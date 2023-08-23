@@ -110,6 +110,8 @@ with col1:
     if 'symbol' not in st.session_state:
         if bt_conf['symbol'] not in opt_conf['symbols']:
             st.session_state.symbol = 'BTCUSDT'
+        else:
+            st.session_state.symbol = bt_conf['symbol']
     symbol = st.selectbox('SYMBOL', opt_conf['symbols'], opt_conf['symbols'].index(st.session_state.symbol))
     market = st.radio("MARKET_TYPE",('futures', 'spot'))
 with col2:
