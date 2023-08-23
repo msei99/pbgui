@@ -3,11 +3,14 @@
 v0.1
 
 ## Overview
-pbgui is a simple WEB-GUI for Passivbot codet with streamlit
+Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
 
 ![image](https://github.com/msei99/pbgui/assets/70921110/965ce036-2e06-4eaf-9261-ca2d01a076d0)
 ![image](https://github.com/msei99/pbgui/assets/70921110/29a551b0-480c-4997-b22c-603e380669e3)
 
+## Requirements
+- Python 3.8.x and higher
+- Streamlit 1.25.0 and higher
 
 ## Installation
 ```
@@ -31,3 +34,7 @@ streamlit run pbgui.py
 - Optimizer: Database for optimizer results
 - Optimizer: Queue for optimizaions
 - ...
+
+## Links:
+Passivbot https://www.passivbot.com/en/latest/
+Streamlit https://streamlit.io/
