@@ -22,6 +22,7 @@ streamlit run pbgui.py
 ## Roadmap
 - Optimizer: add/edit configs/optimize/*.hjson
 - Run: Interface for manager (start/stop/edit live configs)
+- Security: Adding Login credentials
 - Run: Add/Edit api-keys
 - Backtest: open configs from filesystem
 - Backtest: open configs from github
