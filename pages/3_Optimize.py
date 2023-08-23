@@ -38,7 +38,6 @@ def load_opt_log():
 def select_bt_conf_file(file):
     st.session_state[file] = False
     st.session_state.bt_conf_filename = file
-    print(file)
     st.session_state.go_backtest = True
 
 # Delete old files
@@ -145,7 +144,6 @@ files = glob.glob(f'{st.session_state.pbdir}/results_{algo}_{mode}/*/*best_confi
 files.sort(reverse=True)
 with st.container():
     if files:
-        print(os.path.dirname(files[0]).split('_')[-1])
         if st.session_state.symbol != os.path.dirname(files[0]).split('_')[-1]:
             st.session_state.symbol = os.path.dirname(files[0]).split('_')[-1]
             st.experimental_rerun()

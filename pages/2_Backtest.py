@@ -74,7 +74,6 @@ def run_backtest(user, symbol, sd, ed, sb, market, file):
     sd = sd.strftime("%Y-%m-%d")
     ed = ed.strftime("%Y-%m-%d")
     cmd = f'{sys.executable} -u {st.session_state.pbdir}/backtest.py -u {user} -s {symbol} -sd {sd} -ed {ed} -sb {sb} -m {market} -bd ./backtests/pbgui /tmp/bt_conffile.json'
-    print(cmd)
     bt_log = open("/tmp/bt.log","w")
     subprocess.Popen(shlex.split(cmd), stdout=bt_log, stderr=bt_log, cwd=st.session_state.pbdir, text=True)
 
