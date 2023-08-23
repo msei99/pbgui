@@ -22,6 +22,8 @@ pip install -r requirements.txt
 ```
 streamlit run pbgui.py
 ```
+Open http://localhost:8501 with Browser
+On First Run, you have to select your passivbot directory
 
 ## v0.1 (24-08-2023)
 First release with basic backtest and optimization functionality
