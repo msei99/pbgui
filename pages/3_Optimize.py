@@ -30,8 +30,12 @@ def load_bt_conf():
 
 # Load optimizer logfile from tmp
 def load_opt_log():
-    with open('/tmp/opt.log', 'r', encoding='utf-8') as f:
-        logdata = f.read()
+    try:
+        with open('/tmp/opt.log', 'r', encoding='utf-8') as f:
+            logdata = f.read()
+    except FileNotFoundError:
+        print("Optimizer Logfile (/tmp/opt.log), not found. Maybe you have a running optimizer not started from pbgui.")
+        logdata = "Optimizer Logfile (/tmp/opt.log), not found. Maybe you have a running optimizer not started from pbgui."
     return logdata
 
 # store selected config to session state and switch to backtester
@@ -114,6 +118,8 @@ with col1:
     if 'symbol' not in st.session_state:
         if bt_conf['symbol'] not in opt_conf['symbols']:
             st.session_state.symbol = 'BTCUSDT'
+        else:
+            st.session_state.symbol = bt_conf['symbol']
     symbol = st.multiselect('SYMBOL', opt_conf['symbols'], st.session_state.symbol)
     mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'))
     algo = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'))
