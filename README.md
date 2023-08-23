@@ -22,6 +22,10 @@ pip install -r requirements.txt
 ```
 streamlit run pbgui.py
 ```
+
+## v0.1 (24-08-2023)
+First release with basic backtest and optimization functionality
+
 ## Roadmap
 - Optimizer: add/edit configs/optimize/*.hjson
 - Run: Interface for manager (start/stop/edit live configs)
@@ -36,5 +40,5 @@ streamlit run pbgui.py
 - ...
 
 ## Links:
-Passivbot https://www.passivbot.com/en/latest/
-Streamlit https://streamlit.io/
+- Passivbot https://www.passivbot.com/en/latest/
+- Streamlit https://streamlit.io/
