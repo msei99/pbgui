@@ -156,6 +156,10 @@ if optimizer():
 
 # Display optimizer results
 if st.session_state.expand_files != "":
+    if st.session_state.symbol != os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]:
+        st.session_state.symbol = os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]
+        st.experimental_rerun()
+    st.subheader('Optimizing results: (Select a file for run backtest)')
     st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
     for file in st.session_state.expand_files:
         st.checkbox(file, False, key=(file), on_change=select_bt_conf_file, args=[file])
