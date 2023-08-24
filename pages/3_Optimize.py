@@ -38,8 +38,16 @@ def load_opt_log():
         logdata = "Optimizer Logfile (/tmp/opt.log), not found. Maybe you have a running optimizer not started from pbgui."
     return logdata
 
+# Change dir to selected
+def select_optdir(dir):
+    if dir == "back":
+        st.session_state.expand_files = ""
+    else:
+        st.session_state.expand_files = glob.glob(f'{dir}/*best_config_*.json')
+
 # store selected config to session state and switch to backtester
 def select_bt_conf_file(file):
+    st.session_state.expand_files = ""
     st.session_state[file] = False
     st.session_state.bt_conf_filename = file
     st.session_state.go_backtest = True
@@ -68,8 +76,8 @@ def optimizer():
 
 # Run Optimizer in background
 def run_optimizer(user, symbol, sd, ed, sb, iters, algo, market, mode, cpu):
-    directory_path = f'{st.session_state.pbdir}/results_{algo}_{mode}'
-    delete_files_and_subdirectories(directory_path)
+#    directory_path = f'{st.session_state.pbdir}/results_{algo}_{mode}'
+#    delete_files_and_subdirectories(directory_path)
     try:
         cmd = ["pgrep", "-U", getuser(), "-f", "optimize.py"]
         pids = subprocess.check_output(cmd).decode("utf-8").strip()
@@ -103,6 +111,8 @@ if 'go_backtest' in st.session_state:
     if st.session_state.go_backtest:
         st.session_state.go_backtest = False
         switch_page("Backtest")
+if 'expand_files' not in st.session_state:
+    st.session_state.expand_files = ""
 
 st.header("Optimize")
 
@@ -145,14 +155,12 @@ if optimizer():
     opt_count = st_autorefresh(interval=15000, limit=None, key="opt_counter")
 
 # Display optimizer results
-files = glob.glob(f'{st.session_state.pbdir}/results_{algo}_{mode}/*/*best_config_*.json', 
-       recursive = True)
-files.sort(reverse=True)
-with st.container():
-    if files:
-        if st.session_state.symbol != os.path.dirname(files[0]).split('_')[-1]:
-            st.session_state.symbol = os.path.dirname(files[0]).split('_')[-1]
-            st.experimental_rerun()
-        st.subheader('Optimizing results: (Select a file for run backtest)')
-    for file in files:
+if st.session_state.expand_files != "":
+    st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
+    for file in st.session_state.expand_files:
         st.checkbox(file, False, key=(file), on_change=select_bt_conf_file, args=[file])
+else:
+    dirs = glob.glob(f'{st.session_state.pbdir}/results_{algo}_{mode}/*')
+    if dirs:
+        for dir in dirs:
+            st.checkbox(dir, False, key=(dir), on_change=select_optdir, args=[dir])
