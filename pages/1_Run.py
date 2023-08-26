@@ -31,7 +31,8 @@ st.set_page_config(
 if 'pbdir' not in st.session_state:
     switch_page("pbgui")
 else:
-    sys.path.insert(0,{st.session_state.pbdir})
+    sys.path.insert(0,st.session_state.pbdir)
+    sys.path.insert(0,f'{st.session_state.pbdir}/manager')
     manager = __import__("manager")
     Manager = getattr(manager,"Manager")
 
