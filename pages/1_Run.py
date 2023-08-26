@@ -4,7 +4,6 @@ import subprocess
 import sys
 import shlex
 import re
-import jsonpointer
 import yaml
 from typing import Dict
 from os import path
