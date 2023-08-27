@@ -15,6 +15,13 @@ def save_config(file):
 
 def ss_inst(instance):
     print(instance.get_symbol())
+    if instance.is_running():
+        instance.stop()
+    else:
+        instance.start()
+
+def edit_inst(instance):
+    print(instance.get_config())
 
 st.set_page_config(
     page_title="Passivbot GUI - Run",
@@ -41,22 +48,34 @@ st.header("Run")
 pb_manager = Manager()
 #pb_manager.get_instances()
 #pb_inst = pb_manager.get_instances()
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.3,3])
 with col1:
-    st.write("User")
+    st.write("#### **User**")
 with col2:
-    st.write("Symbol")
+    st.write("#### **Symbol**")
 with col3:
-    st.write("Status")
+    st.write("#### **Status**")
+with col4:
+    st.write("#### **Edit**")
+with col5:
+    st.write("#### **Configuration file**")
 
 for inst in pb_manager.get_instances():
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.3,3])
     with col1:
         st.write(inst.get_user())
     with col2:
         st.write(inst.get_symbol())
     with col3:
-        st.button(inst.get_status(), key=inst, on_click=ss_inst, args=[inst])
+        if inst.is_running():
+            ss_button = ":green[Stop]"
+        else:
+            ss_button = ":red[Start]"
+        st.button(ss_button, key=inst, on_click=ss_inst, args=[inst])
+    with col4:
+        st.button("Edit", key=f'edit {inst}', on_click=edit_inst, args=[inst])
+    with col5:
+        st.write(f'{inst.get_config()}')
 
 #save_config(pb_manager.config_parser.config)
 
