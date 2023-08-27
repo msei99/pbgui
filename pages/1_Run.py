@@ -15,10 +15,12 @@ def save_config(file):
 
 def ss_inst(instance):
     print(instance.get_symbol())
-    if instance.is_running():
-        instance.stop()
-    else:
-        instance.start()
+    print(instance.get_cmd())
+#    if instance.is_running():
+#        instance.stop()
+#    else:
+#        print(instance.get_cmd())
+#        instance.start()
 
 def edit_inst(instance):
     print(instance.get_config())
