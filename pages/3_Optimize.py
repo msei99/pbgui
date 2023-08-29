@@ -114,8 +114,6 @@ if 'go_backtest' in st.session_state:
 if 'expand_files' not in st.session_state:
     st.session_state.expand_files = ""
 
-st.header("Optimize")
-
 # Load defaul optimize, backtest and api-keys
 opt_conf = load_opt_conf()
 bt_conf = load_bt_conf()

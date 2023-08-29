@@ -20,7 +20,7 @@ pip install -r requirements.txt
 ```
 ## Running
 ```
-streamlit run pbgui.py
+streamlit run pbgui.py &
 ```
 Open http://localhost:8501 with Browser  
 On First Run, you have to select your passivbot directory

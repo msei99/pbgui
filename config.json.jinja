@@ -1,0 +1,55 @@
+version: {{ version }}
+
+defaults:
+{%- for default, value in defaults.items() %}
+  {{ default }}: {{ value }}
+{%- endfor %}
+
+  # name of a file in the config/live directory
+  # or an absolute path to a config file
+  # config: "default.json"
+
+  # uncomment settings to enable them
+
+  # absolute path to a keys file
+  # api_keys: /home/ubuntu/passivbot/api-keys.json
+
+  # assigned_balance: 0
+  # market_type: "futures"
+  # leverage: 7
+
+  # long_mode: "n"
+  # long_exposure: 0
+  # long_min_markup: 0
+  # long_markup_range: 0
+
+  # short_mode: "m"
+  # short_exposure: 0
+  # short_min_markup: 0
+  # short_markup_range: 0
+
+# it is highly recommended to read the docs/manager.md
+# for the advanced instances configuration
+instances:
+{%- for instance in instances %}
+  - user: {{ instance.user }}
+    symbols:
+      {{ instance.symbol }}:
+        cfg: {{ instance.config }}
+  {%- for flag, value in instance.flags.items() %}
+    {%- if flag == "-ab" and value == defaults.assigned_balance %}
+    {%- elif flag == "-m" and value == defaults.market_type %}
+    {%- elif flag == "-lev" and value == defaults.leverage %}
+    {%- elif flag == "-lm" and value == defaults.long_mode %}
+    {%- elif flag == "-lw" and value == defaults.long_exposure %}
+    {%- elif flag == "-lmm" and value == defaults.long_min_markup %}
+    {%- elif flag == "-lmr" and value == defaults.long_markup_range %}
+    {%- elif flag == "-sm" and value == defaults.short_mode %}
+    {%- elif flag == "-sw" and value == defaults.short_exposure %}
+    {%- elif flag == "-smm" and value == defaults.short_min_markup %}
+    {%- elif flag == "-smr" and value == defaults.short_markup_range %}
+    {%- else %}
+        {{ flag |replace("-", "", 1) }}: {{ value }}
+    {%- endif %}
+  {%- endfor %}
+{%- endfor %}
