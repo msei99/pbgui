@@ -96,8 +96,6 @@ if 'bt_conf_filename' in st.session_state:
 else:
     st.session_state.bt_conf_file = ""
 
-st.header("Backtest")
-
 # Load defaul optimize, backtest and api-keys
 opt_conf = load_opt_conf()
 bt_conf = load_bt_conf()
