@@ -50,7 +50,7 @@ def save_yaml(instance):
                 my_instances.append(inst)
             my_instances.append(instance)
             st.session_state.new_instance = False
-        elif st.session_state.del_instance:
+        elif "del_instance" in st.session_state:
             for inst in st.session_state.pb_instances:
                 if inst != instance:
                     my_instances.append(inst)
