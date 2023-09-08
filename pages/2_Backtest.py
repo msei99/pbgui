@@ -83,13 +83,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
-#        'Get Help': 'https://www.extremelycoolapp.com/help',
+        'Get help': 'https://github.com/msei99/pbgui/#readme',
         'About': "Passivbot GUI"
     }
 )
 
 # Init session state
-if 'pbdir' not in st.session_state:
+if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
 if 'bt_conf_filename' in st.session_state:
     st.session_state.bt_conf_file = load_bt_conffile(st.session_state.bt_conf_filename)
