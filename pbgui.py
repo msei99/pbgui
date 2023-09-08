@@ -1,6 +1,7 @@
 import streamlit as st
 import configparser
 import os
+import inspect
 
 def update_dir(key):
     choice = st.session_state[key]
@@ -44,6 +45,8 @@ st.set_page_config(
 )
 
 st.header("Passivbot GUI")
+st.session_state.pbgdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+os.chdir(st.session_state.pbgdir)
 
 # Load ini and initialize session state
 pb_config = configparser.ConfigParser()
