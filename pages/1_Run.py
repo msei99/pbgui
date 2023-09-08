@@ -354,7 +354,6 @@ def edit_instance(instance):
                 st.session_state.error = f'Error in Instance config'
                 st.experimental_rerun()
             if st.session_state.instance_config != new_instance_config or instance.config != new_config_filename:
-                print("new")
                 if instance.config != new_config_filename:
                     if os.path.isfile(new_config_filename):
                         if "overwrite" in st.session_state:
@@ -364,13 +363,12 @@ def edit_instance(instance):
                             st.session_state.error = f':red[Overwrite {new_config_filename} ?]'
                             st.session_state.overwrite = False
                             st.experimental_rerun()
-                print("save_instance_config")
                 instance.config = new_config_filename
                 save_instance_config(instance, new_instance_config)
                 del st.session_state.instance_config
                 if "error" in st.session_state:
                     del st.session_state.error
-            print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
+#            print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
             instance.user = user
             instance.symbol = symbol
             instance.apply_flags({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
