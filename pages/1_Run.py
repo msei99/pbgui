@@ -134,7 +134,9 @@ def button_handler(instance, button=None):
         if "error"in st.session_state:
             del st.session_state.error
     elif button == "restart":
+        os.chdir(st.session_state.pbdir)
         instance.restart()
+        os.chdir(st.session_state.pbgdir)
     elif button == "del":
         st.session_state.del_instance = True
         save_yaml(instance)
