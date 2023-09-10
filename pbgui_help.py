@@ -17,7 +17,7 @@ price_distance_threshold = """
 mode = """
     ```
     n (normal); normal operation
-    m (manual): bot neither creates nor cancels orders.
+    m (manual): bot neither creates nor cancels orders. (Enabled=False)
     gs (graceful stop): let the bot continue as normal until
         all positions are fully closed, then not open any more positions.
     p (panic): bot will close positions asap using limit orders

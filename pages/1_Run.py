@@ -14,7 +14,13 @@ def update_dir(key):
     choice = st.session_state[key]
     if os.path.isdir(os.path.join(st.session_state[key+'curr_dir'], choice)):
         st.session_state[key+'curr_dir'] = os.path.normpath(os.path.join(st.session_state[key+'curr_dir'], choice))
-        files = sorted(os.listdir(st.session_state[key+'curr_dir']))
+        files1 = os.scandir(st.session_state[key+'curr_dir'])
+        files = []
+        for file in files1:
+            if file.is_dir() or file.name.endswith('.json'):
+                files.insert(0,file.name)
+        files = sorted(files)
+#        files = sorted(os.listdir(st.session_state[key+'curr_dir']))
         files.insert(0, '..')
         files.insert(0, '.')
         st.session_state[key+'files'] = files
@@ -25,7 +31,13 @@ def st_file_selector(st_placeholder, path='.', label='Select a file/folder', key
         base_path = base_path if os.path.isdir(base_path) else os.path.dirname(base_path)
         base_path = '.' if base_path is None or base_path == '' else base_path
 
-        files = sorted(os.listdir(base_path))
+        files1 = os.scandir(base_path)
+        files = []
+        for file in files1:
+            if file.is_dir() or file.name.endswith('.json'):
+                files.insert(0,file.name)
+        files = sorted(files)
+#        files = sorted(os.listdir(base_path))
         files.insert(0, '..')
         files.insert(0, '.')
         st.session_state[key+'files'] = files
@@ -63,7 +75,10 @@ def save_yaml(instance):
         else:
             my_instances = st.session_state.pb_instances
         tmpl = jinja2.Template(f.read())
-        yaml = tmpl.render(instances = my_instances, version=st.session_state.pb_manager.config_parser.config['version'], defaults=st.session_state.pb_manager.config_parser.config['defaults'])
+        yaml = tmpl.render(
+            instances = my_instances,
+            version=st.session_state.pb_manager.config_parser.config['version'],
+            defaults=st.session_state.pb_manager.config_parser.config['defaults'])
         now = datetime.now()
         date = now.strftime("%Y-%m-%d_%H:%M:%S")
         path = f'data/run/manager'
@@ -174,6 +189,7 @@ def edit_instance(instance):
             st.button(":heavy_minus_sign: :red[Delete Instance]", key='del', on_click=button_handler, args=[instance, "del"])
         '---'
         st.button(":back:", key="back", on_click=button_handler, args=[instance, "back"])
+    print(instance.get_flags())
     with st.form("myInstance config"):
         # Init user index
         api = pd.read_json(st.session_state.pbdir+'/api-keys.json', typ='frame', orient='index')
@@ -230,8 +246,16 @@ def edit_instance(instance):
             elif long_mode == "t" or long_mode == "tp_only":
                 long_index = 4
         else:
-            long_mode = 'n'
-            long_index = 0
+            try: 
+                if float(json.loads(st.session_state.instance_config)["long"]["enabled"]):
+                    long_mode = 'n'
+                    long_index = 0
+                else:
+                    long_mode = 'm'
+                    long_index = 1
+            except:
+                long_mode = 'm'
+                long_index = 1
         # short_mode
         if '-sm' in instance.flags:
             short_mode = instance.flags['-sm']
@@ -246,14 +270,22 @@ def edit_instance(instance):
             elif short_mode == "t" or short_mode == "tp_only":
                 short_index = 4
         else:
-            short_mode = 'n'
-            short_index = 0
+            try: 
+                if float(json.loads(st.session_state.instance_config)["short"]["enabled"]):
+                    short_mode = 'n'
+                    short_index = 0
+                else:
+                    short_mode = 'm'
+                    short_index = 1
+            except:
+                short_mode = 'm'
+                short_index = 1
         # long_exposure
         if '-lw' in instance.flags:
             long_exposure = instance.flags['-lw']
         else:
             try: 
-                long_exposure = json.loads(st.session_state.instance_config)["long"]["wallet_exposure_limit"]
+                long_exposure = float(json.loads(st.session_state.instance_config)["long"]["wallet_exposure_limit"])
             except:
                 long_exposure = 1.0
         # short_exposure
@@ -261,7 +293,7 @@ def edit_instance(instance):
             short_exposure = instance.flags['-sw']
         else:
             try:
-                short_exposure = json.loads(st.session_state.instance_config)["short"]["wallet_exposure_limit"]
+                short_exposure = float(json.loads(st.session_state.instance_config)["short"]["wallet_exposure_limit"])
             except:
                 short_exposure = 1.0
         # long_min_markup
@@ -269,7 +301,7 @@ def edit_instance(instance):
             long_min_markup = instance.flags['-lmm']
         else:
             try:
-                long_min_markup = json.loads(st.session_state.instance_config)["long"]["min_markup"]
+                long_min_markup = float(json.loads(st.session_state.instance_config)["long"]["min_markup"])
             except:
                 long_min_markup = 0.0
         # short_min_markup
@@ -277,7 +309,7 @@ def edit_instance(instance):
             short_min_markup = instance.flags['-smm']
         else:
             try:
-                short_min_markup = json.loads(st.session_state.instance_config)["short"]["min_markup"]
+                short_min_markup = float(json.loads(st.session_state.instance_config)["short"]["min_markup"])
             except:
                 short_min_markup = 0.0
         # long_markup_range
@@ -285,7 +317,7 @@ def edit_instance(instance):
             long_markup_range = instance.flags['-lmr']
         else:
             try:
-                long_markup_range = json.loads(st.session_state.instance_config)["long"]["markup_range"]
+                long_markup_range = float(json.loads(st.session_state.instance_config)["long"]["markup_range"])
             except:
                 long_markup_range = 0.0
         # short_markup_range
@@ -293,13 +325,13 @@ def edit_instance(instance):
             short_markup_range = instance.flags['-smr']
         else:
             try:
-                short_markup_range = json.loads(st.session_state.instance_config)["short"]["markup_range"]
+                short_markup_range = float(json.loads(st.session_state.instance_config)["short"]["markup_range"])
             except:
                 short_markup_range = 0.0
         col11, col12, col13 = st.columns([1,1,1])
         with col11:
             user = st.selectbox('User',api.index, index=user_index)
-            long_mode = st.radio("LONG_MODE",('normal', 'manual', 'graceful_stop', 'panic', 'tp_only'), index=long_index, help=pbgui_help.mode)
+            long_mode = st.radio("LONG_MODE",('normal', 'manual', 'graceful_stop', 'panic', 'tp_only'), key="long_mode", index=long_index, help=pbgui_help.mode)
             long_exposure = round(st.slider("LONG_WALLET_EXPOSURE_LIMIT", key="long_exposure", min_value=0.0, max_value=3.0, step=0.05, value=long_exposure, help=pbgui_help.exposure),2)
         with col12:
             symbol = st.text_input('SYMBOL',value=instance.symbol)
@@ -370,7 +402,7 @@ def edit_instance(instance):
                 del st.session_state.instance_config
                 if "error" in st.session_state:
                     del st.session_state.error
-#            print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
+            print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
             instance.user = user
             instance.symbol = symbol
             instance.apply_flags({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
@@ -384,7 +416,11 @@ def edit_instance(instance):
             if "error" in st.session_state:
                 del st.session_state.error
             st.experimental_rerun()
-    selected_config = os.path.abspath(st_file_selector(st, path=f'{st.session_state.pbdir}/configs/live', key = 'selected_config', label = 'load config from disk'))
+    col21, col22 = st.columns([1,1])
+    with col21:
+        selected_config = os.path.abspath(st_file_selector(st, path=f'{st.session_state.pbdir}/configs/live', key = 'selected_config', label = 'select config from live'))
+    with col22:
+        backtest_config = os.path.abspath(st_file_selector(st, path=f'{st.session_state.pbdir}/backtests/pbgui', key = 'backtest_config', label = 'load config from backtests'))
     if selected_config.endswith(".json") and selected_config != instance.config:
         try:
             with open(selected_config, 'r', encoding='utf-8') as f:
@@ -393,6 +429,19 @@ def edit_instance(instance):
             st.session_state.instance_config = ""
         st.session_state.instance_config_high = len(st.session_state.instance_config.splitlines()) * 24
         instance.config = selected_config
+        del st.session_state.selected_config
+        st.session_state.selected_config = "."
+        st.experimental_rerun()
+    if backtest_config.endswith(".json") and backtest_config != instance.config:
+        try:
+            with open(backtest_config, 'r', encoding='utf-8') as f:
+                st.session_state.instance_config = f.read()
+        except FileNotFoundError:
+            st.session_state.instance_config = ""
+        st.session_state.instance_config_high = len(st.session_state.instance_config.splitlines()) * 24
+        instance.config = backtest_config
+        del st.session_state.backtest_config
+        st.session_state.backtest_config = "."
         st.experimental_rerun()
 
 
