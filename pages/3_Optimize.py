@@ -1,4 +1,5 @@
 import streamlit as st
+from pbgui_func import set_page_config
 import streamlit_scrollable_textbox as stx
 from streamlit_extras.switch_page_button import switch_page
 from streamlit_autorefresh import st_autorefresh
@@ -41,13 +42,13 @@ def load_opt_log():
 # Change dir to selected
 def select_optdir(dir):
     if dir == "back":
-        st.session_state.expand_files = ""
+        del st.session_state.expand_files
     else:
         st.session_state.expand_files = glob.glob(f'{dir}/*best_config_*.json')
 
 # store selected config to session state and switch to backtester
 def select_bt_conf_file(file):
-    st.session_state.expand_files = ""
+    del st.session_state.expand_files
     st.session_state[file] = False
     st.session_state.bt_conf_filename = file
     st.session_state.go_backtest = True
@@ -92,29 +93,15 @@ def run_optimizer(user, symbol, sd, ed, sb, iters, algo, market, mode, cpu):
     for pid in pids.splitlines():
         os.kill(int(pid),9)
 
-st.set_page_config(
-    page_title="Passivbot GUI - Optimize",
-    page_icon=":screwdriver:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': 'https://www.extremelycoolapp.com/help',
-        'Report a bug': "https://www.extremelycoolapp.com/bug",
-        'About': "Passivbot GUI"
-    }
-)
+set_page_config()
 
 # Init Session State
-if 'pbdir' not in st.session_state:
+if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
 if 'go_backtest' in st.session_state:
     if st.session_state.go_backtest:
         st.session_state.go_backtest = False
         switch_page("Backtest")
-if 'expand_files' not in st.session_state:
-    st.session_state.expand_files = ""
-
-st.header("Optimize")
 
 # Load defaul optimize, backtest and api-keys
 opt_conf = load_opt_conf()
@@ -155,16 +142,18 @@ if optimizer():
     opt_count = st_autorefresh(interval=15000, limit=None, key="opt_counter")
 
 # Display optimizer results
-if st.session_state.expand_files != "":
+if 'expand_files' in st.session_state:
     if st.session_state.symbol != os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]:
         st.session_state.symbol = os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]
         st.experimental_rerun()
     st.subheader('Optimizing results: (Select a file for run backtest)')
     st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
+    st.session_state.expand_files.sort(reverse=True)
     for file in st.session_state.expand_files:
         st.checkbox(file, False, key=(file), on_change=select_bt_conf_file, args=[file])
 else:
     dirs = glob.glob(f'{st.session_state.pbdir}/results_{algo}_{mode}/*')
     if dirs:
+        dirs.sort(reverse=True)
         for dir in dirs:
             st.checkbox(dir, False, key=(dir), on_change=select_optdir, args=[dir])

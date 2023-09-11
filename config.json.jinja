@@ -1,0 +1,76 @@
+version: {{ version }}
+
+defaults:
+{%- for default, value in defaults.items() %}
+  {{ default }}: {{ value }}
+{%- endfor %}
+
+  # name of a file in the config/live directory
+  # or an absolute path to a config file
+  # config: "default.json"
+
+  # uncomment settings to enable them
+
+  # absolute path to a keys file
+  # api_keys: /home/ubuntu/passivbot/api-keys.json
+
+  # assigned_balance: 0
+  # market_type: "futures"
+  # leverage: 7
+
+  # long_mode: "n"
+  # long_exposure: 0
+  # long_min_markup: 0
+  # long_markup_range: 0
+
+  # short_mode: "m"
+  # short_exposure: 0
+  # short_min_markup: 0
+  # short_markup_range: 0
+
+# it is highly recommended to read the docs/manager.md
+# for the advanced instances configuration
+instances:
+{%- for instance in instances %}
+  - user: {{ instance.user }}
+    symbols:
+      {{ instance.symbol }}:
+        cfg: {{ instance.config }}
+  {%- for flag, value in instance.flags.items() %}
+    {%- if flag == "-ab" and value == defaults.assigned_balance %}
+    {%- elif flag == "-ab" and value == 0 and defaults.assigned_balance is not defined %}
+    {%- elif flag == "-m" and value == defaults.market_type %}
+    {%- elif flag == "-m" and value == "futures" and defaults.market_type is not defined %}
+    {%- elif flag == "-pt" and value == defaults.price_distance_threshold %}
+    {%- elif flag == "-pt" and value == 0.5 and defaults.price_distance_threshold is not defined %}
+    {%- elif flag == "-pp" and value == defaults.price_precision %}
+    {%- elif flag == "-pp" and value == 0 and defaults.price_precision is not defined %}
+    {%- elif flag == "-ps" and value == defaults.price_step %}
+    {%- elif flag == "-ps" and value == 0 and defaults.price_step is not defined %}
+    {%- elif flag == "-lev" and value == defaults.leverage %}
+    {%- elif flag == "-lev" and value == 7 and defaults.leverage is not defined %}
+    {%- elif flag == "-oh" and value == defaults.ohlcv %}
+    {%- elif flag == "-oh" and value == True and defaults.ohlcv is not defined %}
+{#-    {%- elif flag == "-lm" and value == defaults.long_mode %}
+    {%- elif flag == "-lm" and value == "normal" and defaults.long_mode is not defined %}
+    {%- elif flag == "-lm" and value == "n" and defaults.long_mode is not defined %} #}
+    {%- elif flag == "-lw" and value == defaults.long_exposure %}
+    {%- elif flag == "-lw" and value == 0 and defaults.long_exposure is not defined %}
+    {%- elif flag == "-lmm" and value == defaults.long_min_markup %}
+    {%- elif flag == "-lmm" and value == 0 and defaults.long_min_markup is not defined %}
+    {%- elif flag == "-lmr" and value == defaults.long_markup_range %}
+    {%- elif flag == "-lmr" and value == 0 and defaults.long_markup_range is not defined %}
+{#-    {%- elif flag == "-sm" and value == defaults.short_mode%}
+    {%- elif flag == "-sm" and value == "normal" and defaults.short_mode is not defined %}
+    {%- elif flag == "-sm" and value == "n" and defaults.short_mode is not defined %} #}
+    {%- elif flag == "-sw" and value == defaults.short_exposure %}
+    {%- elif flag == "-sw" and value == 0 and defaults.short_exposure is not defined %}
+    {%- elif flag == "-smm" and value == defaults.short_min_markup %}
+    {%- elif flag == "-smm" and value == 0 and defaults.short_min_markup is not defined %}
+    {%- elif flag == "-smr" and value == defaults.short_markup_range %}
+    {%- elif flag == "-smr" and value == 0 and defaults.short_markup_range is not defined %}
+    {%- else %}
+        {{ flag |replace("-", "", 1) }}: {{ value }}
+    {%- endif %}
+  {%- endfor %}
+{%- endfor %}
