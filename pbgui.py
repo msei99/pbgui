@@ -1,6 +1,8 @@
 import streamlit as st
 import configparser
 import os
+import inspect
+from pbgui_func import check_password, set_page_config
 
 def update_dir(key):
     choice = st.session_state[key]
@@ -32,18 +34,16 @@ def st_file_selector(st_placeholder, path='.', label='Select a file/folder', key
     st_placeholder.write(os.path.abspath(selected_path))
     return selected_path
 
-st.set_page_config(
-    page_title="Passivbot GUI - Start",
-    page_icon=":screwdriver:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-#        'Get Help': 'https://www.extremelycoolapp.com/help',
-        'About': "Passivbot GUI"
-    }
-)
+set_page_config()
+
+# Password Check
+if not check_password():
+    st.stop()
 
 st.header("Passivbot GUI")
+st.session_state.pbgdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+os.chdir(st.session_state.pbgdir)
+
 
 # Load ini and initialize session state
 pb_config = configparser.ConfigParser()

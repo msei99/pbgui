@@ -1,3 +1,4 @@
+streamlit==1.26.0
 streamlit-scrollable-textbox==0.0.3
 streamlit-extras==0.3.0
 streamlit-autorefresh==1.0.1

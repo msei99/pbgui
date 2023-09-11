@@ -1,4 +1,5 @@
 import streamlit as st
+from pbgui_func import set_page_config
 import streamlit_scrollable_textbox as stx
 from streamlit_extras.switch_page_button import switch_page
 from streamlit_autorefresh import st_autorefresh
@@ -77,26 +78,15 @@ def run_backtest(user, symbol, sd, ed, sb, market, file):
     bt_log = open("/tmp/bt.log","w")
     subprocess.Popen(shlex.split(cmd), stdout=bt_log, stderr=bt_log, cwd=st.session_state.pbdir, text=True)
 
-st.set_page_config(
-    page_title="Passivbot GUI - Backtest",
-    page_icon=":screwdriver:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-#        'Get Help': 'https://www.extremelycoolapp.com/help',
-        'About': "Passivbot GUI"
-    }
-)
+set_page_config()
 
 # Init session state
-if 'pbdir' not in st.session_state:
+if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
 if 'bt_conf_filename' in st.session_state:
     st.session_state.bt_conf_file = load_bt_conffile(st.session_state.bt_conf_filename)
 else:
     st.session_state.bt_conf_file = ""
-
-st.header("Backtest")
 
 # Load defaul optimize, backtest and api-keys
 opt_conf = load_opt_conf()
