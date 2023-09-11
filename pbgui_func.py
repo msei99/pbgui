@@ -27,3 +27,15 @@ def check_password():
     else:
         # Password correct.
         return True
+
+def set_page_config():
+    st.set_page_config(
+        page_title="Passivbot GUI - Start",
+        page_icon=":screwdriver:",
+        layout="wide",
+        initial_sidebar_state="expanded",
+        menu_items={
+            'Get help': 'https://github.com/msei99/pbgui/#readme',
+            'About': "Passivbot GUI v0.2"
+        }
+    )

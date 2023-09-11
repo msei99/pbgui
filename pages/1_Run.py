@@ -1,4 +1,5 @@
 import streamlit as st
+from pbgui_func import set_page_config
 from streamlit_extras.switch_page_button import switch_page
 import pbgui_help
 from datetime import datetime
@@ -466,16 +467,7 @@ def edit_instance(instance):
         st.experimental_rerun()
 
 
-st.set_page_config(
-    page_title="Passivbot GUI - Run",
-    page_icon=":screwdriver:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get help': 'https://github.com/msei99/pbgui/#readme',
-        'About': "Passivbot GUI"
-    }
-)
+set_page_config()
 
 # Init Session State
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
