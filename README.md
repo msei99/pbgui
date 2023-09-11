@@ -22,17 +22,22 @@ pip install -r requirements.txt
 ```
 streamlit run pbgui.py &
 ```
-Open http://localhost:8501 with Browser  
+Open http://localhost:8501 with Browser
+Password = PBGui$Bot!
 On First Run, you have to select your passivbot directory
+
+Change Password in file: .streamlit/secrets.toml
+
+## v0.2 (11-09-2023)
+- Run: Interface for manager (start/stop/edit live configs)
+- Security: Adding Login credentials
 
 ## v0.1 (24-08-2023)
 First release with basic backtest and optimization functionality
 
 ## Roadmap
-- Optimizer: add/edit configs/optimize/*.hjson
-- Run: Interface for manager (start/stop/edit live configs)
-- Security: Adding Login credentials
 - Run: Add/Edit api-keys
+- Optimizer: add/edit configs/optimize/*.hjson
 - Backtest: open configs from filesystem
 - Backtest: open configs from github
 - Backtest: Database for config/results
