@@ -1,4 +1,5 @@
 import streamlit as st
+from pbgui_func import set_page_config
 import streamlit_scrollable_textbox as stx
 from streamlit_extras.switch_page_button import switch_page
 from streamlit_autorefresh import st_autorefresh
@@ -92,16 +93,7 @@ def run_optimizer(user, symbol, sd, ed, sb, iters, algo, market, mode, cpu):
     for pid in pids.splitlines():
         os.kill(int(pid),9)
 
-st.set_page_config(
-    page_title="Passivbot GUI - Optimize",
-    page_icon=":screwdriver:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get help': 'https://github.com/msei99/pbgui/#readme',
-        'About': "Passivbot GUI"
-    }
-)
+set_page_config()
 
 # Init Session State
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
