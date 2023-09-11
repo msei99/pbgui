@@ -51,18 +51,18 @@ instances:
     {%- elif flag == "-lev" and value == 7 and defaults.leverage is not defined %}
     {%- elif flag == "-oh" and value == defaults.ohlcv %}
     {%- elif flag == "-oh" and value == True and defaults.ohlcv is not defined %}
-    {%- elif flag == "-lm" and value == defaults.long_mode %}
-    {%- elif flag == "-lm" and value == "n" and defaults.long_mode is not defined%}
-    {%- elif flag == "-lm" and value == "normal" and defaults.long_mode is not defined%}
+{#-    {%- elif flag == "-lm" and value == defaults.long_mode %}
+    {%- elif flag == "-lm" and value == "normal" and defaults.long_mode is not defined %}
+    {%- elif flag == "-lm" and value == "n" and defaults.long_mode is not defined %} #}
     {%- elif flag == "-lw" and value == defaults.long_exposure %}
     {%- elif flag == "-lw" and value == 0 and defaults.long_exposure is not defined %}
     {%- elif flag == "-lmm" and value == defaults.long_min_markup %}
     {%- elif flag == "-lmm" and value == 0 and defaults.long_min_markup is not defined %}
     {%- elif flag == "-lmr" and value == defaults.long_markup_range %}
     {%- elif flag == "-lmr" and value == 0 and defaults.long_markup_range is not defined %}
-    {%- elif flag == "-sm" and value == defaults.short_mode %}
-    {%- elif flag == "-sm" and value == "n" and defaults.short_mode is not defined%}
-    {%- elif flag == "-sm" and value == "normal" and defaults.short_mode is not defined%}
+{#-    {%- elif flag == "-sm" and value == defaults.short_mode%}
+    {%- elif flag == "-sm" and value == "normal" and defaults.short_mode is not defined %}
+    {%- elif flag == "-sm" and value == "n" and defaults.short_mode is not defined %} #}
     {%- elif flag == "-sw" and value == defaults.short_exposure %}
     {%- elif flag == "-sw" and value == 0 and defaults.short_exposure is not defined %}
     {%- elif flag == "-smm" and value == defaults.short_min_markup %}

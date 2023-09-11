@@ -189,7 +189,6 @@ def edit_instance(instance):
             st.button(":heavy_minus_sign: :red[Delete Instance]", key='del', on_click=button_handler, args=[instance, "del"])
         '---'
         st.button(":back:", key="back", on_click=button_handler, args=[instance, "back"])
-    print(f'Flags: {instance.get_flags()}')
     with st.form("myInstance config"):
         # Init user index
         api = pd.read_json(st.session_state.pbdir+'/api-keys.json', typ='frame', orient='index')
@@ -381,11 +380,17 @@ def edit_instance(instance):
             try:
                 if long_exposure != round(json.loads(new_instance_config)["long"]["wallet_exposure_limit"],2):
                     instance.apply_flags({'-lw': long_exposure})
+                else:
+                    long_exposure = 0.0
+                    instance.apply_flags({'-lw': long_exposure})
                 if long_min_markup != round(json.loads(new_instance_config)["long"]["min_markup"],4):
                     instance.apply_flags({'-lmm': long_min_markup})
                 if long_markup_range != round(json.loads(new_instance_config)["long"]["markup_range"],4):
                     instance.apply_flags({'-lmr': long_markup_range})
                 if short_exposure != round(json.loads(new_instance_config)["short"]["wallet_exposure_limit"],2):
+                    instance.apply_flags({'-sw': short_exposure})
+                else:
+                    short_exposure = 0.0
                     instance.apply_flags({'-sw': short_exposure})
                 if short_min_markup != round(json.loads(new_instance_config)["short"]["min_markup"],4):
                     instance.apply_flags({'-smm': short_min_markup})
@@ -396,7 +401,6 @@ def edit_instance(instance):
                 st.experimental_rerun()
             if st.session_state.instance_config != new_instance_config or instance.config != f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}':
                 if os.path.exists(f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}'):
-                    print("exists")
                     if not "overwrite" in st.session_state:
                         st.session_state.error = f':red[Overwrite {st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename} ?]'
                         st.session_state.overwrite = False
@@ -412,7 +416,7 @@ def edit_instance(instance):
                 instance.config = f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}'
                 save_instance_config(instance, new_instance_config)
                 del st.session_state.instance_config
-            print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
+#            print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
             instance.user = user
             instance.symbol = symbol
             instance.apply_flags({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
