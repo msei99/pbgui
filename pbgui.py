@@ -2,6 +2,7 @@ import streamlit as st
 import configparser
 import os
 import inspect
+from pbgui_func import check_password
 
 def update_dir(key):
     choice = st.session_state[key]
@@ -44,9 +45,14 @@ st.set_page_config(
     }
 )
 
+# Password Check
+if not check_password():
+    st.stop()
+
 st.header("Passivbot GUI")
 st.session_state.pbgdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 os.chdir(st.session_state.pbgdir)
+
 
 # Load ini and initialize session state
 pb_config = configparser.ConfigParser()

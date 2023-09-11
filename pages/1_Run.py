@@ -189,7 +189,7 @@ def edit_instance(instance):
             st.button(":heavy_minus_sign: :red[Delete Instance]", key='del', on_click=button_handler, args=[instance, "del"])
         '---'
         st.button(":back:", key="back", on_click=button_handler, args=[instance, "back"])
-    print(instance.get_flags())
+    print(f'Flags: {instance.get_flags()}')
     with st.form("myInstance config"):
         # Init user index
         api = pd.read_json(st.session_state.pbdir+'/api-keys.json', typ='frame', orient='index')
@@ -354,17 +354,24 @@ def edit_instance(instance):
                 assigned_balance = st.number_input("ASSIGNED_BALANCE", key="assigned_balance", min_value=0, step=500, value=assigned_balance, help=pbgui_help.assigned_balance)
                 price_distance_threshold = round(st.number_input("PRICE_DISTANCE_THRESHOLD", key="price_distance_threshold", min_value=0.00, step=0.05, value=price_distance_threshold, help=pbgui_help.price_distance_threshold),2)
                 price_precision = round(st.number_input("PRICE_PRECISION_MULTIPLIER", key="price_precision", format="%.4f", min_value=0.0000, step=0.0001, value=price_precision, help=pbgui_help.price_precision),4)
-        new_config_filename = st.text_input("config filename", value=instance.config, max_chars=None, key="config_filename")
+        if not "new_config_filename" in st.session_state or not "config_filename" in st.session_state:
+            config_filename = f'{os.path.split(instance.config)[-1]}'
+        else:
+            config_filename = st.session_state.config_filename
+        if config_filename in ['live_config.json', 'new_config.json', '']:
+            st.session_state.new_config_filename = st.text_input(":red[config filename ***(Please Change filename)***]", value=config_filename, max_chars=None, key="config_filename")
+        else:
+            st.session_state.new_config_filename = st.text_input("config filename", value=config_filename, max_chars=None, key="config_filename")
         new_instance_config = st.text_area("Instance config", st.session_state.instance_config, key="input_instance_config", height=st.session_state.instance_config_high, placeholder="paste config.json or load config from disk")
         if "overwrite" in st.session_state:
             st.session_state.overwrite = st.checkbox(st.session_state.error)
         submitted = st.form_submit_button("Save")
         if submitted:
+            if st.session_state.new_config_filename in ['live_config.json', 'new_config.json', '']:
+                st.session_state.error = 'Please change "config filename"'
+                st.experimental_rerun()
             if len(new_instance_config) == 0:
                 st.session_state.error = 'Instance config is empty'
-                st.experimental_rerun()
-            if new_config_filename == f'{st.session_state.pbdir}/configs/live/new_config.json':
-                st.session_state.error = 'Please change "config filename"'
                 st.experimental_rerun()
             if instance.get_id() != f'{user}-{symbol}':
                 for inst in st.session_state.pb_instances:
@@ -387,21 +394,24 @@ def edit_instance(instance):
             except:
                 st.session_state.error = f'Error in Instance config'
                 st.experimental_rerun()
-            if st.session_state.instance_config != new_instance_config or instance.config != new_config_filename:
-                if instance.config != new_config_filename:
-                    if os.path.isfile(new_config_filename):
-                        if "overwrite" in st.session_state:
-                            del st.session_state.overwrite
-                            del st.session_state.error
-                        else:
-                            st.session_state.error = f':red[Overwrite {new_config_filename} ?]'
-                            st.session_state.overwrite = False
+            if st.session_state.instance_config != new_instance_config or instance.config != f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}':
+                if os.path.exists(f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}'):
+                    print("exists")
+                    if not "overwrite" in st.session_state:
+                        st.session_state.error = f':red[Overwrite {st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename} ?]'
+                        st.session_state.overwrite = False
+                        st.experimental_rerun()
+                    else:
+                        if not st.session_state.overwrite:
                             st.experimental_rerun()
-                instance.config = new_config_filename
+                else:
+                    if "overwrite" in st.session_state:
+                        del st.session_state.overwrite
+                    if "error" in st.session_state:
+                        del st.session_state.error
+                instance.config = f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}'
                 save_instance_config(instance, new_instance_config)
                 del st.session_state.instance_config
-                if "error" in st.session_state:
-                    del st.session_state.error
             print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
             instance.user = user
             instance.symbol = symbol
@@ -415,6 +425,8 @@ def edit_instance(instance):
                     st.session_state.edit_instance = instance
             if "error" in st.session_state:
                 del st.session_state.error
+            if "overwrite" in st.session_state:
+                del st.session_state.overwrite
             st.experimental_rerun()
     col21, col22 = st.columns([1,1])
     with col21:
@@ -440,6 +452,8 @@ def edit_instance(instance):
             st.session_state.instance_config = ""
         st.session_state.instance_config_high = len(st.session_state.instance_config.splitlines()) * 24
         instance.config = backtest_config
+        if "new_config_filename" in st.session_state:
+            del st.session_state.new_config_filename
         del st.session_state.backtest_config
         st.session_state.backtest_config = "."
         st.experimental_rerun()
