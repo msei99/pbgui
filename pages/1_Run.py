@@ -146,7 +146,10 @@ def button_handler(instance, button=None):
     if button == "back":
         del st.session_state.edit_instance
         del st.session_state.instance_config
-        if "error"in st.session_state:
+        del st.session_state.config_filename
+        if "new_config_filename" in st.session_state:
+            del st.session_state.new_config_filename
+        if "error" in st.session_state:
             del st.session_state.error
     elif button == "restart":
         os.chdir(st.session_state.pbdir)
@@ -340,7 +343,6 @@ def edit_instance(instance):
             market = st.radio("MARKET_TYPE",('futures', 'spot'), index=market_index)
             ohlcv = st.checkbox("OHLCV", value=ohlcv, key="ohlcv", help=pbgui_help.ohlcv)
             lev = st.slider("LEVERAGE", key="lev", min_value=2, max_value=20, value=lev, help=pbgui_help.lev)
-#        price_step = round(st.number_input("PRICE_STEP_CUSTOM", key="price_step", format="%.3f", min_value=0.0000, step=0.001, value=price_step, help=pbgui_help.price_precision),4)
         with st.expander("Advanced configurations", expanded=False):
             col21, col22, col23 = st.columns([1,1,1])
             with col21:
@@ -353,6 +355,7 @@ def edit_instance(instance):
                 assigned_balance = st.number_input("ASSIGNED_BALANCE", key="assigned_balance", min_value=0, step=500, value=assigned_balance, help=pbgui_help.assigned_balance)
                 price_distance_threshold = round(st.number_input("PRICE_DISTANCE_THRESHOLD", key="price_distance_threshold", min_value=0.00, step=0.05, value=price_distance_threshold, help=pbgui_help.price_distance_threshold),2)
                 price_precision = round(st.number_input("PRICE_PRECISION_MULTIPLIER", key="price_precision", format="%.4f", min_value=0.0000, step=0.0001, value=price_precision, help=pbgui_help.price_precision),4)
+                price_step = round(st.number_input("PRICE_STEP_CUSTOM", key="price_step", format="%.3f", min_value=0.000, step=0.001, value=price_step, help=pbgui_help.price_step),3)
         if not "new_config_filename" in st.session_state or not "config_filename" in st.session_state:
             config_filename = f'{os.path.split(instance.config)[-1]}'
         else:
