@@ -9,6 +9,7 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ![Alt text](docs/images/run2.png)
 ![Alt text](docs/images/backtest.png)
 ![Alt text](docs/images/optimize.png)
+![Alt text](docs/images/api-editor.png)
 
 ## Requirements
 - Python 3.8.x and higher
