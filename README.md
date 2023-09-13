@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.2
+v0.3
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -9,6 +9,7 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ![Alt text](docs/images/run2.png)
 ![Alt text](docs/images/backtest.png)
 ![Alt text](docs/images/optimize.png)
+![Alt text](docs/images/api-editor.png)
 
 ## Requirements
 - Python 3.8.x and higher
@@ -30,6 +31,9 @@ Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot directory
 
+## v0.3 (14-09-2023)
+- Setup: API-Editor
+- Check connection to exchange and get Wallet Balance
 
 ## v0.2 (11-09-2023)
 - Run: Interface for manager (start/stop/edit live configs)
@@ -39,11 +43,15 @@ On First Run, you have to select your passivbot directory
 First release with basic backtest and optimization functionality
 
 ## Roadmap
-- Run: Add/Edit api-keys
+- Run: Display logfiles
+- Run: Backtest live configs
 - Optimizer: add/edit configs/optimize/*.hjson
 - Backtest: open configs from filesystem
 - Backtest: open configs from github
 - Support for Windows
+- Run: Display Orders
+- Run: Display Positions / Open Orders and Chart
+- Run: History PNL, Balance and more
 - Backtest: Database for config/results
 - Optimizer: Run multiple optimizer sessions
 - Optimizer: Database for optimizer results
