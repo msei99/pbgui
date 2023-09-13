@@ -180,9 +180,10 @@ def edit_instance(instance):
             st.session_state.instance_config_high = 500
         if st.session_state.instance_config != "":
             st.session_state.instance_config_high = len(st.session_state.instance_config.splitlines()) * 24
-    # Navigation
+    # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
+    # Navigation
     with st.sidebar:
         st.text(f'Instance is: {instance.get_status()}')
         if instance.is_running():
@@ -190,8 +191,7 @@ def edit_instance(instance):
             st.button(":green[Restart]", key="restart", on_click=button_handler, args=[instance, "restart"])
         else:
             st.button(":red[Start]", key="instance", on_click=start_stop_instance, args=[instance])
-            st.button(":heavy_minus_sign: :red[Delete Instance]", key='del', on_click=button_handler, args=[instance, "del"])
-        '---'
+            st.button(":wastebasket:", key='del', on_click=button_handler, args=[instance, "del"])
         st.button(":back:", key="back", on_click=button_handler, args=[instance, "back"])
     with st.form("myInstance config"):
         # Init user index
@@ -465,7 +465,6 @@ def edit_instance(instance):
         del st.session_state.backtest_config
         st.session_state.backtest_config = "."
         st.experimental_rerun()
-
 
 set_page_config()
 
