@@ -1,4 +1,6 @@
 import streamlit as st
+import json
+import pprint
 
 def check_password():
     """Returns `True` if the user had the correct password."""
@@ -39,3 +41,16 @@ def set_page_config():
             'About': "Passivbot GUI v0.2"
         }
     )
+
+def validateJSON(jsonData):
+    try:
+        json.loads(jsonData)
+    except ValueError as err:
+        return False
+    return True
+
+def config_pretty_str(config: dict):
+    pretty_str = pprint.pformat(config)
+    for r in [("'", '"'), ("True", "true"), ("False", "false")]:
+        pretty_str = pretty_str.replace(*r)
+    return pretty_str

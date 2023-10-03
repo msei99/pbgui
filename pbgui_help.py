@@ -62,12 +62,5 @@ price_step = """
     Default: None (0.000) Not every exchange has the same minimal step
     ```"""
 api_error = """
-    ```
     Check your API-Key and enable spot and/or future trading if you need it
-    API-Error on Spot Wallet often means you have not enebaled spot trading on your API-Key
-    API-Error on Future Wallet often means you have not enebaled future trading on your API-Key
-    ```"""
-future_error = """
-    ```
-    Check your API-Key and enable future trading
-    ```"""
+    """
