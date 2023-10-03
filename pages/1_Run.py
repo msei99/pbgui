@@ -322,34 +322,34 @@ def edit_instance(instance):
         if '-lmm' in instance.flags:
             long_min_markup = instance.flags['-lmm']
         else:
-            try:
-                long_min_markup = float(json.loads(st.session_state.instance_config)["long"]["min_markup"])
-            except:
-                long_min_markup = 0.0
+#            try:
+#                long_min_markup = float(json.loads(st.session_state.instance_config)["long"]["min_markup"])
+#            except:
+            long_min_markup = 0.0
         # short_min_markup
         if '-smm' in instance.flags:
             short_min_markup = instance.flags['-smm']
         else:
-            try:
-                short_min_markup = float(json.loads(st.session_state.instance_config)["short"]["min_markup"])
-            except:
-                short_min_markup = 0.0
+#            try:
+#                short_min_markup = float(json.loads(st.session_state.instance_config)["short"]["min_markup"])
+#            except:
+            short_min_markup = 0.0
         # long_markup_range
         if '-lmr' in instance.flags:
             long_markup_range = instance.flags['-lmr']
         else:
-            try:
-                long_markup_range = float(json.loads(st.session_state.instance_config)["long"]["markup_range"])
-            except:
-                long_markup_range = 0.0
+#            try:
+#                long_markup_range = float(json.loads(st.session_state.instance_config)["long"]["markup_range"])
+#            except:
+            long_markup_range = 0.0
         # short_markup_range
         if '-smr' in instance.flags:
             short_markup_range = instance.flags['-smr']
         else:
-            try:
-                short_markup_range = float(json.loads(st.session_state.instance_config)["short"]["markup_range"])
-            except:
-                short_markup_range = 0.0
+#            try:
+#                short_markup_range = float(json.loads(st.session_state.instance_config)["short"]["markup_range"])
+#            except:
+            short_markup_range = 0.0
         col11, col12, col13 = st.columns([1,1,1])
         with col11:
             user = st.selectbox('User',api.index, index=user_index)
@@ -406,18 +406,18 @@ def edit_instance(instance):
                 else:
                     long_exposure = 0.0
                     instance.apply_flags({'-lw': long_exposure})
-                if long_min_markup != round(json.loads(new_instance_config)["long"]["min_markup"],4):
+                if long_min_markup != 0.0 or long_min_markup != round(json.loads(new_instance_config)["long"]["min_markup"],4):
                     instance.apply_flags({'-lmm': long_min_markup})
-                if long_markup_range != round(json.loads(new_instance_config)["long"]["markup_range"],4):
+                if long_markup_range != 0.0 or long_markup_range != round(json.loads(new_instance_config)["long"]["markup_range"],4):
                     instance.apply_flags({'-lmr': long_markup_range})
                 if short_exposure != round(json.loads(new_instance_config)["short"]["wallet_exposure_limit"],2):
                     instance.apply_flags({'-sw': short_exposure})
                 else:
                     short_exposure = 0.0
                     instance.apply_flags({'-sw': short_exposure})
-                if short_min_markup != round(json.loads(new_instance_config)["short"]["min_markup"],4):
+                if short_min_markup != 0.0 or short_min_markup != round(json.loads(new_instance_config)["short"]["min_markup"],4):
                     instance.apply_flags({'-smm': short_min_markup})
-                if short_markup_range != round(json.loads(new_instance_config)["short"]["markup_range"],4):
+                if short_markup_range != 0.0 or short_markup_range != round(json.loads(new_instance_config)["short"]["markup_range"],4):
                     instance.apply_flags({'-smr': short_markup_range})
             except:
                 st.session_state.error = f'Error in Instance config'
