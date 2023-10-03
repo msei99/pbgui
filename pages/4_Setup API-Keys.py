@@ -15,8 +15,10 @@ def cleanup():
         del st.session_state.del_api
     if "new_user" in st.session_state:
         del st.session_state.new_user
-    if "error" in st.session_state:
-        del st.session_state.error
+    if "error_api" in st.session_state:
+        del st.session_state.error_api
+    if "error_setup" in st.session_state:
+        del st.session_state.error_setup
     del st.session_state.keyfile
     if "swap_balance" in st.session_state:
         del st.session_state.swap_balance
@@ -34,7 +36,7 @@ def button_handler(user, button=None):
 
 # Display api-keys
 def display_api():
-    col1, col2, col3, col4, col5 = st.columns([0.5,0.3,0.8,1,1])
+    col1, col2, col3 = st.columns([1.5,1,4])
     with col1:
         st.write("#### **User**")
     with col2:
@@ -42,7 +44,7 @@ def display_api():
     with col3:
         st.write("#### **Edit**")
     for user in st.session_state.keyfile:
-        col1, col2, col3, col4, col5 = st.columns([0.5,0.3,0.8,1,1])
+        col1, col2, col3 = st.columns([1.5,1,4])
         with col1:
             if "exchange" in st.session_state.keyfile[user]: user
         with col2:
@@ -56,7 +58,7 @@ def save_api(user, new_user, exchange, key, secret, passphrase):
     # Check if new_user already used
     if st.session_state.new_user:
         if new_user in st.session_state.keyfile:
-            st.session_state.error = f'User: {new_user} is used in other API-Key'
+            st.session_state.error_setup = f'User: {new_user} is used in other API-Key'
             return
     # Add/Edit new_user to api-key
     if not "del_api" in st.session_state:
@@ -100,7 +102,7 @@ def get_balance(exchange, key, secret, passphrase):
     try:
         exc.checkRequiredCredentials()
     except Exception as e:
-        st.session_state.error = (str(e))
+        st.session_state.error_api = (str(e))
         return
     if exchange in ["binance","bybit"]:
         param = {"type":"spot"}
@@ -109,7 +111,7 @@ def get_balance(exchange, key, secret, passphrase):
             st.session_state.spot_balance = f'${round(balance["USDT"]["total"],2)}'
         except Exception as e:
             st.session_state.spot_balance = ':red[API-Error]'
-            st.session_state.error = (str(e))
+            st.session_state.error_api = (str(e))
     if exchange in ["binance", "bybit", "bitget", "kucoin", "okx"]:
         param = {"type":"swap"}
         try:
@@ -117,10 +119,13 @@ def get_balance(exchange, key, secret, passphrase):
             st.session_state.swap_balance = f'${round(balance["USDT"]["total"],2)}'
         except Exception as e:
             st.session_state.swap_balance = ':red[API-Error]'
-            st.session_state.error = (str(e))
+            st.session_state.error_api = (str(e))
 
 # Edit/Add/Del User/API
 def edit_api(user):
+    # Display Setup Error
+    if "error_setup" in st.session_state:
+        st.error(st.session_state.error_setup, icon="🚨")
     # Init variables
     if user == "new_user" or "del_api" in st.session_state:
         st.session_state.new_user = True
@@ -171,9 +176,9 @@ def edit_api(user):
                 if "spot_balance" in st.session_state:
                     st.markdown(f'# <center>{st.session_state.spot_balance}</center>', unsafe_allow_html=True)
         # Display Error
-        if "error" in st.session_state:
+        if "error_api" in st.session_state:
             st.markdown(":red[Error message from exchange:]", help=pbgui_help.api_error)
-            st.error(st.session_state.error, icon="🚨")
+            st.error(st.session_state.error_api, icon="🚨")
     # Navigation
     with st.sidebar:
         st.button(":wastebasket:", key="del", on_click=del_api, args=[user])
