@@ -73,7 +73,7 @@ def bt_add():
             my_bt.symbol = st.selectbox('SYMBOL', my_bt.swap, index = my_bt.swap.index(my_bt.symbol))
         my_bt.market_type = st.radio("MARKET_TYPE",('futures', 'spot'), index = 0 if my_bt.market_type == "futures" else 1)
     with col2:
-        my_bt.sb = st.number_input('STARTING_BALANCE',value=1000,step=500)
+        my_bt.sb = st.number_input('STARTING_BALANCE',value=my_bt.sb,step=500)
         my_bt.sd = st.date_input("START_DATE", datetime.datetime.strptime(my_bt.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
         my_bt.ed = st.date_input("END_DATE", datetime.datetime.strptime(my_bt.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
     my_bt.config = st.text_area("Passivbot Config: ",my_bt.config, height=500)
@@ -118,7 +118,8 @@ def bt_queue():
         with col_del:
             help_config = ""
             for line in i.config.split(sep=','):
-                help_config = help_config + line + "  "
+                help_config = help_config + line + ",  "
+            help_config = help_config[:-3]
             st.button(":wastebasket:", key=f'remove {i}', on_click=button_handler, args=["remove",i], help=help_config)
         with col_run:
             if i.is_running():

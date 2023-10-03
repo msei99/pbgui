@@ -67,9 +67,6 @@ def run_optimizer(user, symbol, sd, ed, sb, iters, algo, market, mode, cpu):
         cmd = ["pgrep", "-U", getuser(), "-f", "optimize.py"]
         pids = subprocess.check_output(cmd).decode("utf-8").strip()
     except subprocess.CalledProcessError:
-        symbol = ','.join(symbol)
-        sd = sd.strftime("%Y-%m-%d")
-        ed = ed.strftime("%Y-%m-%d")
         cmd = f'{sys.executable} -u {st.session_state.pbdir}/optimize.py -u {user} -i {iters} -pm {mode} -a {algo} -s {symbol} -sd {sd} -ed {ed} -sb {sb} -m {market} -c {cpu}'
         opt_log = open("/tmp/opt.log","w")
         bt_proc = subprocess.Popen(shlex.split(cmd), stdout=opt_log, stderr=opt_log, cwd=st.session_state.pbdir, text=True)
@@ -116,7 +113,7 @@ with col1:
     mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'))
     algo = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'))
 with col2:
-    opt.sb = st.number_input('STARTING_BALANCE',value=1000,step=500)
+    opt.sb = st.number_input('STARTING_BALANCE',value=opt.sb,step=500)
     iters = st.number_input('ITERS',value=10000,step=1000)
     opt.sd = st.date_input("START_DATE", datetime.datetime.strptime(opt.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
     opt.ed = st.date_input("END_DATE", datetime.datetime.strptime(opt.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
@@ -136,14 +133,18 @@ if optimizer():
 
 # Display optimizer results
 if 'expand_files' in st.session_state:
-    if opt.symbol != os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]:
-        opt.symbol = os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]
-        st.experimental_rerun()
-    st.subheader('Optimizing results: (Select a file for run backtest)')
-    st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
-    st.session_state.expand_files.sort(reverse=True)
-    for file in st.session_state.expand_files:
-        st.checkbox(file, False, key=(file), on_change=select_bt_conf_file, args=[file])
+    if st.session_state.expand_files:
+        if opt.symbol != os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]:
+            opt.symbol = os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]
+            st.experimental_rerun()
+        st.subheader('Optimizing results: (Select a file for run backtest)')
+        st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
+        st.session_state.expand_files.sort(reverse=True)
+        for file in st.session_state.expand_files:
+            st.checkbox(file, False, key=(file), on_change=select_bt_conf_file, args=[file])
+    else:
+        st.subheader('Empty Directory')
+        st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
 else:
     dirs = glob.glob(f'{st.session_state.pbdir}/results_{algo}_{mode}/*')
     if dirs:
