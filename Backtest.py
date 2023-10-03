@@ -502,6 +502,9 @@ class BacktestResults:
                     and short == bt.short
                 ):
                     self.backtests.append(bt)
+            if not self.backtests:
+                st.write("Backtest result not found. Please Run it again")
+                item.remove_log()
         else:
             st.write("Backtest result not found. Please Run it again")
             item.remove_log()
