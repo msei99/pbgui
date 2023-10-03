@@ -1,11 +1,13 @@
 import streamlit as st
 from pbgui_func import set_page_config
+from Backtest import BacktestItem, BacktestResults
 from streamlit_extras.switch_page_button import switch_page
+import streamlit_scrollable_textbox as stx
 import pbgui_help
 from datetime import datetime
+from pathlib import Path
 import sys
 import shutil
-import yaml
 import json
 import os
 import pandas as pd
@@ -142,16 +144,25 @@ def save_instance_config(instance, config):
     with open(instance.config, 'w', encoding='utf-8') as f:
         f.write(config)
 
+# Cleanup session_state
+def cleanup():
+    if "edit_instance" in st.session_state:
+        del st.session_state.edit_instance
+    if "instance_config" in st.session_state:
+        del st.session_state.instance_config
+    if "config_filename" in st.session_state:
+        del st.session_state.config_filename
+    if "new_config_filename" in st.session_state:
+        del st.session_state.new_config_filename
+    if "error" in st.session_state:
+        del st.session_state.error
+    if "bt_results_run" in st.session_state:
+        del st.session_state.bt_results_run
+
 # handler for button clicks
 def button_handler(instance, button=None):
     if button == "back":
-        del st.session_state.edit_instance
-        del st.session_state.instance_config
-        del st.session_state.config_filename
-        if "new_config_filename" in st.session_state:
-            del st.session_state.new_config_filename
-        if "error" in st.session_state:
-            del st.session_state.error
+        cleanup()
     elif button == "restart":
         os.chdir(st.session_state.pbdir)
         instance.restart()
@@ -161,6 +172,13 @@ def button_handler(instance, button=None):
         save_yaml(instance)
         st.session_state.pb_manager = Manager()
         st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
+    elif button == "run_bt":
+        st.session_state.my_bt = BacktestItem(st.session_state.instance_config)
+        st.session_state.my_bt.symbol = instance.symbol
+        st.session_state.my_bt.user = instance.user
+        st.session_state.go_backtest = True
+        if "bt_queue" in st.session_state:
+            del st.session_state.bt_queue
     elif button == "add":
         st.session_state.edit_instance = instance
         st.session_state.new_instance = True
@@ -193,6 +211,7 @@ def edit_instance(instance):
             st.button(":red[Start]", key="instance", on_click=start_stop_instance, args=[instance])
             st.button(":wastebasket:", key='del', on_click=button_handler, args=[instance, "del"])
         st.button(":back:", key="back", on_click=button_handler, args=[instance, "back"])
+        st.button("Copy to backtest", key="run_bt", on_click=button_handler, args=[instance, "run_bt"])
     with st.form("myInstance config"):
         # Init user index
         api = pd.read_json(st.session_state.pbdir+'/api-keys.json', typ='frame', orient='index')
@@ -465,6 +484,26 @@ def edit_instance(instance):
         del st.session_state.backtest_config
         st.session_state.backtest_config = "."
         st.experimental_rerun()
+    # Display Logfile
+    logfile = Path(f'{st.session_state.pbdir}/logs/{instance.user}/{instance.symbol}.log')
+    logr = ""
+    if logfile.exists():
+        with open(logfile, 'r', encoding='utf-8') as f:
+            log = f.readlines()
+            for line in reversed(log):
+                logr = logr+line
+    st.button(':recycle: **Refresh Logfile**',)
+    stx.scrollableTextbox(logr,height="300")
+    #Display Backtest
+    if "bt_results_run" in st.session_state:
+        bt_results_run = st.session_state.bt_results_run
+    else:
+        st.session_state.bt_results_run = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
+        bt_results_run = st.session_state.bt_results_run
+        bt_results_run.match_config(instance.symbol, st.session_state.instance_config)
+    bt_results_run.view()
+    for _ in range(100):
+        ' '
 
 set_page_config()
 
@@ -482,6 +521,10 @@ else:
 if 'pb_manager' not in st.session_state:
     st.session_state.pb_manager = Manager()
     st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
+if 'go_backtest' in st.session_state:
+    if st.session_state.go_backtest:
+        st.session_state.go_backtest = False
+        switch_page("Backtest")
 if 'edit_instance' in st.session_state:
     edit_instance(st.session_state.edit_instance)
 else:
