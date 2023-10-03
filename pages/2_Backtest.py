@@ -1,149 +1,203 @@
 import streamlit as st
-from pbgui_func import set_page_config
-import streamlit_scrollable_textbox as stx
+from streamlit_super_slider import st_slider
+from pbgui_func import set_page_config, validateJSON
+from Backtest import BacktestItem, BacktestQueue, BacktestResults
+from User import Users
 from streamlit_extras.switch_page_button import switch_page
-from streamlit_autorefresh import st_autorefresh
-from getpass import getuser
-import hjson, json
 import datetime
-import subprocess
-import sys
-import shlex
-import shutil
-import os
-import glob
-import pandas as pd
+import multiprocessing
 
-# Load Optimizer config to cache
-@st.cache_data
-def load_opt_conf():
-    with open(st.session_state.pbdir+'/configs/optimize/default.hjson', 'r', encoding='utf-8') as f:
-        opt_conf = hjson.load(f)
-    return opt_conf
+# Cleanup session_state
+def cleanup():
+    if "bt_queue" in st.session_state:
+        del st.session_state.bt_queue
+    if "bt_view" in st.session_state:
+        del st.session_state.bt_view
+    if "log" in st.session_state:
+        del st.session_state.log
+    if "bt_results" in st.session_state:
+        del st.session_state.bt_results
 
-# Load Backtester config to cache
-@st.cache_data
-def load_bt_conf():
-    with open(st.session_state.pbdir+'/configs/backtest/default.hjson', 'r', encoding='utf-8') as f:
-        bt_conf = hjson.load(f)
-    return bt_conf
+# handler for button clicks
+def button_handler(button=None, item=None):
+    if button == "back":
+        cleanup()
+    if button == "back_compare":
+        del st.session_state.bt_compare
+    if button == "back_view":
+        st.session_state.bt_queue = True
+        del st.session_state.bt_view
+    if button == "add_queue":
+        if not my_bt.config or not validateJSON(my_bt.config):
+           st.session_state.error = 'config is empty or invalid'
+        else:
+             if "error" in st.session_state:
+                del st.session_state.error
+             my_bt.save()
+             my_bt.file = None
+             st.session_state.bt_queue = True
+    if button == "queue":
+        st.session_state.bt_queue = True
+    if button == "remove":
+        item.remove()
+    if button == "run":
+        item.run()
+    if button == "stop":
+        item.stop()
+    if button == "view":
+        cleanup()
+        st.session_state.bt_view = item
+    if button == "compare":
+        cleanup()
+        st.session_state.bt_compare = True
+    if button == "log":
+        st.session_state.bt_log = item
 
-# Save passivbot config (.json) to temporary folder for backtesting
-def save_bt_conf_file(file):
-    with open('/tmp/bt_conffile.json', 'w', encoding='utf-8') as f:
-        f.write(file)
+def bt_add():
+    # Init users
+    users = Users(f'{st.session_state.pbdir}/api-keys.json')
+    # Display Error
+    if "error" in st.session_state:
+        st.error(st.session_state.error, icon="🚨")
+    # Navigation
+    with st.sidebar:
+        st.button("Compare Backtests", key="compare", on_click=button_handler, args=["compare"])
+    with st.sidebar:
+        st.button("Backtest Queue", key="queue", on_click=button_handler, args=["queue"])
+    # Create Backtest GUI
+    col1, col2 = st.columns(2)
+    with col1:
+        my_bt.user = st.selectbox('User',users.list(), index = users.list().index(my_bt.user))
+        if my_bt.market_type == "spot":
+            my_bt.symbol = st.selectbox('SYMBOL', my_bt.spot, index = my_bt.spot.index(my_bt.symbol))
+        else:
+            my_bt.symbol = st.selectbox('SYMBOL', my_bt.swap, index = my_bt.swap.index(my_bt.symbol))
+        my_bt.market_type = st.radio("MARKET_TYPE",('futures', 'spot'), index = 0 if my_bt.market_type == "futures" else 1)
+    with col2:
+        my_bt.sb = st.number_input('STARTING_BALANCE',value=1000,step=500)
+        my_bt.sd = st.date_input("START_DATE", datetime.datetime.strptime(my_bt.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
+        my_bt.ed = st.date_input("END_DATE", datetime.datetime.strptime(my_bt.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
+    my_bt.config = st.text_area("Passivbot Config: ",my_bt.config, height=500)
+    st.button("Add to Backtest Queue", key=f'add_queue', on_click=button_handler, args=["add_queue"])
 
-# Load backtest logfile from tmp
-def load_bt_log():
-    with open('/tmp/bt.log', 'r', encoding='utf-8') as f:
-        logdata = f.read()
-    return logdata
+def bt_queue():
+    if "my_btq" in st.session_state:
+        my_btq = st.session_state.my_btq
+    else:
+        st.session_state.my_btq = BacktestQueue() 
+        my_btq = st.session_state.my_btq
+    my_btq.load()
+    col_run, col_cpu = st.columns([1,1]) 
+    with col_cpu:
+        st.markdown("###### <center>Max running Backtests</center>", unsafe_allow_html=True)
+        my_btq.cpu = st_slider(min_value=1, max_value=multiprocessing.cpu_count(), default_value=my_btq.cpu)
+#        my_btq.cpu = st.slider("Max running Backtests",min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu)
+    with col_run:
+        my_btq.autostart = st.toggle("Autostart", value=my_btq.autostart, key="autostart", help=None)
+        st.button(':recycle:',)
+    col_del, col_run, col1, col2, col_exchange, col3, col4, col5, col_log = st.columns([1,1,1,1,1,1,1,1,1]) 
+    with col_del:
+        st.write("##### **Remove**")
+    with col_run:
+        st.write("##### **Run**")
+    with col1:
+        st.write("##### **Status**")
+    with col2:
+        st.write("##### **Symbol**")
+    with col_exchange:
+        st.write("##### **Exchange**")
+    with col3:
+        st.write("##### **Start**")
+    with col4:
+        st.write("##### **End**")
+    with col5:
+        st.write("##### **Balance**")
+    with col_log:
+        st.write("##### **Log**")
+    for i in my_btq.items:
+        col_del, col_run, col1, col2, col_exchange, col3, col4, col5, col_log = st.columns([1,1,1,1,1,1,1,1,1])
+        with col_del:
+            help_config = ""
+            for line in i.config.split(sep=','):
+                help_config = help_config + line + "  "
+            st.button(":wastebasket:", key=f'remove {i}', on_click=button_handler, args=["remove",i], help=help_config)
+        with col_run:
+            if i.is_running():
+                st.button("Stop", key=f'stop {i}', on_click=button_handler, args=["stop",i])
+            elif i.is_finish():
+                st.button("View", key=f'stop {i}', on_click=button_handler, args=["view",i])
+            else:
+                st.button("Run", key=f'run {i}', on_click=button_handler, args=["run",i])
+        with col1:
+            st.write(i.status())
+        with col2:
+                st.write(i.symbol)
+        with col_exchange:
+                st.write(i.exchange.id)
+        with col3:
+                st.write(i.sd)
+        with col4:
+                st.write(i.ed)
+        with col5:
+                st.write(i.sb)
+        with col_log:
+            st.button("Log", key=f'log {i}', on_click=button_handler, args=["log",i])
+    # Navigation
+    with st.sidebar:
+        st.button(":back:", key="back", on_click=button_handler, args=["back"])
+    if "bt_log" in st.session_state:
+        if st.session_state.bt_log:
+            st.button(':recycle: **Backtest Logfile**',)
+            st.code(st.session_state.bt_log.load_log())
 
-# Load passivbot config (.json) from optimizer
-def load_bt_conffile(filename):
-    with open(filename, 'r', encoding='utf-8') as f:
-        bt_conf_file = f.read()
-    return bt_conf_file
+def bt_view():
+    # Navigation
+    with st.sidebar:
+        st.button(":back:", key="back_view", on_click=button_handler, args=["back_view"])
+    if "bt_view" in st.session_state:
+        if "bt_results" in st.session_state:
+            bt_results = st.session_state.bt_results
+        else:     
+            st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
+            bt_results = st.session_state.bt_results
+            bt_results.match_item(st.session_state.bt_view)
+    bt_results.view()
 
-# Delete old files
-def delete_files_and_subdirectories(directory_path):
-   try:
-     with os.scandir(directory_path) as entries:
-       for entry in entries:
-         if entry.is_file():
-            os.unlink(entry.path)
-         else:
-            shutil.rmtree(entry.path)
-     print("All files and subdirectories deleted successfully.")
-   except OSError:
-     print("Error occurred while deleting files and subdirectories.")
+def bt_compare():
+    # Navigation
+    with st.sidebar:
+        st.button(":back:", key="back_compare", on_click=button_handler, args=["back_compare"])
+    st.markdown('### Filter and select backtests for view')
+    if "bt_results" in st.session_state:
+        bt_results = st.session_state.bt_results
+    else:     
+        st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
+        bt_results = st.session_state.bt_results
+        bt_results.find_all()
+    col_symbol, col_exchange = st.columns([1,1])
+    with col_symbol:
+        symbols = st.multiselect("Symbols", bt_results.symbols, default=None, key=None, on_change=None, args=None)
+    with col_exchange:
+        exchanges = st.multiselect("Exchanges", bt_results.exchanges, default=None, key=None, on_change=None, args=None)
+    bt_results.view(symbols = symbols, exchanges = exchanges)
 
-# Check backtest is running
-def backtest():
-    try:
-        cmd = ["pgrep", "-U", getuser(), "-f", "backtest.py"]
-        pids = subprocess.check_output(cmd).decode("utf-8").strip()
-    except subprocess.CalledProcessError:
-        return False
-    return True
-
-# Run Backtest in background
-def run_backtest(user, symbol, sd, ed, sb, market, file):
-#    directory_path = f'{st.session_state.pbdir}/backtests/pbgui'
-#    delete_files_and_subdirectories(directory_path)
-    save_bt_conf_file(file)
-    sd = sd.strftime("%Y-%m-%d")
-    ed = ed.strftime("%Y-%m-%d")
-    cmd = f'{sys.executable} -u {st.session_state.pbdir}/backtest.py -u {user} -s {symbol} -sd {sd} -ed {ed} -sb {sb} -m {market} -bd ./backtests/pbgui /tmp/bt_conffile.json'
-    bt_log = open("/tmp/bt.log","w")
-    subprocess.Popen(shlex.split(cmd), stdout=bt_log, stderr=bt_log, cwd=st.session_state.pbdir, text=True)
 
 set_page_config()
 
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
-if 'bt_conf_filename' in st.session_state:
-    st.session_state.bt_conf_file = load_bt_conffile(st.session_state.bt_conf_filename)
+if 'my_bt' in st.session_state:
+    my_bt = st.session_state.my_bt
 else:
-    st.session_state.bt_conf_file = ""
+    my_bt = BacktestItem()
+    st.session_state.my_bt = my_bt
 
-# Load defaul optimize, backtest and api-keys
-opt_conf = load_opt_conf()
-bt_conf = load_bt_conf()
-api = pd.read_json(st.session_state.pbdir+'/api-keys.json', typ='frame', orient='index')
-
-# Create Backtest GUI
-col1, col2 = st.columns(2)
-with col1:
-    user = st.selectbox('User',api.index, api.index.get_loc(bt_conf['user']))
-    if 'symbol' not in st.session_state:
-        if bt_conf['symbol'] not in opt_conf['symbols']:
-            st.session_state.symbol = 'BTCUSDT'
-        else:
-            st.session_state.symbol = bt_conf['symbol']
-    symbol = st.selectbox('SYMBOL', opt_conf['symbols'], opt_conf['symbols'].index(st.session_state.symbol))
-    market = st.radio("MARKET_TYPE",('futures', 'spot'))
-with col2:
-    sb = st.number_input('STARTING_BALANCE',value=1000,step=500)
-    today = datetime.datetime.now()
-    sd = st.date_input("START_DATE", datetime.date.today() - datetime.timedelta(days=365*4),format="YYYY-MM-DD")
-    ed = st.date_input("END_DATE", datetime.date.today(),format="YYYY-MM-DD")
-
-# Load selected passivbot config (.json) from optimizer
-bt_filename = ""
-if 'bt_conf_filename' in st.session_state:
-    bt_filename = os.path.split(st.session_state.bt_conf_filename)[1]
-
-#stx.scrollableTextbox(st.session_state.bt_conf_file, height="500", fontFamily="Courier")
-st.session_state.bt_conf_file = st.text_area("Passivbot Config: "+symbol+" "+bt_filename,st.session_state.bt_conf_file, height=500, placeholder="Paste config and select correct SYMBOL")
-
-# Start backtest
-if st.session_state.bt_conf_file != "":
-    st.button('Start Backtest', on_click=run_backtest, args=[user, symbol, sd, ed, sb, market, st.session_state.bt_conf_file])
-if backtest():
-    st.header('Backtest is running....')
-    st.button(':recycle: **Backtest Logfile**',)
-    logfile = load_bt_log()
-    stx.scrollableTextbox(logfile,height="300")
-    bt_count = st_autorefresh(interval=15000, limit=None, key="bt_counter")
-
-# Display backtest results
-if st.session_state.bt_conf_file != "" and not backtest():
-    bt_l = json.loads(st.session_state.bt_conf_file)["long"]
-    bt_s = json.loads(st.session_state.bt_conf_file)["short"]
-    files = glob.glob(f'{st.session_state.pbdir}/backtests/pbgui/*/*/plots/*/live_config.json', recursive = True)
-    if files:
-        for file in files:
-            with open(file, 'r', encoding='utf-8') as f:
-                bt_json = json.load(f)
-                if bt_json["long"] == bt_l and bt_json["short"] == bt_s:
-                    bt_path = os.path.split(file)[0]
-                    st.header('Backtest results:')
-                    files = glob.glob(f'{bt_path}/balance_and_equity_sampled_*.png', 
-                            recursive = True)
-                    for file in files:
-                        st.image(file)
-                    st.image(f'{bt_path}/wallet_exposures_plot.png')
-                    with open(f'{bt_path}/backtest_result.txt', 'r', encoding='utf-8') as f:
-                        st.code(f.read())
+if "bt_queue" in st.session_state:
+    bt_queue()
+elif "bt_view" in st.session_state:
+    bt_view()
+elif "bt_compare" in st.session_state:
+    bt_compare()
+else:
+    bt_add()

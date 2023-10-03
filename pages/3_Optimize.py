@@ -4,7 +4,6 @@ import streamlit_scrollable_textbox as stx
 from streamlit_extras.switch_page_button import switch_page
 from streamlit_autorefresh import st_autorefresh
 from getpass import getuser
-import hjson, json
 import datetime
 import subprocess
 import sys
@@ -12,22 +11,10 @@ import shlex
 import shutil
 import os
 import glob
-import pandas as pd
 import multiprocessing
+from User import Users
+from Backtest import BacktestItem
 
-# Load Optimizer config to cache
-@st.cache_data
-def load_opt_conf():
-    with open(st.session_state.pbdir+'/configs/optimize/default.hjson', 'r', encoding='utf-8') as f:
-        opt_conf = hjson.load(f)
-    return opt_conf
-
-# Load Backtester config to cache
-@st.cache_data
-def load_bt_conf():
-    with open(st.session_state.pbdir+'/configs/backtest/default.hjson', 'r', encoding='utf-8') as f:
-        bt_conf = hjson.load(f)
-    return bt_conf
 
 # Load optimizer logfile from tmp
 def load_opt_log():
@@ -46,12 +33,11 @@ def select_optdir(dir):
     else:
         st.session_state.expand_files = glob.glob(f'{dir}/*best_config_*.json')
 
-# store selected config to session state and switch to backtester
+# store selected config and switch to backtester
 def select_bt_conf_file(file):
     del st.session_state.expand_files
     st.session_state[file] = False
-    st.session_state.bt_conf_filename = file
-    st.session_state.go_backtest = True
+    opt.config_file = file
 
 # Delete old files
 def delete_files_and_subdirectories(directory_path):
@@ -77,8 +63,6 @@ def optimizer():
 
 # Run Optimizer in background
 def run_optimizer(user, symbol, sd, ed, sb, iters, algo, market, mode, cpu):
-#    directory_path = f'{st.session_state.pbdir}/results_{algo}_{mode}'
-#    delete_files_and_subdirectories(directory_path)
     try:
         cmd = ["pgrep", "-U", getuser(), "-f", "optimize.py"]
         pids = subprocess.check_output(cmd).decode("utf-8").strip()
@@ -98,35 +82,44 @@ set_page_config()
 # Init Session State
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
-if 'go_backtest' in st.session_state:
-    if st.session_state.go_backtest:
-        st.session_state.go_backtest = False
-        switch_page("Backtest")
 
-# Load defaul optimize, backtest and api-keys
-opt_conf = load_opt_conf()
-bt_conf = load_bt_conf()
-api = pd.read_json(st.session_state.pbdir+'/api-keys.json', typ='frame', orient='index')
+# Init users
+users = Users(f'{st.session_state.pbdir}/api-keys.json')
+
+# Init Optimizer
+if 'opt' in st.session_state:
+    opt = st.session_state.opt
+else:
+    opt = BacktestItem()
+    st.session_state.opt = opt
+
+if opt.config_file:
+    st.session_state.my_bt = opt
+    del st.session_state.opt
+    if "bt_view" in st.session_state:
+        del st.session_state.bt_view
+    if "bt_compare" in st.session_state:
+        del st.session_state.bt_compare
+    if "bt_queue" in st.session_state:
+        del st.session_state.bt_queue
+    switch_page("Backtest")
 
 # Create Optimizer GUI
 col1, col2 = st.columns(2)
 with col1:
-    user = st.selectbox('User',api.index, api.index.get_loc(bt_conf['user']))
-    if 'symbol' not in st.session_state:
-        if bt_conf['symbol'] not in opt_conf['symbols']:
-            st.session_state.symbol = 'BTCUSDT'
-        else:
-            st.session_state.symbol = bt_conf['symbol']
-    symbol = st.multiselect('SYMBOL', opt_conf['symbols'], st.session_state.symbol)
+    opt.user = st.selectbox('User',users.list(), index = users.list().index(opt.user))
+    if opt.market_type == "spot":
+        opt.symbol = st.selectbox('SYMBOL', opt.spot, index = opt.spot.index(opt.symbol))
+    else:
+        opt.symbol = st.selectbox('SYMBOL', opt.swap, index = opt.swap.index(opt.symbol))
+    opt.market_type = st.radio("MARKET_TYPE",('futures', 'spot'), index = 0 if opt.market_type == "futures" else 1)
     mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'))
     algo = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'))
-    market = st.radio("MARKET_TYPE",('futures', 'spot'))
 with col2:
-    sb = st.number_input('STARTING_BALANCE',value=1000,step=500)
+    opt.sb = st.number_input('STARTING_BALANCE',value=1000,step=500)
     iters = st.number_input('ITERS',value=10000,step=1000)
-    today = datetime.datetime.now()
-    sd = st.date_input("START_DATE", datetime.date.today() - datetime.timedelta(days=365*4),format="YYYY-MM-DD")
-    ed = st.date_input("END_DATE", datetime.date.today(),format="YYYY-MM-DD")
+    opt.sd = st.date_input("START_DATE", datetime.datetime.strptime(opt.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
+    opt.ed = st.date_input("END_DATE", datetime.datetime.strptime(opt.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
     cpu = st.slider("N_CPUS",min_value=1, max_value=multiprocessing.cpu_count(), value=multiprocessing.cpu_count()-1)
     if optimizer():
         st.header('Optimizer is running....')
@@ -134,7 +127,7 @@ with col2:
         st.header('Optimizer is stopped')
 # Start optimizer
 with col1:
-    st.button("Start/Stop Optimizer", on_click=run_optimizer, args=[user,symbol, sd, ed, sb, iters, algo, market, mode, cpu])
+    st.button("Start/Stop Optimizer", on_click=run_optimizer, args=[opt.user,opt.symbol, opt.sd, opt.ed, opt.sb, iters, algo, opt.market_type, mode, cpu])
 if optimizer():
     st.button(':recycle: **Optimizer Logfile**',)
     logfile = load_opt_log()
@@ -143,8 +136,8 @@ if optimizer():
 
 # Display optimizer results
 if 'expand_files' in st.session_state:
-    if st.session_state.symbol != os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]:
-        st.session_state.symbol = os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]
+    if opt.symbol != os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]:
+        opt.symbol = os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]
         st.experimental_rerun()
     st.subheader('Optimizing results: (Select a file for run backtest)')
     st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
