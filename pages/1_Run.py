@@ -500,7 +500,8 @@ def edit_instance(instance):
     else:
         st.session_state.bt_results_run = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
         bt_results_run = st.session_state.bt_results_run
-        bt_results_run.match_config(instance.symbol, st.session_state.instance_config)
+        if st.session_state.instance_config:
+            bt_results_run.match_config(instance.symbol, st.session_state.instance_config)
     bt_results_run.view()
     for _ in range(100):
         ' '
