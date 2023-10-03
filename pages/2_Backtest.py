@@ -61,9 +61,8 @@ def bt_add():
         st.error(st.session_state.error, icon="🚨")
     # Navigation
     with st.sidebar:
-        st.button("Compare Backtests", key="compare", on_click=button_handler, args=["compare"])
-    with st.sidebar:
         st.button("Backtest Queue", key="queue", on_click=button_handler, args=["queue"])
+        st.button("Compare Backtests", key="compare", on_click=button_handler, args=["compare"])
     # Create Backtest GUI
     col1, col2 = st.columns(2)
     with col1:
