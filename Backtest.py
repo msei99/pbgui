@@ -182,7 +182,10 @@ class BacktestItem:
     def pid(self):
         if self.file:
             for process in psutil.process_iter():
-                cmdline = process.cmdline()
+                try:
+                    cmdline = process.cmdline()
+                except psutil.NoSuchProcess:
+                    pass
                 if any(str(self.file) in sub for sub in cmdline) and any("backtest.py" in sub for sub in cmdline):
                     return process
 
