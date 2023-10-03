@@ -336,7 +336,6 @@ class BacktestResults:
             column_config = {
                 "Show": st.column_config.CheckboxColumn('Show', default=False),
                 "Delete": st.column_config.CheckboxColumn('Delete', default=False),
-                "id": None,
                 }
             for bt in self.backtests:
                 if (bt.symbol in symbols or not symbols) and (bt.exchange in exchanges or not exchanges):
@@ -427,17 +426,17 @@ class BacktestResults:
                 b_long[idx] = bt.stats["balance_long"]
                 e_long[idx] = bt.stats["equity_long"]
                 we_long[idx] = bt.stats["wallet_exposure_long"]
-                be.line(x, b_long[idx], legend_label=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_balance',color=Category20_20[color_b], line_width=2, name=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_balance')
-                be.line(x, e_long[idx], legend_label=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_equity',color=Category20_20[color_e], line_width=1, name=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_equity')
-                we.line(x, we_long[idx], legend_label=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_long',color=Category20_20[color_b], line_width=1, name=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_long')
+                be.line(x, b_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_balance',color=Category20_20[color_b], line_width=2, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_balance')
+                be.line(x, e_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_equity',color=Category20_20[color_e], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_equity')
+                we.line(x, we_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_long',color=Category20_20[color_b], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_long')
             if bt.selected and bt.short_enabled:
                 x = bt.stats["timestamp"]
                 b_short[idx] = bt.stats["balance_short"]
                 e_short[idx] = bt.stats["equity_short"]
                 we_short[idx] = -abs(bt.stats["wallet_exposure_short"])
-                be.line(x, b_short[idx], legend_label=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_balance',color=Category20_20[color_b], line_width=2, name=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_balance')
-                be.line(x, e_short[idx], legend_label=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_equity',color=Category20_20[color_e], line_width=1, name=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_equity')
-                we.line(x, we_short[idx], legend_label=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_short',color=Category20_20[color_b], line_width=1, name=f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_short')
+                be.line(x, b_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_balance',color=Category20_20[color_b], line_width=2, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_balance')
+                be.line(x, e_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_equity',color=Category20_20[color_e], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_equity')
+                we.line(x, we_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_short',color=Category20_20[color_b], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_short')
         if be.legend:
             be.yaxis[0].formatter = NumeralTickFormatter(format="$ 0")
             be_leg = be.legend[0]
@@ -460,12 +459,12 @@ class BacktestResults:
                 if idx == 3: idx = 1
                 if idx == 1:
                     with col_r1:
-                        st.write(f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed}')
+                        st.write(f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed}')
                         st.code(bt.result_txt)
                         st.code(bt.config)
                 if idx == 2:
                     with col_r2:
-                        st.write(f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed}')
+                        st.write(f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed}')
                         st.code(bt.result_txt)
                         st.code(bt.config)
 
