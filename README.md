@@ -1,10 +1,12 @@
 # GUI for Passivbot
 
-v0.4
+v0.5
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
 
+![Alt text](docs/images/live1.png)
+![Alt text](docs/images/live2.png)
 ![Alt text](docs/images/run.png)
 ![Alt text](docs/images/run2.png)
 ![Alt text](docs/images/backtest.png)
@@ -15,7 +17,8 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ## Requirements
 - Python 3.8.x and higher
 - Streamlit 1.26.0 and higher
-- Linux (Windows not suppoted at the moment)
+- Linux and Winodws (Run Module not supported)
+- Live Modul only tested on bybit and bitget
 
 ## Installation
 ```
@@ -32,7 +35,19 @@ Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot directory
 
-## v0.4 02-10-2023)
+## v0.5 (21-10-2023)
+- Support Windows (Exclude Run Modul)
+- Live: Display ohlcv candlesticks with selectable timeframe and auto refresh
+- Live: Show position, open/close orders, price, unrealizedPnL
+- Live: Show trading history
+- Live: Run backtests and compare trading history with backtest
+- Live: Add, Edit, Delete instances
+- Live: Dynamic edit config file
+- Run: Add Instance to Live
+- Code cleanup: Config, Instance class added
+- Much more small changes
+
+## v0.4 (02-10-2023)
 - Run: Display Logfile
 - Run: Add Backtest button
 - Run: Display and compare backtests
@@ -53,19 +68,20 @@ On First Run, you have to select your passivbot directory
 First release with basic backtest and optimization functionality
 
 ## Roadmap
+- Live: Start / Stop / Status Instances
+- Live: Autostart enabled Instances after reboot
+- Live: Watchdog for crashed instances and restart them
+- Run: Remove the Run modul. Move all to the Live modul
 - Backtest: Wallet_Exposure for long and short
 - Backtest: Enable short/long
 - Backtest: Configure Default Values
-- Code cleanup (Config, Optimizer class)
+- Code cleanup (Optimizer class)
 - Optimizer: add/edit configs/optimize/*.hjson
 - Optimizer: Queue for run multiple optimizers
 - Backtest: open configs from filesystem
 - Backtest: open configs from github
-- Support for Windows
-- Run: Display Orders
-- Run: Display Positions / Open Orders and Chart
-- Run: History PNL, Balance and more
-- Run: Compare live results with backtest
+- Full support for Windows
+- Remote managment for multiple passivebot servers
 - ...
 
 ## Links:

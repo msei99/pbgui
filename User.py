@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import configparser
 
 class User:
     def __init__(self):
@@ -7,6 +8,7 @@ class User:
         self._exchange = None
         self._key = None
         self._secret = None
+        self._passphrase = None
     
     @property
     def name(self): return self._name
@@ -14,6 +16,8 @@ class User:
     def key(self): return self._key
     @property
     def secret(self): return self._secret
+    @property
+    def passphrase(self): return self._passphrase
     @property
     def exchange(self): return self._exchange
 
@@ -29,13 +33,19 @@ class User:
     @secret.setter
     def secret(self, new_secret):
         self._secret = new_secret
+    @passphrase.setter
+    def passphrase(self, new_passphrase):
+        self._passphrase = new_passphrase
 
 
 class Users:
-    def __init__(self, api_path: Path = None):
+    def __init__(self):
         self.users = []
         self.index = 0
-        self.api_path = api_path
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pbdir = pb_config.get("main", "pbdir")
+        self.api_path = f'{pbdir}/api-keys.json'
         self.load()
     
     def __iter__(self):
@@ -59,7 +69,7 @@ class Users:
     def find_user(self, name: str):
         for user in self.users:
             if user.name == name:
-                return user.name
+                return user
 
     def find_exchange(self, name: str):
         for user in self.users:
@@ -78,6 +88,8 @@ class Users:
                     my_user.key = users[user]["key"]
                 if "secret" in users[user]:
                     my_user.secret = users[user]["secret"]
+                if "passphrase" in users[user]:
+                    my_user.passphrase = users[user]["passphrase"]
                 self.users.append(my_user)
 
 

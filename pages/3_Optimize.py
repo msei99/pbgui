@@ -11,19 +11,22 @@ import shlex
 import shutil
 import os
 import glob
+import psutil
 import multiprocessing
 from User import Users
 from Backtest import BacktestItem
-
+from pathlib import Path, PurePath
 
 # Load optimizer logfile from tmp
 def load_opt_log():
+    pbgdir = Path.cwd()
+    log = Path(f'{pbgdir}/data/logs/opt.log')
     try:
-        with open('/tmp/opt.log', 'r', encoding='utf-8') as f:
+        with open(log, 'r', encoding='utf-8') as f:
             logdata = f.read()
     except FileNotFoundError:
-        print("Optimizer Logfile (/tmp/opt.log), not found. Maybe you have a running optimizer not started from pbgui.")
-        logdata = "Optimizer Logfile (/tmp/opt.log), not found. Maybe you have a running optimizer not started from pbgui."
+        print(f'Optimizer Logfile {log}, not found. Maybe you have a running optimizer not started from pbgui.')
+        logdata = f'Optimizer Logfile {log}, not found. Maybe you have a running optimizer not started from pbgui.'
     return logdata
 
 # Change dir to selected
@@ -55,24 +58,35 @@ def delete_files_and_subdirectories(directory_path):
 # Check optimizer is running
 def optimizer():
     try:
-        cmd = ["pgrep", "-U", getuser(), "-f", "optimize.py"]
-        pids = subprocess.check_output(cmd).decode("utf-8").strip()
-    except subprocess.CalledProcessError:
-        return False
-    return True
+        for process in psutil.process_iter(['pid', 'name', 'cmdline', 'username']):
+            if str(process.info["username"]).endswith(getuser()) and any("optimize.py" in sub for sub in process.info["cmdline"]):
+                return True
+    except psutil.NoSuchProcess:
+        pass
+    return False
 
 # Run Optimizer in background
 def run_optimizer(user, symbol, sd, ed, sb, iters, algo, market, mode, cpu):
+    pids = []
     try:
-        cmd = ["pgrep", "-U", getuser(), "-f", "optimize.py"]
-        pids = subprocess.check_output(cmd).decode("utf-8").strip()
-    except subprocess.CalledProcessError:
-        cmd = f'{sys.executable} -u {st.session_state.pbdir}/optimize.py -u {user} -i {iters} -pm {mode} -a {algo} -s {symbol} -sd {sd} -ed {ed} -sb {sb} -m {market} -c {cpu}'
-        opt_log = open("/tmp/opt.log","w")
-        bt_proc = subprocess.Popen(shlex.split(cmd), stdout=opt_log, stderr=opt_log, cwd=st.session_state.pbdir, text=True)
-        return
-    for pid in pids.splitlines():
-        os.kill(int(pid),9)
+        for process in psutil.process_iter(['pid', 'name', 'cmdline', 'username']):
+            if str(process.info["username"]).endswith(getuser()) and any("optimize.py" in sub for sub in process.info["cmdline"]):
+                pids.append(process.info["pid"])
+    except psutil.NoSuchProcess:
+        pass
+    if pids:
+        for pid in pids:
+            os.kill(int(pid),9)
+    else:
+        cmd_end = f'-u {user} -i {iters} -pm {mode} -a {algo} -s {symbol} -sd {sd} -ed {ed} -sb {sb} -m {market} -c {cpu}'
+        cmd = [sys.executable, '-u', PurePath(f'{st.session_state.pbdir}/optimize.py')]
+        cmd.extend(shlex.split(cmd_end))
+        pbgdir = Path.cwd()
+        dest = Path(f'{pbgdir}/data/logs')
+        if not dest.exists():
+            dest.mkdir(parents=True)
+        opt_log = open(Path(f'{dest}/opt.log'),"w")
+        bt_proc = subprocess.Popen(cmd, stdout=opt_log, stderr=opt_log, cwd=PurePath(st.session_state.pbdir), text=True)
 
 set_page_config()
 
@@ -81,7 +95,7 @@ if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
 
 # Init users
-users = Users(f'{st.session_state.pbdir}/api-keys.json')
+users = Users()
 
 # Init Optimizer
 if 'opt' in st.session_state:
