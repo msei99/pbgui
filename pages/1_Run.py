@@ -11,6 +11,7 @@ import sys
 import shutil
 import json
 import os
+import platform
 import pandas as pd
 import jinja2
 
@@ -531,6 +532,11 @@ def editpb_instance(instance):
         ' '
 
 set_page_config()
+
+# Not supported on windows
+if platform.system() == "Windows":
+    st.write("Run Module not supported on Windows")
+    exit()
 
 # Init Session State
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
