@@ -195,9 +195,12 @@ class BacktestItem:
             pb_config.read('pbgui.ini')
             if pb_config.has_option("main", "pbdir"):
                 pbdir = pb_config.get("main", "pbdir")
-                cmd = f'{sys.executable} -u {pbdir}/backtest.py -dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -bd ./backtests/pbgui {str(self.config_file)}'
+                cmd = [sys.executable, '-u', PurePath(f'{pbdir}/backtest.py')]
+                cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
+                cmd.extend(shlex.split(cmd_end))
+                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self.config_file)}')])
                 log = open(self.log,"w")
-                subprocess.Popen(shlex.split(cmd), stdout=log, stderr=log, cwd=pbdir, text=True)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True)
 
 class BacktestQueue:
     def __init__(self):
@@ -272,9 +275,9 @@ class BacktestQueue:
     def run(self):
         if not self.is_running():
             pbgdir = Path.cwd()
-            cmd = f'{sys.executable} -u {pbgdir}/Backtest.py'
-            log = open(f'{pbgdir}/data/bt_queue/Backtest.log',"a")
-            subprocess.Popen(shlex.split(cmd), stdout=log, stderr=log, cwd=pbgdir, text=True)
+            cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/Backtest.py')]
+            log = open(Path(f'{pbgdir}/data/bt_queue/Backtest.log'),"a")
+            subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def is_running(self):
         if self.pid():
@@ -283,7 +286,10 @@ class BacktestQueue:
 
     def pid(self):
         for process in psutil.process_iter():
-            cmdline = process.cmdline()
+            try:
+                cmdline = process.cmdline()
+            except psutil.AccessDenied:
+                continue
             if any("Backtest.py" in sub for sub in cmdline):
                 return process
 
