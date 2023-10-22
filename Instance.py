@@ -19,6 +19,7 @@ class Instance:
         self._error = None # not saved
         self._user = None
         self._symbol = None
+        self._symbol_ccxt = None # not saved
         self._symbols = [] # not saved
         self._config = Config() # not saved
         self._assigned_balance = 0
@@ -53,6 +54,8 @@ class Instance:
     def user(self): return self._user
     @property
     def symbol(self): return self._symbol
+    @property
+    def symbol_ccxt(self): return self._symbol_ccxt
     @property
     def symbols(self): return self._symbols
     @property
@@ -335,7 +338,7 @@ class Instance:
 #                    balance = balance - trade["fee"]["cost"]
                 timestamp = trade["timestamp"]
                 df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
-        else:
+        elif self.exchange.id == "binance":
             for trade in trades:
                 if psize < 0:
                     psize = 0
@@ -345,26 +348,25 @@ class Instance:
                     df = pd.DataFrame(data)
                     if self.sb_change:
                         balance = self.sb
-                if trade["type"] and trade["side"] == "buy":
+                if trade["side"] == "buy":
                     last_psize = psize
                     psize = round(psize + trade["amount"],10)
                     pprice = (pprice*last_psize + trade["amount"]*trade["price"])/psize
                     price = trade["price"]
                     balance = balance - trade["fee"]["cost"]
-                if trade["type"] and trade["side"] == "sell" and psize > 0:
+                if trade["side"] == "sell" and psize > 0:
                     last_psize = psize
                     psize = round(psize - trade["amount"],10)
                     win = trade["amount"] * trade["price"] - trade["amount"] * pprice
                     price = trade["price"]
                     balance = balance - trade["fee"]["cost"]
                     balance = balance + win
-                if not trade["type"]:
-                    balance = balance - trade["fee"]["cost"]
                 timestamp = trade["timestamp"]
                 df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
         if not self.sb_change:
             my_balance = self.balance
             df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance)
+#        print(df)
         return df
 
     def remove(self):
@@ -380,10 +382,10 @@ class Instance:
             try:
                 since = int(trades[-1]["cTime"])
             except ValueError:
-                since = 946684861000
+                since = 1577840461000
         else:
-            since = 946684861000
-        new_trades = self._exchange.fetch_bill(self._symbol, self._market_type, since)
+            since = 1577840461000
+        new_trades = self._exchange.fetch_bill(self.symbol_ccxt, self._market_type, since)
         if new_trades:
             for trade in new_trades:
                 if not any(trade["id"] in sub["id"] for sub in trades):
@@ -403,10 +405,10 @@ class Instance:
             if type(trades[-1]["timestamp"]) == int:
                 since = trades[-1]["timestamp"]
             else:
-                since = 946684861000
+                since = 1577840461000
         else:
-            since = 946684861000
-        new_trades = self._exchange.fetch_trades(self._symbol, self._market_type, since)
+            since = 1577840461000
+        new_trades = self._exchange.fetch_trades(self.symbol_ccxt, self._market_type, since)
         if new_trades:
             for trade in new_trades:
                 if not any(trade["id"] in sub["id"] for sub in trades):
@@ -417,7 +419,7 @@ class Instance:
                 json.dump(trades, f, indent=4)
 
     def view_ohlcv(self):
-        ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.market_type, timeframe=self.tf, limit=100)
+        ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe=self.tf, limit=100)
         self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
         w = (self._ohlcv_df["timestamp"][1] - self._ohlcv_df["timestamp"][0]) * 0.8
@@ -429,18 +431,20 @@ class Instance:
             active_scroll="wheel_zoom")
         p.segment(x0=self._ohlcv_df["timestamp"], y0=self._ohlcv_df["high"], x1=self._ohlcv_df["timestamp"], y1=self._ohlcv_df["low"], color=self._ohlcv_df["color"])
         p.vbar(x=self._ohlcv_df["timestamp"], width=w, top=self._ohlcv_df["open"], bottom=self._ohlcv_df["close"], color=self._ohlcv_df["color"])
-        price = self.exchange.fetch_price(self.symbol, self.market_type)
-        position = self.exchange.fetch_position(self.symbol, self.market_type)
+        price = self.exchange.fetch_price(self.symbol_ccxt, self._market_type)
+        position = self.exchange.fetch_position(self.symbol_ccxt, self._market_type)
+#        st.write(position)
         st.markdown(f'### Symbol: {self.symbol} {self.balance} USDT')
-        orders = self.exchange.fetch_open_orders(self.symbol, self.market_type)
+        orders = self.exchange.fetch_open_orders(self.symbol_ccxt, self._market_type)
         # price
         color = "red" if price["last"] < self._ohlcv_df["open"].iloc[-1] else "green"
         self._last_price = price["last"]
         p.line(x=self._ohlcv_df["timestamp"], y=price["last"], color=color, legend_label=f'price: {str(price["last"])}')
         # position
-        if position["entryPrice"]:
-            color = "red" if price["last"] < position["entryPrice"] else "green"
-            p.line(x=self._ohlcv_df["timestamp"], y=position["entryPrice"], color=color, line_dash="dashed", legend_label=f'position: {str(position["entryPrice"])} qty: {str(position["contracts"])} Pnl: {str(position["unrealizedPnl"])}')
+        if position:
+            if position["entryPrice"]:
+                color = "red" if price["last"] < position["entryPrice"] else "green"
+                p.line(x=self._ohlcv_df["timestamp"], y=position["entryPrice"], color=color, line_dash="dashed", legend_label=f'position: {str(position["entryPrice"])} qty: {str(position["contracts"])} Pnl: {str(position["unrealizedPnl"])}')
         # open/close orders
         for order in orders:
             color = "red" if order["side"] == "sell" else "green"
@@ -450,6 +454,8 @@ class Instance:
         st.bokeh_chart(p, use_container_width=True)
 
     def compare_history(self):
+        if self.exchange.id not in ["bybit", "bitget", "binance"]:
+            st.write("History is only supported on bybit, bitget and binance (binance not fully tested)")
         if not isinstance(self._trades, pd.DataFrame):
             self.fetch_trades()
             self._trades = self.trades_to_df()
@@ -509,6 +515,7 @@ class Instance:
                 state = json.load(f)
                 self.__dict__.update(state)
                 self.user = state["_user"]
+                self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
                 self._config = Config(f'{self._instance_path}/config.json')
                 self._config.load_config()
         else:
@@ -542,6 +549,7 @@ class Instance:
             del state['_sb_change']
             del state['_sd_change']
             del state['_ed_change']
+            del state['_symbol_ccxt']
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(state, f, indent=4)
         else:

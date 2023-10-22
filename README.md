@@ -68,6 +68,7 @@ On First Run, you have to select your passivbot directory
 First release with basic backtest and optimization functionality
 
 ## Roadmap
+- Live: Support Kucoin and OKX
 - Live: Start / Stop / Status Instances
 - Live: Autostart enabled Instances after reboot
 - Live: Watchdog for crashed instances and restart them
@@ -87,3 +88,7 @@ First release with basic backtest and optimization functionality
 ## Links:
 - Passivbot https://www.passivbot.com/en/latest/
 - Streamlit https://streamlit.io/
+
+## Support:
+If you like to support pbgui, please join my copytrading on bybit
+https://i.bybit.com/uab1dF9

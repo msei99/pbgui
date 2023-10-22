@@ -2,6 +2,7 @@ import ccxt
 import configparser
 from User import User
 from enum import Enum
+import json
 
 class Exchanges(Enum):
     BINANCE = 'binance'
@@ -56,26 +57,30 @@ class Exchange:
 
     def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int):
         if not self.instance: self.connect()
-        symbol = self.symbol_to_exchange_symbol(symbol)
-        ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit, params = {"type": market_type})
+#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
+        ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
         return ohlcv
 
     def fetch_price(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
-        symbol = self.symbol_to_exchange_symbol(symbol)
-        price = self.instance.fetch_ticker(symbol=symbol, params = {"type": market_type})
+#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
+        price = self.instance.fetch_ticker(symbol=symbol)
         return price
 
     def fetch_open_orders(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
-        symbol = self.symbol_to_exchange_symbol(symbol)
-        orders = self.instance.fetch_open_orders(symbol=symbol, params = {"type": market_type})
+#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
+        orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 
     def fetch_position(self, symbol: str, market_type: str):
+#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
+        if self.id == 'binance':
+            position = self.instance.fetch_account_positions(symbols=[symbol])
+            return position[0]
         if not self.instance: self.connect()
-        symbol = self.symbol_to_exchange_symbol(symbol)
-        position = self.instance.fetch_position(symbol=symbol, params = {"type": market_type})
+        position = self.instance.fetch_position(symbol=symbol)
+        print(json.dumps(position))
         return position
 
     def fetch_balance(self, market_type: str):
@@ -85,6 +90,8 @@ class Exchange:
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
             return float(balance["total"]["USDT"])
+        elif self.id == "binance":
+            return float(balance["info"]["totalWalletBalance"])
         return float(balance["total"]["USDT"])
 
     def fetch_bill(self, symbol: str, market_type: str, since: int):
@@ -94,7 +101,7 @@ class Exchange:
         end_time = self.instance.milliseconds()
             # With ccxt >= 4.1.7 we can use pagination in one line
             # trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "paginate": True, "paginationDirection": "forward", "until": self.instance.milliseconds()})
-        symbol = self.symbol_to_exchange_symbol(symbol)
+#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
         while True:
             trades = self.instance.privateMixGetAccountAccountBill({
                                                             "symbol": symbol,
@@ -127,24 +134,57 @@ class Exchange:
             end_time = self.instance.milliseconds()
             # With ccxt >= 4.1.7 we can use pagination in one line
             # trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "paginate": True, "paginationDirection": "forward", "until": self.instance.milliseconds()})
-            symbol = self.symbol_to_exchange_symbol(symbol)
-            while True:
-                trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "endTime": end_time})
-                if trades and trades[-1]['id'] != last_trade_id:
-                    first_trade = trades[0]
-                    last_trade = trades[len(trades) - 1]
-                    last_trade_id = trades[-1]['id']
-                    end_time = first_trade['timestamp']
-                    all_trades = trades + all_trades
-                    print('Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
-                else:
-                    print('Done')
-                    break
+            # symbol = self.symbol_to_exchange_symbol(symbol, market_type)
+            if self.id == "binance":
+                week = 7 * 24 * 60 * 60 * 1000
+                now = self.instance.milliseconds ()
+                all_trades = []
+                if since == 1577840461000:
+                    first_trade = self.instance.fetch_my_trades (symbol, None, None, {'fromId': 0})
+                    if first_trade:
+                        since = first_trade[0]["timestamp"]
+                while since < now:
+                    print('Fetching trades from', self.instance.iso8601(since))
+                    end_time = since + week
+                    if end_time > now:
+                        end_time = now
+                    trades = self.instance.fetch_my_trades (symbol, since, None, {
+                        'endTime': end_time,
+                    })
+                    if len(trades):
+                        last_trade = trades[len(trades) - 1]
+                        since = last_trade['timestamp'] + 1
+                        all_trades = all_trades + trades
+                    else:
+                        since = end_time
+            else:
+                while True:
+                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "endTime": end_time})
+                    if trades and trades[-1]['id'] != last_trade_id:
+                        first_trade = trades[0]
+                        last_trade = trades[len(trades) - 1]
+                        last_trade_id = trades[-1]['id']
+                        end_time = first_trade['timestamp']
+                        all_trades = trades + all_trades
+                        print('Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
+                    else:
+                        print('Done')
+                        break
         if all_trades:
             return all_trades
 
-    def symbol_to_exchange_symbol(self, symbol: str):
-        if self.id == 'bitget':
+    def symbol_to_exchange_symbol(self, symbol: str, market_type: str):
+        if self.id == 'binance':
+            if not self.instance: self.connect()
+            if not self._markets: self._markets = self.instance.load_markets()
+            for (k,v) in list(self._markets.items()):
+                if market_type == "spot":
+                    if v["id"] == symbol and v["spot"]:
+                        return v["symbol"]
+                if market_type == "swap":
+                    if v["id"] == symbol and v["swap"]:
+                        return v["symbol"]
+        elif self.id == 'bitget':
             if symbol.endswith('USD'):
                 return f'{symbol}_DMCBL'    
             return f'{symbol}_UMCBL'
@@ -161,6 +201,7 @@ class Exchange:
         self._markets = self.instance.load_markets()
         self.swap = []
         self.spot = []
+#        print(json.dumps(self._markets))
         for (k,v) in list(self._markets.items()):
             if v["swap"] and v["active"]:
                 if self.id == "bitget":

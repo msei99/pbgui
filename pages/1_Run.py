@@ -535,7 +535,7 @@ set_page_config()
 
 # Not supported on windows
 if platform.system() == "Windows":
-    st.write("Run Module not supported on Windows")
+    st.write("Run Module is not supported on Windows")
     exit()
 
 # Init Session State
