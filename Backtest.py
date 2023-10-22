@@ -13,7 +13,7 @@ import time
 import multiprocessing
 import pandas as pd
 from pbgui_func import config_pretty_str
-
+import uuid
 from User import Users
 from streamlit import experimental_rerun
 from pathlib import Path, PurePath
@@ -56,10 +56,7 @@ class BacktestItem:
             self.load_config()
 
     def initialize(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        self.pbdir = pb_config.get("main", "pbdir")
-        users = Users(f'{self.pbdir}/api-keys.json')
+        users = Users()
         self.user = users.default()
         self.symbol = "BTCUSDT"
         self.sd = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
@@ -87,7 +84,7 @@ class BacktestItem:
             self.ed = t["ed"]
             self.sb = t["sb"]
             self.market_type = t["market_type"]
-        users = Users(f'{self.pbdir}/api-keys.json')
+        users = Users()
         if self.user not in users.list():
             self.user = users.default()
         self.exchange = Exchange(users.find_exchange(self.user))
@@ -107,9 +104,9 @@ class BacktestItem:
     def save(self):
         pbgdir = Path.cwd()
         dest = Path(f'{pbgdir}/data/bt_queue')
-        now = datetime.datetime.now().isoformat(timespec='microseconds')
+        unique_filename = str(uuid.uuid4())
         if not self.file:
-            self.file = Path(f'{dest}/{now}.json') 
+            self.file = Path(f'{dest}/{unique_filename}.json') 
         bt_dict = {
             "user": self.user,
             "symbol": self.symbol,
@@ -136,9 +133,10 @@ class BacktestItem:
         self.log.unlink(missing_ok=True)
 
     def load_log(self):
-        if self.log.exists():
-            with open(self.log, 'r', encoding='utf-8') as f:
-                return f.read()
+        if self.log:
+            if self.log.exists():
+                with open(self.log, 'r', encoding='utf-8') as f:
+                    return f.read()
 
     def status(self):
         if self.is_running():
@@ -186,6 +184,8 @@ class BacktestItem:
                     cmdline = process.cmdline()
                 except psutil.NoSuchProcess:
                     pass
+                except psutil.AccessDenied:
+                    pass
                 if any(str(self.file) in sub for sub in cmdline) and any("backtest.py" in sub for sub in cmdline):
                     return process
 
@@ -195,9 +195,12 @@ class BacktestItem:
             pb_config.read('pbgui.ini')
             if pb_config.has_option("main", "pbdir"):
                 pbdir = pb_config.get("main", "pbdir")
-                cmd = f'{sys.executable} -u {pbdir}/backtest.py -dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -bd ./backtests/pbgui {str(self.config_file)}'
+                cmd = [sys.executable, '-u', PurePath(f'{pbdir}/backtest.py')]
+                cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
+                cmd.extend(shlex.split(cmd_end))
+                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self.config_file)}')])
                 log = open(self.log,"w")
-                subprocess.Popen(shlex.split(cmd), stdout=log, stderr=log, cwd=pbdir, text=True)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True)
 
 class BacktestQueue:
     def __init__(self):
@@ -272,9 +275,9 @@ class BacktestQueue:
     def run(self):
         if not self.is_running():
             pbgdir = Path.cwd()
-            cmd = f'{sys.executable} -u {pbgdir}/Backtest.py'
-            log = open(f'{pbgdir}/data/bt_queue/Backtest.log',"a")
-            subprocess.Popen(shlex.split(cmd), stdout=log, stderr=log, cwd=pbgdir, text=True)
+            cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/Backtest.py')]
+            log = open(Path(f'{pbgdir}/data/bt_queue/Backtest.log'),"a")
+            subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def is_running(self):
         if self.pid():
@@ -283,7 +286,10 @@ class BacktestQueue:
 
     def pid(self):
         for process in psutil.process_iter():
-            cmdline = process.cmdline()
+            try:
+                cmdline = process.cmdline()
+            except psutil.AccessDenied:
+                continue
             if any("Backtest.py" in sub for sub in cmdline):
                 return process
 
@@ -333,8 +339,8 @@ class BacktestResults:
         rmtree(bt_result.backtest_path, ignore_errors=True)
         self.backtests.remove(bt_result)
 
-    def view(self, symbols: list = [], exchanges: list = []):
-        if self.backtests:
+    def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None):
+        if self.backtests or isinstance(trades, pd.DataFrame):
             d = []
             column_config = {
                 "Show": st.column_config.CheckboxColumn('Show', default=False),
@@ -421,6 +427,11 @@ class BacktestResults:
         we_short = {}
         color_b = -2
         color_e = -1
+        if isinstance(trades, pd.DataFrame):
+            color_b += 2
+            color_e += 2
+            x = trades["timestamp"]
+            be.line(x, trades["balance"], legend_label=f'History',color=Category20_20[color_b], line_width=2, name=f'History')
         for idx, bt in enumerate(self.backtests):
             if bt.selected and bt.long_enabled:
                 color_b += 2
@@ -443,17 +454,19 @@ class BacktestResults:
         if be.legend:
             be.yaxis[0].formatter = NumeralTickFormatter(format="$ 0")
             be_leg = be.legend[0]
-            we_leg = we.legend[0]
             be.add_layout(be_leg,'above')
-            we.add_layout(we_leg,'above')
             be.add_tools(hover_be)
             we.add_tools(hover_we)
             be.legend.location = "top_left"
-            we.legend.location = "top_left"
             be.legend.click_policy="hide"
-            we.legend.click_policy="hide"
             st.bokeh_chart(be, use_container_width=True)
+        if we.legend:
+            we_leg = we.legend[0]
+            we.add_layout(we_leg,'above')
+            we.legend.location = "top_left"
+            we.legend.click_policy="hide"
             st.bokeh_chart(we, use_container_width=True)
+
         idx = 0
         col_r1, col_r2 = st.columns([1,1]) 
         for bt in self.backtests:
@@ -498,8 +511,23 @@ class BacktestResults:
                     and item.ed == bt.ed
                     and item.sb == bt.sb
                     and item.market_type == bt.market_type
-                    and long == bt.long
-                    and short == bt.short
+                    and item.exchange.name == bt.exchange
+                    and long["ema_span_0"] == bt.long["ema_span_0"]
+                    and long["ema_span_1"] == bt.long["ema_span_1"]
+                    and long["enabled"] == bt.long["enabled"]
+                    and long["min_markup"] == bt.long["min_markup"]
+                    and long["markup_range"] == bt.long["markup_range"]
+                    and long["n_close_orders"] == bt.long["n_close_orders"]
+                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
+                    and long["backwards_tp"] == bt.long["backwards_tp"]
+                    and short["ema_span_0"] == bt.short["ema_span_0"]
+                    and short["ema_span_1"] == bt.short["ema_span_1"]
+                    and short["enabled"] == bt.short["enabled"]
+                    and short["min_markup"] == bt.short["min_markup"]
+                    and short["markup_range"] == bt.short["markup_range"]
+                    and short["n_close_orders"] == bt.short["n_close_orders"]
+                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
+                    and short["backwards_tp"] == bt.short["backwards_tp"]
                 ):
                     self.backtests.append(bt)
             if not self.backtests:
@@ -518,7 +546,25 @@ class BacktestResults:
         if found_bt:
             for p in found_bt:
                 bt = BacktestResult(PurePath(p).parent)
-                if symbol == bt.symbol and long == bt.long and short == bt.short:
+                if (
+                    symbol == bt.symbol
+                    and long["ema_span_0"] == bt.long["ema_span_0"]
+                    and long["ema_span_1"] == bt.long["ema_span_1"]
+                    and long["enabled"] == bt.long["enabled"]
+                    and long["min_markup"] == bt.long["min_markup"]
+                    and long["markup_range"] == bt.long["markup_range"]
+                    and long["n_close_orders"] == bt.long["n_close_orders"]
+                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
+                    and long["backwards_tp"] == bt.long["backwards_tp"]
+                    and short["ema_span_0"] == bt.short["ema_span_0"]
+                    and short["ema_span_1"] == bt.short["ema_span_1"]
+                    and short["enabled"] == bt.short["enabled"]
+                    and short["min_markup"] == bt.short["min_markup"]
+                    and short["markup_range"] == bt.short["markup_range"]
+                    and short["n_close_orders"] == bt.short["n_close_orders"]
+                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
+                    and short["backwards_tp"] == bt.short["backwards_tp"]
+                ):
                     self.backtests.append(bt)
                     if bt.symbol not in self.symbols:
                         self.symbols.append(bt.symbol)
