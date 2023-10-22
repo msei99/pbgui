@@ -55,7 +55,7 @@ def button_handler(button=None, item=None):
 
 def bt_add():
     # Init users
-    users = Users(f'{st.session_state.pbdir}/api-keys.json')
+    users = Users()
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
