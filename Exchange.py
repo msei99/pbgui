@@ -57,30 +57,25 @@ class Exchange:
 
     def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int):
         if not self.instance: self.connect()
-#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
         ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
         return ohlcv
 
     def fetch_price(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
-#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
         price = self.instance.fetch_ticker(symbol=symbol)
         return price
 
     def fetch_open_orders(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
-#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
         orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 
     def fetch_position(self, symbol: str, market_type: str):
-#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
         if self.id == 'binance':
             position = self.instance.fetch_account_positions(symbols=[symbol])
             return position[0]
         if not self.instance: self.connect()
         position = self.instance.fetch_position(symbol=symbol)
-        print(json.dumps(position))
         return position
 
     def fetch_balance(self, market_type: str):
@@ -101,7 +96,6 @@ class Exchange:
         end_time = self.instance.milliseconds()
             # With ccxt >= 4.1.7 we can use pagination in one line
             # trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "paginate": True, "paginationDirection": "forward", "until": self.instance.milliseconds()})
-#        symbol = self.symbol_to_exchange_symbol(symbol, market_type)
         while True:
             trades = self.instance.privateMixGetAccountAccountBill({
                                                             "symbol": symbol,
@@ -134,7 +128,6 @@ class Exchange:
             end_time = self.instance.milliseconds()
             # With ccxt >= 4.1.7 we can use pagination in one line
             # trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "paginate": True, "paginationDirection": "forward", "until": self.instance.milliseconds()})
-            # symbol = self.symbol_to_exchange_symbol(symbol, market_type)
             if self.id == "binance":
                 week = 7 * 24 * 60 * 60 * 1000
                 now = self.instance.milliseconds ()
