@@ -93,6 +93,9 @@ def del_api(user):
 
 # Get spot and future balance from exchange
 def get_balance(exchange, key, secret, passphrase):
+    if exchange == "kucoin":
+        exchange = "kucoinfutures"
+        print(exchange)
     exchange_class = getattr(ccxt, exchange)
     exc = exchange_class({
         'apiKey': key,
@@ -112,7 +115,7 @@ def get_balance(exchange, key, secret, passphrase):
         except Exception as e:
             st.session_state.spot_balance = ':red[API-Error]'
             st.session_state.error_api = (str(e))
-    if exchange in ["binance", "bybit", "bitget", "kucoin", "okx"]:
+    if exchange in ["binance", "bybit", "bitget", "kucoinfutures", "okx"]:
         param = {"type":"swap"}
         try:
             balance = exc.fetchBalance(param)
