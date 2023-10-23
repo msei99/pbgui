@@ -117,10 +117,10 @@ class Config:
         col1, col2, col3 = st.columns([1,1,1])
         with col1:
             self.long_enabled = st.toggle("Long enabled", value=self.long_enabled, key="config_long_enabled", help=None)
-            self.long_we = st.number_input("LONG_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=self.long_we, step=0.05, format="%.2f", key="config_long_we", help=pbgui_help.exposure)
+            self.long_we = st.number_input("LONG_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=float(round(self.long_we,2)), step=0.05, format="%.2f", key="config_long_we", help=pbgui_help.exposure)
         with col2:
             self.short_enabled = st.toggle("Short enabled", value=self.short_enabled, key="config_short_enabled", help=None)
-            self.short_we = st.number_input("SHORT_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=self.short_we, step=0.05, format="%.2f", key="config_short_we", help=pbgui_help.exposure)
+            self.short_we = st.number_input("SHORT_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=float(round(self.short_we,2)), step=0.05, format="%.2f", key="config_short_we", help=pbgui_help.exposure)
         self.config = st.text_area("Instance config", self.config, key="config_instance_config", height=600)
 
 def main():

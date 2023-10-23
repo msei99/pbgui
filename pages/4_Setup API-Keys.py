@@ -95,7 +95,6 @@ def del_api(user):
 def get_balance(exchange, key, secret, passphrase):
     if exchange == "kucoin":
         exchange = "kucoinfutures"
-        print(exchange)
     exchange_class = getattr(ccxt, exchange)
     exc = exchange_class({
         'apiKey': key,
