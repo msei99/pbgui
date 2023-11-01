@@ -1,6 +1,8 @@
 import streamlit as st
 import json
 import pprint
+import uuid
+import requests
 
 def check_password():
     """Returns `True` if the user had the correct password."""
@@ -38,7 +40,7 @@ def set_page_config():
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v0.2"
+            'About': "Passivbot GUI v0.6"
         }
     )
 
@@ -54,3 +56,17 @@ def config_pretty_str(config: dict):
     for r in [("'", '"'), ("True", "true"), ("False", "false")]:
         pretty_str = pretty_str.replace(*r)
     return pretty_str
+
+def upload_pbconfigdb(config: str, symbol: str, source_name : str):
+    if validateJSON(config):
+        uniq = str(uuid.uuid4().hex)
+        url = 'https://pbconfigdb.scud.dedyn.io/uploads/b1ea37f7cfa0ebf9b67c2f6b30b95b8b1a92e249/'
+        headers = {
+            'Content-Type': 'application/json',
+            'data': json.dumps(json.loads(config)),
+            'filename': f'{symbol}-{source_name}-{uniq}.json' # {symbol}-{username}-{unique}.json
+        }
+        response = requests.put(url, headers=headers)
+        st.info(response.text, icon="ℹ️")
+    else:
+        st.error("Invalid config", icon="🚨")

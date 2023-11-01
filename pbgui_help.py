@@ -64,3 +64,8 @@ price_step = """
 api_error = """
     Check your API-Key and enable spot and/or future trading if you need it
     """
+upload_pbguidb = """
+    ```
+    Share your configuration with pbconfigdb
+    You can enter a name that will be displayed in pbconfigdb as source
+    ```"""
