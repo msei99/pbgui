@@ -1,9 +1,9 @@
 import streamlit as st
 from pathlib import Path
-from Exchange import Exchange
+#from Exchange import Exchange
+from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from streamlit_autorefresh import st_autorefresh
-from User import Users
 from Config import Config
 import json
 import glob
@@ -13,20 +13,16 @@ from bokeh.plotting import figure
 import numpy as np
 from shutil import rmtree
 
-class Instance:
+
+class Instance(Base):
     def __init__(self):
+        super().__init__()
         self._instance_path = None
         self._error = None # not saved
-        self._user = None
-        self._symbol = None
         self._symbol_ccxt = None # not saved
-        self._symbols = [] # not saved
         self._config = Config() # not saved
         self._assigned_balance = 0
-        self._market_type = "swap"
-        self._market_types = ["futures"] # not saved
         self._leverage = 7
-        self._ohlcv = True
         self._price_distance_threshold = 0.5
         self._price_precision = 0.0
         self._price_step = 0.0
@@ -36,7 +32,6 @@ class Instance:
         self._short_mode = None
         self._short_min_markup = 0.0
         self._short_markup_range = 0.0
-        self._exchange = None # not saved
         self._ohlcv_df = None # not saved
         self._tf = None
         self._bt = None # not saved
@@ -51,29 +46,12 @@ class Instance:
         self._balance = None # not saved
 
     @property
-    def user(self): return self._user
-    @property
-    def symbol(self): return self._symbol
-    @property
     def symbol_ccxt(self): return self._symbol_ccxt
-    @property
-    def symbols(self): return self._symbols
-    @property
-    def market_type(self):
-        if self._market_type == 'swap':
-            return 'futures'
-        return 'spot'
-    @property
-    def market_types(self): return self._market_types
-    @property
-    def exchange(self): return self._exchange
     @property
     def tf(self):
         if not self._tf:
             self._tf = self.exchange.tf[0]
         return self._tf
-    @property
-    def ohlcv(self): return self._ohlcv
     @property
     def leverage(self): return self._leverage
     @property
@@ -100,12 +78,6 @@ class Instance:
     def balance(self):
         self._balance = self._exchange.fetch_balance(self._market_type)
         return self._balance
-
-    @ohlcv.setter
-    def ohlcv(self, new_ohlcv):
-        if self._ohlcv != new_ohlcv:
-            self._ohlcv = new_ohlcv
-            st.experimental_rerun()
 
     @leverage.setter
     def leverage(self, new_leverage):
@@ -191,65 +163,12 @@ class Instance:
                 self._trades = self.trades_to_df()
             st.experimental_rerun()
 
-    @user.setter
-    def user(self, new_user):
-        if self._user != new_user or not self._exchange:
-            if type(new_user) != str:
-                raise ValueError("user must be str")
-            self._user = new_user
-            users = Users()
-            self._exchange = Exchange(users.find_exchange(self.user), users.find_user(self.user))
-            self._exchange.load_symbols()
-            if len(self._exchange.spot):
-                self._market_types = ['futures', 'spot']
-            else:
-                self._market_types = ['futures']
-                self._market_type = 'swap'
-            if self._market_type == 'swap':
-                self._symbols = self._exchange.swap
-            else:
-                self._symbols = self._exchange.spot
-            if self._symbol not in self._symbols:
-                self._symbol = self._symbols[0]
-
-    @symbol.setter
-    def symbol(self, new_symbol):
-        if self._symbol != new_symbol:
-            if new_symbol:
-                if type(new_symbol) != str:
-                    raise ValueError("symbol must be str")
-            self._symbol = new_symbol
-
-    @market_type.setter
-    def market_type(self, new_market_type):
-        if self.market_type != new_market_type:
-            if new_market_type not in ["spot", "futures"]:
-                raise ValueError("market_type must be futures or spot")
-            if new_market_type == "futures":
-                self._market_type = "swap"
-                self._symbols = self._exchange.swap
-            else:
-                self._market_type = "spot"
-                self._symbols = self._exchange.spot
-            if self._symbol not in self._symbols:
-                self._symbol = self._symbols[0]
-            st.experimental_rerun()
-
     @tf.setter
     def tf(self, new_tf):
         if self._tf != new_tf:
             self._tf = new_tf
             self.save()
             st.experimental_rerun()
-
-    def update_symbols(self):
-        self.exchange.fetch_symbols()
-        if self._market_type == 'swap':
-            self._symbols = self._exchange.swap
-        else:
-            self._symbols = self._exchange.spot
-        if self._symbol not in self._symbols:
-            self._symbol = self._symbols[0]
 
     def trades_to_df(self):
         file = Path(f'{self._instance_path}/trades.json')
@@ -504,9 +423,13 @@ class Instance:
         if self._bt.is_running():
             st_autorefresh(interval=10000, limit=None, key="refresh_backtest_running")
 
-
     def edit_config(self):
         self._config.edit_config()
+
+    def refresh(self):
+        path = self._instance_path
+        self.__init__()
+        self.load(path)
 
     def load(self, path: Path):
         file = Path(f'{path}/instance.cfg')
@@ -515,12 +438,12 @@ class Instance:
                 state = json.load(f)
                 self.__dict__.update(state)
                 self.user = state["_user"]
-                self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+                if not self._symbol_ccxt:
+                    self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
                 self._config = Config(f'{self._instance_path}/config.json')
                 self._config.load_config()
         else:
             print(f'{file} not found')
-
 
     def save(self):
         if self.user and self.symbol and self.market_type:
@@ -535,6 +458,7 @@ class Instance:
             state = self.__dict__.copy()
             del state['_error']
             del state['_market_types']
+            del state['_users']
             del state['_symbols']
             del state['_exchange']
             del state['_ohlcv_df']
@@ -549,12 +473,10 @@ class Instance:
             del state['_sb_change']
             del state['_sd_change']
             del state['_ed_change']
-            del state['_symbol_ccxt']
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(state, f, indent=4)
         else:
             self._error = ""
-
 
 class Instances:
     def __init__(self, backtest_path: str = None):
