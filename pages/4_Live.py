@@ -1,7 +1,7 @@
 import streamlit as st
 from streamlit_extras.switch_page_button import switch_page
 from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, upload_pbconfigdb
+from pbgui_func import set_page_config, upload_pbconfigdb, validateJSON
 from Instance import Instances, Instance
 import pbgui_help
 
@@ -105,9 +105,9 @@ def edit_instance():
             del st.session_state.edit_instance
             st.experimental_rerun()
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
-        if st.button("Upload"):
-            upload_pbconfigdb(instance._config.config, instance.symbol, source_name)
-
+        if not "error" in st.session_state:
+            if st.button("Upload"):
+                upload_pbconfigdb(instance._config.config, instance.symbol, source_name)
     instance.edit_base()
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:

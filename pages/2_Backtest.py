@@ -133,6 +133,8 @@ def bt_view():
     # Navigation
     with st.sidebar:
         if st.button("Queue"):
+            if "bt_results" in st.session_state:
+                del st.session_state.bt_results
             st.session_state.bt_queue = True
             del st.session_state.bt_view
             st.experimental_rerun()
