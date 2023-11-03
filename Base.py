@@ -98,7 +98,7 @@ class Base:
         with col_2:
             self.symbol = st.selectbox('SYMBOL', self.symbols, index=self.symbols.index(self.symbol))
             if st.button("Update Symbols from Exchange"):
-                st.session_state.edit_instance.update_symbols()
+                self.update_symbols()
                 st.experimental_rerun()
         with col_3:
             self.market_type = st.radio("MARKET_TYPE", self.market_types, index=self.market_types.index(self.market_type))

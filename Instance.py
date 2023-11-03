@@ -389,6 +389,7 @@ class Instance(Base):
             self._bt.sb = self.sb
             self._bt.sd = self.sd
             self._bt.ed = self.ed
+        st.markdown(f'### Symbol: {self.symbol} {self.balance} USDT')
         col_1, col_2, col_3, col_4, col_end = st.columns([1,1,1,1,5])
         with col_1:
             self.sb_change = st.checkbox("Change", value=self.sb_change, key="sb_change", help=None, on_change=None)
