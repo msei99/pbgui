@@ -8,11 +8,11 @@ import datetime
 import subprocess
 import sys
 import shlex
-import shutil
 import os
 import glob
 import psutil
 import multiprocessing
+from shutil import rmtree
 from User import Users
 from Backtest import BacktestItem
 from pathlib import Path, PurePath
@@ -20,14 +20,17 @@ from pathlib import Path, PurePath
 # Load optimizer logfile from tmp
 def load_opt_log():
     pbgdir = Path.cwd()
-    log = Path(f'{pbgdir}/data/logs/opt.log')
+    logfile = Path(f'{pbgdir}/data/logs/opt.log')
+    logr = ""
     try:
-        with open(log, 'r', encoding='utf-8') as f:
-            logdata = f.read()
+        with open(logfile, 'r', encoding='utf-8') as f:
+            log = f.readlines()
+            for line in reversed(log):
+                logr = logr+line
     except FileNotFoundError:
         print(f'Optimizer Logfile {log}, not found. Maybe you have a running optimizer not started from pbgui.')
         logdata = f'Optimizer Logfile {log}, not found. Maybe you have a running optimizer not started from pbgui.'
-    return logdata
+    return logr
 
 # Change dir to selected
 def select_optdir(dir):
@@ -35,25 +38,15 @@ def select_optdir(dir):
         del st.session_state.expand_files
     else:
         st.session_state.expand_files = glob.glob(f'{dir}/*best_config_*.json')
+        if not st.session_state.expand_files:
+            st.session_state.expand_files_empty = dir
 
 # store selected config and switch to backtester
 def select_bt_conf_file(file):
     del st.session_state.expand_files
     st.session_state[file] = False
-    opt.config_file = file
-
-# Delete old files
-def delete_files_and_subdirectories(directory_path):
-   try:
-     with os.scandir(directory_path) as entries:
-       for entry in entries:
-         if entry.is_file():
-            os.unlink(entry.path)
-         else:
-            shutil.rmtree(entry.path)
-     print("All files and subdirectories deleted successfully.")
-   except OSError:
-     print("Error occurred while deleting files and subdirectories.")
+    opt._config.config_file = file
+    opt._config.load_config()
 
 # Check optimizer is running
 def optimizer():
@@ -104,7 +97,7 @@ else:
     opt = BacktestItem()
     st.session_state.opt = opt
 
-if opt.config_file:
+if opt._config.config_file:
     st.session_state.my_bt = opt
     del st.session_state.opt
     if "bt_view" in st.session_state:
@@ -116,33 +109,37 @@ if opt.config_file:
     switch_page("Backtest")
 
 # Create Optimizer GUI
-col1, col2 = st.columns(2)
-with col1:
-    opt.user = st.selectbox('User',users.list(), index = users.list().index(opt.user))
-    if opt.market_type == "spot":
-        opt.symbol = st.selectbox('SYMBOL', opt.spot, index = opt.spot.index(opt.symbol))
-    else:
-        opt.symbol = st.selectbox('SYMBOL', opt.swap, index = opt.swap.index(opt.symbol))
-    opt.market_type = st.radio("MARKET_TYPE",('futures', 'spot'), index = 0 if opt.market_type == "futures" else 1)
-    mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'))
-    algo = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'))
-with col2:
+opt.edit_base()
+col_1, col_2, col_3 = st.columns([1,1,1])
+with col_1:
     opt.sb = st.number_input('STARTING_BALANCE',value=opt.sb,step=500)
-    iters = st.number_input('ITERS',value=10000,step=1000)
+with col_2:
     opt.sd = st.date_input("START_DATE", datetime.datetime.strptime(opt.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
+with col_3:
     opt.ed = st.date_input("END_DATE", datetime.datetime.strptime(opt.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
+
+col1, col2, col3 = st.columns([1,1,1])
+with col1:
+    mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'))
+with col2:
+    algo = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'))
+with col3:
+    iters = st.number_input('ITERS',value=10000,step=1000)
     cpu = st.slider("N_CPUS",min_value=1, max_value=multiprocessing.cpu_count(), value=multiprocessing.cpu_count()-1)
-    if optimizer():
-        st.header('Optimizer is running....')
-    else:
-        st.header('Optimizer is stopped')
 # Start optimizer
 with col1:
-    st.button("Start/Stop Optimizer", on_click=run_optimizer, args=[opt.user,opt.symbol, opt.sd, opt.ed, opt.sb, iters, algo, opt.market_type, mode, cpu])
+    if not optimizer():
+        if st.button("Start Optimizer"):
+            run_optimizer(opt.user,opt.symbol, opt.sd, opt.ed, opt.sb, iters, algo, opt.market_type, mode, cpu)
+            st.experimental_rerun()
+    else:
+        if st.button("Stop Optimizer"):
+            run_optimizer(opt.user,opt.symbol, opt.sd, opt.ed, opt.sb, iters, algo, opt.market_type, mode, cpu)
+            st.experimental_rerun()
 if optimizer():
     st.button(':recycle: **Optimizer Logfile**',)
-    logfile = load_opt_log()
-    stx.scrollableTextbox(logfile,height="300")
+    logr = load_opt_log()
+    stx.scrollableTextbox(logr,height="300")
     opt_count = st_autorefresh(interval=15000, limit=None, key="opt_counter")
 
 # Display optimizer results
@@ -152,12 +149,21 @@ if 'expand_files' in st.session_state:
             opt.symbol = os.path.dirname(st.session_state.expand_files[0]).split('_')[-1]
             st.experimental_rerun()
         st.subheader('Optimizing results: (Select a file for run backtest)')
+        if st.checkbox("Delete"):
+            rmtree(PurePath(st.session_state.expand_files[0]).parents[0], ignore_errors=True)
+            del st.session_state.expand_files
+            st.experimental_rerun()
         st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
         st.session_state.expand_files.sort(reverse=True)
         for file in st.session_state.expand_files:
             st.checkbox(file, False, key=(file), on_change=select_bt_conf_file, args=[file])
     else:
         st.subheader('Empty Directory')
+        if st.checkbox("Delete"):
+            rmtree(st.session_state.expand_files_empty, ignore_errors=True)
+            del st.session_state.expand_files_empty
+            del st.session_state.expand_files
+            st.experimental_rerun()
         st.checkbox("..", False, key=("back"), on_change=select_optdir, args=["back"])
 else:
     dirs = glob.glob(f'{st.session_state.pbdir}/results_{algo}_{mode}/*')

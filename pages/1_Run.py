@@ -175,7 +175,7 @@ def button_handler(instance, button=None):
         st.session_state.pb_manager = Manager()
         st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
     elif button == "run_bt":
-        st.session_state.my_bt = BacktestItem(st.session_state.instance_config)
+        st.session_state.my_bt = BacktestItem(config=st.session_state.instance_config)
         st.session_state.my_bt.symbol = instance.symbol
         st.session_state.my_bt.user = instance.user
         st.session_state.go_backtest = True
