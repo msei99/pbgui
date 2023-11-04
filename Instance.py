@@ -374,7 +374,8 @@ class Instance(Base):
 
     def compare_history(self):
         if self.exchange.id not in ["bybit", "bitget", "binance"]:
-            st.write("History is only supported on bybit, bitget and binance (binance not fully tested)")
+            st.write("History is only supported on bybit, bitget and binance")
+            return
         if not isinstance(self._trades, pd.DataFrame):
             self.fetch_trades()
             self._trades = self.trades_to_df()

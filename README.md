@@ -35,7 +35,7 @@ Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot directory
 
-## v0.6 (01-11-2023)
+## v0.6 (04-11-2023)
 - Live: Upload to pbconfigdb
 - Backtest: Import from pbconfigdb
 - Backtest: Total rewrite for look and feel like Live Module
