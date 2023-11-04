@@ -102,6 +102,6 @@ First release with basic backtest and optimization functionality
 ## Support:
 If you like to support pbgui, please join one of my copytradings on bybit
 ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0
-https://i.bybit.com/uab1dF9
+https://i.bybit.com/28bMabOR
 RNDR only
 https://i.bybit.com/1qabmY01

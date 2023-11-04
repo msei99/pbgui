@@ -74,8 +74,7 @@ def bt_queue():
     column_config = {
         "Run": st.column_config.CheckboxColumn('Start/Stop/View', default=False),
         "Log": st.column_config.CheckboxColumn('Log', default=False),
-        "Config": st.column_config.CheckboxColumn('Config', default=False),
-        "id": None}
+        "Config": st.column_config.CheckboxColumn('Config', default=False)}
     for id, bt in enumerate(my_btq.items):
         d.append({
             'id': id,
@@ -108,26 +107,30 @@ def bt_queue():
             my_btq.items[line["id"]].stop()
             st.experimental_rerun()
         if line["Log"]:
-            st.session_state.bt_log = my_btq.items[line["id"]].load_log()
+            st.session_state.bt_log = ({
+                'id': line["id"],
+                'log': my_btq.items[line["id"]].load_log()})
             st.session_state.ed_bt_key += 1
             st.experimental_rerun()
         if line["Config"]:
-            st.session_state.bt_config = my_btq.items[line["id"]].config
+            st.session_state.bt_config = ({
+                'id': line["id"],
+                'config': my_btq.items[line["id"]].config})
             st.session_state.ed_bt_key += 1
             st.experimental_rerun()
         if line["Delete"]:
             my_btq.items[line["id"]].remove()
             st.experimental_rerun()
     if "bt_config" in st.session_state:
-        if st.button(":negative_squared_cross_mark:", key="view_bt_config"):
+        if st.button(f':negative_squared_cross_mark: {st.session_state.bt_config["id"]}', key="view_bt_config"):
             del st.session_state.bt_config
             st.experimental_rerun()
-        st.code(st.session_state.bt_config)
+        st.code(st.session_state.bt_config["config"])
     if "bt_log" in st.session_state:
-        if st.button(":negative_squared_cross_mark:", key="view_bt_log"):
+        if st.button(f':negative_squared_cross_mark: {st.session_state.bt_log["id"]}', key="view_bt_log"):
             del st.session_state.bt_log
             st.experimental_rerun()
-        st.code(st.session_state.bt_log)
+        st.code(st.session_state.bt_log["log"])
 
 def bt_view():
     # Navigation
