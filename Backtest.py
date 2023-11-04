@@ -16,7 +16,6 @@ from pbgui_func import validateJSON
 import uuid
 from Base import Base
 from Config import Config
-from streamlit import experimental_rerun
 from pathlib import Path, PurePath
 from shutil import rmtree
 import requests
@@ -287,7 +286,7 @@ class BacktestQueue:
             self.pb_config.set("backtest", "cpu", str(self._cpu))
             with open('pbgui.ini', 'w') as f:
                 self.pb_config.write(f)
-            experimental_rerun()
+            st.experimental_rerun()
 
     @property
     def autostart(self):
@@ -302,7 +301,7 @@ class BacktestQueue:
                 self.pb_config.write(f)
             if self._autostart:
                 self.run()
-            experimental_rerun()
+            st.experimental_rerun()
 
     def add(self, item: BacktestItem = None):
         if item:
@@ -312,7 +311,7 @@ class BacktestQueue:
         for item in self.items:
             if item.is_finish():
                 item.remove()
-        experimental_rerun()
+        st.experimental_rerun()
 
     def running(self):
         r = 0
