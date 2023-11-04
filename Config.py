@@ -5,9 +5,9 @@ from pbgui_func import validateJSON, config_pretty_str
 import pbgui_help
 
 class Config:
-    def __init__(self, file_name = None):
+    def __init__(self, file_name = None, config = None):
         self._config_file = file_name
-        self._config = None
+        self._config = config
         self._long_we = 1.0
         self._short_we = 1.0
         self._long_enabled = True
@@ -37,9 +37,13 @@ class Config:
                     del st.session_state.error
                     st.experimental_rerun()
             else:
-                if not "error" in st.session_state:
+                if "error" in st.session_state:
+                    if st.session_state.error != "Config is invalid":
+                        st.session_state.error = "Config is invalid"
+                        st.experimental_rerun()
+                else:
                     st.session_state.error = "Config is invalid"
-                    st.experimental_rerun() 
+                    st.experimental_rerun()
 
     @config_file.setter
     def config_file(self, new_config_file):
@@ -114,13 +118,15 @@ class Config:
                 f.write(self._config)
 
     def edit_config(self):
+        if self.config:
+            self.update_config()
         col1, col2, col3 = st.columns([1,1,1])
         with col1:
             self.long_enabled = st.toggle("Long enabled", value=self.long_enabled, key="config_long_enabled", help=None)
-            self.long_we = st.number_input("LONG_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=self.long_we, step=0.05, format="%.2f", key="config_long_we", help=pbgui_help.exposure)
+            self.long_we = st.number_input("LONG_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=float(round(self.long_we,2)), step=0.05, format="%.2f", key="config_long_we", help=pbgui_help.exposure)
         with col2:
             self.short_enabled = st.toggle("Short enabled", value=self.short_enabled, key="config_short_enabled", help=None)
-            self.short_we = st.number_input("SHORT_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=self.short_we, step=0.05, format="%.2f", key="config_short_we", help=pbgui_help.exposure)
+            self.short_we = st.number_input("SHORT_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=float(round(self.short_we,2)), step=0.05, format="%.2f", key="config_short_we", help=pbgui_help.exposure)
         self.config = st.text_area("Instance config", self.config, key="config_instance_config", height=600)
 
 def main():

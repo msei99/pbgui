@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.5
+v0.6
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -34,6 +34,20 @@ Open http://localhost:8501 with Browser\
 Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot directory
+
+## v0.6 (01-11-2023)
+- Live: Upload to pbconfigdb
+- Backtest: Import from pbconfigdb
+- Backtest: Total rewrite for look and feel like Live Module
+- Backtest: Wallet_Exposure for long and short
+- Backtest: Enable short/long
+- Optimizer: Dynamic User / Symbol and Market_Type
+- Optimizer: Quick hack for deleting optimizations
+- Optimizer: Reverse Logfile
+- Live: Fixed kucoin API-Editor / Live View
+- Code: Added Base class for User/Symbol/market
+- Code: Save ccxt_symbol to instance for speed up binance live module
+- Code: Bugfixes for spot market
 
 ## v0.5 (21-10-2023)
 - Support Windows (Exclude Run Modul)
@@ -73,14 +87,10 @@ First release with basic backtest and optimization functionality
 - Live: Autostart enabled Instances after reboot
 - Live: Watchdog for crashed instances and restart them
 - Run: Remove the Run modul. Move all to the Live modul
-- Backtest: Wallet_Exposure for long and short
-- Backtest: Enable short/long
 - Backtest: Configure Default Values
 - Code cleanup (Optimizer class)
 - Optimizer: add/edit configs/optimize/*.hjson
 - Optimizer: Queue for run multiple optimizers
-- Backtest: open configs from filesystem
-- Backtest: open configs from github
 - Full support for Windows
 - Remote managment for multiple passivebot servers
 - ...
@@ -90,5 +100,8 @@ First release with basic backtest and optimization functionality
 - Streamlit https://streamlit.io/
 
 ## Support:
-If you like to support pbgui, please join my copytrading on bybit
-https://i.bybit.com/uab1dF9
+If you like to support pbgui, please join one of my copytradings on bybit
+ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0
+https://i.bybit.com/28bMabOR
+RNDR only
+https://i.bybit.com/1qabmY01

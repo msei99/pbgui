@@ -12,94 +12,156 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import config_pretty_str
+from pbgui_func import validateJSON
 import uuid
-from User import Users
+from Base import Base
+from Config import Config
 from streamlit import experimental_rerun
 from pathlib import Path, PurePath
-from Exchange import Exchange
 from shutil import rmtree
+import requests
 import datetime
 
-class BacktestItem:
+class BacktestItem(Base):
     def __init__(self, config: str = None):
-        self.config = config
+        super().__init__()
+        self._config = Config(config=config)
         self.file = None
         self.log = None
-        self.user = None
-        self.symbol = None
         self.sd = None
         self.ed = None
         self.sb = None
         self.pbdir = None
-        self.exchange = None
-        self.spot = None
-        self.swap = None
-        self._market_type = None
-        self._config_file = None
         self.initialize()
 
     @property
-    def market_type(self): return self._market_type
-    @property
-    def config_file(self): return self._config_file
-
-    @market_type.setter
-    def market_type(self, new_market_type):
-        if self._market_type != new_market_type:
-            self._market_type = new_market_type
-            st.experimental_rerun()
-    @config_file.setter
-    def config_file(self, new_config_file):
-        if self._config_file != new_config_file:
-            self._config_file = new_config_file
-            self.load_config()
+    def config(self): return self._config.config
 
     def initialize(self):
-        users = Users()
-        self.user = users.default()
-        self.symbol = "BTCUSDT"
         self.sd = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.ed = datetime.date.today().strftime("%Y-%m-%d")
         self.sb = 1000
-        self._market_type = "futures"
-        self.exchange = Exchange(users.find_exchange(self.user))
-        self.exchange.load_symbols()
-        self.swap = self.exchange.swap
-        self.spot = self.exchange.spot
 
-    def load_config(self):
-        with open(self.config_file, "r", encoding='utf-8') as f:
-            self.config = config_pretty_str(json.load(f))
+    def import_pbconfigdb(self):
+        st.markdown('### Import from PassivBot Config Result DB by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/")
+        df = self.update_pbconfigdb()
+        df = df[df['source'].str.contains('github')]
+        column_config = {
+            "View": st.column_config.CheckboxColumn('View', default=False),
+            "adg_per_exposure": 'adg_pe',
+            "adg_weighted_per_exposure": 'adg_wpe',
+            "eqbal_ratio_mean_of_10_worst": 'eqbal_10_worst',
+            "balance_needed": 'min_balance',
+            "quality_score": 'score',
+            "source": st.column_config.LinkColumn('source', width=None, disabled=True),
+            "hash": None
+            }
+        df_min = df[[
+            "symbol", 
+            "side", 
+            "strategy", 
+            "adg_per_exposure", 
+            "adg_weighted_per_exposure", 
+            "eqbal_ratio_mean_of_10_worst", 
+            "hrs_stuck_max", 
+            "loss_profit_ratio", 
+            "pa_distance_max", 
+            "n_days", 
+            "net_pnl_plus_fees", 
+            "quality_score", 
+            "balance_needed",
+            "source",
+            "hash"]]
+        df_min.insert(0 ,column="View", value=False)
+        col_symbol, col_side, col_strategy = st.columns([1,1,1])
+        with col_symbol:
+            symbols = st.multiselect("Symbols", df["symbol"].unique(), default=None, key=None, on_change=None, args=None)
+            adg_per_exposure = st.number_input("adg_per_exposure =>", min_value=0.0, max_value=1.0, value=0.0, step=0.05, format="%.2f")
+            if symbols:
+                df_min = df_min[df_min['symbol'].isin(symbols)]
+            df_min = df_min[df_min['adg_per_exposure'].ge(adg_per_exposure)]
+        with col_side:
+            side = st.multiselect("Side", df["side"].unique(), default=None, key=None, on_change=None, args=None)
+            hrs_stuck_max = st.number_input("hrs_stuck_max <=", min_value=df["hrs_stuck_max"].min(), max_value=df["hrs_stuck_max"].max(), value=df["hrs_stuck_max"].max(), step=1.0, format="%.1f")
+            if side:
+                df_min = df_min[df_min['side'].isin(side)]
+            df_min = df_min[df_min['hrs_stuck_max'].le(hrs_stuck_max)]
+        with col_strategy:
+            strategy = st.multiselect("Strategy", df["strategy"].unique(), default=None, key=None, on_change=None, args=None)
+            quality_score = st.number_input("quality_score =>", min_value=df["quality_score"].min(), max_value=df["quality_score"].max(), value=df["quality_score"].min(), step=1.0, format="%.1f")
+            if strategy:
+                df_min = df_min[df_min['strategy'].isin(strategy)]
+            df_min = df_min[df_min['quality_score'].ge(quality_score)]
+        df_min = df_min.reset_index(drop=True)
+        selected = st.data_editor(data=df_min, width=None, height=None, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
+        col_image, col_config = st.columns([1,1])
+        view = selected[selected['View']==True]
+        view = view.reset_index()
+        for index, row in view.iterrows():
+            col_image, col_config = st.columns([1,1])
+            with col_image:
+                hash = row['hash']
+                source = row['source']
+                config = self.fetch_config(source)
+                if not config.endswith("found"):
+                    if st.checkbox("Backtest", key=hash):
+                        self._config.config = config
+                        self.symbol = row['symbol']
+                        del st.session_state.bt_import
+                        st.experimental_rerun()
+                st.image(f'https://pbconfigdb.scud.dedyn.io/plots/{hash}.png')
+            with col_config:
+                st.code(config)
+
+    def fetch_config(self, url: str):
+        response = requests.get(url)
+        if response.status_code == 200:
+            config = response.json()["payload"]["blob"]["rawLines"]
+            config = '\n'.join(config)
+            if validateJSON(config):
+                return config
+        return f'{response.status_code} config not found'
+
+    def update_pbconfigdb(self):
+        day = 24*60*60
+        url = "https://pbconfigdb.scud.dedyn.io/result/pbconfigdb.pbgui.json"
+        pbgdir = Path.cwd()
+        local = Path(f'{pbgdir}/data/pbconfigdb')
+        if not local.exists():
+            local.mkdir(parents=True)
+        dbfile = Path(f'{local}/pbconfigdb.json')
+        if dbfile.exists():
+            dbfile_ts = dbfile.stat().st_mtime
+            now_ts = datetime.datetime.now().timestamp()
+            if dbfile_ts < now_ts-day:
+                df = pd.read_json(url)
+                df.to_json(dbfile)
+            else:
+                df = pd.read_json(dbfile)
+        else:
+            df = pd.read_json(url)
+            df.to_json(dbfile)
+        return df
+
+    def edit_config(self):
+        self._config.edit_config()
 
     def load(self, file: str):
         self.file = Path(file)
-        self.config_file = Path(f'{self.file}.cfg')
+        self._config = Config(f'{self.file}.cfg')
+        self._config.load_config()
         self.log = Path(f'{self.file}.log')
         with open(self.file, "r", encoding='utf-8') as f:
             t = json.load(f)
+            if t["market_type"] == "futures":
+                self._market_type = "swap"
+            else:
+                self._market_type = "spot"
             self.user = t["user"]
             self.symbol = t["symbol"]
             self.sd = t["sd"]
             self.ed = t["ed"]
             self.sb = t["sb"]
-            self.market_type = t["market_type"]
-        users = Users()
-        if self.user not in users.list():
-            self.user = users.default()
-        self.exchange = Exchange(users.find_exchange(self.user))
-        self.exchange.load_symbols()
-        if self.market_type == "spot":
-            if self.exchange.name not in ['binance', 'bybit']:
-                self.market_type = "futures"
-            else:
-                self.spot = self.exchange.spot
-                if self.symbol not in self.spot:
-                    self.symbol = "BTCUSDT"
-        elif self.market_type == "future":
-            self.swap = self.exchange.swap
-            if self.symbol not in self.swap:
-                self.symbol = "BTCUSDT"
 
     def save(self):
         pbgdir = Path.cwd()
@@ -117,17 +179,15 @@ class BacktestItem:
         }
         if not dest.exists():
             dest.mkdir(parents=True)
-        config_file = Path(f'{self.file}.cfg')
-        with open(config_file, "w", encoding='utf-8') as f:
-            f.write(self.config)
-        self.config_file = config_file
+        self._config.config_file = f'{self.file}.cfg'
+        self._config.save_config()
         with open(self.file, "w", encoding='utf-8') as f:
             json.dump(bt_dict, f, indent=4)
 
     def remove(self):
         self.file.unlink(missing_ok=True)
         self.log.unlink(missing_ok=True)
-        self.config_file.unlink(missing_ok=True)
+        Path(self._config.config_file).unlink(missing_ok=True)
 
     def remove_log(self):
         self.log.unlink(missing_ok=True)
@@ -198,7 +258,7 @@ class BacktestItem:
                 cmd = [sys.executable, '-u', PurePath(f'{pbdir}/backtest.py')]
                 cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
                 cmd.extend(shlex.split(cmd_end))
-                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self.config_file)}')])
+                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self._config.config_file)}')])
                 log = open(self.log,"w")
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True)
 
@@ -247,6 +307,12 @@ class BacktestQueue:
     def add(self, item: BacktestItem = None):
         if item:
             self.items.append(item)
+
+    def remove_finish(self):
+        for item in self.items:
+            if item.is_finish():
+                item.remove()
+        experimental_rerun()
 
     def running(self):
         r = 0
@@ -348,7 +414,10 @@ class BacktestResults:
                 }
             for bt in self.backtests:
                 if (bt.symbol in symbols or not symbols) and (bt.exchange in exchanges or not exchanges):
-                    filename = str(bt.backtest_path).partition(f'{bt.exchange}/')[-1]
+                    if bt.market_type == "spot":
+                        filename = str(bt.backtest_path).partition(f'{bt.exchange}_spot/')[-1]
+                    else:
+                        filename = str(bt.backtest_path).partition(f'{bt.exchange}/')[-1]
                     d.append({
                             'id': self.backtests.index(bt),
                             'Show': bt.selected,
@@ -500,7 +569,7 @@ class BacktestResults:
     def match_item(self, item: BacktestItem = None):
         long = json.loads(item.config)["long"]
         short = json.loads(item.config)["short"]
-        p = str(Path(f'{self.backtest_path}/{item.exchange.name}/{item.symbol}/plots/*/result.json'))
+        p = str(Path(f'{self.backtest_path}/{item.exchange.name}*/{item.symbol}/plots/*/result.json'))
         found_bt = glob.glob(p, recursive=True)
         if found_bt:
             for p in found_bt:
@@ -519,7 +588,6 @@ class BacktestResults:
                     and long["markup_range"] == bt.long["markup_range"]
                     and long["n_close_orders"] == bt.long["n_close_orders"]
                     and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
-                    and long["backwards_tp"] == bt.long["backwards_tp"]
                     and short["ema_span_0"] == bt.short["ema_span_0"]
                     and short["ema_span_1"] == bt.short["ema_span_1"]
                     and short["enabled"] == bt.short["enabled"]
@@ -527,7 +595,6 @@ class BacktestResults:
                     and short["markup_range"] == bt.short["markup_range"]
                     and short["n_close_orders"] == bt.short["n_close_orders"]
                     and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
-                    and short["backwards_tp"] == bt.short["backwards_tp"]
                 ):
                     self.backtests.append(bt)
             if not self.backtests:
