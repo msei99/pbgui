@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.6
+v0.61
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -9,6 +9,7 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ![Alt text](docs/images/live2.png)
 ![Alt text](docs/images/run.png)
 ![Alt text](docs/images/run2.png)
+![Alt text](docs/images/pbconfigdb.png)
 ![Alt text](docs/images/backtest.png)
 ![Alt text](docs/images/backtest2.png)
 ![Alt text](docs/images/optimize.png)
@@ -34,6 +35,12 @@ Open http://localhost:8501 with Browser\
 Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot directory
+
+## v0.61 (05-11-2023)
+- Backtest: Bugfix for configs with long config_name from pbconfigdv
+- Backtest: Added id to Import
+- Backtest: Bugfix for backtest queue / remove backtests
+- Backtest: Bugfix for change cpu and autostart
 
 ## v0.6 (04-11-2023)
 - Live: Upload to pbconfigdb
