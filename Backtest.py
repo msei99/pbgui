@@ -12,7 +12,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import validateJSON
+from pbgui_func import validateJSON, config_pretty_str
 import uuid
 from Base import Base
 from Config import Config
@@ -45,16 +45,6 @@ class BacktestItem(Base):
         st.markdown('### Import from PassivBot Config Result DB by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/")
         df = self.update_pbconfigdb()
         df = df[df['source'].str.contains('github')]
-        column_config = {
-            "View": st.column_config.CheckboxColumn('View', default=False),
-            "adg_per_exposure": 'adg_pe',
-            "adg_weighted_per_exposure": 'adg_wpe',
-            "eqbal_ratio_mean_of_10_worst": 'eqbal_10_worst',
-            "balance_needed": 'min_balance',
-            "quality_score": 'score',
-            "source": st.column_config.LinkColumn('source', width=None, disabled=True),
-            "hash": None
-            }
         df_min = df[[
             "symbol", 
             "side", 
@@ -71,6 +61,17 @@ class BacktestItem(Base):
             "balance_needed",
             "source",
             "hash"]]
+        column_config = {
+            "_index": 'Id',
+            "View": st.column_config.CheckboxColumn('View', default=False),
+            "adg_per_exposure": 'adg_pe',
+            "adg_weighted_per_exposure": 'adg_wpe',
+            "eqbal_ratio_mean_of_10_worst": 'eqbal_10_worst',
+            "balance_needed": 'min_balance',
+            "quality_score": 'score',
+            "source": st.column_config.LinkColumn('source', width=None, disabled=True),
+            "hash": None
+            }
         df_min.insert(0 ,column="View", value=False)
         col_symbol, col_side, col_strategy = st.columns([1,1,1])
         with col_symbol:
@@ -101,14 +102,15 @@ class BacktestItem(Base):
             with col_image:
                 hash = row['hash']
                 source = row['source']
+                id = row["index"]
                 config = self.fetch_config(source)
                 if not config.endswith("found"):
-                    if st.checkbox("Backtest", key=hash):
+                    if st.checkbox(f'{id}: Backtest', key=hash):
                         self._config.config = config
                         self.symbol = row['symbol']
                         del st.session_state.bt_import
                         st.experimental_rerun()
-                st.image(f'https://pbconfigdb.scud.dedyn.io/plots/{hash}.png')
+                st.image(f'https://pbconfigdb.scud.dedyn.io/plots/{hash}.webp')
             with col_config:
                 st.code(config)
 
@@ -118,7 +120,9 @@ class BacktestItem(Base):
             config = response.json()["payload"]["blob"]["rawLines"]
             config = '\n'.join(config)
             if validateJSON(config):
-                return config
+                t = json.loads(config)
+                t["config_name"] = json.loads(config)["config_name"][:60]
+                return config_pretty_str(t)
         return f'{response.status_code} config not found'
 
     def update_pbconfigdb(self):
@@ -277,6 +281,8 @@ class BacktestQueue:
 
     @property
     def cpu(self):
+        self.pb_config.read('pbgui.ini')
+        self._cpu = int(self.pb_config.get("backtest", "cpu"))
         return self._cpu
 
     @cpu.setter
@@ -301,6 +307,8 @@ class BacktestQueue:
                 self.pb_config.write(f)
             if self._autostart:
                 self.run()
+            else:
+                self.stop()
             st.experimental_rerun()
 
     def add(self, item: BacktestItem = None):
@@ -325,9 +333,7 @@ class BacktestQueue:
         dest = Path(f'{pbgdir}/data/bt_queue')
         p = str(Path(f'{dest}/*.json'))
         items = glob.glob(p)
-        for t_item in self.items:
-            if not any(str(t_item.file) in sub for sub in items):
-                self.items.remove(t_item)
+        self.items = []
         for item in items:
             bt_item = BacktestItem()
             bt_item.load(item)
@@ -343,6 +349,11 @@ class BacktestQueue:
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/Backtest.py')]
             log = open(Path(f'{pbgdir}/data/bt_queue/Backtest.log'),"a")
             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+
+    def stop(self):
+        if self.is_running():
+            self.pid().kill()
+
 
     def is_running(self):
         if self.pid():
