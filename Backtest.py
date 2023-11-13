@@ -347,7 +347,10 @@ class BacktestQueue:
         if not self.is_running():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/Backtest.py')]
-            log = open(Path(f'{pbgdir}/data/logs/Backtest.log'),"a")
+            dest = Path(f'{pbgdir}/data/logs')
+            if not dest.exists():
+                dest.mkdir(parents=True)
+            log = open(Path(f'{dest}/Backtest.log'),"a")
             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def stop(self):

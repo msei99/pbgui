@@ -241,8 +241,11 @@ def main():
         print("Run Module is not supported on Windows")
         exit()
     pbgdir = Path.cwd()
-    sys.stdout = TextIOWrapper(open(Path(f'{pbgdir}/data/logs/PBRun.log'),"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(Path(f'{pbgdir}/data/logs/PBRun.log'),"ab",0), write_through=True)
+    dest = Path(f'{pbgdir}/data/logs')
+    if not dest.exists():
+        dest.mkdir(parents=True)
+    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRun.log'),"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRun.log'),"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRun')
     run = PBRun()
     run.load_all()
