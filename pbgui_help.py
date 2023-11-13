@@ -17,7 +17,6 @@ price_distance_threshold = """
 mode = """
     ```
     n (normal); normal operation
-    m (manual): bot neither creates nor cancels orders. (Enabled=False)
     gs (graceful stop): let the bot continue as normal until
         all positions are fully closed, then not open any more positions.
     p (panic): bot will close positions asap using limit orders
@@ -47,6 +46,13 @@ lev = """
     no difference on risk, profit or bot behavior, as long as leverage is set
     high enough for the bot to make its grid according to the configuration.
     ```"""
+co = """
+    ```
+    When in OHLCV mode, offset the execution cycle by a certain number of
+    seconds from the start of each minute. This can help avoid exceeding
+    the API rate limit when running multiple instances.
+    Default is random (-1)
+    ```"""
 ohlcv = """
     ```
     use 1m ohlcv instead of 1s ticks
@@ -68,4 +74,39 @@ upload_pbguidb = """
     ```
     Share your configuration with pbconfigdb
     You can enter a name that will be displayed in pbconfigdb as source
+    ```"""
+instance_save = """
+    ```
+    Save config
+    ```"""
+instance_restart = """
+    ```
+    Save config and restart Instance
+    ```"""
+instance_enable = """
+    ```
+    Save config and start/stop Instance
+    ```"""
+
+pbrun = """
+    ```
+    This is the Instance Manager from PBGUI.
+    Enable, to start all enabled Instances.
+    To start the Instance Manager after reboot your server, you have to
+    start PBRun.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    python PBRun.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
     ```"""
