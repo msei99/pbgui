@@ -15,47 +15,6 @@ import platform
 import pandas as pd
 import jinja2
 
-def update_dir(key):
-    choice = st.session_state[key]
-    if os.path.isdir(os.path.join(st.session_state[key+'curr_dir'], choice)):
-        st.session_state[key+'curr_dir'] = os.path.normpath(os.path.join(st.session_state[key+'curr_dir'], choice))
-        files1 = os.scandir(st.session_state[key+'curr_dir'])
-        files = []
-        for file in files1:
-            if file.is_dir() or file.name.endswith('.json'):
-                files.insert(0,file.name)
-        files = sorted(files)
-#        files = sorted(os.listdir(st.session_state[key+'curr_dir']))
-        files.insert(0, '..')
-        files.insert(0, '.')
-        st.session_state[key+'files'] = files
-
-def st_file_selector(st_placeholder, path='.', label='Select a file/folder', key = 'selected'):
-    if key+'curr_dir' not in st.session_state:
-        base_path = '.' if path is None or path == '' else path
-        base_path = base_path if os.path.isdir(base_path) else os.path.dirname(base_path)
-        base_path = '.' if base_path is None or base_path == '' else base_path
-
-        files1 = os.scandir(base_path)
-        files = []
-        for file in files1:
-            if file.is_dir() or file.name.endswith('.json'):
-                files.insert(0,file.name)
-        files = sorted(files)
-#        files = sorted(os.listdir(base_path))
-        files.insert(0, '..')
-        files.insert(0, '.')
-        st.session_state[key+'files'] = files
-        st.session_state[key+'curr_dir'] = base_path
-    else:
-        base_path = st.session_state[key+'curr_dir']
-    selected_file = st_placeholder.selectbox(label=label, 
-                                        options=st.session_state[key+'files'], 
-                                        key=key, 
-                                        on_change = lambda: update_dir(key))
-    selected_path = os.path.normpath(os.path.join(base_path, selected_file))
-    st_placeholder.write(os.path.abspath(selected_path))
-    return selected_path
 
 #  backup old config.yaml and save new
 def save_yaml(instance):
@@ -174,38 +133,6 @@ def button_handler(instance, button=None):
         save_yaml(instance)
         st.session_state.pb_manager = Manager()
         st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
-    elif button == "run_bt":
-        st.session_state.my_bt = BacktestItem(config=st.session_state.instance_config)
-        st.session_state.my_bt.symbol = instance.symbol
-        st.session_state.my_bt.user = instance.user
-        st.session_state.go_backtest = True
-        if "bt_queue" in st.session_state:
-            del st.session_state.bt_queue
-    elif button == "add_live":
-        if 'pbgui_instances' not in st.session_state:
-            st.session_state.pbgui_instances = Instances()
-        if '-m' in instance.flags and instance.flags['-m'] == 'spot':
-            market = 'spot'
-        else:
-            market = 'futures'
-        pbgdir = Path.cwd()
-        dirname = Path(f'{pbgdir}/data/instances/{instance.user}_{instance.symbol}_{market}')
-        if not dirname.exists():
-            inst = Instance()
-            inst.user = instance.user
-            inst.symbol = instance.symbol
-            inst.market_type = market
-            if '-lev' in instance.flags:
-                inst.leverage = instance.flags['-lev']
-            inst.save()
-            shutil.copy(PurePath(f'{instance.config}'), PurePath(f'{dirname}/config.json'))
-            if 'pbgui_instances' in st.session_state:
-                del st.session_state.pbgui_instances
-        else:
-            st.session_state.error = f'{instance.user}_{instance.symbol}_{market} already exists in live modul. Remove it first.'
-    elif button == "add":
-        st.session_state.editpb_instance = instance
-        st.session_state.new_instance = True
     else:
         st.session_state.editpb_instance = instance
         st.session_state.new_instance = False
@@ -235,8 +162,6 @@ def editpb_instance(instance):
             st.button(":red[Start]", key="instance", on_click=start_stop_instance, args=[instance])
             st.button(":wastebasket:", key='del', on_click=button_handler, args=[instance, "del"])
         st.button(":back:", key="back", on_click=button_handler, args=[instance, "back"])
-        st.button("Copy to backtest", key="run_bt", on_click=button_handler, args=[instance, "run_bt"])
-        st.button("Add to live", key="add_live", on_click=button_handler, args=[instance, "add_live"])
     with st.form("myInstance config"):
         # Init user index
         api = pd.read_json(st.session_state.pbdir+'/api-keys.json', typ='frame', orient='index')
@@ -412,103 +337,8 @@ def editpb_instance(instance):
         new_instance_config = st.text_area("Instance config", st.session_state.instance_config, key="input_instance_config", height=st.session_state.instance_config_high, placeholder="paste config.json or load config from disk")
         if "overwrite" in st.session_state:
             st.session_state.overwrite = st.checkbox(st.session_state.error)
-        submitted = st.form_submit_button("Save")
-        if submitted:
-            if st.session_state.new_config_filename in ['live_config.json', 'new_config.json', '']:
-                st.session_state.error = 'Please change "config filename"'
-                st.experimental_rerun()
-            if len(new_instance_config) == 0:
-                st.session_state.error = 'Instance config is empty'
-                st.experimental_rerun()
-            if instance.get_id() != f'{user}-{symbol}':
-                for inst in st.session_state.pb_instances:
-                    if inst.get_id() == f'{user}-{symbol}':
-                        st.session_state.error = f'There is another Instance with same User-SYMBOL combinantion: {instance.get_id()} This is not supported.'
-                        st.experimental_rerun()
-            try:
-                if long_exposure != round(json.loads(new_instance_config)["long"]["wallet_exposure_limit"],2):
-                    instance.apply_flags({'-lw': long_exposure})
-                else:
-                    long_exposure = 0.0
-                    instance.apply_flags({'-lw': long_exposure})
-                if long_min_markup != 0.0 or long_min_markup != round(json.loads(new_instance_config)["long"]["min_markup"],4):
-                    instance.apply_flags({'-lmm': long_min_markup})
-                if long_markup_range != 0.0 or long_markup_range != round(json.loads(new_instance_config)["long"]["markup_range"],4):
-                    instance.apply_flags({'-lmr': long_markup_range})
-                if short_exposure != round(json.loads(new_instance_config)["short"]["wallet_exposure_limit"],2):
-                    instance.apply_flags({'-sw': short_exposure})
-                else:
-                    short_exposure = 0.0
-                    instance.apply_flags({'-sw': short_exposure})
-                if short_min_markup != 0.0 or short_min_markup != round(json.loads(new_instance_config)["short"]["min_markup"],4):
-                    instance.apply_flags({'-smm': short_min_markup})
-                if short_markup_range != 0.0 or short_markup_range != round(json.loads(new_instance_config)["short"]["markup_range"],4):
-                    instance.apply_flags({'-smr': short_markup_range})
-            except:
-                st.session_state.error = f'Error in Instance config'
-                st.experimental_rerun()
-            if st.session_state.instance_config != new_instance_config or instance.config != PurePath(f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}'):
-                if os.path.exists(PurePath(f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}')):
-                    if not "overwrite" in st.session_state:
-                        st.session_state.error = f':red[Overwrite {st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename} ?]'
-                        st.session_state.overwrite = False
-                        st.experimental_rerun()
-                    else:
-                        if not st.session_state.overwrite:
-                            st.experimental_rerun()
-                else:
-                    if "overwrite" in st.session_state:
-                        del st.session_state.overwrite
-                    if "error" in st.session_state:
-                        del st.session_state.error
-                instance.config = PurePath(f'{st.session_state.pbdir}/configs/live/{st.session_state.new_config_filename}')
-                save_instance_config(instance, new_instance_config)
-                del st.session_state.instance_config
-#            print({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
-            instance.user = user
-            instance.symbol = symbol
-            instance.apply_flags({'-lev': lev, '-m': market, '-lm': long_mode, '-sm': short_mode, '-ab': assigned_balance, '-pt': price_distance_threshold, '-oh': ohlcv, '-pp': price_precision, '-ps': price_step})
-            save_yaml(instance)
-            id = instance.get_id()
-            st.session_state.pb_manager = Manager()
-            st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
-            for instance in st.session_state.pb_instances:
-                if instance.match(id,exact=True):
-                    st.session_state.editpb_instance = instance
-            if "error" in st.session_state:
-                del st.session_state.error
-            if "overwrite" in st.session_state:
-                del st.session_state.overwrite
-            st.experimental_rerun()
-    col21, col22 = st.columns([1,1])
-    with col21:
-        selected_config = os.path.abspath(st_file_selector(st, path=f'{st.session_state.pbdir}/configs/live', key = 'selected_config', label = 'select config from live'))
-    with col22:
-        backtest_config = os.path.abspath(st_file_selector(st, path=f'{st.session_state.pbdir}/backtests/pbgui', key = 'backtest_config', label = 'load config from backtests'))
-    if selected_config.endswith(".json") and selected_config != instance.config:
-        try:
-            with open(selected_config, 'r', encoding='utf-8') as f:
-                st.session_state.instance_config = f.read()
-        except FileNotFoundError:
-            st.session_state.instance_config = ""
-        st.session_state.instance_config_high = len(st.session_state.instance_config.splitlines()) * 24
-        instance.config = selected_config
-        del st.session_state.selected_config
-        st.session_state.selected_config = "."
-        st.experimental_rerun()
-    if backtest_config.endswith(".json") and backtest_config != instance.config:
-        try:
-            with open(backtest_config, 'r', encoding='utf-8') as f:
-                st.session_state.instance_config = f.read()
-        except FileNotFoundError:
-            st.session_state.instance_config = ""
-        st.session_state.instance_config_high = len(st.session_state.instance_config.splitlines()) * 24
-        instance.config = backtest_config
-        if "new_config_filename" in st.session_state:
-            del st.session_state.new_config_filename
-        del st.session_state.backtest_config
-        st.session_state.backtest_config = "."
-        st.experimental_rerun()
+        if st.form_submit_button("Save"):
+            st.write("Changes are no longer supported, please migrate to PBRun.")
     # Display Logfile
     logfile = Path(f'{st.session_state.pbdir}/logs/{instance.user}/{instance.symbol}.log')
     logr = ""
@@ -519,17 +349,6 @@ def editpb_instance(instance):
                 logr = logr+line
     st.button(':recycle: **Refresh Logfile**',)
     stx.scrollableTextbox(logr,height="300")
-    #Display Backtest
-    if "bt_results_run" in st.session_state:
-        bt_results_run = st.session_state.bt_results_run
-    else:
-        st.session_state.bt_results_run = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
-        bt_results_run = st.session_state.bt_results_run
-        if st.session_state.instance_config:
-            bt_results_run.match_config(instance.symbol, st.session_state.instance_config)
-    bt_results_run.view()
-    for _ in range(100):
-        ' '
 
 set_page_config()
 
@@ -560,12 +379,3 @@ if 'editpb_instance' in st.session_state:
     editpb_instance(st.session_state.editpb_instance)
 else:
     display_bots()
-    instance = __import__("manager.instance")
-    PBInstance = getattr(manager.instance,"Instance")
-    new_instance = PBInstance({
-                "user": "",
-                "symbol": "SYMBOL",
-                "config": PurePath(f'{st.session_state.pbdir}/configs/live/new_config.json'),
-                "flags": {}
-            })
-    st.button(":heavy_plus_sign: Add Instance", key='add', on_click=button_handler, args=[new_instance, "add"])
