@@ -1,0 +1,7 @@
+#!/usr/bin/bash
+venv=~/software/venv_pb39       #Path to python venv
+pbgui=~/software/pbgui          #path to pbgui installation
+
+source ${venv}/bin/activate
+cd ${pbgui}
+python PBRun.py
