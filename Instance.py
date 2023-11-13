@@ -1,8 +1,10 @@
 import streamlit as st
 from pathlib import Path
-#from Exchange import Exchange
+import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
+from PBRun import PBRun, RunInstance
+import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
 import json
@@ -12,28 +14,30 @@ from datetime import datetime
 from bokeh.plotting import figure
 import numpy as np
 from shutil import rmtree
-
+import sys
 
 class Instance(Base):
     def __init__(self):
         super().__init__()
         self._instance_path = None
+        self._enabled = False
         self._error = None # not saved
         self._symbol_ccxt = None # not saved
         self._config = Config() # not saved
         self._assigned_balance = 0
+        self._co = -1
         self._leverage = 7
         self._price_distance_threshold = 0.5
         self._price_precision = 0.0
         self._price_step = 0.0
-        self._long_mode = None
-        self._long_min_markup = 0.0
-        self._long_markup_range = 0.0
-        self._short_mode = None
-        self._short_min_markup = 0.0
-        self._short_markup_range = 0.0
-        self._ohlcv_df = None # not saved
+        self._long_mode = "normal"
+#        self._long_min_markup = 0.0
+#        self._long_markup_range = 0.0
+        self._short_mode = "normal"
+#        self._short_min_markup = 0.0
+#        self._short_markup_range = 0.0
         self._tf = None
+        self._ohlcv_df = None # not saved
         self._bt = None # not saved
         self._btresults = None # not saved
         self._trades = None # not saved
@@ -46,12 +50,16 @@ class Instance(Base):
         self._balance = None # not saved
 
     @property
+    def enabled(self): return self._enabled
+    @property
     def symbol_ccxt(self): return self._symbol_ccxt
     @property
     def tf(self):
         if not self._tf:
             self._tf = self.exchange.tf[0]
         return self._tf
+    @property
+    def co(self): return self._co
     @property
     def leverage(self): return self._leverage
     @property
@@ -62,6 +70,10 @@ class Instance(Base):
     def price_precision(self): return self._price_precision
     @property
     def price_step(self): return self._price_step
+    @property
+    def long_mode(self): return self._long_mode
+    @property
+    def short_mode(self): return self._short_mode
     @property
     def sb(self): return self._sb
     @property
@@ -78,6 +90,20 @@ class Instance(Base):
     def balance(self):
         self._balance = self._exchange.fetch_balance(self._market_type)
         return self._balance
+
+    @enabled.setter
+    def enabled(self, new_enabled):
+        if self._enabled != new_enabled:
+            self._enabled = new_enabled
+            self.save()
+            PBRun().update(self._instance_path, self._enabled)
+            st.experimental_rerun()
+
+    @co.setter
+    def co(self, new_co):
+        if self._co != new_co:
+            self._co = new_co
+            st.experimental_rerun()
 
     @leverage.setter
     def leverage(self, new_leverage):
@@ -107,6 +133,18 @@ class Instance(Base):
     def price_step(self, new_price_step):
         if self._price_step != new_price_step:
             self._price_step = new_price_step
+            st.experimental_rerun()
+
+    @long_mode.setter
+    def long_mode(self, new_long_mode):
+        if self._long_mode != new_long_mode:
+            self._long_mode = new_long_mode
+            st.experimental_rerun()
+
+    @short_mode.setter
+    def short_mode(self, new_short_mode):
+        if self._short_mode != new_short_mode:
+            self._short_mode = new_short_mode
             st.experimental_rerun()
 
     @sb.setter
@@ -428,6 +466,18 @@ class Instance(Base):
     def edit_config(self):
         self._config.edit_config()
 
+    def edit_mode(self):
+        if not self.long_mode:
+            self.long_mode = "normal"
+        if not self.short_mode:
+            self.short_mode = "normal"
+        modes = ['normal', 'graceful_stop', 'panic', 'tp_only']
+        col_lm, col_sm, col_empty = st.columns([1,1,1])
+        with col_lm:
+            self.long_mode = st.radio("LONG_MODE",(modes), key="long_mode", index=modes.index(self.long_mode), help=pbgui_help.mode)
+        with col_sm:
+            self.short_mode = st.radio("SHORT_MODE",(modes), key="short_mode", index=modes.index(self.short_mode), help=pbgui_help.mode)
+
     def refresh(self):
         path = self._instance_path
         self.__init__()
@@ -451,6 +501,9 @@ class Instance(Base):
         if self.user and self.symbol and self.market_type:
             pbgdir = Path.cwd()
             instance_path = Path(f'{pbgdir}/data/instances/{self._user}_{self._symbol}_{self.market_type}')
+            if self._instance_path and self._instance_path != str(instance_path):
+                if Path(self._instance_path).exists():
+                    Path(self._instance_path).rename(instance_path)
             self._instance_path = str(instance_path)
             if not instance_path.exists():
                 instance_path.mkdir(parents=True)
@@ -479,6 +532,23 @@ class Instance(Base):
                 json.dump(state, f, indent=4)
         else:
             self._error = ""
+
+    def view_log(self):
+        logfile = Path(f'{self._instance_path}/passivbot.log')
+        logr = ""
+        if logfile.exists():
+            with open(logfile, 'r', encoding='utf-8') as f:
+                log = f.readlines()
+                for line in reversed(log):
+                    logr = logr+line
+            st.button(':recycle: **passivbot logfile**')
+            stx.scrollableTextbox(logr,height="300")
+
+    def is_running(self):
+        run_instance = RunInstance()
+        run_instance.user = self.user
+        run_instance.symbol = self.symbol
+        return run_instance.is_running()
 
 class Instances:
     def __init__(self, backtest_path: str = None):
@@ -513,6 +583,56 @@ class Instances:
             self.instances.append(inst)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
 
+    def import_manager(self):
+        sys.path.insert(0,st.session_state.pbdir)
+        sys.path.insert(0,f'{st.session_state.pbdir}/manager')
+        manager = __import__("manager")
+        Manager = getattr(manager,"Manager")
+        pb_manager = Manager()
+        pb_instances = pb_manager.get_instances()
+        d = []
+        select_all = st.checkbox('Select All',value=False, key="select_all")
+        column_config = {
+            "Import": st.column_config.CheckboxColumn('Import', default=False),
+            "id": None}
+        for id, instance in enumerate(pb_instances):
+            d.append({
+                'id': id,
+                'Import': select_all,
+                'User': instance.user,
+                'Symbol': instance.symbol,
+                'Running': instance.is_running(),
+            })
+        selected = st.data_editor(data=d, width=None, height=1024, use_container_width=True, key="editor_select_pbinstance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol'])
+        if st.button("Import"):
+            for line in selected:
+                if line["Import"]:
+                    instance = list(pb_instances)[line["id"]]
+                    if '-m' in instance.flags and instance.flags['-m'] == 'spot':
+                        market = 'spot'
+                    else:
+                        market = 'swap'
+                    inst = Instance()
+                    inst._config = Config(file_name = instance.config)
+                    inst._config.load_config()
+                    inst.user = instance.user
+                    inst.symbol = instance.symbol
+                    inst._market_type = market
+                    if '-lev' in instance.flags:
+                        inst._leverage = instance.flags['-lev']
+                    if '-oh' in instance.flags:
+                        if not instance.flags['-oh']:
+                            inst._ohlcv = False
+                    if '-ab' in instance.flags:
+                        inst._assigned_balance = instance.flags['-ab']
+                    if '-pt' in instance.flags:
+                        inst._price_distance_threshold = instance.flags['-pt']
+                    if '-pp' in instance.flags:
+                        inst._price_precision = instance.flags['-pp']
+                    if '-ps' in instance.flags:
+                        inst._price_step = instance.flags['-ps']
+                    inst.save()
+                    st.write(f'User: :green[{instance.user}] Symbol: :green[{instance.symbol}] imported. :red[Please verify the new Instance!]')
 
 def main():
     print("Don't Run this Class from CLI")

@@ -36,8 +36,47 @@ Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot directory
 
+## PBRun Instance Manager
+To enable the PBGui instance manager in the GUI, you can follow these steps:
+
+1. Open the PBGui interface.
+2. Go to Live and enable PBRun
+
+To ensure that the Instance Manager starts after rebooting your server, you can use the following method:
+
+1. Create a script file, such as "start.sh", in your pbgui directory (e.g., ~/software/pbgui).
+2. In the script file, include the following lines:
+
+```
+#!/usr/bin/bash
+venv=~/software/venv_pb39 # Path to your Python virtual environment
+pbgui=~/software/pbgui # Path to your PBGui installation
+
+source ${venv}/bin/activate
+cd ${pbgui}
+python PBRun.py
+```
+
+3. Save the script file and make it executable by running the command: `chmod 755 start.sh`.
+4. Open your crontab file by running the command: `crontab -e`.
+5. Add the following line to the crontab file to execute the script at reboot:
+
+```
+@reboot ~/software/pbgui/start.sh
+```
+
+6. Save the crontab file.
+
+Please make sure to adjust the paths in the script file and crontab entry according to your specific setup.
+
+## v0.65 (13-11-2023)
+- Live: -co countdown added
+- Live: PBRun is now the Instance Manager vom PBGui
+- Run: Module removed / run is now included in Live
+- Live: Bugfix for change symbol/market
+
 ## v0.61 (05-11-2023)
-- Backtest: Bugfix for configs with long config_name from pbconfigdv
+- Backtest: Bugfix for configs with long config_name from pbconfigdb
 - Backtest: Added id to Import
 - Backtest: Bugfix for backtest queue / remove backtests
 - Backtest: Bugfix for change cpu and autostart
