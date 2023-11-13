@@ -347,13 +347,12 @@ class BacktestQueue:
         if not self.is_running():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/Backtest.py')]
-            log = open(Path(f'{pbgdir}/data/bt_queue/Backtest.log'),"a")
+            log = open(Path(f'{pbgdir}/data/logs/Backtest.log'),"a")
             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def stop(self):
         if self.is_running():
             self.pid().kill()
-
 
     def is_running(self):
         if self.pid():
