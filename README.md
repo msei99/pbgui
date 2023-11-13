@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.61
+v0.65
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
