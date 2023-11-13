@@ -14,13 +14,22 @@ def select_instance():
         st.error(st.session_state.error, icon="🚨")
     if "confirm" in st.session_state:
         st.session_state.confirm = st.checkbox(st.session_state.confirm_text)
-    if st.toggle("PBRun", value=PBRun().is_running(), key="pbrun", help=pbgui_help.pbrun):
-        if not PBRun().is_running():
-            PBRun().run()
+    # Navigation
+    with st.sidebar:
+        if st.toggle("PBRun", value=PBRun().is_running(), key="pbrun", help=pbgui_help.pbrun):
+            if not PBRun().is_running():
+                PBRun().run()
+                st.experimental_rerun()
+        else:
+            if PBRun().is_running():
+                PBRun().stop()
+                st.experimental_rerun()
+        view_pbrun_log = st.checkbox("PBRun Logfile", value=False, key="view_pbrun_log")
+        if st.button("Add"):
+            st.session_state.edit_instance = Instance()
             st.experimental_rerun()
-    else:
-        if PBRun().is_running():
-            PBRun().stop()
+        if st.button("Import"):
+            st.session_state.import_instance = True
             st.experimental_rerun()
     d = []
     column_config = {
@@ -62,6 +71,8 @@ def select_instance():
                     del st.session_state.confirm
                     del st.session_state.confirm_text
                     st.experimental_rerun()
+    if view_pbrun_log:
+        instances.view_log()
 
 def view_instance():
     # Init instance
@@ -168,12 +179,3 @@ elif 'import_instance' in st.session_state:
     import_instance()
 else:
     select_instance()
-    col_addinst, col_import = st.columns([1,1])
-    with col_addinst:
-        if st.button(":heavy_plus_sign: Add Instance"):
-            st.session_state.edit_instance = Instance()
-            st.experimental_rerun()
-    with col_import:
-        if st.button(":heavy_plus_sign: Import Instances from Live Bot Manager (Old Run Module)"):
-            st.session_state.import_instance = True
-            st.experimental_rerun()
