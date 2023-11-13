@@ -541,8 +541,8 @@ class Instance(Base):
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
-            st.button(':recycle: **passivbot logfile**')
-            stx.scrollableTextbox(logr,height="300")
+        st.button(':recycle: **passivbot logfile**')
+        stx.scrollableTextbox(logr,height="300")
 
     def is_running(self):
         run_instance = RunInstance()
@@ -582,6 +582,18 @@ class Instances:
             inst.load(instance)
             self.instances.append(inst)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
+
+    def view_log(self):
+        pbgdir = Path.cwd()
+        logfile = Path(f'{pbgdir}/data/logs/PBRun.log')
+        logr = ""
+        if logfile.exists():
+            with open(logfile, 'r', encoding='utf-8') as f:
+                log = f.readlines()
+                for line in reversed(log):
+                    logr = logr+line
+        st.button(':recycle: **PBRun logfile**')
+        stx.scrollableTextbox(logr,height="300")
 
     def import_manager(self):
         sys.path.insert(0,st.session_state.pbdir)
