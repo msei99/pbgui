@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.65
+v0.66
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -69,8 +69,10 @@ python PBRun.py
 
 Please make sure to adjust the paths in the script file and crontab entry according to your specific setup.
 
+## v0.66 (14-11-2023)
+- Live: Bugfix for download trades history from bybit
+
 ## v0.65 (13-11-2023)
-- Live: Bugfix for download trades history
 - Live: -co countdown added
 - Live: PBRun is now the Instance Manager vom PBGui
 - Run: Module removed / run is now included in Live
