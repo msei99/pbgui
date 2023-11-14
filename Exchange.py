@@ -2,6 +2,7 @@ import ccxt
 import configparser
 from User import User
 from enum import Enum
+from time import sleep
 import json
 
 class Exchanges(Enum):
@@ -128,30 +129,77 @@ class Exchange:
             end_time = self.instance.milliseconds()
             # With ccxt >= 4.1.7 we can use pagination in one line
             # trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "paginate": True, "paginationDirection": "forward", "until": self.instance.milliseconds()})
-            week = 7 * 24 * 60 * 60 * 1000
-            now = self.instance.milliseconds ()
-            all_trades = []
-            if since == 1577840461000:
-                first_trade = self.instance.fetch_my_trades (symbol, None, None, {'fromId': 0})
-                if first_trade:
-                    since = first_trade[0]["timestamp"]
-            while since < now:
-                print('Fetching trades from', self.instance.iso8601(since))
-                end_time = since + week
-                if end_time > now:
-                    end_time = now
-                trades = self.instance.fetch_my_trades (symbol, since, None, {
-                    'endTime': end_time,
-                })
-                if len(trades):
-                    last_trade = trades[len(trades) - 1]
-                    since = last_trade['timestamp'] + 1
-                    all_trades = all_trades + trades
-                else:
-                    since = end_time
-            print('Done')
+            if self.id == "binance":
+                week = 7 * 24 * 60 * 60 * 1000
+                now = self.instance.milliseconds ()
+                all_trades = []
+                if since == 1577840461000:
+                    first_trade = self.instance.fetch_my_trades(symbol, None, None, {'fromId': 0})
+                    if first_trade:
+                        since = first_trade[0]["timestamp"]
+                while since < now:
+                    print('Fetching trades from', self.instance.iso8601(since))
+                    end_time = since + week
+                    if end_time > now:
+                        end_time = now
+                    trades = self.instance.fetch_my_trades(symbol, since, None, {
+                        'endTime': end_time,
+                    })
+                    if len(trades):
+                        last_trade = trades[len(trades) - 1]
+                        since = last_trade['timestamp'] + 1
+                        all_trades = all_trades + trades
+                    else:
+                        since = end_time
+            elif self.id == "bybit":
+                week = 7 * 24 * 60 * 60 * 1000
+                now = self.instance.milliseconds ()
+                all_trades = []
+                if since == 1577840461000:
+                    end_time = since + week
+                    first_trade = self.instance.fetch_my_trades(symbol, since, 100, {"paginate": True, 'endTime': end_time })
+                    if first_trade:
+                        since = first_trade[0]["timestamp"]
+                while since < now:
+                    print('Fetching trades from', self.instance.iso8601(since))
+                    end_time = since + week
+                    if end_time > now:
+                        end_time = now
+                    trades = self.instance.fetch_my_trades(symbol, since, 100, {'endTime': end_time })
+                    if len(trades):
+                        last_trade = trades[len(trades) - 1]
+                        if "nextPageCursor" in last_trade["info"]:
+                            cursor = last_trade["info"]["nextPageCursor"]
+                            while True:
+                                print("Fetching trades from", cursor)
+                                all_trades = all_trades + trades
+                                trades = self.instance.fetch_my_trades(symbol, since, 100, {'cursor': cursor, 'endTime': end_time })
+                                if len(trades):
+                                    lpage = trades[len(trades) - 1]
+                                    if "nextPageCursor" in lpage["info"]:
+                                        cursor = lpage["info"]["nextPageCursor"]
+                                    else:
+                                        break
+                        since = last_trade['timestamp'] + 1
+                        all_trades = all_trades + trades
+                    else:
+                        since = end_time
+            else:
+                while True:
+                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "endTime": end_time})
+                    if trades and trades[-1]['id'] != last_trade_id:
+                        first_trade = trades[0]
+                        last_trade = trades[len(trades) - 1]
+                        last_trade_id = trades[-1]['id']
+                        end_time = first_trade['timestamp']
+                        all_trades = trades + all_trades
+                        print('Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
+                    else:
+                        print('Done')
+                        break
         if all_trades:
-            return all_trades
+            sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])
+            return sort_trades
 
     def symbol_to_exchange_symbol(self, symbol: str, market_type: str):
         if self.id == 'binance':
