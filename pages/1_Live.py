@@ -119,7 +119,7 @@ def select_instance():
         "id": None}
     df = pd.DataFrame(d)
     sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
-    st.data_editor(data=sdf, width=None, height=len(instances.instances)*37, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, on_change = edited, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+    st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, on_change = edited, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
     if instances.pbstat_log:
