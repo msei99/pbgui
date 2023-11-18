@@ -500,11 +500,17 @@ class Instance(Base):
             active_scroll="wheel_zoom")
         p.segment(x0=self._ohlcv_df["timestamp"], y0=self._ohlcv_df["high"], x1=self._ohlcv_df["timestamp"], y1=self._ohlcv_df["low"], color=self._ohlcv_df["color"])
         p.vbar(x=self._ohlcv_df["timestamp"], width=w, top=self._ohlcv_df["open"], bottom=self._ohlcv_df["close"], color=self._ohlcv_df["color"])
+        if self._status:
+            price = self.price
+            position = self._status["position"]
+            orders = self._status["orders"]
+        else:
+            price = self.fetch_price()["last"]
+            position = self.fetch_position()
+            orders = self.fetch_open_orders()
         # price
-        price = self.price
         color = "red" if price < self._ohlcv_df["open"].iloc[-1] else "green"
         p.line(x=self._ohlcv_df["timestamp"], y=price, color=color, legend_label=f'price: {str(price)}')
-        position = self._status["position"]
         # position
         if position:
             if position["entryPrice"]:
@@ -512,7 +518,6 @@ class Instance(Base):
                 p.line(x=self._ohlcv_df["timestamp"], y=position["entryPrice"], color=color, line_dash="dashed", legend_label=f'position: {str(position["entryPrice"])} qty: {str(position["contracts"])} Pnl: {str(position["unrealizedPnl"])}')
         st.markdown(f'### Symbol: {self.symbol} {self.balance} USDT')
         # open/close orders
-        orders = self._status["orders"]
         for order in orders:
             color = "red" if order["side"] == "sell" else "green"
             legend = f'close: {str(order["price"])} qty: {str(order["amount"])}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(order["amount"])}'
