@@ -4,4 +4,5 @@ pbgui=~/software/pbgui          #path to pbgui installation
 
 source ${venv}/bin/activate
 cd ${pbgui}
-python PBRun.py
+python PBRun.py &
+python PBStat.py &

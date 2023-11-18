@@ -47,7 +47,8 @@ class Instance(Base):
         self._sb_change = False # Not saved
         self._sd_change = False # Not saved
         self._ed_change = False # Not saved
-        self._balance = None # not saved
+        self._status = {} # not saved
+        self._statusll = 0 # not saved
 
     @property
     def enabled(self): return self._enabled
@@ -88,8 +89,104 @@ class Instance(Base):
     def ed_change(self): return self._ed_change
     @property
     def balance(self):
-        self._balance = self._exchange.fetch_balance(self._market_type)
-        return self._balance
+        self.load_status()
+        if "balance" in self._status:
+            return self._status["balance"]
+        else:
+            return 0
+    @property
+    def we(self):
+        if not self.load_status(): return 0
+        try:
+            entry = self._status["position"]["entryPrice"]
+            qty = self._status["position"]["contracts"]
+            if self.balance == 0 or not qty:
+                return 0
+            entry = float(entry)
+            qty = float(qty)
+            we = 100 / self.balance * entry * qty
+            return we
+        except Exception as e:
+            print(e)
+            return 0
+    @property
+    def upnl(self):
+        if not self.load_status(): return 0
+        try: 
+            upnl = self._status["position"]["unrealizedPnl"]
+            if not upnl: return 0
+            return upnl
+        except Exception as e:
+            print(e)
+            return 0
+    @property
+    def psize(self):
+        if not self.load_status(): return 0
+        try: 
+            psize = self._status["position"]["contracts"]
+            if not psize: return 0
+            return psize
+        except Exception as e:
+            print(e)
+            return 0
+    @property
+    def price(self):
+        if not self.load_status(): return 0
+        try: 
+            price = self._status["price"]["last"]
+            if not price: return 0
+            return price
+        except Exception as e:
+            print(e)
+            return 0
+    @property
+    def next_tp(self):
+        next_tp = 0
+        if not self.load_status(): return 0
+        try:
+            for order in self._status["orders"]:
+                if order["side"] == "sell":
+                    if next_tp == 0 or next_tp > order["price"]:
+                        next_tp = order["price"]
+            return next_tp
+        except Exception as e:
+            print(e)
+            return 0
+    @property
+    def next_dca(self):
+        next_dca = 0
+        if not self.load_status(): return 0
+        try:
+            for order in self._status["orders"]:
+                if order["side"] == "buy":
+                    if next_dca < order["price"]:
+                        next_dca = order["price"]
+            return next_dca
+        except Exception as e:
+            print(e)
+            return 0
+    @property
+    def dca(self):
+        dca = 0
+        if not self.load_status(): return 0
+        try:
+            for order in self._status["orders"]:
+                if order["side"] == "buy":
+                    dca += 1
+            return dca
+        except Exception as e:
+            print(e)
+            return 0
+    @property
+    def entry(self):
+        if not self.load_status(): return 0
+        try: 
+            entry = self._status["position"]["entryPrice"]
+            if not entry: return 0
+            return entry
+        except Exception as e:
+            print(e)
+            return 0
 
     @enabled.setter
     def enabled(self, new_enabled):
@@ -326,6 +423,18 @@ class Instance(Base):
 #        print(df)
         return df
 
+    def fetch_balance(self):
+        return self._exchange.fetch_balance(self._market_type)
+
+    def fetch_position(self):
+        return self.exchange.fetch_position(self.symbol_ccxt, self._market_type)
+
+    def fetch_price(self):
+        return self.exchange.fetch_price(self.symbol_ccxt, self._market_type)
+
+    def fetch_open_orders(self):
+        return self.exchange.fetch_open_orders(self.symbol_ccxt, self._market_type)
+
     def remove(self):
         rmtree(self._instance_path, ignore_errors=True)
 
@@ -356,9 +465,11 @@ class Instance(Base):
         file = Path(f'{self._instance_path}/trades.json')
         trades = []
         save = False
+        ltrades = 0
         if file.exists():
             with open(file, "r", encoding='utf-8') as f:
                 trades = json.load(f)
+                ltrades = len(trades)
             if type(trades[-1]["timestamp"]) == int:
                 since = trades[-1]["timestamp"]
             else:
@@ -374,6 +485,7 @@ class Instance(Base):
         if save:
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(trades, f, indent=4)
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(trades) - ltrades} trades')
 
     def view_ohlcv(self):
         ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe=self.tf, limit=100)
@@ -388,21 +500,19 @@ class Instance(Base):
             active_scroll="wheel_zoom")
         p.segment(x0=self._ohlcv_df["timestamp"], y0=self._ohlcv_df["high"], x1=self._ohlcv_df["timestamp"], y1=self._ohlcv_df["low"], color=self._ohlcv_df["color"])
         p.vbar(x=self._ohlcv_df["timestamp"], width=w, top=self._ohlcv_df["open"], bottom=self._ohlcv_df["close"], color=self._ohlcv_df["color"])
-        price = self.exchange.fetch_price(self.symbol_ccxt, self._market_type)
-        position = self.exchange.fetch_position(self.symbol_ccxt, self._market_type)
-#        st.write(position)
-        st.markdown(f'### Symbol: {self.symbol} {self.balance} USDT')
-        orders = self.exchange.fetch_open_orders(self.symbol_ccxt, self._market_type)
         # price
-        color = "red" if price["last"] < self._ohlcv_df["open"].iloc[-1] else "green"
-        self._last_price = price["last"]
-        p.line(x=self._ohlcv_df["timestamp"], y=price["last"], color=color, legend_label=f'price: {str(price["last"])}')
+        price = self.price
+        color = "red" if price < self._ohlcv_df["open"].iloc[-1] else "green"
+        p.line(x=self._ohlcv_df["timestamp"], y=price, color=color, legend_label=f'price: {str(price)}')
+        position = self._status["position"]
         # position
         if position:
             if position["entryPrice"]:
-                color = "red" if price["last"] < position["entryPrice"] else "green"
+                color = "red" if price < position["entryPrice"] else "green"
                 p.line(x=self._ohlcv_df["timestamp"], y=position["entryPrice"], color=color, line_dash="dashed", legend_label=f'position: {str(position["entryPrice"])} qty: {str(position["contracts"])} Pnl: {str(position["unrealizedPnl"])}')
+        st.markdown(f'### Symbol: {self.symbol} {self.balance} USDT')
         # open/close orders
+        orders = self._status["orders"]
         for order in orders:
             color = "red" if order["side"] == "sell" else "green"
             legend = f'close: {str(order["price"])} qty: {str(order["amount"])}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(order["amount"])}'
@@ -497,6 +607,28 @@ class Instance(Base):
         else:
             print(f'{file} not found')
 
+    def load_status(self):
+        file = Path(f'{self._instance_path}/status.json')
+        if not file.exists():
+            return False
+        if self._statusll > datetime.now().timestamp() - 60:
+            return True
+        self._statusll = datetime.now().timestamp()
+        with open(file, "r", encoding='utf-8') as f:
+            self._status = json.load(f)
+            return True
+
+    def save_status(self):
+        file = Path(f'{self._instance_path}/status.json')
+        status = {}
+        status["timestamp"] = datetime.now().timestamp()
+        status["balance"] = self.fetch_balance()
+        status["price"] = self.fetch_price()
+        status["position"] = self.fetch_position()
+        status["orders"] = self.fetch_open_orders()
+        with open(file, "w", encoding='utf-8') as f:
+            json.dump(status, f, indent=4)
+
     def save(self):
         if self.user and self.symbol and self.market_type:
             pbgdir = Path.cwd()
@@ -521,7 +653,8 @@ class Instance(Base):
             del state['_bt']
             del state['_btresults']
             del state['_trades']
-            del state['_balance']
+            del state['_status']
+            del state['_statusll']
             del state['_sb']
             del state['_sd']
             del state['_ed']
@@ -554,6 +687,8 @@ class Instances:
     def __init__(self, backtest_path: str = None):
         self.instances = []
         self.index = 0
+        self.pbrun_log = False
+        self.pbstat_log = False
         pbgdir = Path.cwd()
         self.instances_path = f'{pbgdir}/data/instances'
         self.load()
@@ -583,17 +718,17 @@ class Instances:
             self.instances.append(inst)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
 
-    def view_log(self):
+    def view_log(self, log_filename: str):
         pbgdir = Path.cwd()
-        logfile = Path(f'{pbgdir}/data/logs/PBRun.log')
+        logfile = Path(f'{pbgdir}/data/logs/{log_filename}.log')
         logr = ""
         if logfile.exists():
             with open(logfile, 'r', encoding='utf-8') as f:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
-        st.button(':recycle: **PBRun logfile**')
-        stx.scrollableTextbox(logr,height="300")
+        st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
+        stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
 
     def import_manager(self):
         sys.path.insert(0,st.session_state.pbdir)
