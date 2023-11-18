@@ -3,9 +3,19 @@ from streamlit_extras.switch_page_button import switch_page
 from streamlit_autorefresh import st_autorefresh
 from pbgui_func import set_page_config, upload_pbconfigdb
 from Instance import Instances, Instance
+from Backtest import BacktestItem
 from PBRun import PBRun
+from PBStat import PBStat
 import pbgui_help
+import pandas as pd
 
+
+def bgcolor_positive_or_negative(value):
+    bgcolor = "lightcoral" if value < 0 else "lightgreen"
+    return f"background-color: {bgcolor};"
+
+def edited():
+    st.session_state.edited = True
 
 def select_instance():
     instances = st.session_state.pbgui_instances
@@ -24,18 +34,60 @@ def select_instance():
             if PBRun().is_running():
                 PBRun().stop()
                 st.experimental_rerun()
-        view_pbrun_log = st.checkbox("PBRun Logfile", value=False, key="view_pbrun_log")
+        instances.pbrun_log = st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="view_pbrun_log")
+        if st.toggle("PBStat", value=PBStat().is_running(), key="pbstat", help=pbgui_help.pbstat):
+            if not PBStat().is_running():
+                PBStat().run()
+                st.experimental_rerun()
+        else:
+            if PBStat().is_running():
+                PBStat().stop()
+                st.experimental_rerun()
+        instances.pbstat_log = st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="view_pbstat_log")
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
             st.experimental_rerun()
         if st.button("Import"):
             st.session_state.import_instance = True
             st.experimental_rerun()
+    if "editor_select_instance" in st.session_state:
+        ed = st.session_state["editor_select_instance"]
+        for row in ed["edited_rows"]:
+            if "View" in ed["edited_rows"][row]:
+                st.session_state.view_instance = instances.instances[row]
+                if "confirm" in st.session_state:
+                    del st.session_state.confirm
+                    del st.session_state.confirm_text
+                st.experimental_rerun()
+            if "Edit" in ed["edited_rows"][row]:
+                st.session_state.edit_instance = instances.instances[row]
+                if "confirm" in st.session_state:
+                    del st.session_state.confirm
+                    del st.session_state.confirm_text
+                st.experimental_rerun()
+            if "Delete" in ed["edited_rows"][row]:
+                if not "confirm" in st.session_state:
+                    st.session_state.confirm_text = f':red[Delete selected instance ?]'
+                    st.session_state.confirm = False
+                    st.experimental_rerun()
+                elif "confirm" in st.session_state:
+                    if st.session_state.confirm:
+                        instances.remove(instances.instances[row])
+                        del st.session_state.confirm
+                        del st.session_state.confirm_text
+                        st.experimental_rerun()
     d = []
-    column_config = {
-        "Show": st.column_config.CheckboxColumn('Show', default=False),
-        "id": None}
+    wb = 0
+    we = 0
+    total_upnl = 0
+    total_we = 0
     for id, instance in enumerate(instances):
+        if any(dic.get('User') == instance.user for dic in d):
+            balance = 0
+        else:
+            balance = instance.balance
+        if instance.we > we:
+            we = instance.we
         d.append({
             'id': id,
             'View': False,
@@ -44,35 +96,36 @@ def select_instance():
             'User': instance.user,
             'Symbol': instance.symbol,
             'Market_type': instance.market_type,
+            'Balance': f'${instance.balance:.2f}',
+            'uPnl': instance.upnl,
+            'Position': f'{instance.psize}',
+            'Price': f'{instance.price}',
+            'Entry': f'{instance.entry}',
+            'DCA': f'{instance.dca}',
+            'Next DCA': f'{instance.next_dca}',
+            'Next TP': f'{instance.next_tp}',
+            'Wallet Exposure': instance.we,
             'Delete': False,
         })
-    selected = st.data_editor(data=d, width=None, height=1024, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type'])
-    for line in selected:
-        if line["View"]:
-            st.session_state.view_instance = instances.instances[line["id"]]
-            if "confirm" in st.session_state:
-                del st.session_state.confirm
-                del st.session_state.confirm_text
-            st.experimental_rerun()
-        if line["Edit"]:
-            st.session_state.edit_instance = instances.instances[line["id"]]
-            if "confirm" in st.session_state:
-                del st.session_state.confirm
-                del st.session_state.confirm_text
-            st.experimental_rerun()
-        if line["Delete"]:
-            if not "confirm" in st.session_state:
-                st.session_state.confirm_text = f':red[Delete selected instance ?]'
-                st.session_state.confirm = False
-                st.experimental_rerun()
-            elif "confirm" in st.session_state:
-                if st.session_state.confirm:
-                    instances.remove(instances.instances[line["id"]])
-                    del st.session_state.confirm
-                    del st.session_state.confirm_text
-                    st.experimental_rerun()
-    if view_pbrun_log:
-        instances.view_log()
+        if type(balance) == float:
+            wb += balance
+        total_upnl += instance.upnl
+        total_we += instance.we
+    total_we = total_we / len(instances.instances)
+    if we == 0:
+        we = 100
+    column_config = {
+        "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
+        "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
+        "Wallet Exposure": st.column_config.ProgressColumn(f'Wallet Exposure: {total_we:.2f} %', format="%.2f %%", max_value=we),
+        "id": None}
+    df = pd.DataFrame(d)
+    sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
+    st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, on_change = edited, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+    if instances.pbrun_log:
+        instances.view_log("PBRun")
+    if instances.pbstat_log:
+        instances.view_log("PBStat")
 
 def view_instance():
     # Init instance
@@ -125,6 +178,12 @@ def edit_instance():
                 st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
 #            del st.session_state.edit_instance
             st.experimental_rerun()
+        if st.button("Backtest"):
+            st.session_state.my_bt = BacktestItem(instance._config.config)
+            st.session_state.my_bt.user = instance.user
+            st.session_state.my_bt.symbol = instance.symbol
+            st.session_state.my_bt.market_type = instance.market_type
+            switch_page("Backtest")
         instance.enabled = st.toggle("enable", value=instance.enabled, key="live_enabled", help=pbgui_help.instance_enable)
         if instance.enabled:
             if st.button("restart", help=pbgui_help.instance_restart):

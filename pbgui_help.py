@@ -110,3 +110,28 @@ pbrun = """
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
     ```"""
+
+pbstat = """
+    ```
+    This is the Data Scrapper from PBGUI.
+    If you disable PBStat, you will not be able to see live exchange data.
+    Enable, to start scrapping data from Exchanges.
+    To start the Data Scrapper after reboot your server, you have to
+    start PBStat.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    python PBRun.py
+    python PBStat.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
+    ```"""
