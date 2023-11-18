@@ -1,14 +1,14 @@
 # GUI for Passivbot
 
-v0.66
+v0.7
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
 
+![Alt text](docs/images/live01.png)
+![Alt text](docs/images/live02.png)
 ![Alt text](docs/images/live1.png)
 ![Alt text](docs/images/live2.png)
-![Alt text](docs/images/run.png)
-![Alt text](docs/images/run2.png)
 ![Alt text](docs/images/pbconfigdb.png)
 ![Alt text](docs/images/backtest.png)
 ![Alt text](docs/images/backtest2.png)
@@ -54,7 +54,7 @@ pbgui=~/software/pbgui # Path to your PBGui installation
 
 source ${venv}/bin/activate
 cd ${pbgui}
-python PBRun.py
+python PBRun.py &
 ```
 
 3. Save the script file and make it executable by running the command: `chmod 755 start.sh`.
@@ -68,6 +68,20 @@ python PBRun.py
 6. Save the crontab file.
 
 Please make sure to adjust the paths in the script file and crontab entry according to your specific setup.
+
+## PBStat Statistics
+Actually, the best way to enable PBStat is by adding the following line to your start.sh script:
+```
+python PBStat.py &
+```
+This command will run the PBStat.py script in the background, allowing it to collect statistics.
+
+## v0.7 (18-11-2023)
+- Live: Add Backtest Button on Edit Page
+- Live: Display Balance, uPnl, Position, Price, Entry, DCA, Next DCA, Next TP, Wallet Exposure
+- Live: PBStat fetch trades, balance, positions, price and orders in background
+- Live: PBStat added
+- Live: Bugfix for select instances
 
 ## v0.66 (14-11-2023)
 - Live: Bugfix for download trades history from bybit

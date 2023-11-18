@@ -138,7 +138,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    print('Fetching trades from', self.instance.iso8601(since))
+                    # print('Fetching trades from', self.instance.iso8601(since))
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -161,7 +161,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    print('Fetching trades from', self.instance.iso8601(since))
+                    # print('Fetching trades from', self.instance.iso8601(since))
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -171,7 +171,7 @@ class Exchange:
                         if "nextPageCursor" in last_trade["info"]:
                             cursor = last_trade["info"]["nextPageCursor"]
                             while True:
-                                print("Fetching trades from", cursor)
+                                # print("Fetching trades from", cursor)
                                 all_trades = all_trades + trades
                                 trades = self.instance.fetch_my_trades(symbol, since, 100, {'cursor': cursor, 'endTime': end_time })
                                 if len(trades):
@@ -193,9 +193,9 @@ class Exchange:
                         last_trade_id = trades[-1]['id']
                         end_time = first_trade['timestamp']
                         all_trades = trades + all_trades
-                        print('Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
+                        # print('Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
                     else:
-                        print('Done')
+                        # print('Done')
                         break
         if all_trades:
             sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])
