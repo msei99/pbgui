@@ -112,6 +112,8 @@ def select_instance():
         total_upnl += instance.upnl
         total_we += instance.we
     total_we = total_we / len(instances.instances)
+    if we == 0:
+        we = 100
     column_config = {
         "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
         "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
