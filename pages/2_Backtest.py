@@ -167,6 +167,8 @@ def bt_compare():
         if st.button("Queue"):
             st.session_state.bt_queue = True
             del st.session_state.bt_compare
+            if "bt_results" in st.session_state:
+                del st.session_state.bt_results
             st.experimental_rerun()
         if st.button(":back:"):
             if "bt_results" in st.session_state:
