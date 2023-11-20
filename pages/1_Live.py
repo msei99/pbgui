@@ -8,6 +8,7 @@ from PBRun import PBRun
 from PBStat import PBStat
 import pbgui_help
 import pandas as pd
+import platform
 
 
 def bgcolor_positive_or_negative(value):
@@ -47,9 +48,10 @@ def select_instance():
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
             st.experimental_rerun()
-        if st.button("Import"):
-            st.session_state.import_instance = True
-            st.experimental_rerun()
+        if not platform.system() == "Windows":
+            if st.button("Import"):
+                st.session_state.import_instance = True
+                st.experimental_rerun()
     if "editor_select_instance" in st.session_state:
         ed = st.session_state["editor_select_instance"]
         for row in ed["edited_rows"]:
@@ -111,17 +113,18 @@ def select_instance():
             wb += balance
         total_upnl += instance.upnl
         total_we += instance.we
-    total_we = total_we / len(instances.instances)
-    if we == 0:
-        we = 100
-    column_config = {
-        "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
-        "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
-        "Wallet Exposure": st.column_config.ProgressColumn(f'Wallet Exposure: {total_we:.2f} %', format="%.2f %%", max_value=we),
-        "id": None}
-    df = pd.DataFrame(d)
-    sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
-    st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, on_change = edited, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+    if len(instances.instances) > 0:
+        total_we = total_we / len(instances.instances)
+        if we == 0:
+            we = 100
+        column_config = {
+            "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
+            "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
+            "Wallet Exposure": st.column_config.ProgressColumn(f'Wallet Exposure: {total_we:.2f} %', format="%.2f %%", max_value=we),
+            "id": None}
+        df = pd.DataFrame(d)
+        sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
+        st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, on_change = edited, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
     if instances.pbstat_log:
