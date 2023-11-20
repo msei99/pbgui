@@ -739,6 +739,7 @@ class Instances:
         managercfg = Path(f'{st.session_state.pbdir}/manager/config.yaml')
         if not managercfg.exists():
             st.write(f'{managercfg} not found')
+            return
         sys.path.insert(0,st.session_state.pbdir)
         sys.path.insert(0,f'{st.session_state.pbdir}/manager')
         manager = __import__("manager")
