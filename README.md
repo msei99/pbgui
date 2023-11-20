@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.71
+v0.72
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -75,6 +75,9 @@ Actually, the best way to enable PBStat is by adding the following line to your 
 python PBStat.py &
 ```
 This command will run the PBStat.py script in the background, allowing it to collect statistics.
+
+## v0.72 (20-11-2023)
+- Live: Bugfix for fetch_trades (bybit)
 
 ## v0.71 (19-11-2023)
 - Backtest: Buxfix not load new finished backtests from queue
