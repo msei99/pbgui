@@ -171,7 +171,7 @@ class PBRun():
             if direction == 'up':
                 cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
             else:
-                cmd = ['rclone', 'sync', '-v', '--exclude', f'{spath}_{self.name}', f'pbgui:pbgui/{spath}_*', PurePath(f'{pbgdir}/data/remote')]
+                cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
             log = open(logfile,"ab")
             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, start_new_session=True)
