@@ -169,6 +169,7 @@ class PBRun():
             pbgdir = Path.cwd()
             print("not Running")
             if direction == 'up':
+                print(f'sync up: {spath}')
                 cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
             else:
                 cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
@@ -201,7 +202,8 @@ class PBRun():
 
     def has_rtd(self, name: str):
         self.sync('down', 'cmd')
-        cfile = Path(f'{self.cmd_path}_{name}/rtd.cmd')
+        pbgdir = Path.cwd()
+        cfile = Path(f'{pbgdir}/data/remote/cmd_{name}/rtd.cmd')
         if cfile.exists():
             with open(cfile, "r", encoding='utf-8') as f:
                 cfg = json.load(f)
