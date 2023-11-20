@@ -8,6 +8,7 @@ from PBRun import PBRun
 from PBStat import PBStat
 import pbgui_help
 import pandas as pd
+import platform
 
 
 def bgcolor_positive_or_negative(value):
@@ -47,9 +48,10 @@ def select_instance():
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
             st.experimental_rerun()
-        if st.button("Import"):
-            st.session_state.import_instance = True
-            st.experimental_rerun()
+        if not platform.system() == "Windows":
+            if st.button("Import"):
+                st.session_state.import_instance = True
+                st.experimental_rerun()
     if "editor_select_instance" in st.session_state:
         ed = st.session_state["editor_select_instance"]
         for row in ed["edited_rows"]:
