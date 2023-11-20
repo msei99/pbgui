@@ -111,7 +111,8 @@ def select_instance():
             wb += balance
         total_upnl += instance.upnl
         total_we += instance.we
-    total_we = total_we / len(instances.instances)
+    if len(instances.instances) > 0:
+        total_we = total_we / len(instances.instances)
     if we == 0:
         we = 100
     column_config = {
