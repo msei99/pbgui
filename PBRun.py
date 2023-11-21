@@ -62,7 +62,7 @@ class RunInstance():
                 pass
             except psutil.AccessDenied:
                 pass
-            if any(self.user in sub for sub in cmdline) and any(self.symbol in sub for sub in cmdline) and any("passivbot.py" in sub for sub in cmdline):
+            if self.user in cmdline and self.symbol in cmdline and any("passivbot.py" in sub for sub in cmdline):
                 return process
 
     def stop(self):
@@ -149,38 +149,37 @@ class PBRun():
         if run_instance:
             self.run_instances.remove(run_instance)
 
-    def is_sync_running(self, spath : str):
-        if self.sync_pid(spath):
+    def is_sync_running(self):
+        if self.sync_pid():
             return True
         return False
 
-    def sync_pid(self, spath : str):
+    def sync_pid(self):
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
             except psutil.AccessDenied:
                 continue
-            if any("rclone" in sub for sub in cmdline) and any(f'pbgui:pbgui/{spath}_{self.name}' in sub for sub in cmdline):
+            if any("rclone" in sub for sub in cmdline) and any("pbgui:pbgui" in sub for sub in cmdline):
                 return process
 
     def sync(self, direction: str, spath: str):
-        print("sync")
-        if not self.is_sync_running(spath):
-            pbgdir = Path.cwd()
-            print("not Running")
-            if direction == 'up':
-                print(f'sync up: {spath}')
-                cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
-            else:
-                cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
-            logfile = Path(f'{pbgdir}/data/logs/sync.log')
-            log = open(logfile,"ab")
-            subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, start_new_session=True)
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
+        if self.is_sync_running():
+            sleep(1)
+        pbgdir = Path.cwd()
+        if direction == 'up':
+            cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
+        else:
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
+        logfile = Path(f'{pbgdir}/data/logs/sync.log')
+        log = open(logfile,"ab")
+        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
 
-    def rtd(self):
-        cfile = Path(f'{self.cmd_path}/rtd.cmd')
-        if cfile.exists(): return
+    def alive(self):
+        if self.is_sync_running():
+            sleep(1)
+        cfile = Path(f'{self.cmd_path}/alive.cmd')
         timestamp = datetime.now().timestamp()
         cfg = ({
             "timestamp": timestamp,
@@ -189,28 +188,18 @@ class PBRun():
             json.dump(cfg, f)
         self.sync('up', 'cmd')
 
-    def send_rtd(self, name: str):
-        cfile = Path(f'{self.cmd_path}/rtd.cmd')
-        timestamp = datetime.now().timestamp()
-        if cfile.exists():
-            with open(cfile, "r", encoding='utf-8') as f:
-                cfg = json.load(f)
-                print(timestamp - float(cfg["timestamp"]))
-                cfile.unlink(missing_ok=True)
-                return True
-        return False
-
-    def has_rtd(self, name: str):
+    def has_remote(self):
+        if self.is_sync_running():
+            sleep(1)
         self.sync('down', 'cmd')
         pbgdir = Path.cwd()
-        cfile = Path(f'{pbgdir}/data/remote/cmd_{name}/rtd.cmd')
-        if cfile.exists():
-            with open(cfile, "r", encoding='utf-8') as f:
-                cfg = json.load(f)
-                if cfg["name"] == self.name:
-                    if not self.send_rtd:
-                        self.rtd(self.name)
-
+        p = str(Path(f'{pbgdir}/data/remote/cmd_*/alive.cmd'))
+        found_remote = glob.glob(p)
+        if found_remote:
+            for remote in found_remote:
+                with open(remote, "r", encoding='utf-8') as f:
+                    cfg = json.load(f)
+                    print(cfg)
 
     def restart(self, user : str, symbol : str):
         cfile = Path(f'{self.cmd_path}/restart.cmd')
