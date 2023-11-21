@@ -175,25 +175,32 @@ class PBRun():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
 
     def alive(self):
-        cfile = Path(f'{self.cmd_path}/alive.cmd')
-        timestamp = datetime.now().timestamp()
+        timestamp = round(datetime.now().timestamp())
+        cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
         cfg = ({
             "timestamp": timestamp,
             "name": self.name})
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
         self.sync('up', 'cmd')
+        p = str(Path(f'{self.cmd_path}/alive_*.cmd'))
+        found_local = glob.glob(p)
+        found_local.sort()
+        while len(found_local) > 5:
+            local = Path(found_local.pop(0))
+            local.unlink(missing_ok=True)
 
     def has_remote(self):
         self.sync('down', 'cmd')
         pbgdir = Path.cwd()
-        p = str(Path(f'{pbgdir}/data/remote/cmd_*/alive.cmd'))
+        p = str(Path(f'{pbgdir}/data/remote/cmd_*/alive_*.cmd'))
         found_remote = glob.glob(p)
+        found_remote.sort()
         if found_remote:
-            for remote in found_remote:
-                with open(remote, "r", encoding='utf-8') as f:
-                    cfg = json.load(f)
-                    print(cfg)
+            remote = Path(found_remote.pop())
+            with open(remote, "r", encoding='utf-8') as f:
+                cfg = json.load(f)
+                print(cfg)
 
     def restart(self, user : str, symbol : str):
         cfile = Path(f'{self.cmd_path}/restart.cmd')
