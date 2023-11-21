@@ -164,21 +164,17 @@ class PBRun():
                 return process
 
     def sync(self, direction: str, spath: str):
-        if self.is_sync_running():
-            sleep(1)
         pbgdir = Path.cwd()
         if direction == 'up':
             cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         else:
-            cmd = ['rclone', 'sync', '-v', '--ignore-checksum', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
-        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
 
     def alive(self):
-        if self.is_sync_running():
-            sleep(1)
         cfile = Path(f'{self.cmd_path}/alive.cmd')
         timestamp = datetime.now().timestamp()
         cfg = ({
@@ -189,8 +185,6 @@ class PBRun():
         self.sync('up', 'cmd')
 
     def has_remote(self):
-        if self.is_sync_running():
-            sleep(1)
         self.sync('down', 'cmd')
         pbgdir = Path.cwd()
         p = str(Path(f'{pbgdir}/data/remote/cmd_*/alive.cmd'))
