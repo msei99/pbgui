@@ -12,7 +12,7 @@ from datetime import datetime
 import platform
 
 class RunInstance():
-    def __init__(self, config: str = None):
+    def __init__(self):
         self._user = None
         self._symbol = None
         self._parameter = None
@@ -141,66 +141,13 @@ class PBRun():
         self.index += 1
         return next(self)
 
-    def add(self, run_instance: RunInstance = None):
+    def add(self, run_instance: RunInstance):
         if run_instance:
             self.run_instances.append(run_instance)
 
-    def remove(self, run_instance: RunInstance = None):
+    def remove(self, run_instance: RunInstance):
         if run_instance:
             self.run_instances.remove(run_instance)
-
-    def is_sync_running(self):
-        if self.sync_pid():
-            return True
-        return False
-
-    def sync_pid(self):
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except psutil.AccessDenied:
-                continue
-            if any("rclone" in sub for sub in cmdline) and any("pbgui:pbgui" in sub for sub in cmdline):
-                return process
-
-    def sync(self, direction: str, spath: str):
-        pbgdir = Path.cwd()
-        if direction == 'up':
-            cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
-        else:
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
-        logfile = Path(f'{pbgdir}/data/logs/sync.log')
-        log = open(logfile,"ab")
-        subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
-
-    def alive(self):
-        timestamp = round(datetime.now().timestamp())
-        cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
-        cfg = ({
-            "timestamp": timestamp,
-            "name": self.name})
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
-        self.sync('up', 'cmd')
-        p = str(Path(f'{self.cmd_path}/alive_*.cmd'))
-        found_local = glob.glob(p)
-        found_local.sort()
-        while len(found_local) > 5:
-            local = Path(found_local.pop(0))
-            local.unlink(missing_ok=True)
-
-    def has_remote(self):
-        self.sync('down', 'cmd')
-        pbgdir = Path.cwd()
-        p = str(Path(f'{pbgdir}/data/remote/cmd_*/alive_*.cmd'))
-        found_remote = glob.glob(p)
-        found_remote.sort()
-        if found_remote:
-            remote = Path(found_remote.pop())
-            with open(remote, "r", encoding='utf-8') as f:
-                cfg = json.load(f)
-                print(cfg)
 
     def restart(self, user : str, symbol : str):
         cfile = Path(f'{self.cmd_path}/restart.cmd')
@@ -292,7 +239,7 @@ class PBRun():
 def main():
     # Not supported on windows
     if platform.system() == "Windows":
-        print("Run Module is not supported on Windows")
+        print("PBRun Module is not supported on Windows")
         exit()
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')

@@ -732,7 +732,14 @@ class Instances:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
-        st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
+        col_log, col_del, col_empty = st.columns([2,1,20])
+        with col_log:
+            st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
+        with col_del:
+            if st.button(f':wastebasket:', key=f'button__del_{log_filename}'):
+                with open(logfile,'r+') as file:
+                    file.truncate(512)
+                st.experimental_rerun()
         stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
 
     def import_manager(self):
