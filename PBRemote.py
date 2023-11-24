@@ -52,12 +52,13 @@ class RemoteServer():
         p = str(Path(f'{self._path}/alive_*.cmd'))
         alive_remote = glob.glob(p)
         alive_remote.sort()
-        remote = Path(alive_remote.pop())
-        with open(remote, "r", encoding='utf-8') as f:
-            cfg = json.load(f)
-            if "name" in cfg and "timestamp" in cfg:
-                self._name = cfg["name"]
-                self._ts = cfg["timestamp"]
+        if alive_remote:
+            remote = Path(alive_remote.pop())
+            with open(remote, "r", encoding='utf-8') as f:
+                cfg = json.load(f)
+                if "name" in cfg and "timestamp" in cfg:
+                    self._name = cfg["name"]
+                    self._ts = cfg["timestamp"]
 
 class PBRemote():
     def __init__(self):
@@ -108,9 +109,11 @@ class PBRemote():
 
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
-        if direction == 'up':
+        if direction == 'up' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
-        else:
+        if direction == 'up' and spath == 'instances':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
+        elif direction == 'down' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
@@ -195,6 +198,7 @@ def main():
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote')
     remote = PBRemote()
     remote.load_remote()
+    remote.sync('up', 'instances')
     while True:
         try:
             remote.alive()
