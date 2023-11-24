@@ -31,11 +31,7 @@ class Instance(Base):
         self._price_precision = 0.0
         self._price_step = 0.0
         self._long_mode = "normal"
-#        self._long_min_markup = 0.0
-#        self._long_markup_range = 0.0
         self._short_mode = "normal"
-#        self._short_min_markup = 0.0
-#        self._short_markup_range = 0.0
         self._tf = None
         self._ohlcv_df = None # not saved
         self._bt = None # not saved
@@ -50,6 +46,8 @@ class Instance(Base):
         self._status = {} # not saved
         self._statusll = 0 # not saved
 
+    @property
+    def config(self): return self._config.config
     @property
     def enabled(self): return self._enabled
     @property
@@ -689,13 +687,17 @@ class Instance(Base):
         return run_instance.is_running()
 
 class Instances:
-    def __init__(self, backtest_path: str = None):
+    def __init__(self, ipath: str = None):
         self.instances = []
         self.index = 0
         self.pbrun_log = False
+        self.pbremote_log = False
         self.pbstat_log = False
         pbgdir = Path.cwd()
-        self.instances_path = f'{pbgdir}/data/instances'
+        if not ipath:
+            self.instances_path = f'{pbgdir}/data/instances'
+        else:
+            self.instances_path = f'{pbgdir}/data/instances_{ipath}'
         self.load()
 
     def __iter__(self):
@@ -710,6 +712,30 @@ class Instances:
     def list(self):
         return list(map(lambda c: c.user, self.instances))
     
+    def is_same(self, instance_remote: Instance):
+        local_instance = self.find_instance(instance_remote.user, instance_remote.symbol, instance_remote.market_type)
+        if local_instance:
+            if (
+                instance_remote.config == local_instance.config
+                and instance_remote._ohlcv == local_instance._ohlcv
+                and instance_remote._assigned_balance == local_instance._assigned_balance
+                and instance_remote._leverage == local_instance._leverage
+                and instance_remote._price_distance_threshold == local_instance._price_distance_threshold
+                and instance_remote._price_precision == local_instance._price_precision
+                and instance_remote._price_step == local_instance._price_step
+            ):
+                return True
+        return False
+
+    def find_instance(self, user: str, symbol: str, market_type: str):
+        for instance in self.instances:
+            if (
+                instance.user == user
+                and instance.symbol == symbol
+                and instance.market_type == market_type
+            ):
+                return instance
+
     def remove(self, instance: Instance):
         instance.remove()
         self.instances.remove(instance)
@@ -732,7 +758,7 @@ class Instances:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
-        col_log, col_del, col_empty = st.columns([2,1,20])
+        col_log, col_del, col_empty = st.columns([3,1,20])
         with col_log:
             st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
         with col_del:

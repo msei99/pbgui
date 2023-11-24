@@ -106,6 +106,33 @@ pbrun = """
     source ${venv}/bin/activate
     cd ${pbgui}
     python PBRun.py
+    # python PBRemote.py
+    # python PBStat.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
+    ```"""
+
+pbremote = """
+    ```
+    This is the Remote Server Manager from PBGUI.
+    Enable, to start sync Bots running on a Remote Server.
+    To start the Remote Server Manager after reboot your server, you have to
+    start PBRemote.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    # python PBRun.py
+    python PBRemote.py
+    # python PBStat.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -129,7 +156,8 @@ pbstat = """
     pbgui=~/software/pbgui          #path to pbgui installation
     source ${venv}/bin/activate
     cd ${pbgui}
-    python PBRun.py
+    # python PBRun.py
+    # python PBRemote.py
     python PBStat.py
 
     Run "chmod 755 start.sh" and change the path to your needs

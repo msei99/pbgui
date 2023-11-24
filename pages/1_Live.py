@@ -6,6 +6,7 @@ from Instance import Instances, Instance
 from Backtest import BacktestItem
 from PBRun import PBRun
 from PBStat import PBStat
+from PBRemote import PBRemote
 import pbgui_help
 import pandas as pd
 import platform
@@ -18,8 +19,12 @@ def bgcolor_positive_or_negative(value):
 def edited():
     st.session_state.edited = True
 
+def redited():
+    st.session_state.redited = True
+
 def select_instance():
     instances = st.session_state.pbgui_instances
+    remote = st.session_state.remote
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
@@ -36,6 +41,15 @@ def select_instance():
                 PBRun().stop()
                 st.experimental_rerun()
         instances.pbrun_log = st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="view_pbrun_log")
+        if st.toggle("PBRemote", value=PBRemote().is_running(), key="pbremote", help=pbgui_help.pbremote):
+            if not PBRemote().is_running():
+                PBRemote().run()
+                st.experimental_rerun()
+        else:
+            if PBRemote().is_running():
+                PBRemote().stop()
+                st.experimental_rerun()
+        instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
         if st.toggle("PBStat", value=PBStat().is_running(), key="pbstat", help=pbgui_help.pbstat):
             if not PBStat().is_running():
                 PBStat().run()
@@ -78,6 +92,28 @@ def select_instance():
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.experimental_rerun()
+    rinstances = Instances('manibot3')
+    rd = []
+    for rid, rinstance in enumerate(rinstances):
+        rd.append({
+            'id': rid,
+            'User': rinstance.user,
+            'Symbol': rinstance.symbol,
+            'Market_type': rinstance.market_type,
+            'Local same': instances.is_same(rinstance),
+            'Delete': False,
+        })
+    if len(rinstances.instances) > 0:
+        column_config = {
+            "id": None}
+        rdf = pd.DataFrame(rd)
+        st.data_editor(data=rdf, width=None, height=(len(rinstances.instances)+1)*36, use_container_width=True, key="editor_select_rinstance", hide_index=None, column_order=None, column_config=column_config, on_change = redited, disabled=['id','User','Symbol','Market_type'])
+    for server in remote.remote_servers:
+        if server.is_online():
+            st.write(f':green[{server.name}] RTD:{server.rtd}')
+        else:
+            st.write(f':red[{server.name}] RTD:{server.rtd}')
+
     d = []
     wb = 0
     we = 0
@@ -127,6 +163,8 @@ def select_instance():
         st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, on_change = edited, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
+    if instances.pbremote_log:
+        instances.view_log("PBRemote")
     if instances.pbstat_log:
         instances.view_log("PBStat")
 
@@ -230,6 +268,10 @@ if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
 if 'pbgui_instances' not in st.session_state:
     st.session_state.pbgui_instances = Instances()
 #instances = st.session_state.pbgui_instances
+
+if 'remote' not in st.session_state:
+    st.session_state.remote = PBRemote()
+    st.session_state.remote.load_remote()
 
 if 'view_history' in st.session_state:
     view_history()
