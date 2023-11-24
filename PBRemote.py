@@ -111,10 +111,12 @@ class PBRemote():
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
-        if direction == 'up' and spath == 'instances':
+        elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
+        elif direction == 'down' and spath == 'instances':
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
@@ -199,6 +201,7 @@ def main():
     remote = PBRemote()
     remote.load_remote()
     remote.sync('up', 'instances')
+    remote.sync('down', 'instances')
     while True:
         try:
             remote.alive()
