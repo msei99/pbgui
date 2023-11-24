@@ -697,7 +697,7 @@ class Instances:
         if not ipath:
             self.instances_path = f'{pbgdir}/data/instances'
         else:
-            self.instances_path = f'{pbgdir}/data/instances_{ipath}'
+            self.instances_path = f'{pbgdir}/data/remote/instances_{ipath}'
         self.load()
 
     def __iter__(self):
