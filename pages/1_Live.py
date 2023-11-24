@@ -92,27 +92,29 @@ def select_instance():
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.experimental_rerun()
-    rinstances = Instances('manibot3')
-    rd = []
-    for rid, rinstance in enumerate(rinstances):
-        rd.append({
-            'id': rid,
-            'User': rinstance.user,
-            'Symbol': rinstance.symbol,
-            'Market_type': rinstance.market_type,
-            'Local same': instances.is_same(rinstance),
-            'Delete': False,
-        })
-    if len(rinstances.instances) > 0:
-        column_config = {
-            "id": None}
-        rdf = pd.DataFrame(rd)
-        st.data_editor(data=rdf, width=None, height=(len(rinstances.instances)+1)*36, use_container_width=True, key="editor_select_rinstance", hide_index=None, column_order=None, column_config=column_config, on_change = redited, disabled=['id','User','Symbol','Market_type'])
     for server in remote.remote_servers:
         if server.is_online():
-            st.write(f':green[{server.name}] RTD:{server.rtd}')
+            online = True
         else:
-            st.write(f':red[{server.name}] RTD:{server.rtd}')
+            online = False
+        rinstances = Instances(server.name)
+        rd = []
+        for rid, rinstance in enumerate(rinstances):
+            rd.append({
+                'id': rid,
+                'Server': server.name,
+                'Online': online,
+                'RTD': server.rtd,
+                'User': rinstance.user,
+                'Symbol': rinstance.symbol,
+                'Market_type': rinstance.market_type,
+                'Local same': instances.is_same(rinstance),
+                'Delete': False,
+            })
+        if len(rinstances.instances) > 0:
+            column_config = {
+                "id": None}
+            st.data_editor(data=rd, width=None, height=(len(rinstances.instances)+1)*36, use_container_width=True, key="editor_select_rinstance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol','Market_type'])
 
     d = []
     wb = 0
