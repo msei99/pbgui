@@ -15,12 +15,15 @@ class RemoteServer():
     def __init__(self, path: str):
         self._name = None
         self._ts = None
+        self._rtd = None
         self._path = path
     
     @property
     def name(self): return self._name
     @property
     def ts(self): return self._ts
+    @property
+    def rtd(self): return self._rtd
     @property
     def path(self): return self._path
 
@@ -36,6 +39,14 @@ class RemoteServer():
     def path(self, new_path):
         if self._path != new_path:
             self._path = new_path
+
+    def is_online(self):
+        self.load()
+        timestamp = round(datetime.now().timestamp())
+        self._rtd = timestamp - self.ts
+        if self._rtd < 60:
+            return True
+        return False
 
     def load(self):
         p = str(Path(f'{self._path}/alive_*.cmd'))
@@ -53,7 +64,12 @@ class PBRemote():
         self.remote_servers = []
         self.index = 0
         pbgdir = Path.cwd()
-        self.name = "home"
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("main", "pbname"):
+            self.name = pb_config.get("main", "pbname")
+        else:
+            self.name = platform.node()
         self.instances_path = f'{pbgdir}/data/instances'
         self.cmd_path = f'{pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
@@ -174,8 +190,8 @@ def main():
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
         dest.mkdir(parents=True)
-#    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
-#    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
+    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote')
     remote = PBRemote()
     remote.load_remote()
@@ -185,7 +201,6 @@ def main():
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
-                print(server.name, server.ts)
             sleep(5)
         except Exception:
             print("Something went wrong, but continue")

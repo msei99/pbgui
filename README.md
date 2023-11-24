@@ -76,6 +76,10 @@ python PBStat.py &
 ```
 This command will run the PBStat.py script in the background, allowing it to collect statistics.
 
+## v0.75 (21-11-2023)
+- Live: Bugfix PBRun find running instances
+- Live: Add cleanup Logfile Button
+
 ## v0.72 (20-11-2023)
 - Live: Bugfix for fetch_trades (bybit)
 
