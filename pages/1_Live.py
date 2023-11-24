@@ -115,7 +115,6 @@ def select_instance():
             column_config = {
                 "id": None}
             st.data_editor(data=rd, width=None, height=(len(rinstances.instances)+1)*36, use_container_width=True, key="editor_select_rinstance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol','Market_type'])
-
     d = []
     wb = 0
     we = 0
