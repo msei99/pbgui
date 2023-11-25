@@ -93,6 +93,7 @@ def select_instance():
                         del st.session_state.confirm_text
                         st.experimental_rerun()
     for server in remote.remote_servers:
+        print(server.name)
         if server.is_online():
             online = True
         else:
@@ -114,7 +115,7 @@ def select_instance():
         if len(rinstances.instances) > 0:
             column_config = {
                 "id": None}
-            st.data_editor(data=rd, width=None, height=(len(rinstances.instances)+1)*36, use_container_width=True, key="editor_select_rinstance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol','Market_type'])
+            st.data_editor(data=rd, width=None, height=(len(rinstances.instances)+1)*36, use_container_width=True, key=f'editor_select_rinstance_{server.name}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol','Market_type'])
     d = []
     wb = 0
     we = 0
