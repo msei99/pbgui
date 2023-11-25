@@ -10,6 +10,7 @@ from PBRemote import PBRemote
 import pbgui_help
 import pandas as pd
 import platform
+from datetime import datetime
 
 
 def bgcolor_positive_or_negative(value):
@@ -93,7 +94,6 @@ def select_instance():
                         del st.session_state.confirm_text
                         st.experimental_rerun()
     for server in remote.remote_servers:
-        print(server.name)
         if server.is_online():
             online = True
         else:
@@ -106,6 +106,7 @@ def select_instance():
                 'Server': server.name,
                 'Online': online,
                 'RTD': server.rtd,
+                'Running': server.is_running(rinstance.user, rinstance.symbol),
                 'User': rinstance.user,
                 'Symbol': rinstance.symbol,
                 'Market_type': rinstance.market_type,
