@@ -126,7 +126,6 @@ class PBRun():
         self.run_instances = []
         self.index = 0
         pbgdir = Path.cwd()
-        self.name = "home"
         self.instances_path = f'{pbgdir}/data/instances'
         self.cmd_path = f'{pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():

@@ -1,7 +1,6 @@
 import psutil
 import subprocess
 import configparser
-import shlex
 import sys
 from pathlib import Path, PurePath
 from time import sleep
@@ -10,6 +9,7 @@ import json
 from io import TextIOWrapper
 from datetime import datetime
 import platform
+from PBRun import PBRun, RunInstance
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -63,6 +63,7 @@ class RemoteServer():
 class PBRemote():
     def __init__(self):
         self.remote_servers = []
+        self.local_run = PBRun()
         self.index = 0
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
@@ -125,9 +126,18 @@ class PBRemote():
     def alive(self):
         timestamp = round(datetime.now().timestamp())
         cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
+        run = []
+        for instance in self.local_run:
+            inst = ({
+                "user": instance.user,
+                "symbol": instance.symbol
+            })
+            run.append(inst)
         cfg = ({
             "timestamp": timestamp,
-            "name": self.name})
+            "name": self.name,
+            "run": run
+            })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
         self.sync('up', 'cmd')
@@ -138,18 +148,6 @@ class PBRemote():
             local = Path(found_local.pop(0))
             local.unlink(missing_ok=True)
 
-    # def has_remote(self):
-    #     self.sync('down', 'cmd')
-    #     pbgdir = Path.cwd()
-    #     p = str(Path(f'{pbgdir}/data/remote/cmd_*/alive_*.cmd'))
-    #     found_remote = glob.glob(p)
-    #     found_remote.sort()
-    #     if found_remote:
-    #         remote = Path(found_remote.pop())
-    #         with open(remote, "r", encoding='utf-8') as f:
-    #             cfg = json.load(f)
-    #             print(cfg)
-
     def load_remote(self):
         pbgdir = Path.cwd()
         self.remote_servers = []
@@ -159,6 +157,9 @@ class PBRemote():
             rserver = RemoteServer(remote)
             rserver.load()
             self.add(rserver)
+
+    def load_local(self):
+        self.local_run.load_all()
 
     def run(self):
         if not self.is_running():
@@ -195,11 +196,12 @@ def main():
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
         dest.mkdir(parents=True)
-    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
+#    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
+#    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote')
     remote = PBRemote()
     remote.load_remote()
+    remote.load_local()
     remote.sync('up', 'instances')
     remote.sync('down', 'instances')
     while True:
