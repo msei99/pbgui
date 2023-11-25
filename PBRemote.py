@@ -16,6 +16,7 @@ class RemoteServer():
         self._name = None
         self._ts = None
         self._rtd = None
+        self._run = None
         self._path = path
     
     @property
@@ -24,6 +25,8 @@ class RemoteServer():
     def ts(self): return self._ts
     @property
     def rtd(self): return self._rtd
+    @property
+    def run(self): return self._run
     @property
     def path(self): return self._path
 
@@ -39,6 +42,13 @@ class RemoteServer():
     def path(self, new_path):
         if self._path != new_path:
             self._path = new_path
+
+    def is_running(self, user : str, symbol : str):
+        if self.run:
+            for running in self.run:
+                if running["user"] == user and running["symbol"] == symbol:
+                    return True
+        return False
 
     def is_online(self):
         self.load()
@@ -59,6 +69,8 @@ class RemoteServer():
                 if "name" in cfg and "timestamp" in cfg:
                     self._name = cfg["name"]
                     self._ts = cfg["timestamp"]
+                if "run" in cfg:
+                    self._run = cfg["run"]
 
 class PBRemote():
     def __init__(self):
