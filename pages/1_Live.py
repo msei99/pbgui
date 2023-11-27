@@ -39,7 +39,16 @@ def list_remote():
                 PBRemote().stop()
                 st.experimental_rerun()
         instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
-    servers = st.multiselect("Server", remote.remote_servers, format_func=lambda x: x.name,  default=None, key="select_server1")
+    col_server, col_refresh, col_empty = st.columns([5,2,10])
+    with col_server:
+        servers = st.multiselect("Server", remote.remote_servers, format_func=lambda x: x.name,  default=None, key="select_server1")
+    with col_refresh:
+        st.write("## ")
+        if st.button(f':recycle:', key=f'button_refresh_server'):
+            for server in servers:
+                for server_ss in st.session_state.remote.remote_servers:
+                    if server_ss.name == server.name:
+                        server_ss.instances = Instances(server.name)
     sid = {}
     column_config = {
         "id": None}
