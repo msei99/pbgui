@@ -182,11 +182,10 @@ class RemoteServer():
                     with open(afile, "r", encoding='utf-8') as f:
                         cfg = json.load(f)
                         to = cfg["to"]
-                        if to == self.name:
-                            unique = cfg["unique"]
-                            instance = cfg["instance"]
-                            command = cfg["command"]
-                        if command == "sync":
+                        unique = cfg["unique"]
+                        instance = cfg["instance"]
+                        command = cfg["command"]
+                        if to == self.name and command == "sync":
                             if unique in self._unique:
                                 self._unique.remove(unique)
                             afile.unlink(missing_ok=True)
