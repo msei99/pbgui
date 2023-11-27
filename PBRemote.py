@@ -158,7 +158,7 @@ class RemoteServer():
                         if to == pbname:
                             instance = cfg["instance"]
                             unique = cfg["unique"]
-                            src = PurePath(f'{self._path}/../instances_{pbname}/{instance}')
+                            src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
                             dest = PurePath(f'{self._path}/../../instances/{instance}')
                             print(f'copy {src} {dest}')
                             shutil.copy(src, dest)
@@ -317,8 +317,8 @@ def main():
                 server.sync_from(remote.name)
                 server.ack_from(remote.name)
             sleep(5)
-        except Exception:
-            print("Something went wrong, but continue")
+        except Exception as e:
+            print(f'Something went wrong, but continue {e}')
 
 if __name__ == '__main__':
     main()
