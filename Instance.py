@@ -602,6 +602,7 @@ class Instance(Base):
             with open(file, "r", encoding='utf-8') as f:
                 state = json.load(f)
                 self.__dict__.update(state)
+                self._instance_path = path
                 self.user = state["_user"]
                 if not self._symbol_ccxt:
                     self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
@@ -646,6 +647,7 @@ class Instance(Base):
             self._config.save_config()
             file = Path(f'{instance_path}/instance.cfg')
             state = self.__dict__.copy()
+            del state['_instance_path']
             del state['_error']
             del state['_market_types']
             del state['_users']
@@ -712,20 +714,25 @@ class Instances:
     def list(self):
         return list(map(lambda c: c.user, self.instances))
     
-    def is_same(self, instance_remote: Instance):
-        local_instance = self.find_instance(instance_remote.user, instance_remote.symbol, instance_remote.market_type)
-        if local_instance:
-            if (
-                instance_remote.config == local_instance.config
-                and instance_remote._ohlcv == local_instance._ohlcv
-                and instance_remote._assigned_balance == local_instance._assigned_balance
-                and instance_remote._leverage == local_instance._leverage
-                and instance_remote._price_distance_threshold == local_instance._price_distance_threshold
-                and instance_remote._price_precision == local_instance._price_precision
-                and instance_remote._price_step == local_instance._price_step
-            ):
-                return True
-        return False
+    def is_same(self, instance: Instance):
+        if instance:
+            local_instance = self.find_instance(instance.user, instance.symbol, instance.market_type)
+            if local_instance:
+                if (
+                    instance.config == local_instance.config
+                    and instance._ohlcv == local_instance._ohlcv
+                    and instance._assigned_balance == local_instance._assigned_balance
+                    and instance._leverage == local_instance._leverage
+                    and instance._price_distance_threshold == local_instance._price_distance_threshold
+                    and instance._price_precision == local_instance._price_precision
+                    and instance._price_step == local_instance._price_step
+                ):
+                    return True
+                else:
+                    return False
+            else:
+                return False
+        return None
 
     def find_instance(self, user: str, symbol: str, market_type: str):
         for instance in self.instances:

@@ -10,6 +10,8 @@ from io import TextIOWrapper
 from datetime import datetime
 import platform
 from PBRun import PBRun, RunInstance
+import uuid
+import shutil
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -17,6 +19,8 @@ class RemoteServer():
         self._ts = None
         self._rtd = None
         self._run = None
+        self._edit = False
+        self._instances = False
         self._path = path
     
     @property
@@ -28,6 +32,10 @@ class RemoteServer():
     @property
     def run(self): return self._run
     @property
+    def edit(self): return self._edit
+    @property
+    def instances(self): return self._instances
+    @property
     def path(self): return self._path
 
     @name.setter
@@ -38,16 +46,40 @@ class RemoteServer():
     def ts(self, new_ts):
         if self._ts != new_ts:
             self._ts = new_ts
+    @edit.setter
+    def edit(self, new_edit):
+        if self._edit != new_edit:
+            self._edit = new_edit
+    @instances.setter
+    def instances(self, new_instances):
+        if self._instances != new_instances:
+            self._instances = new_instances
     @path.setter
     def path(self, new_path):
         if self._path != new_path:
             self._path = new_path
 
     def is_running(self, user : str, symbol : str):
+        self.load()
         if self.run:
             for running in self.run:
                 if running["user"] == user and running["symbol"] == symbol:
                     return True
+        if self.has_instance(user,symbol):
+            return False
+        else:
+            return None
+
+    def has_instance(self, user : str, symbol : str):
+        p = str(Path(f'{self._path}/../instances_{self.name}/*'))
+        instances = glob.glob(p)
+        for instance in instances:
+            file = Path(f'{instance}/instance.cfg')
+            if file.exists():
+                with open(file, "r", encoding='utf-8') as f:
+                    config = json.load(f)
+                    if config["_user"] == user and config["_symbol"] == symbol:
+                        return True
         return False
 
     def is_online(self):
@@ -71,6 +103,66 @@ class RemoteServer():
                     self._ts = cfg["timestamp"]
                 if "run" in cfg:
                     self._run = cfg["run"]
+
+    def sync_to(self, user : str, symbol : str, market_type : str):
+        unique = str(uuid.uuid4())
+        timestamp = round(datetime.now().timestamp())
+        cfile = str(Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd'))
+        cfg = ({
+            "timestamp": timestamp,
+            "unique": unique,
+            "to": self.name,
+            "instance": f'{user}_{symbol}_{market_type}'
+            })
+        with open(cfile, "w", encoding='utf-8') as f:
+            json.dump(cfg, f)
+
+    def ack_to(self, unique : str):
+        timestamp = round(datetime.now().timestamp())
+        cfile = str(Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.ack'))
+        cfg = ({
+            "timestamp": timestamp,
+            "unique": unique,
+            "to": self.name
+            })
+        with open(cfile, "w", encoding='utf-8') as f:
+            json.dump(cfg, f)
+
+    def ack_from(self, pbname : str):
+        p = str(Path(f'{self._path}/sync_{pbname}_*.ack'))
+        ack_remote = glob.glob(p)
+        ack_remote.sort()
+        if ack_remote:
+            for ack in ack_remote:
+                remote = Path(ack)
+                with open(remote, "r", encoding='utf-8') as f:
+                    cfg = json.load(f)
+                    if "to" in cfg and "unique" in cfg:
+                        to = cfg["to"]
+                        if to == pbname:
+                            unique = cfg["unique"]
+                            cfile = Path(f'{self._path}/../../cmd/sync_{pbname}_{unique}.ack')
+                            cfile.unlink(missing_ok=True)
+
+    def sync_from(self, pbname : str):
+        p = str(Path(f'{self._path}/sync_{pbname}_*.cmd'))
+        sync_remote = glob.glob(p)
+        sync_remote.sort()
+        if sync_remote:
+            for sync in sync_remote:
+                remote = Path(sync)
+                with open(remote, "r", encoding='utf-8') as f:
+                    cfg = json.load(f)
+                    if "to" in cfg and "instance" in cfg and "unique" in cfg:
+                        to = cfg["to"]
+                        if to == pbname:
+                            instance = cfg["instance"]
+                            unique = cfg["unique"]
+                            src = PurePath(f'{self._path}/../instances_{pbname}/{instance}')
+                            dest = PurePath(f'{self._path}/../../instances/{instance}')
+                            print(f'copy {src} {dest}')
+                            shutil.copy(src, dest)
+                            self.ack_to(unique)
 
 class PBRemote():
     def __init__(self):
@@ -222,6 +314,8 @@ def main():
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
+                server.sync_from()
+                server.ack_from()
             sleep(5)
         except Exception:
             print("Something went wrong, but continue")
