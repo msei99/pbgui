@@ -149,6 +149,7 @@ class RemoteServer():
                             cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd')
                             cfile.unlink(missing_ok=True)
                             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {to} {command} {instance}')
+                            return True
 
     def sync_from(self, pbname : str):
         p = str(Path(f'{self._path}/sync_{pbname}_*.cmd'))
@@ -166,9 +167,10 @@ class RemoteServer():
                             if unique not in self._unique:
                                 src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
                                 dest = PurePath(f'{self._path}/../../instances/{instance}')
-                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
                                 shutil.copytree(src, dest)
                                 self.ack_to("sync", instance, unique)
+                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
+                                return True
         else:
             p = str(Path(f'{self.path}/../../cmd/*.ack'))
             sync_ack = glob.glob(p)
@@ -334,8 +336,10 @@ def main():
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
-                server.sync_from(remote.name)
-                server.ack_from(remote.name)
+                if server.sync_from(remote.name):
+                    remote.sync("up", 'instances')
+                if server.ack_from(remote.name):
+                    remote.sync("down", 'instances')
             sleep(5)
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
