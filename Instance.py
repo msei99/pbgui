@@ -771,7 +771,7 @@ class Instances:
         with col_del:
             if st.button(f':wastebasket:', key=f'button__del_{log_filename}'):
                 with open(logfile,'r+') as file:
-                    file.truncate(512)
+                    file.truncate()
                 st.experimental_rerun()
         stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
 
