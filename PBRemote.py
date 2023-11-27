@@ -22,6 +22,7 @@ class RemoteServer():
         self._edit = False
         self._instances = False
         self._path = path
+        self._unique = []
     
     @property
     def name(self): return self._name
@@ -183,6 +184,7 @@ class RemoteServer():
                         instance = cfg["instance"]
                         command = cfg["command"]
                     if command == "sync":
+                        self._unique.remove(unique)
                         afile.unlink(missing_ok=True)
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {unique} {self.name} {command} {instance}')
 
