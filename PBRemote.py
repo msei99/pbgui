@@ -22,6 +22,7 @@ class RemoteServer():
         self._edit = False
         self._instances = False
         self._path = path
+        self._unique = []
     
     @property
     def name(self): return self._name
@@ -119,7 +120,7 @@ class RemoteServer():
 
     def ack_to(self, command : str, instance : str, unique : str):
         timestamp = round(datetime.now().timestamp())
-        cfile = str(Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.ack'))
+        cfile = str(Path(f'{self._path}/../../cmd/{self.name}_{unique}.ack'))
         cfg = ({
             "timestamp": timestamp,
             "unique": unique,
@@ -129,9 +130,10 @@ class RemoteServer():
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} send_ack: {unique} {self.name} {command} {instance}')
 
     def ack_from(self, pbname : str):
-        p = str(Path(f'{self._path}/sync_{pbname}_*.ack'))
+        p = str(Path(f'{self._path}/{pbname}_*.ack'))
         ack_remote = glob.glob(p)
         ack_remote.sort()
         if ack_remote:
@@ -145,14 +147,21 @@ class RemoteServer():
                             unique = cfg["unique"]
                             instance = cfg["instance"]
                             command = cfg["command"]
-                            cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.ack')
-                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {to} {command} {instance}')
+                            cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd')
                             cfile.unlink(missing_ok=True)
+                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {to} {command} {instance}')
 
     def sync_from(self, pbname : str):
         p = str(Path(f'{self._path}/sync_{pbname}_*.cmd'))
         sync_remote = glob.glob(p)
         sync_remote.sort()
+        for sync, unique in self._unique:
+            if sync not in sync_remote:
+                afile = Path(f'{self.path}/../../cmd/{self.name}_{unique}.ack')
+                afile.unlink(missing_ok=True)
+                self._unique.remove([sync, unique])
+                print(self._unique)
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {self.name}_{unique}.ack')
         if sync_remote:
             for sync in sync_remote:
                 remote = Path(sync)
@@ -163,11 +172,13 @@ class RemoteServer():
                         if to == pbname:
                             instance = cfg["instance"]
                             unique = cfg["unique"]
-                            src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
-                            dest = PurePath(f'{self._path}/../../instances/{instance}')
-                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
-                            shutil.copytree(src, dest)
-                            self.ack_to("sync", instance, unique)
+                            if unique not in self._unique:
+                                src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
+                                dest = PurePath(f'{self._path}/../../instances/{instance}')
+                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
+                                shutil.copytree(src, dest)
+                                self.ack_to("sync", instance, unique)
+                                self._unique.append([sync, unique])
 
 class PBRemote():
     def __init__(self):
