@@ -170,6 +170,7 @@ class RemoteServer():
                                 dest = PurePath(f'{self._path}/../../instances/{instance}')
                                 shutil.copytree(src, dest)
                                 self.ack_to("sync", instance, unique)
+                                self._unique.append(unique)
                                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
                                 return True
         else:
