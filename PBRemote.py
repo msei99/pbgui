@@ -117,13 +117,15 @@ class RemoteServer():
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
 
-    def ack_to(self, unique : str):
+    def ack_to(self, command : str, instance : str, unique : str):
         timestamp = round(datetime.now().timestamp())
         cfile = str(Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.ack'))
         cfg = ({
             "timestamp": timestamp,
             "unique": unique,
-            "to": self.name
+            "to": self.name,
+            "command": command,
+            "instance": instance
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
@@ -141,7 +143,10 @@ class RemoteServer():
                         to = cfg["to"]
                         if to == pbname:
                             unique = cfg["unique"]
-                            cfile = Path(f'{self._path}/../../cmd/sync_{pbname}_{unique}.ack')
+                            instance = cfg["instance"]
+                            command = cfg["command"]
+                            cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.ack')
+                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {to} {command} {instance}')
                             cfile.unlink(missing_ok=True)
 
     def sync_from(self, pbname : str):
@@ -160,9 +165,9 @@ class RemoteServer():
                             unique = cfg["unique"]
                             src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
                             dest = PurePath(f'{self._path}/../../instances/{instance}')
-                            print(f'copy {src} {dest}')
-                            shutil.copy(src, dest)
-                            self.ack_to(unique)
+                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
+                            shutil.copytree(src, dest)
+                            self.ack_to("sync", instance, unique)
 
 class PBRemote():
     def __init__(self):
@@ -225,7 +230,7 @@ class PBRemote():
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
+#        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
