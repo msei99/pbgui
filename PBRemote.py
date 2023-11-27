@@ -22,7 +22,6 @@ class RemoteServer():
         self._edit = False
         self._instances = False
         self._path = path
-        self._unique = []
     
     @property
     def name(self): return self._name
@@ -154,14 +153,6 @@ class RemoteServer():
     def sync_from(self, pbname : str):
         p = str(Path(f'{self._path}/sync_{pbname}_*.cmd'))
         sync_remote = glob.glob(p)
-        sync_remote.sort()
-        for sync, unique in self._unique:
-            if sync not in sync_remote:
-                afile = Path(f'{self.path}/../../cmd/{self.name}_{unique}.ack')
-                afile.unlink(missing_ok=True)
-                self._unique.remove([sync, unique])
-                print(self._unique)
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {self.name}_{unique}.ack')
         if sync_remote:
             for sync in sync_remote:
                 remote = Path(sync)
@@ -178,7 +169,20 @@ class RemoteServer():
                                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
                                 shutil.copytree(src, dest)
                                 self.ack_to("sync", instance, unique)
-                                self._unique.append([sync, unique])
+        else:
+            p = str(Path(f'{self.path}/../../cmd/*.ack'))
+            sync_ack = glob.glob(p)
+            if sync_ack:
+                for file in sync_ack:
+                    afile = Path(file)
+                    with open(afile, "r", encoding='utf-8') as f:
+                        cfg = json.load(f)
+                        unique = cfg["unique"]
+                        instance = cfg["instance"]
+                        command = cfg["command"]
+                    if command == "sync":
+                        afile.unlink(missing_ok=True)
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {unique} {self.name} {command} {instance}')
 
 class PBRemote():
     def __init__(self):
