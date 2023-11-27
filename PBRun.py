@@ -198,7 +198,7 @@ class PBRun():
                 if "_enabled" in instance_cfg:
                     if instance_cfg["_enabled"]:
                         run_instance = RunInstance()
-                        run_instance.path = instance_cfg["_instance_path"]
+                        run_instance.path = instance
                         run_instance.load()
                         self.add(run_instance)
 

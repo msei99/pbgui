@@ -17,15 +17,80 @@ def bgcolor_positive_or_negative(value):
     bgcolor = "lightcoral" if value < 0 else "lightgreen"
     return f"background-color: {bgcolor};"
 
-def edited():
-    st.session_state.edited = True
-
-def redited():
-    st.session_state.redited = True
+def list_remote():
+    instances = st.session_state.pbgui_instances
+    edit_remote = None
+    if 'remote' not in st.session_state:
+        st.session_state.remote = PBRemote()
+        st.session_state.remote.load_remote()
+        for server in st.session_state.remote.remote_servers:
+            server.instances = Instances(server.name)
+    remote = st.session_state.remote
+    # Navigation
+    with st.sidebar:
+        if st.button(":back:"):
+            del st.session_state.list_remote
+            st.experimental_rerun()
+        if st.toggle("PBRemote", value=PBRemote().is_running(), key="pbremote", help=pbgui_help.pbremote):
+            if not PBRemote().is_running():
+                PBRemote().run()
+                st.experimental_rerun()
+        else:
+            if PBRemote().is_running():
+                PBRemote().stop()
+                st.experimental_rerun()
+        instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
+    servers = st.multiselect("Server", remote.remote_servers, format_func=lambda x: x.name,  default=None, key="select_server1")
+    sid = {}
+    column_config = {
+        "id": None}
+#    print(st.session_state)
+    for server in servers:
+        if f'select_instance_{server.name}' in st.session_state:
+            ed = st.session_state[f'select_instance_{server.name}']
+            for row in ed["edited_rows"]:
+                if "Start/Stop" in ed["edited_rows"][row]:
+                    status = server.is_running(instances.instances[row].user, instances.instances[row].symbol)
+                    if (status != None):
+                        if status:
+                            print(f'Stop {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                        else:
+                            print(f'Start {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                if "Sync to local" in ed["edited_rows"][row]:
+                    status = instances.is_same(server.instances.find_instance(instances.instances[row].user,instances.instances[row].symbol,instances.instances[row].market_type))
+                    if (status == False):
+                        print(f'Sync to local {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                if "Sync to remote" in ed["edited_rows"][row]:
+                    status = server.instances.is_same(instances.instances[row])
+                    if (status == False):
+                        print(f'Sync to remote {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                        server.sync_to(instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                if "Remove" in ed["edited_rows"][row]:
+                    status = server.is_running(instances.instances[row].user, instances.instances[row].symbol) or not server.has_instance(instances.instances[row].user, instances.instances[row].symbol)
+                    if not status:
+                        print(f'Remove {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+        sid[server] = []
+        for id, instance in enumerate(instances):
+            if server.is_running(instance.user, instance.symbol) or not server.has_instance(instance.user, instance.symbol):
+                remove = None
+            else:
+                remove = False
+            sid[server].append({
+                'id': id,
+                'Server': server.name,
+                'Online': server.is_online(),
+                'RTD': server.rtd,
+                'User': instance.user,
+                'Symbol': instance.symbol,
+                'Start/Stop': server.is_running(instance.user, instance.symbol),
+                'Sync to local': instances.is_same(server.instances.find_instance(instance.user,instance.symbol,instance.market_type)),
+                'Sync to remote': server.instances.is_same(instance),
+                'Remove': remove,
+            })
+        st.data_editor(data=sid[server], width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key=f'select_instance_{server.name}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
 
 def select_instance():
     instances = st.session_state.pbgui_instances
-    remote = st.session_state.remote
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
@@ -42,15 +107,6 @@ def select_instance():
                 PBRun().stop()
                 st.experimental_rerun()
         instances.pbrun_log = st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="view_pbrun_log")
-        if st.toggle("PBRemote", value=PBRemote().is_running(), key="pbremote", help=pbgui_help.pbremote):
-            if not PBRemote().is_running():
-                PBRemote().run()
-                st.experimental_rerun()
-        else:
-            if PBRemote().is_running():
-                PBRemote().stop()
-                st.experimental_rerun()
-        instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
         if st.toggle("PBStat", value=PBStat().is_running(), key="pbstat", help=pbgui_help.pbstat):
             if not PBStat().is_running():
                 PBStat().run()
@@ -62,6 +118,9 @@ def select_instance():
         instances.pbstat_log = st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="view_pbstat_log")
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
+            st.experimental_rerun()
+        if st.button("Remote"):
+            st.session_state.list_remote = True
             st.experimental_rerun()
         if not platform.system() == "Windows":
             if st.button("Import"):
@@ -93,30 +152,6 @@ def select_instance():
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.experimental_rerun()
-    for server in remote.remote_servers:
-        if server.is_online():
-            online = True
-        else:
-            online = False
-        rinstances = Instances(server.name)
-        rd = []
-        for rid, rinstance in enumerate(rinstances):
-            rd.append({
-                'id': rid,
-                'Server': server.name,
-                'Online': online,
-                'RTD': server.rtd,
-                'Running': server.is_running(rinstance.user, rinstance.symbol),
-                'User': rinstance.user,
-                'Symbol': rinstance.symbol,
-                'Market_type': rinstance.market_type,
-                'Local same': instances.is_same(rinstance),
-                'Delete': False,
-            })
-        if len(rinstances.instances) > 0:
-            column_config = {
-                "id": None}
-            st.data_editor(data=rd, width=None, height=(len(rinstances.instances)+1)*36, use_container_width=True, key=f'editor_select_rinstance_{server.name}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol','Market_type'])
     d = []
     wb = 0
     we = 0
@@ -163,7 +198,7 @@ def select_instance():
             "id": None}
         df = pd.DataFrame(d)
         sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
-        st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, on_change = edited, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+        st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
     if instances.pbremote_log:
@@ -272,10 +307,6 @@ if 'pbgui_instances' not in st.session_state:
     st.session_state.pbgui_instances = Instances()
 #instances = st.session_state.pbgui_instances
 
-if 'remote' not in st.session_state:
-    st.session_state.remote = PBRemote()
-    st.session_state.remote.load_remote()
-
 if 'view_history' in st.session_state:
     view_history()
 elif 'view_instance' in st.session_state:
@@ -284,5 +315,7 @@ elif 'edit_instance' in st.session_state:
     edit_instance()
 elif 'import_instance' in st.session_state:
     import_instance()
+elif 'list_remote' in st.session_state:
+    list_remote()
 else:
     select_instance()
