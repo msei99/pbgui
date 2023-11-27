@@ -314,8 +314,8 @@ def main():
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
-                server.sync_from()
-                server.ack_from()
+                server.sync_from(remote.name)
+                server.ack_from(remote.name)
             sleep(5)
         except Exception:
             print("Something went wrong, but continue")

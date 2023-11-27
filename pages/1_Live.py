@@ -19,7 +19,6 @@ def bgcolor_positive_or_negative(value):
 
 def list_remote():
     instances = st.session_state.pbgui_instances
-    edit_remote = None
     if 'remote' not in st.session_state:
         st.session_state.remote = PBRemote()
         st.session_state.remote.load_remote()
@@ -44,7 +43,6 @@ def list_remote():
     sid = {}
     column_config = {
         "id": None}
-#    print(st.session_state)
     for server in servers:
         if f'select_instance_{server.name}' in st.session_state:
             ed = st.session_state[f'select_instance_{server.name}']
@@ -88,6 +86,8 @@ def list_remote():
                 'Remove': remove,
             })
         st.data_editor(data=sid[server], width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key=f'select_instance_{server.name}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
+    if instances.pbremote_log:
+        instances.view_log("PBRemote")
 
 def select_instance():
     instances = st.session_state.pbgui_instances
@@ -201,8 +201,6 @@ def select_instance():
         st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
-    if instances.pbremote_log:
-        instances.view_log("PBRemote")
     if instances.pbstat_log:
         instances.view_log("PBStat")
 
