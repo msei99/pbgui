@@ -105,7 +105,7 @@ class RemoteServer():
                 if "run" in cfg:
                     self._run = cfg["run"]
 
-    def sync_to(self, user : str, symbol : str, market_type : str):
+    def sync_to(self, command : str, user : str, symbol : str, market_type : str):
         unique = str(uuid.uuid4())
         timestamp = round(datetime.now().timestamp())
         cfile = str(Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd'))
@@ -113,6 +113,7 @@ class RemoteServer():
             "timestamp": timestamp,
             "unique": unique,
             "to": self.name,
+            "command": command,
             "instance": f'{user}_{symbol}_{market_type}'
             })
         with open(cfile, "w", encoding='utf-8') as f:
@@ -163,16 +164,18 @@ class RemoteServer():
                     if "to" in cfg and "instance" in cfg and "unique" in cfg:
                         to = cfg["to"]
                         if to == pbname:
-                            instance = cfg["instance"]
-                            unique = cfg["unique"]
-                            if unique not in self._unique:
-                                src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
-                                dest = PurePath(f'{self._path}/../../instances/{instance}')
-                                shutil.copytree(src, dest)
-                                self.ack_to("sync", instance, unique)
-                                self._unique.append(unique)
-                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {instance}')
-                                return True
+                            command = cfg["command"]
+                            if command == "sync":
+                                instance = cfg["instance"]
+                                unique = cfg["unique"]
+                                if unique not in self._unique:
+                                    src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
+                                    dest = PurePath(f'{self._path}/../../instances/{instance}')
+                                    shutil.copytree(src, dest)
+                                    self.ack_to(command, instance, unique)
+                                    self._unique.append(unique)
+                                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {command} {instance}')
+                                    return True
         else:
             p = str(Path(f'{self.path}/../../cmd/*.ack'))
             sync_ack = glob.glob(p)
@@ -185,7 +188,7 @@ class RemoteServer():
                         unique = cfg["unique"]
                         instance = cfg["instance"]
                         command = cfg["command"]
-                        if to == self.name and command == "sync":
+                        if to == self.name:
                             if unique in self._unique:
                                 self._unique.remove(unique)
                             afile.unlink(missing_ok=True)

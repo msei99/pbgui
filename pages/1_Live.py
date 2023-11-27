@@ -71,7 +71,7 @@ def list_remote():
                     status = server.instances.is_same(instances.instances[row])
                     if (status == False):
                         print(f'Sync to remote {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
-                        server.sync_to(instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                        server.sync_to("sync", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                 if "Remove" in ed["edited_rows"][row]:
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol) or not server.has_instance(instances.instances[row].user, instances.instances[row].symbol)
                     if not status:
