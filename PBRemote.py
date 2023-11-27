@@ -181,14 +181,16 @@ class RemoteServer():
                     afile = Path(file)
                     with open(afile, "r", encoding='utf-8') as f:
                         cfg = json.load(f)
-                        unique = cfg["unique"]
-                        instance = cfg["instance"]
-                        command = cfg["command"]
-                    if command == "sync":
-                        if unique in self._unique:
-                            self._unique.remove(unique)
-                        afile.unlink(missing_ok=True)
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {unique} {self.name} {command} {instance}')
+                        to = cfg["to"]
+                        if to == self.name:
+                            unique = cfg["unique"]
+                            instance = cfg["instance"]
+                            command = cfg["command"]
+                        if command == "sync":
+                            if unique in self._unique:
+                                self._unique.remove(unique)
+                            afile.unlink(missing_ok=True)
+                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {unique} {self.name} {command} {instance}')
 
 class PBRemote():
     def __init__(self):
