@@ -256,8 +256,8 @@ def main():
             for run_instance in run:
                 run_instance.watch()
             sleep(5)
-        except Exception:
-            print("Something went wrong, but continue")
+        except Exception as e:
+            print(f'Something went wrong, but continue {e}')
 
 if __name__ == '__main__':
     main()
