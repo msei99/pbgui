@@ -185,7 +185,8 @@ class RemoteServer():
                         instance = cfg["instance"]
                         command = cfg["command"]
                     if command == "sync":
-                        self._unique.remove(unique)
+                        if unique in self._unique:
+                            self._unique.remove(unique)
                         afile.unlink(missing_ok=True)
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {unique} {self.name} {command} {instance}')
 
