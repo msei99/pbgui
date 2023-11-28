@@ -357,6 +357,7 @@ def main():
                 server.load()
                 if server.sync_from(remote.name):
                     remote.sync("up", 'instances')
+                    remote.load_local()
                 if server.ack_from(remote.name):
                     remote.sync("down", 'instances')
             sleep(2)
