@@ -151,20 +151,20 @@ class PBRun():
     def start_instance(self, instance):
         ipath = f'{self.instances_path}/{instance}'
         ifile = Path(f'{ipath}/instance.cfg')
-        with open(ifile, "r+", encoding='utf-8') as f:
+        with open(ifile, "r", encoding='utf-8') as f:
             inst = json.load(f)
             inst["_enabled"] = True
-            f.truncate(0)
+        with open(ifile, "w", encoding='utf-8') as f:
             json.dump(inst, f, indent=4)
         self.update(ipath, True)
 
     def stop_instance(self, instance):
         ipath = f'{self.instances_path}/{instance}'
         ifile = Path(f'{ipath}/instance.cfg')
-        with open(ifile, "r+", encoding='utf-8') as f:
+        with open(ifile, "r", encoding='utf-8') as f:
             inst = json.load(f)
             inst["_enabled"] = False
-            f.truncate(0)
+        with open(ifile, "w", encoding='utf-8') as f:
             json.dump(inst, f, indent=4)
         self.update(ipath, False)
 
