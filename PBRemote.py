@@ -108,16 +108,18 @@ class RemoteServer():
     def sync_to(self, command : str, user : str, symbol : str, market_type : str):
         unique = str(uuid.uuid4())
         timestamp = round(datetime.now().timestamp())
+        instance = f'{user}_{symbol}_{market_type}'
         cfile = str(Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd'))
         cfg = ({
             "timestamp": timestamp,
             "unique": unique,
             "to": self.name,
             "command": command,
-            "instance": f'{user}_{symbol}_{market_type}'
+            "instance": instance
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
+#        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {self.name} {command} {instance}')
 
     def ack_to(self, command : str, instance : str, unique : str):
         timestamp = round(datetime.now().timestamp())
@@ -131,12 +133,11 @@ class RemoteServer():
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} send_ack: {unique} {self.name} {command} {instance}')
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_to: {self.name} {command} {instance} {unique}')
 
     def ack_from(self, pbname : str):
         p = str(Path(f'{self._path}/{pbname}_*.ack'))
         ack_remote = glob.glob(p)
-        ack_remote.sort()
         if ack_remote:
             for ack in ack_remote:
                 remote = Path(ack)
@@ -149,9 +150,10 @@ class RemoteServer():
                             instance = cfg["instance"]
                             command = cfg["command"]
                             cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd')
-                            cfile.unlink(missing_ok=True)
-                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {to} {command} {instance}')
-                            return True
+                            if cfile.exists():
+                                cfile.unlink(missing_ok=True)
+                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {command} {instance} {unique}')
+                                return True
 
     def sync_from(self, pbname : str):
         p = str(Path(f'{self._path}/sync_{pbname}_*.cmd'))
@@ -174,7 +176,7 @@ class RemoteServer():
                                     shutil.copytree(src, dest)
                                     self.ack_to(command, instance, unique)
                                     self._unique.append(unique)
-                                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {to} {command} {instance}')
+                                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {command} {instance} {unique}')
                                     return True
         else:
             p = str(Path(f'{self.path}/../../cmd/*.ack'))
@@ -192,7 +194,7 @@ class RemoteServer():
                             if unique in self._unique:
                                 self._unique.remove(unique)
                             afile.unlink(missing_ok=True)
-                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {unique} {self.name} {command} {instance}')
+                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {self.name} {command} {instance} {unique}')
 
 class PBRemote():
     def __init__(self):
@@ -278,7 +280,7 @@ class PBRemote():
         p = str(Path(f'{self.cmd_path}/alive_*.cmd'))
         found_local = glob.glob(p)
         found_local.sort()
-        while len(found_local) > 9:
+        while len(found_local) > 19:
             local = Path(found_local.pop(0))
             local.unlink(missing_ok=True)
 
@@ -348,7 +350,7 @@ def main():
                     remote.sync("up", 'instances')
                 if server.ack_from(remote.name):
                     remote.sync("down", 'instances')
-            sleep(5)
+            sleep(2)
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 
