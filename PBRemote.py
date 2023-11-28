@@ -183,9 +183,9 @@ class RemoteServer():
                                     PBRun().stop_instance(instance)
                                 else:
                                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: unknown command {self.name} {command} {instance} {unique}')    
+                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {command} {instance} {unique}')
                                 self.ack_to(command, instance, unique)
                                 self._unique.append(unique)
-                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {command} {instance} {unique}')
                                 return True
         else:
             p = str(Path(f'{self.path}/../../cmd/*.ack'))
@@ -305,7 +305,7 @@ class PBRemote():
         p = str(Path(f'{self.cmd_path}/alive_*.cmd'))
         found_local = glob.glob(p)
         found_local.sort()
-        while len(found_local) > 19:
+        while len(found_local) > 9:
             local = Path(found_local.pop(0))
             local.unlink(missing_ok=True)
 
@@ -377,7 +377,7 @@ def main():
                     remote.load_local()
                 if server.ack_from(remote.name):
                     remote.sync("down", 'instances')
-            sleep(2)
+#            sleep(2)
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 
