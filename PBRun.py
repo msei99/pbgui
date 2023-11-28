@@ -154,6 +154,7 @@ class PBRun():
         with open(ifile, "r+", encoding='utf-8') as f:
             inst = json.load(f)
             inst["_enabled"] = True
+            f.truncate()
             json.dump(inst, f, indent=4)
         self.update(ipath, True)
 
@@ -163,6 +164,7 @@ class PBRun():
         with open(ifile, "r+", encoding='utf-8') as f:
             inst = json.load(f)
             inst["_enabled"] = False
+            f.truncate()
             json.dump(inst, f, indent=4)
         self.update(ipath, False)
 
