@@ -280,6 +280,8 @@ class PBRemote():
                     unique = cfg["unique"]
                     instance = cfg["instance"]
                     command = cfg["command"]
+                    if command == "sync":
+                        self.sync('up', 'instances')
                     cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
 
