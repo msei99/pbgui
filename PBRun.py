@@ -192,7 +192,6 @@ class PBRun():
     
     def update(self, instance_path : str, enabled : bool):
         cfile = Path(f'{self.cmd_path}/update.cmd')
-        print(instance_path)
         cfg = ({
             "path": instance_path,
             "enabled": enabled})

@@ -105,11 +105,11 @@ class RemoteServer():
                 if "run" in cfg:
                     self._run = cfg["run"]
 
-    def sync_to(self, command : str, user : str, symbol : str, market_type : str):
+    def send_to(self, command : str, user : str, symbol : str, market_type : str):
         unique = str(uuid.uuid4())
         timestamp = round(datetime.now().timestamp())
         instance = f'{user}_{symbol}_{market_type}'
-        cfile = str(Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd'))
+        cfile = str(Path(f'{self._path}/../../cmd/send_{self.name}_{unique}.cmd'))
         cfg = ({
             "timestamp": timestamp,
             "unique": unique,
@@ -256,7 +256,7 @@ class PBRemote():
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
@@ -267,6 +267,23 @@ class PBRemote():
         log = open(logfile,"ab")
         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 #        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
+
+    def sync_to(self):
+        p = str(Path(f'{self.cmd_path}/send_*.cmd'))
+        sync_cmd = glob.glob(p)
+        if sync_cmd:
+            for file in sync_cmd:
+                cfile = Path(file)
+                with open(cfile, "r", encoding='utf-8') as f:
+                    cfg = json.load(f)
+                    to = cfg["to"]
+                    unique = cfg["unique"]
+                    instance = cfg["instance"]
+                    command = cfg["command"]
+                    if unique not in self._unique:
+                        cfile.rename(f'{self._path}/../../cmd/sync_{to}_{unique}.cmd')
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
+
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
@@ -352,6 +369,7 @@ def main():
     while True:
         try:
             remote.alive()
+            remote.sync_to()
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()

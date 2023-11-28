@@ -60,10 +60,10 @@ def list_remote():
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol)
                     if (status != None):
                         if status:
-                            server.sync_to("stop", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                            server.send_to("stop", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
 #                            print(f'Stop {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                         else:
-                            server.sync_to("start", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                            server.send_to("start", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
 #                            print(f'Start {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                 if "Sync to local" in ed["edited_rows"][row]:
                     status = instances.is_same(server.instances.find_instance(instances.instances[row].user,instances.instances[row].symbol,instances.instances[row].market_type))
@@ -73,11 +73,11 @@ def list_remote():
                     status = server.instances.is_same(instances.instances[row])
                     if (status == False):
 #                        print(f'Sync to remote {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
-                        server.sync_to("sync", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                        server.send_to("sync", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                 if "Remove" in ed["edited_rows"][row]:
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol) or not server.has_instance(instances.instances[row].user, instances.instances[row].symbol)
                     if not status:
-                        server.sync_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                        server.send_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
 #                        print(f'Remove {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
         sid[server] = []
         for id, instance in enumerate(instances):
