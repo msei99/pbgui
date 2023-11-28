@@ -167,17 +167,22 @@ class RemoteServer():
                         to = cfg["to"]
                         if to == pbname:
                             command = cfg["command"]
-                            if command == "sync":
-                                instance = cfg["instance"]
-                                unique = cfg["unique"]
-                                if unique not in self._unique:
+                            instance = cfg["instance"]
+                            unique = cfg["unique"]
+                            if unique not in self._unique:
+                                if command == "sync":
                                     src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
                                     dest = PurePath(f'{self._path}/../../instances/{instance}')
                                     shutil.copytree(src, dest)
-                                    self.ack_to(command, instance, unique)
-                                    self._unique.append(unique)
-                                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {command} {instance} {unique}')
-                                    return True
+                                elif command == "remove":
+                                    dest = PurePath(f'{self._path}/../../instances/{instance}')
+                                    shutil.rmtree(dest, ignore_errors=True)
+                                else:
+                                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: unknown command {self.name} {command} {instance} {unique}')    
+                                self.ack_to(command, instance, unique)
+                                self._unique.append(unique)
+                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {command} {instance} {unique}')
+                                return True
         else:
             p = str(Path(f'{self.path}/../../cmd/*.ack'))
             sync_ack = glob.glob(p)

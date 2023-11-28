@@ -70,12 +70,13 @@ def list_remote():
                 if "Sync to remote" in ed["edited_rows"][row]:
                     status = server.instances.is_same(instances.instances[row])
                     if (status == False):
-                        print(f'Sync to remote {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+#                        print(f'Sync to remote {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                         server.sync_to("sync", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                 if "Remove" in ed["edited_rows"][row]:
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol) or not server.has_instance(instances.instances[row].user, instances.instances[row].symbol)
                     if not status:
-                        print(f'Remove {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                        server.sync_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+#                        print(f'Remove {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
         sid[server] = []
         for id, instance in enumerate(instances):
             if server.is_running(instance.user, instance.symbol) or not server.has_instance(instance.user, instance.symbol):
