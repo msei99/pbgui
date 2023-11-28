@@ -171,6 +171,7 @@ class RemoteServer():
                             unique = cfg["unique"]
                             if unique not in self._unique:
                                 if command == "sync":
+                                    self.sync(pbname)
                                     src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
                                     dest = PurePath(f'{self._path}/../../instances/{instance}')
                                     shutil.copytree(src, dest)
@@ -204,6 +205,14 @@ class RemoteServer():
                                 self._unique.remove(unique)
                             afile.unlink(missing_ok=True)
                             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {self.name} {command} {instance} {unique}')
+
+    def sync(self, pbname: str):
+        pbgdir = Path.cwd()
+        spath = 'instances'
+        cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
+        logfile = Path(f'{pbgdir}/data/logs/sync.log')
+        log = open(logfile,"ab")
+        subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
 class PBRemote():
     def __init__(self):
