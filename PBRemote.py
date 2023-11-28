@@ -177,6 +177,10 @@ class RemoteServer():
                                 elif command == "remove":
                                     dest = PurePath(f'{self._path}/../../instances/{instance}')
                                     shutil.rmtree(dest, ignore_errors=True)
+                                elif command == "start":
+                                    PBRun().start_instance(instance)
+                                elif command == "stop":
+                                    PBRun().stop_instance(instance)
                                 else:
                                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: unknown command {self.name} {command} {instance} {unique}')    
                                 self.ack_to(command, instance, unique)

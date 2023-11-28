@@ -148,6 +148,24 @@ class PBRun():
         if run_instance:
             self.run_instances.remove(run_instance)
 
+    def start_instance(self, instance):
+        ipath = f'{self.instances_path}/{instance}'
+        ifile = Path(f'{ipath}/instance.cfg')
+        with open(ifile, "r+", encoding='utf-8') as f:
+            inst = json.load(f)
+            inst["_enabled"] = True
+            json.dump(inst, f, indent=4)
+        self.update(ipath, True)
+
+    def stop_instance(self, instance):
+        ipath = f'{self.instances_path}/{instance}'
+        ifile = Path(f'{ipath}/instance.cfg')
+        with open(ifile, "r+", encoding='utf-8') as f:
+            inst = json.load(f)
+            inst["_enabled"] = False
+            json.dump(inst, f, indent=4)
+        self.update(ipath, False)
+
     def restart(self, user : str, symbol : str):
         cfile = Path(f'{self.cmd_path}/restart.cmd')
         cfg = ({

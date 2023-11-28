@@ -60,9 +60,11 @@ def list_remote():
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol)
                     if (status != None):
                         if status:
-                            print(f'Stop {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                            server.sync_to("stop", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+#                            print(f'Stop {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                         else:
-                            print(f'Start {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                            server.sync_to("start", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+#                            print(f'Start {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                 if "Sync to local" in ed["edited_rows"][row]:
                     status = instances.is_same(server.instances.find_instance(instances.instances[row].user,instances.instances[row].symbol,instances.instances[row].market_type))
                     if (status == False):
