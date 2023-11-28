@@ -256,7 +256,7 @@ class PBRemote():
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
@@ -280,9 +280,8 @@ class PBRemote():
                     unique = cfg["unique"]
                     instance = cfg["instance"]
                     command = cfg["command"]
-                    if unique not in self._unique:
-                        cfile.rename(f'{self._path}/../../cmd/sync_{to}_{unique}.cmd')
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
+                    cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
 
 
     def alive(self):
