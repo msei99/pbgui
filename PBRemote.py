@@ -228,6 +228,7 @@ class PBRemote():
             self.name = platform.node()
         self.instances_path = f'{pbgdir}/data/instances'
         self.cmd_path = f'{pbgdir}/data/cmd'
+        self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
 
@@ -291,8 +292,14 @@ class PBRemote():
                     command = cfg["command"]
                     if command == "sync":
                         self.sync('up', 'instances')
-                    cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
+                        cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
+                    if command == "copy":
+                        src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
+                        dest = PurePath(f'{self.instances_path}/{instance}')
+                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        cfile.unlink(missing_ok=True)
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
 
 
     def alive(self):

@@ -49,6 +49,7 @@ def list_remote():
                 for server_ss in st.session_state.remote.remote_servers:
                     if server_ss.name == server.name:
                         server_ss.instances = Instances(server.name)
+            instances.refresh()
     sid = {}
     column_config = {
         "id": None}
@@ -61,24 +62,20 @@ def list_remote():
                     if (status != None):
                         if status:
                             server.send_to("stop", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
-#                            print(f'Stop {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                         else:
                             server.send_to("start", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
-#                            print(f'Start {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                 if "Sync to local" in ed["edited_rows"][row]:
                     status = instances.is_same(server.instances.find_instance(instances.instances[row].user,instances.instances[row].symbol,instances.instances[row].market_type))
                     if (status == False):
-                        print(f'Sync to local {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
+                        server.send_to("copy", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                 if "Sync to remote" in ed["edited_rows"][row]:
                     status = server.instances.is_same(instances.instances[row])
                     if (status == False):
-#                        print(f'Sync to remote {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
                         server.send_to("sync", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                 if "Remove" in ed["edited_rows"][row]:
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol) or not server.has_instance(instances.instances[row].user, instances.instances[row].symbol)
                     if not status:
                         server.send_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
-#                        print(f'Remove {server.name} {instances.instances[row].user} {instances.instances[row].symbol}')
         sid[server] = []
         for id, instance in enumerate(instances):
             if server.is_running(instance.user, instance.symbol) or not server.has_instance(instance.user, instance.symbol):
