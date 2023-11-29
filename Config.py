@@ -57,9 +57,10 @@ class Config:
     def long_we(self, new_long_we):
         if self._long_we != new_long_we:
             self._long_we = new_long_we
-            t = json.loads(self._config)
-            t["long"]["wallet_exposure_limit"] = self._long_we
-            self.config = config_pretty_str(t)
+            if self._config:
+                t = json.loads(self._config)
+                t["long"]["wallet_exposure_limit"] = self._long_we
+                self.config = config_pretty_str(t)
             st.experimental_rerun()
     
     @property
@@ -93,9 +94,10 @@ class Config:
     def short_we(self, new_short_we):
         if self._short_we != new_short_we:
             self._short_we = new_short_we
-            t = json.loads(self._config)
-            t["short"]["wallet_exposure_limit"] = self._short_we
-            self.config = config_pretty_str(t)
+            if self._config:
+                t = json.loads(self._config)
+                t["short"]["wallet_exposure_limit"] = self._short_we
+                self.config = config_pretty_str(t)
             st.experimental_rerun()
 
     def update_config(self):

@@ -747,6 +747,10 @@ class Instances:
         instance.remove()
         self.instances.remove(instance)
 
+    def refresh(self):
+        for instance in self.instances:
+            instance.load(instance._instance_path)
+
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))
         instances = glob.glob(p)
