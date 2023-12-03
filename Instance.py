@@ -22,7 +22,7 @@ class Instance(Base):
         self._instance_path = None
         self._enabled = False
         self._error = None # not saved
-        self._symbol_ccxt = None # not saved
+        self._symbol_ccxt = None
         self._config = Config() # not saved
         self._assigned_balance = 0
         self._co = -1
@@ -646,6 +646,7 @@ class Instance(Base):
             self._config.config_file = f'{self._instance_path}/config.json'
             self._config.save_config()
             file = Path(f'{instance_path}/instance.cfg')
+            self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
             state = self.__dict__.copy()
             del state['_instance_path']
             del state['_error']
@@ -714,6 +715,12 @@ class Instances:
     def list(self):
         return list(map(lambda c: c.user, self.instances))
     
+    def is_user_used(self, user: str):
+        for instance in self.instances:
+           if user == instance.user:
+               return True
+        return False
+
     def is_same(self, instance: Instance):
         if instance:
             local_instance = self.find_instance(instance.user, instance.symbol, instance.market_type)

@@ -99,6 +99,8 @@ On your servers, you only need to run Streamlit once to configure the passivbot 
 
 ## v0.75 (29-11-2023)
 - Live: Remote Server Manager added
+- Base: Bugfix save correct ccxt symbol when change symbol or exchange in instance config
+- Live: Bugfix removed 1s timeframe from Live view
 - Config: Bugfix when change WE without config
 - Live: Bugfix PBRun find running instances
 - Live: Add cleanup Logfile Button
