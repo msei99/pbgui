@@ -149,26 +149,30 @@ class PBRun():
             self.run_instances.remove(run_instance)
 
     def start_instance(self, instance):
+        self.change_enabled(instance, True)
         ipath = f'{self.instances_path}/{instance}'
-        ifile = Path(f'{ipath}/instance.cfg')
-        with open(ifile, "r", encoding='utf-8') as f:
-            inst = json.load(f)
-            inst["_enabled"] = True
-            f.close()
-        with open(ifile, "w", encoding='utf-8') as f:
-            json.dump(inst, f, indent=4)
         self.update(ipath, True)
 
     def stop_instance(self, instance):
+        self.change_enabled(instance, False)
+        ipath = f'{self.instances_path}/{instance}'
+        self.update(ipath, False)
+
+    def disable_instance(self, instance):
+        self.change_enabled(instance, False)
+
+    def enable_instance(self, instance):
+        self.change_enabled(instance, True)
+
+    def change_enabled(self, instance : str, enabled : bool):
         ipath = f'{self.instances_path}/{instance}'
         ifile = Path(f'{ipath}/instance.cfg')
         with open(ifile, "r", encoding='utf-8') as f:
             inst = json.load(f)
-            inst["_enabled"] = False
+            inst["_enabled"] = enabled
             f.close()
         with open(ifile, "w", encoding='utf-8') as f:
             json.dump(inst, f, indent=4)
-        self.update(ipath, False)
 
     def restart(self, user : str, symbol : str):
         cfile = Path(f'{self.cmd_path}/restart.cmd')

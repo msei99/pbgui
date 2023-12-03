@@ -2,190 +2,133 @@ import streamlit as st
 from streamlit_extras.switch_page_button import switch_page
 from pbgui_func import set_page_config
 import pbgui_help
-from pathlib import Path
-import shutil
-import json
-from datetime import datetime
-import ccxt
+from User import Users, User
+from Instance import Instances
+from Exchange import Exchange, Exchanges, Spot, Passphrase
 
-# Cleanup session_state
-def cleanup():
-    del st.session_state.edit_api
-    if "del_api" in st.session_state:
-        del st.session_state.del_api
-    if "new_user" in st.session_state:
-        del st.session_state.new_user
-    if "error_api" in st.session_state:
-        del st.session_state.error_api
-    if "error_setup" in st.session_state:
-        del st.session_state.error_setup
-    del st.session_state.keyfile
-    if "swap_balance" in st.session_state:
-        del st.session_state.swap_balance
-    if "spot_balance" in st.session_state:
-        del st.session_state.spot_balance
-
-# handler for button clicks
-def button_handler(user, button=None):
-    if button == "back":
-        cleanup()
-    elif button == "edit":
-        st.session_state.edit_api = user
-    else:
-        print("other button")
-
-# Display api-keys
-def display_api():
-    col1, col2, col3 = st.columns([1.5,1,4])
-    with col1:
-        st.write("#### **User**")
-    with col2:
-        st.write("#### **Exchange**")
-    with col3:
-        st.write("#### **Edit**")
-    for user in st.session_state.keyfile:
-        col1, col2, col3 = st.columns([1.5,1,4])
-        with col1:
-            if "exchange" in st.session_state.keyfile[user]: user
-        with col2:
-            if "exchange" in st.session_state.keyfile[user]: st.session_state.keyfile[user]["exchange"]
-        with col3:
-            if "exchange" in st.session_state.keyfile[user]:
-                st.button("Edit", key=f'edit {user}', on_click=button_handler, args=[user, "edit"])
-
-# Save api-keys
-def save_api(user, new_user, exchange, key, secret, passphrase):
-    # Check if new_user already used
-    if st.session_state.new_user:
-        if new_user in st.session_state.keyfile:
-            st.session_state.error_setup = f'User: {new_user} is used in other API-Key'
-            return
-    # Add/Edit new_user to api-key
-    if not "del_api" in st.session_state:
-        if user in st.session_state.keyfile:
-            field = st.session_state.keyfile.pop(user)
-        st.session_state.keyfile[new_user] = ({
-            "exchange": exchange,
-            "key": key,
-            "secret": secret
-        })
-        if exchange in ["bitget", "okx", "kucoin"]:
-            st.session_state.keyfile[new_user]["passphrase"] = passphrase
-    # Backup api-keys and save new version
-    now = datetime.now()
-    date = now.strftime("%Y-%m-%d_%H:%M:%S")
-    source = Path(f'{st.session_state.pbdir}/api-keys.json')
-    destpath = Path(f'{st.session_state.pbgdir}/data/api-keys')
-    destination = Path(f'{st.session_state.pbgdir}/data/api-keys/api-keys_{date}.json')
-    if not destpath.exists():
-        destpath.mkdir(parents=True)
-    shutil.copy(source, destination)
-    with Path(f'{st.session_state.pbdir}/api-keys.json').open("w", encoding="UTF-8") as f:
-        json.dump(st.session_state.keyfile, f, indent=4)
-    # Cleanup session_state
-    cleanup()
-
-# del user from api-keys
-def del_api(user):
-    if user in st.session_state.keyfile:
-        st.session_state.keyfile.pop(user)
-        st.session_state.del_api = True
-
-# Get spot and future balance from exchange
-def get_balance(exchange, key, secret, passphrase):
-    if exchange == "kucoin":
-        exchange = "kucoinfutures"
-    exchange_class = getattr(ccxt, exchange)
-    exc = exchange_class({
-        'apiKey': key,
-        'secret': secret,
-        'password': passphrase,
-    })
-    try:
-        exc.checkRequiredCredentials()
-    except Exception as e:
-        st.session_state.error_api = (str(e))
-        return
-    if exchange in ["binance","bybit"]:
-        param = {"type":"spot"}
-        try:
-            balance = exc.fetchBalance(param)
-            st.session_state.spot_balance = f'${round(balance["USDT"]["total"],2)}'
-        except Exception as e:
-            st.session_state.spot_balance = ':red[API-Error]'
-            st.session_state.error_api = (str(e))
-    if exchange in ["binance", "bybit", "bitget", "kucoinfutures", "okx"]:
-        param = {"type":"swap"}
-        try:
-            balance = exc.fetchBalance(param)
-            st.session_state.swap_balance = f'${round(balance["USDT"]["total"],2)}'
-        except Exception as e:
-            st.session_state.swap_balance = ':red[API-Error]'
-            st.session_state.error_api = (str(e))
-
-# Edit/Add/Del User/API
-def edit_api(user):
-    # Display Setup Error
-    if "error_setup" in st.session_state:
-        st.error(st.session_state.error_setup, icon="🚨")
-    # Init variables
-    if user == "new_user" or "del_api" in st.session_state:
-        st.session_state.new_user = True
-        exchange = ""
-        key = ""
-        secret = ""
-        passphrase = ""
-        exchange_index = 0
-    else:
-        exchange = st.session_state.keyfile[user]["exchange"]
-        key = st.session_state.keyfile[user]["key"]
-        secret = st.session_state.keyfile[user]["secret"]
-        if "passphrase" in st.session_state.keyfile[user]:
-            passphrase = st.session_state.keyfile[user]["passphrase"]
-        else: 
-            passphrase = ""
-        if exchange == "binance":
-            exchange_index = 0
-        elif exchange == "bybit":
-            exchange_index = 1
-        elif exchange == "bitget":
-            exchange_index = 2
-        elif exchange == "okx":
-            exchange_index = 3
-        elif exchange == "kucoin":
-            exchange_index = 4
-    if "del_api" in st.session_state:
-        st.write(f':red[User: {user} deleted]')
-        st.write(f'Press :floppy_disk: for save')
-        new_user = user
-    else:
-        new_user = st.text_input("User", value=user, help=None)
-        exchange = st.selectbox('Exchange',["binance", "bybit", "bitget", "okx", "kucoin"], index=exchange_index, help=None)
-        key = st.text_input("Key", value=key, help=None)
-        secret = st.text_input("Secret", value=secret, help=None)
-        if exchange in ["bitget", "okx", "kucoin"]:
-            passphrase = st.text_input("Passphrase", value=passphrase, help=None)
-        get_balance(exchange, key, secret, passphrase)
-        col_f, col_s = st.columns([1,1])
-        with col_f:
-            if exchange in ["binance", "bybit", "bitget", "kucoin", "okx"]:
-                st.markdown(f'### <center>Future Wallet Balance</center>', unsafe_allow_html=True)
-                if "swap_balance" in st.session_state:
-                    st.markdown(f'# <center>{st.session_state.swap_balance}</center>', unsafe_allow_html=True)
-        with col_s:
-            if exchange in ["binance","bybit"]:
-                st.markdown(f'### <center>Spot Wallet Balance</center>', unsafe_allow_html=True)
-                if "spot_balance" in st.session_state:
-                    st.markdown(f'# <center>{st.session_state.spot_balance}</center>', unsafe_allow_html=True)
-        # Display Error
-        if "error_api" in st.session_state:
-            st.markdown(":red[Error message from exchange:]", help=pbgui_help.api_error)
-            st.error(st.session_state.error_api, icon="🚨")
-    # Navigation
+def edit_user():
+    # Init
+    user = st.session_state.edit_user
+    users = st.session_state.users
+    instances = st.session_state.pbgui_instances
+    in_use = instances.is_user_used(user.name)
+    balance_futures = None
+    balance_spot = None
+    # Display Error
+    if "error" in st.session_state:
+        st.error(st.session_state.error, icon="🚨")
     with st.sidebar:
-        st.button(":wastebasket:", key="del", on_click=del_api, args=[user])
-        st.button(":floppy_disk:", key="save", on_click=save_api, args=[user, new_user, exchange, key, secret, passphrase])
-        st.button(":back:", key="back", on_click=button_handler, args=[user, "back"])
+        if st.button(":back:"):
+            if "error" in st.session_state:
+                del st.session_state.error
+            del st.session_state.edit_user
+            del st.session_state.users
+            st.experimental_rerun()
+        if not in_use and not "error" in st.session_state:
+            if st.button(":wastebasket:"):
+                users.users.remove(user)
+                users.save()
+                if "error" in st.session_state:
+                    del st.session_state.error
+                del st.session_state.edit_user
+                del st.session_state.users
+                st.experimental_rerun()
+        if user.name and not "error" in st.session_state:
+            if st.button(":floppy_disk:"):
+                if not users.has_user(user):
+                    users.users.append(user)
+                users.save()
+    col_1, col_2, col_3 = st.columns([1,1,1])
+    with col_1:
+        new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)
+        if new_name != user.name:
+            user.name = new_name
+            if users.has_user(user):
+                st.session_state.error = "Username already in use"
+            else:
+                if "error" in st.session_state:
+                    del st.session_state.error
+            st.experimental_rerun()
+        new_key = st.text_input("API-Key", value=user.key, type="default", help=None)
+        if new_key != user.key:
+            user.key = new_key
+            st.experimental_rerun()
+    with col_2:
+        if user.exchange:
+            index_exc = Exchanges.list().index(user.exchange)
+        else:
+            index_exc = 0
+        new_exchange = st.selectbox('Exchange', Exchanges.list(), index=index_exc, disabled=in_use)
+        if new_exchange != user.exchange:
+            user.exchange = new_exchange
+            st.experimental_rerun()
+        new_secret = st.text_input("API-Secret", value=user.secret, type="password", help=None)
+        if new_secret != user.secret:
+            user.secret = new_secret
+            st.experimental_rerun()
+    with col_3:
+        st.write("## ")
+        if st.button("Test"):
+            exchange = Exchange(user.exchange, user)
+            balance_futures = exchange.fetch_balance('swap')
+            if exchange.name in Spot.list():
+                balance_spot = exchange.fetch_balance('spot')
+        if user.exchange in Passphrase.list():
+            new_passphrase = st.text_input("Passphrase", value=user.passphrase, type="password", help=None)
+            if new_passphrase != user.passphrase:
+                user.passphrase = new_passphrase
+                st.experimental_rerun()
+    with col_1:
+        st.markdown(f'### <center>Futures Wallet Balance</center>', unsafe_allow_html=True)
+        if type(balance_futures) == float:
+            st.markdown(f'# <center>{balance_futures}</center>', unsafe_allow_html=True)
+        elif balance_futures:
+            st.error(balance_futures, icon="🚨")    
+    with col_2:
+        if user.exchange in Spot.list():
+            st.markdown(f'### <center>Spot Wallet Balance</center>', unsafe_allow_html=True)
+            if type(balance_spot) == float:
+                st.markdown(f'# <center>{balance_spot}</center>', unsafe_allow_html=True)
+            elif balance_spot:
+                st.error(balance_spot, icon="🚨")    
+
+def select_user():
+    # Init
+    users = st.session_state.users
+    instances = st.session_state.pbgui_instances
+    if not "ed_user_key" in st.session_state:
+        st.session_state.ed_user_key = 0
+    with st.sidebar:
+        if st.button("Add"):
+            st.session_state.edit_user = User()
+            st.experimental_rerun()
+    if f'editor_{st.session_state.ed_user_key}' in st.session_state:
+        ed = st.session_state[f'editor_{st.session_state.ed_user_key}']
+        for row in ed["edited_rows"]:
+            if "Edit" in ed["edited_rows"][row]:
+                st.session_state.edit_user = users.users[row]
+                st.experimental_rerun()
+            if "Delete" in ed["edited_rows"][row]:
+                if not instances.is_user_used(users.users[row].name):
+                    users.users.remove(users.users[row])
+                    users.save()
+                st.session_state.ed_user_key += 1
+                st.experimental_rerun()
+    d = []
+    for id, user in enumerate(users):
+        in_use = False
+        if instances.is_user_used(user.name):
+            in_use = None
+        d.append({
+            'id': id,
+            'Edit': False,
+            'User': user.name,
+            'Exchange': user.exchange,
+            'Delete': in_use,
+        })
+    column_config = {
+        "id": None}
+    st.data_editor(data=d, width=None, height=(len(users.users)+1)*36, use_container_width=True, key=f'editor_{st.session_state.ed_user_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Exchange',])
 
 set_page_config()
 
@@ -193,16 +136,14 @@ set_page_config()
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
 
-# Load api-keys
-if not Path(f'{st.session_state.pbdir}/api-keys.json').exists():
-    shutil.copy(Path(f'{st.session_state.pbdir}/api-keys.example.json'), Path(f'{st.session_state.pbdir}/api-keys.json'))
-if not "keyfile" in st.session_state:
-    with Path(f'{st.session_state.pbdir}/api-keys.json').open(encoding="UTF-8") as f:
-        st.session_state.keyfile = json.load(f)
+if 'users' not in st.session_state:
+    st.session_state.users = Users()
+
+if 'pbgui_instances' not in st.session_state:
+    st.session_state.pbgui_instances = Instances()
 
 # Display Setup
-if 'edit_api' in st.session_state:
-    edit_api(st.session_state.edit_api)
+if 'edit_user' in st.session_state:
+    edit_user()
 else:
-    display_api()
-    st.button(":heavy_plus_sign: Add User/API", key='add', on_click=button_handler, args=["new_user", "edit"])
+    select_user()

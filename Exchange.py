@@ -2,7 +2,6 @@ import ccxt
 import configparser
 from User import User
 from enum import Enum
-from time import sleep
 import json
 
 class Exchanges(Enum):
@@ -11,11 +10,27 @@ class Exchanges(Enum):
     BITGET = 'bitget'
     OKX = 'okx'
     KUCOIN = 'kucoin'
-
+    
     @staticmethod
     def list():
         return list(map(lambda c: c.value, Exchanges))
 
+class Spot(Enum):
+    BINANCE = 'binance'
+    BYBIT = 'bybit'
+
+    @staticmethod
+    def list():
+        return list(map(lambda c: c.value, Spot))
+
+class Passphrase(Enum):
+    BITGET = 'bitget'
+    OKX = 'okx'
+    KUCOIN = 'kucoin'
+
+    @staticmethod
+    def list():
+        return list(map(lambda c: c.value, Passphrase))
 
 class Exchange:
     def __init__(self, id: str, user: User = None):
@@ -37,6 +52,8 @@ class Exchange:
         if not self._tf:
             self.connect()
             self._tf = list(self.instance.timeframes.keys())
+            if "1s" in self._tf:
+                self._tf.remove('1s')
         return self._tf
 
     @user.setter
@@ -81,13 +98,17 @@ class Exchange:
 
     def fetch_balance(self, market_type: str):
         if not self.instance: self.connect()
-        balance = self.instance.fetch_balance(params = {"type": market_type})
+        try:
+            balance = self.instance.fetch_balance(params = {"type": market_type})
+        except Exception as e:
+            return e   
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
             return float(balance["total"]["USDT"])
         elif self.id == "binance":
-            return float(balance["info"]["totalWalletBalance"])
+            if market_type == 'swap': return float(balance["info"]["totalWalletBalance"])
+            else: return float(balance["total"]["USDT"])
         return float(balance["total"]["USDT"])
 
     def fetch_bill(self, symbol: str, market_type: str, since: int):

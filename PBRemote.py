@@ -174,7 +174,8 @@ class RemoteServer():
                                     self.sync(pbname)
                                     src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
                                     dest = PurePath(f'{self._path}/../../instances/{instance}')
-                                    shutil.copytree(src, dest)
+                                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                                    PBRun().disable_instance(instance)
                                 elif command == "remove":
                                     dest = PurePath(f'{self._path}/../../instances/{instance}')
                                     shutil.rmtree(dest, ignore_errors=True)
@@ -290,16 +291,18 @@ class PBRemote():
                     unique = cfg["unique"]
                     instance = cfg["instance"]
                     command = cfg["command"]
-                    if command == "sync":
-                        self.sync('up', 'instances')
-                        cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
                     if command == "copy":
                         src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
                         dest = PurePath(f'{self.instances_path}/{instance}')
                         shutil.copytree(src, dest, dirs_exist_ok=True)
+                        PBRun().disable_instance(instance)
                         cfile.unlink(missing_ok=True)
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
+                    if command == "sync":
+                        self.sync('up', 'instances')
+                    if command in ['start','stop','sync']:
+                        cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
 
 
     def alive(self):
