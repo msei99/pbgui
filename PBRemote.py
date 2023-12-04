@@ -271,6 +271,9 @@ class PBRemote():
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
+        self.load_remote()
+        self.load_local()
+
 
     def __iter__(self):
         return iter(self.remote_servers)
@@ -437,8 +440,6 @@ def main():
     sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote')
     remote = PBRemote()
-    remote.load_remote()
-    remote.load_local()
     remote.sync('up', 'instances')
     remote.sync('down', 'instances')
     while True:

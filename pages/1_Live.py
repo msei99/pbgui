@@ -21,7 +21,6 @@ def list_remote():
     instances = st.session_state.pbgui_instances
     if 'remote' not in st.session_state:
         st.session_state.remote = PBRemote()
-        st.session_state.remote.load_remote()
         for server in st.session_state.remote.remote_servers:
             server.instances = Instances(server.name)
     remote = st.session_state.remote
