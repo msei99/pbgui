@@ -41,7 +41,11 @@ def list_remote():
         instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
     col_server, col_refresh, col_empty = st.columns([5,2,10])
     with col_server:
-        servers = st.multiselect("Server", remote.remote_servers, format_func=lambda x: x.name,  default=None, key="select_server1")
+        selected = st.multiselect("Server", remote.list(), default=None, key="select_server1")
+        servers = []
+        for server in remote.remote_servers:
+            if server.name in selected:
+                servers.append(server)
     with col_refresh:
         st.write("## ")
         if st.button(f':recycle:', key=f'button_refresh_server'):
@@ -51,9 +55,14 @@ def list_remote():
                         server_ss.instances = Instances(server.name)
             instances.refresh()
     sid = {}
+    sync_api = {}
     column_config = {
         "id": None}
     for server in servers:
+        if f'sync_api_{server.name}' in st.session_state:
+            if st.session_state[f'sync_api_{server.name}']:
+                print(f'sync_api_{server.name}')
+                st.session_state[f'sync_api_{server.name}'] = False
         if f'select_instance_{server.name}' in st.session_state:
             ed = st.session_state[f'select_instance_{server.name}']
             for row in ed["edited_rows"]:
@@ -77,6 +86,8 @@ def list_remote():
                     if not status:
                         server.send_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
         sid[server] = []
+        st.write(f'self: {remote._api_md5} remote: {server._api_md5}')
+        sync_api[server] = st.checkbox(f'Sync API-Keys to {server.name}',value=False, key=f'sync_api_{server.name}')
         for id, instance in enumerate(instances):
             if server.is_running(instance.user, instance.symbol) or not server.has_instance(instance.user, instance.symbol):
                 remove = None
