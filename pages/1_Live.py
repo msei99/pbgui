@@ -62,6 +62,7 @@ def list_remote():
         if f'sync_api_{server.name}' in st.session_state:
             if st.session_state[f'sync_api_{server.name}']:
                 print(f'sync_api_{server.name}')
+                server.send_to("sync_api")
                 st.session_state[f'sync_api_{server.name}'] = False
         if f'select_instance_{server.name}' in st.session_state:
             ed = st.session_state[f'select_instance_{server.name}']
@@ -86,8 +87,9 @@ def list_remote():
                     if not status:
                         server.send_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
         sid[server] = []
-        st.write(f'self: {remote._api_md5} remote: {server._api_md5}')
-        sync_api[server] = st.checkbox(f'Sync API-Keys to {server.name}',value=False, key=f'sync_api_{server.name}')
+        if not server.is_api_md5_same(remote.api_md5):
+            st.write(f'self: {remote.api_md5} remote: {server.api_md5}')
+            sync_api[server] = st.checkbox(f'Sync API-Keys to {server.name}',value=False, key=f'sync_api_{server.name}')
         for id, instance in enumerate(instances):
             if server.is_running(instance.user, instance.symbol) or not server.has_instance(instance.user, instance.symbol):
                 remove = None

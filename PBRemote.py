@@ -25,6 +25,7 @@ class RemoteServer():
         self._path = path
         self._unique = []
         self._api_md5 = None
+        self._pbdir = None
     
     @property
     def name(self): return self._name
@@ -42,6 +43,8 @@ class RemoteServer():
     def path(self): return self._path
     @property
     def api_md5(self): return self._api_md5
+    @property
+    def pbdir(self): return self._pbdir
 
     @name.setter
     def name(self, new_name):
@@ -63,6 +66,10 @@ class RemoteServer():
     def path(self, new_path):
         if self._path != new_path:
             self._path = new_path
+    @pbdir.setter
+    def pbdir(self, new_pbdir):
+        if self._pbdir != new_pbdir:
+            self._pbdir = new_pbdir
 
     def is_running(self, user : str, symbol : str):
         self.load()
@@ -116,10 +123,13 @@ class RemoteServer():
                 if "run" in cfg:
                     self._run = cfg["run"]
 
-    def send_to(self, command : str, user : str, symbol : str, market_type : str):
+    def send_to(self, command : str, user : str = None, symbol : str = None, market_type : str = None):
         unique = str(uuid.uuid4())
         timestamp = round(datetime.now().timestamp())
-        instance = f'{user}_{symbol}_{market_type}'
+        if user:
+            instance = f'{user}_{symbol}_{market_type}'
+        else:
+            instance = "all"
         cfile = str(Path(f'{self._path}/../../cmd/send_{self.name}_{unique}.cmd'))
         cfg = ({
             "timestamp": timestamp,
@@ -181,6 +191,10 @@ class RemoteServer():
                             instance = cfg["instance"]
                             unique = cfg["unique"]
                             if unique not in self._unique:
+                                if command == "sync_api":
+                                    src = PurePath(f'{self._path}/api-keys.json')
+                                    dest = PurePath(f'{self._pbdir}/api-keys.json.new')
+                                    shutil.copy(src, dest)
                                 if command == "sync":
                                     self.sync(pbname)
                                     src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
@@ -283,7 +297,7 @@ class PBRemote():
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
@@ -307,6 +321,10 @@ class PBRemote():
                     unique = cfg["unique"]
                     instance = cfg["instance"]
                     command = cfg["command"]
+                    if command == "sync_api":
+                        src = PurePath(f'{self.pbdir}/api-keys.json')
+                        dest = PurePath(f'{self.cmd_path}/api-keys.json')
+                        shutil.copy(src, dest)
                     if command == "copy":
                         src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
                         dest = PurePath(f'{self.instances_path}/{instance}')
@@ -316,7 +334,7 @@ class PBRemote():
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
                     if command == "sync":
                         self.sync('up', 'instances')
-                    if command in ['start','stop','sync']:
+                    if command in ['start','stop','sync','sync_api']:
                         cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
 
@@ -360,6 +378,7 @@ class PBRemote():
         found_remote = glob.glob(p)
         for remote in found_remote:
             rserver = RemoteServer(remote)
+            rserver.pbdir = self.pbdir
             rserver.load()
             self.add(rserver)
 
