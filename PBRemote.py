@@ -199,7 +199,7 @@ class RemoteServer():
                                     api_keys = PurePath(f'{self._pbdir}/api-keys.json')
                                     # Backup api-keys
                                     date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                                    api_backup = PurePath(f'{self._path}/../../api-keys')
+                                    api_backup = Path(f'{self._path}/../../api-keys')
                                     if not api_backup.exists():
                                         api_backup.mkdir(parents=True)
                                     backup_dest = Path(f'{api_backup}/api-keys_{date}.json')
