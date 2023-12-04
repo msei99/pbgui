@@ -3,6 +3,7 @@ import configparser
 from User import User
 from enum import Enum
 import json
+from datetime import datetime
 
 class Exchanges(Enum):
     BINANCE = 'binance'

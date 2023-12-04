@@ -12,6 +12,7 @@ import platform
 from PBRun import PBRun, RunInstance
 import uuid
 import shutil
+import hashlib
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -23,6 +24,7 @@ class RemoteServer():
         self._instances = False
         self._path = path
         self._unique = []
+        self._api_md5 = None
     
     @property
     def name(self): return self._name
@@ -38,6 +40,8 @@ class RemoteServer():
     def instances(self): return self._instances
     @property
     def path(self): return self._path
+    @property
+    def api_md5(self): return self._api_md5
 
     @name.setter
     def name(self, new_name):
@@ -83,6 +87,11 @@ class RemoteServer():
                         return True
         return False
 
+    def is_api_md5_same(self, api_md5 : str):
+        if self.api_md5 == api_md5:
+            return True
+        return False
+
     def is_online(self):
         self.load()
         timestamp = round(datetime.now().timestamp())
@@ -102,6 +111,8 @@ class RemoteServer():
                 if "name" in cfg and "timestamp" in cfg:
                     self._name = cfg["name"]
                     self._ts = cfg["timestamp"]
+                if "api_md5" in cfg:
+                    self._api_md5 = cfg["api_md5"]
                 if "run" in cfg:
                     self._run = cfg["run"]
 
@@ -227,6 +238,8 @@ class PBRemote():
             self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
+        self.pbdir = pb_config.get("main", "pbdir")
+        self.api_md5 = self.calculate_api_md5()
         self.instances_path = f'{pbgdir}/data/instances'
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
@@ -241,6 +254,9 @@ class PBRemote():
             raise StopIteration
         self.index += 1
         return next(self)
+
+    def list(self):
+        return list(map(lambda c: c.name, self.remote_servers))
 
     def add(self, remote_servers: RemoteServer):
         if remote_servers:
@@ -318,6 +334,7 @@ class PBRemote():
         cfg = ({
             "timestamp": timestamp,
             "name": self.name,
+            "api_md5": self.api_md5,
             "run": run
             })
         with open(cfile, "w", encoding='utf-8') as f:
@@ -329,6 +346,12 @@ class PBRemote():
         while len(found_local) > 9:
             local = Path(found_local.pop(0))
             local.unlink(missing_ok=True)
+
+    def calculate_api_md5(self):
+        file = Path(f'{self.pbdir}/api-keys.json')
+        with open(file, 'rb') as file_obj:
+            file_contents = file_obj.read()
+        return hashlib.md5(file_contents).hexdigest()
 
     def load_remote(self):
         pbgdir = Path.cwd()

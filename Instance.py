@@ -601,13 +601,16 @@ class Instance(Base):
         if file.exists():
             with open(file, "r", encoding='utf-8') as f:
                 state = json.load(f)
-                self.__dict__.update(state)
-                self._instance_path = path
-                self.user = state["_user"]
-                if not self._symbol_ccxt:
-                    self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
-                self._config = Config(f'{self._instance_path}/config.json')
-                self._config.load_config()
+            self.__dict__.update(state)
+            self._instance_path = path
+            self.user = state["_user"]
+            if not self._symbol_ccxt:
+                self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+                state["_symbol_ccxt"] = self._symbol_ccxt
+                with open(file, "w", encoding='utf-8') as f:
+                    json.dump(state, f, indent=4)
+            self._config = Config(f'{self._instance_path}/config.json')
+            self._config.load_config()
         else:
             print(f'{file} not found')
 
