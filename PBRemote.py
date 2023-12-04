@@ -196,9 +196,17 @@ class RemoteServer():
                             unique = cfg["unique"]
                             if unique not in self._unique:
                                 if command == "sync_api":
+                                    api_keys = PurePath(f'{self._pbdir}/api-keys.json')
+                                    # Backup api-keys
+                                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                                    api_backup = PurePath(f'{self._path}/../../api-keys')
+                                    if not api_backup.exists():
+                                        api_backup.mkdir(parents=True)
+                                    backup_dest = Path(f'{api_backup}/api-keys_{date}.json')
+                                    shutil.copy(api_keys, backup_dest)
+                                    # Copy new api-keys
                                     src = PurePath(f'{self._path}/api-keys.json')
-                                    dest = PurePath(f'{self._pbdir}/api-keys.json.new')
-                                    shutil.copy(src, dest)
+                                    shutil.copy(src, api_keys)
                                 elif command == "sync":
                                     self.sync(pbname)
                                     src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
@@ -249,6 +257,7 @@ class PBRemote():
         self.remote_servers = []
         self.local_run = PBRun()
         self.index = 0
+        self.api_md5 = None
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -257,7 +266,6 @@ class PBRemote():
         else:
             self.name = platform.node()
         self.pbdir = pb_config.get("main", "pbdir")
-        self.api_md5 = self.calculate_api_md5()
         self.instances_path = f'{pbgdir}/data/instances'
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
@@ -388,6 +396,7 @@ class PBRemote():
 
     def load_local(self):
         self.local_run.load_all()
+        self.api_md5 = self.calculate_api_md5()
 
     def run(self):
         if not self.is_running():
