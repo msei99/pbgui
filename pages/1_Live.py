@@ -139,6 +139,7 @@ def list_remote():
                     st.experimental_rerun()
     if "run_rserver" in st.session_state:
         rlist = []
+        instances.refresh()
         for id, instance in enumerate(instances):
             lrun = False
             for rserver in remote.remote_servers:
