@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.72
+v0.8
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -14,6 +14,8 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ![Alt text](docs/images/backtest2.png)
 ![Alt text](docs/images/optimize.png)
 ![Alt text](docs/images/api-editor.png)
+![Alt text](docs/images/remote.png)
+![Alt text](docs/images/remote2.png)
 
 ## Requirements
 - Python 3.8.x and higher
@@ -97,9 +99,14 @@ rclone config create pbgui s3 provider=Synology region=eu-002 endpoint=eu-002.s3
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
 
-## v0.75 (29-11-2023)
+## v0.8 (05-12-2023)
 - Live: Remote Server Manager added
+- Live: Start / Stop Instances on local and remote servers
+- Live: Sync API-Keys to remote servers
+- Live: Sync Instances from and to remote servers
+- Live: Remove Instances from remote servers
 - Base: Bugfix save correct ccxt symbol when change symbol or exchange in instance config
+- Live: Speedup display instances
 - Live: Bugfix removed 1s timeframe from Live view
 - Config: Bugfix when change WE without config
 - Live: Bugfix PBRun find running instances
@@ -200,6 +207,11 @@ First release with basic backtest and optimization functionality
 - Streamlit https://streamlit.io/
 
 ## Support:
-If you like to support pbgui, please join one of my copytradings on bybit\
-ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0 https://i.bybit.com/28bMabOR\
-RNDR only https://i.bybit.com/1qabmY01
+If you like to support pbgui, please join one of my copytradings:\
+Byybit:\
+manicptlowrisk1: ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0 https://i.bybit.com/28bMabOR\
+manicptlowrisk2: INJ, FET, DOGE, AGIX TWE 2.25 https://i.bybit.com/25alabs3\
+manicptrndr: RNDR only https://i.bybit.com/1qabmY01\
+Binance:\
+manicptlowrisk: INJ, FET, RNDR, DOGE TWE 2.0 https://www.binance.com/en/copy-trading/lead-details?portfolioId=3746904129636329728\
+
