@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.72
+v0.8
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -14,6 +14,8 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ![Alt text](docs/images/backtest2.png)
 ![Alt text](docs/images/optimize.png)
 ![Alt text](docs/images/api-editor.png)
+![Alt text](docs/images/remote.png)
+![Alt text](docs/images/remote2.png)
 
 ## Requirements
 - Python 3.8.x and higher
@@ -75,6 +77,40 @@ Actually, the best way to enable PBStat is by adding the following line to your 
 python PBStat.py &
 ```
 This command will run the PBStat.py script in the background, allowing it to collect statistics.
+
+## PBRemote Server Manager
+With PBRemote, you can efficiently manage passivbot instances on multiple servers directly from your PC.
+This includes starting, stopping, removing, and syncing instances from and to your servers.
+PBRemote utilizes rclone to establish communication via cloud storage with your servers.
+The advantage is that you do not need to open any incoming firewall ports on your PC or servers.
+Additionally, all your passivbot config data is securely transferred and stored on your preferred cloud storage provider.
+rclone supports over 70 cloud storage providers, you can find more information at https://rclone.org/.
+To install rclone, you can use the following command:
+```
+sudo -v ; curl https://rclone.org/install.sh | sudo bash
+```
+As a recommendation, Synology C2 Object Storage offers a reliable option.
+They provide 15GB of free storage, and you can sign up at https://c2.synology.com/en-uk/object-storage/overview.
+After registration, create a bucket named "pbgui" and configure rclone on your PC and servers using the following steps:
+Rclone configuration (Synology):
+```
+rclone config create pbgui s3 provider=Synology region=eu-002 endpoint=eu-002.s3.synologyc2.net no_check_bucket=true access_key_id=<key> secret_access_key=<secret>
+```
+Finally, enable PBRemote on your servers and home PC, and you're all set.
+On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
+
+## v0.8 (05-12-2023)
+- Live: Remote Server Manager added
+- Live: Start / Stop Instances on local and remote servers
+- Live: Sync API-Keys to remote servers
+- Live: Sync Instances from and to remote servers
+- Live: Remove Instances from remote servers
+- Base: Bugfix save correct ccxt symbol when change symbol or exchange in instance config
+- Live: Speedup display instances
+- Live: Bugfix removed 1s timeframe from Live view
+- Config: Bugfix when change WE without config
+- Live: Bugfix PBRun find running instances
+- Live: Add cleanup Logfile Button
 
 ## v0.72 (20-11-2023)
 - Live: Bugfix for fetch_trades (bybit)
@@ -153,17 +189,17 @@ This command will run the PBStat.py script in the background, allowing it to col
 First release with basic backtest and optimization functionality
 
 ## Roadmap
+- API-Editor: Rewrite the whole module and fix some errors
+- PBRemote: install api-keys
 - Live: Support Kucoin and OKX
-- Live: Start / Stop / Status Instances
-- Live: Autostart enabled Instances after reboot
-- Live: Watchdog for crashed instances and restart them
-- Run: Remove the Run modul. Move all to the Live modul
+- Dashboard: Full Dashbord for history and results
 - Backtest: Configure Default Values
 - Code cleanup (Optimizer class)
 - Optimizer: add/edit configs/optimize/*.hjson
 - Optimizer: Queue for run multiple optimizers
 - Full support for Windows
-- Remote managment for multiple passivebot servers
+- PBRemote: update passivbot and pbgui
+- PBRemote: transfer logfiles
 - ...
 
 ## Links:
@@ -171,6 +207,12 @@ First release with basic backtest and optimization functionality
 - Streamlit https://streamlit.io/
 
 ## Support:
-If you like to support pbgui, please join one of my copytradings on bybit\
-ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0 https://i.bybit.com/28bMabOR\
-RNDR only https://i.bybit.com/1qabmY01
+If you like to support pbgui, please join one of my copytradings:\
+Byybit:
+- manicptlowrisk1: ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0 https://i.bybit.com/28bMabOR
+- manicptlowrisk2: INJ, FET, DOGE, AGIX TWE 2.25 https://i.bybit.com/25alabs3
+- manicptrndr: RNDR only https://i.bybit.com/1qabmY01
+
+Binance:
+- manicptlowrisk: INJ, FET, RNDR, DOGE TWE 2.0 https://www.binance.com/en/copy-trading/lead-details?portfolioId=3746904129636329728
+

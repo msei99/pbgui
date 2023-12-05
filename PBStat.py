@@ -69,6 +69,7 @@ def main():
                 run.fetch_all()
             else:
                 run.fetch_status()
+            trade_count += 1
             sleep(60)
         except Exception as e:
             print(f'Something went wrong, but continue {e}')

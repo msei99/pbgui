@@ -2,8 +2,8 @@ import ccxt
 import configparser
 from User import User
 from enum import Enum
-from time import sleep
 import json
+from datetime import datetime
 
 class Exchanges(Enum):
     BINANCE = 'binance'
@@ -11,11 +11,27 @@ class Exchanges(Enum):
     BITGET = 'bitget'
     OKX = 'okx'
     KUCOIN = 'kucoin'
-
+    
     @staticmethod
     def list():
         return list(map(lambda c: c.value, Exchanges))
 
+class Spot(Enum):
+    BINANCE = 'binance'
+    BYBIT = 'bybit'
+
+    @staticmethod
+    def list():
+        return list(map(lambda c: c.value, Spot))
+
+class Passphrase(Enum):
+    BITGET = 'bitget'
+    OKX = 'okx'
+    KUCOIN = 'kucoin'
+
+    @staticmethod
+    def list():
+        return list(map(lambda c: c.value, Passphrase))
 
 class Exchange:
     def __init__(self, id: str, user: User = None):
@@ -37,6 +53,8 @@ class Exchange:
         if not self._tf:
             self.connect()
             self._tf = list(self.instance.timeframes.keys())
+            if "1s" in self._tf:
+                self._tf.remove('1s')
         return self._tf
 
     @user.setter
@@ -81,13 +99,17 @@ class Exchange:
 
     def fetch_balance(self, market_type: str):
         if not self.instance: self.connect()
-        balance = self.instance.fetch_balance(params = {"type": market_type})
+        try:
+            balance = self.instance.fetch_balance(params = {"type": market_type})
+        except Exception as e:
+            return e   
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
             return float(balance["total"]["USDT"])
         elif self.id == "binance":
-            return float(balance["info"]["totalWalletBalance"])
+            if market_type == 'swap': return float(balance["info"]["totalWalletBalance"])
+            else: return float(balance["total"]["USDT"])
         return float(balance["total"]["USDT"])
 
     def fetch_bill(self, symbol: str, market_type: str, since: int):
@@ -112,9 +134,9 @@ class Exchange:
                 last_trade_id = trades[-1]['id']
                 end_time = last_trade['cTime']
                 all_trades = trades + all_trades
-                print('Fetched', len(trades), 'trades from', first_trade['cTime'], 'till', last_trade['cTime'])
+                print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['cTime'], 'till', last_trade['cTime'])
             else:
-                print('Done')
+                print(f'User:{self.user.name} Symbol:{symbol} Done')
                 break
         if all_trades:
             all_trades = sorted(all_trades, key=lambda d: d['cTime'])
@@ -138,7 +160,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    print('Fetching trades from', self.instance.iso8601(since))
+                    print(f'User:{self.user.name} Symbol:{symbol} Fetching trades from', self.instance.iso8601(since))
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -161,7 +183,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    print('Fetching trades from', self.instance.iso8601(since))
+                    print(f'User:{self.user.name} Symbol:{symbol} Fetching trades from', self.instance.iso8601(since))
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -171,7 +193,7 @@ class Exchange:
                         if "nextPageCursor" in last_trade["info"]:
                             cursor = last_trade["info"]["nextPageCursor"]
                             while True:
-                                print("Fetching trades from", cursor)
+                                print(f'User:{self.user.name} Symbol:{symbol} Fetching trades from', cursor)
                                 all_trades = all_trades + trades
                                 trades = self.instance.fetch_my_trades(symbol, since, 100, {'cursor': cursor, 'endTime': end_time })
                                 if len(trades):
@@ -195,9 +217,9 @@ class Exchange:
                         last_trade_id = trades[-1]['id']
                         end_time = first_trade['timestamp']
                         all_trades = trades + all_trades
-                        print('Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
+                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
                     else:
-                        print('Done')
+                        print(f'User:{self.user.name} Symbol:{symbol} Done')
                         break
         if all_trades:
             sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])

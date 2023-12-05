@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+from datetime import datetime
+import shutil
 import configparser
 
 class User:
@@ -46,6 +48,8 @@ class Users:
         pb_config.read('pbgui.ini')
         pbdir = pb_config.get("main", "pbdir")
         self.api_path = f'{pbdir}/api-keys.json'
+        pbgdir = Path.cwd()
+        self.api_backup = Path(f'{pbgdir}/data/api-keys')
         self.load()
     
     def __iter__(self):
@@ -65,6 +69,12 @@ class Users:
             return self.users[0].name
         else:
             return None
+
+    def has_user(self, user: User):
+        for u in self.users:
+            if u != user and u.name == user.name:
+                return True
+        return False
 
     def find_user(self, name: str):
         for user in self.users:
@@ -92,6 +102,24 @@ class Users:
                     my_user.passphrase = users[user]["passphrase"]
                 self.users.append(my_user)
 
+    def save(self):
+        save_users = {}
+        for user in self.users:
+            save_users[user.name] = ({
+                        "exchange": user.exchange,
+                        "key": user.key,
+                        "secret": user.secret
+                    })
+            if user.passphrase:
+                save_users[user.name]["passphrase"] = user.passphrase
+        # Backup api-keys and save new version
+        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        destination = Path(f'{self.api_backup}/api-keys_{date}.json')
+        if not self.api_backup.exists():
+            self.api_backup.mkdir(parents=True)
+        shutil.copy(self.api_path, destination)
+        with Path(f'{self.api_path}').open("w", encoding="UTF-8") as f:
+            json.dump(save_users, f, indent=4)
 
 def main():
     print("Don't Run this Class from CLI")

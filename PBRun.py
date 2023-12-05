@@ -12,7 +12,7 @@ from datetime import datetime
 import platform
 
 class RunInstance():
-    def __init__(self, config: str = None):
+    def __init__(self):
         self._user = None
         self._symbol = None
         self._parameter = None
@@ -62,7 +62,7 @@ class RunInstance():
                 pass
             except psutil.AccessDenied:
                 pass
-            if any(self.user in sub for sub in cmdline) and any(self.symbol in sub for sub in cmdline) and any("passivbot.py" in sub for sub in cmdline):
+            if self.user in cmdline and self.symbol in cmdline and any("passivbot.py" in sub for sub in cmdline):
                 return process
 
     def stop(self):
@@ -126,7 +126,6 @@ class PBRun():
         self.run_instances = []
         self.index = 0
         pbgdir = Path.cwd()
-        self.name = "home"
         self.instances_path = f'{pbgdir}/data/instances'
         self.cmd_path = f'{pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
@@ -141,76 +140,39 @@ class PBRun():
         self.index += 1
         return next(self)
 
-    def add(self, run_instance: RunInstance = None):
+    def add(self, run_instance: RunInstance):
         if run_instance:
             self.run_instances.append(run_instance)
 
-    def remove(self, run_instance: RunInstance = None):
+    def remove(self, run_instance: RunInstance):
         if run_instance:
             self.run_instances.remove(run_instance)
 
-    def is_sync_running(self, spath : str):
-        if self.sync_pid(spath):
-            return True
-        return False
+    def start_instance(self, instance):
+        self.change_enabled(instance, True)
+        ipath = f'{self.instances_path}/{instance}'
+        self.update(ipath, True)
 
-    def sync_pid(self, spath : str):
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except psutil.AccessDenied:
-                continue
-            if any("rclone" in sub for sub in cmdline) and any(f'pbgui:pbgui/{spath}_{self.name}' in sub for sub in cmdline):
-                return process
+    def stop_instance(self, instance):
+        self.change_enabled(instance, False)
+        ipath = f'{self.instances_path}/{instance}'
+        self.update(ipath, False)
 
-    def sync(self, direction: str, spath: str):
-        print("sync")
-        if not self.is_sync_running(spath):
-            pbgdir = Path.cwd()
-            print("not Running")
-            if direction == 'up':
-                print(f'sync up: {spath}')
-                cmd = ['rclone', 'sync', '-v', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
-            else:
-                cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
-            logfile = Path(f'{pbgdir}/data/logs/sync.log')
-            log = open(logfile,"ab")
-            subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, start_new_session=True)
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
+    def disable_instance(self, instance):
+        self.change_enabled(instance, False)
 
-    def rtd(self):
-        cfile = Path(f'{self.cmd_path}/rtd.cmd')
-        if cfile.exists(): return
-        timestamp = datetime.now().timestamp()
-        cfg = ({
-            "timestamp": timestamp,
-            "name": self.name})
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
-        self.sync('up', 'cmd')
+    def enable_instance(self, instance):
+        self.change_enabled(instance, True)
 
-    def send_rtd(self, name: str):
-        cfile = Path(f'{self.cmd_path}/rtd.cmd')
-        timestamp = datetime.now().timestamp()
-        if cfile.exists():
-            with open(cfile, "r", encoding='utf-8') as f:
-                cfg = json.load(f)
-                print(timestamp - float(cfg["timestamp"]))
-                cfile.unlink(missing_ok=True)
-                return True
-        return False
-
-    def has_rtd(self, name: str):
-        self.sync('down', 'cmd')
-        pbgdir = Path.cwd()
-        cfile = Path(f'{pbgdir}/data/remote/cmd_{name}/rtd.cmd')
-        if cfile.exists():
-            with open(cfile, "r", encoding='utf-8') as f:
-                cfg = json.load(f)
-                if cfg["name"] == self.name:
-                    if not self.send_rtd:
-                        self.rtd(self.name)
-
+    def change_enabled(self, instance : str, enabled : bool):
+        ipath = f'{self.instances_path}/{instance}'
+        ifile = Path(f'{ipath}/instance.cfg')
+        with open(ifile, "r", encoding='utf-8') as f:
+            inst = json.load(f)
+            inst["_enabled"] = enabled
+            f.close()
+        with open(ifile, "w", encoding='utf-8') as f:
+            json.dump(inst, f, indent=4)
 
     def restart(self, user : str, symbol : str):
         cfile = Path(f'{self.cmd_path}/restart.cmd')
@@ -231,7 +193,7 @@ class PBRun():
                         instance.load()
                         instance.start()
             cfile.unlink(missing_ok=True)
-
+    
     def update(self, instance_path : str, enabled : bool):
         cfile = Path(f'{self.cmd_path}/update.cmd')
         cfg = ({
@@ -262,7 +224,7 @@ class PBRun():
                 if "_enabled" in instance_cfg:
                     if instance_cfg["_enabled"]:
                         run_instance = RunInstance()
-                        run_instance.path = instance_cfg["_instance_path"]
+                        run_instance.path = instance
                         run_instance.load()
                         self.add(run_instance)
 
@@ -302,7 +264,7 @@ class PBRun():
 def main():
     # Not supported on windows
     if platform.system() == "Windows":
-        print("Run Module is not supported on Windows")
+        print("PBRun Module is not supported on Windows")
         exit()
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
@@ -320,8 +282,8 @@ def main():
             for run_instance in run:
                 run_instance.watch()
             sleep(5)
-        except Exception:
-            print("Something went wrong, but continue")
+        except Exception as e:
+            print(f'Something went wrong, but continue {e}')
 
 if __name__ == '__main__':
     main()
