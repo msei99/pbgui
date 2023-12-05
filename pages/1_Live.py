@@ -10,7 +10,6 @@ from PBRemote import PBRemote
 import pbgui_help
 import pandas as pd
 import platform
-from datetime import datetime
 
 
 def bgcolor_positive_or_negative(value):
@@ -18,12 +17,14 @@ def bgcolor_positive_or_negative(value):
     return f"background-color: {bgcolor};"
 
 def list_remote():
+    # Init
     instances = st.session_state.pbgui_instances
     if 'remote' not in st.session_state:
         st.session_state.remote = PBRemote()
-        for server in st.session_state.remote.remote_servers:
-            server.instances = Instances(server.name)
     remote = st.session_state.remote
+    if not "ed_key" in st.session_state:
+        st.session_state.ed_key = 0
+    ed_key = st.session_state.ed_key
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
@@ -38,75 +39,136 @@ def list_remote():
                 PBRemote().stop()
                 st.experimental_rerun()
         instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
-    col_server, col_refresh, col_empty = st.columns([5,2,10])
-    with col_server:
-        selected = st.multiselect("Server", remote.list(), default=None, key="select_server1")
-        servers = []
-        for server in remote.remote_servers:
-            if server.name in selected:
-                servers.append(server)
-    with col_refresh:
-        st.write("## ")
-        if st.button(f':recycle:', key=f'button_refresh_server'):
-            for server in servers:
-                for server_ss in st.session_state.remote.remote_servers:
-                    if server_ss.name == server.name:
-                        server_ss.instances = Instances(server.name)
-            instances.refresh()
-    sid = {}
-    sync_api = {}
+        for rserver in remote.remote_servers:
+            if rserver.is_online():
+                color = "green"
+            else: color = "red"
+            if st.button(f':{color}[{rserver.name}]'):
+                if "run_rserver" in st.session_state:
+                    del st.session_state.run_rserver
+                st.session_state.server = rserver
+        if st.button(f'Start/Stop Instances'):
+            if "server" in st.session_state:
+                del st.session_state.server
+            st.session_state.run_rserver = True
     column_config = {
         "id": None}
-    for server in servers:
-        if f'sync_api_{server.name}' in st.session_state:
-            if st.session_state[f'sync_api_{server.name}']:
-                print(f'sync_api_{server.name}')
-                server.send_to("sync_api")
-                st.session_state[f'sync_api_{server.name}'] = False
-        if f'select_instance_{server.name}' in st.session_state:
-            ed = st.session_state[f'select_instance_{server.name}']
+    # Sync Servers
+    if "server" in st.session_state:
+        server = st.session_state.server
+        if f'select_instance_{ed_key}' in st.session_state:
+            ed = st.session_state[f'select_instance_{ed_key}']
             for row in ed["edited_rows"]:
-                if "Start/Stop" in ed["edited_rows"][row]:
-                    status = server.is_running(instances.instances[row].user, instances.instances[row].symbol)
-                    if (status != None):
-                        if status:
-                            server.send_to("stop", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
-                        else:
-                            server.send_to("start", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                 if "Sync to local" in ed["edited_rows"][row]:
                     status = instances.is_same(server.instances.find_instance(instances.instances[row].user,instances.instances[row].symbol,instances.instances[row].market_type))
                     if (status == False):
                         server.send_to("copy", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                        st.session_state.ed_key += 1
+                        st.experimental_rerun()
                 if "Sync to remote" in ed["edited_rows"][row]:
                     status = server.instances.is_same(instances.instances[row])
                     if (status == False):
                         server.send_to("sync", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                        st.session_state.ed_key += 1
+                        st.experimental_rerun()
                 if "Remove" in ed["edited_rows"][row]:
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol) or not server.has_instance(instances.instances[row].user, instances.instances[row].symbol)
                     if not status:
                         server.send_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
-        sid[server] = []
+                        st.session_state.ed_key += 1
+                        st.experimental_rerun()
+        server.instances = Instances(server.name)
+        instances.refresh()
+        color = "red"
+        if server.is_online():
+            color = "green"
+        st.markdown(f'### Remote Server: :{color}[{server.name}] ({server.rtd}s)')
+        sid = []
         if not server.is_api_md5_same(remote.api_md5):
-            st.write(f'self: {remote.api_md5} remote: {server.api_md5}')
-            sync_api[server] = st.checkbox(f'Sync API-Keys to {server.name}',value=False, key=f'sync_api_{server.name}')
+            if st.checkbox(f'Sync API-Keys to {server.name} (Local md5: {remote.api_md5} remote md5: {server.api_md5})',value=False, key=f'sync_api_{ed_key}'):
+                server.send_to("sync_api")
+                st.session_state.ed_key += 1
+                st.experimental_rerun()
         for id, instance in enumerate(instances):
             if server.is_running(instance.user, instance.symbol) or not server.has_instance(instance.user, instance.symbol):
                 remove = None
             else:
                 remove = False
-            sid[server].append({
+            sid.append({
                 'id': id,
-                'Server': server.name,
-                'Online': server.is_online(),
-                'RTD': server.rtd,
                 'User': instance.user,
                 'Symbol': instance.symbol,
-                'Start/Stop': server.is_running(instance.user, instance.symbol),
+                'Running': server.is_running(instance.user, instance.symbol),
                 'Sync to local': instances.is_same(server.instances.find_instance(instance.user,instance.symbol,instance.market_type)),
                 'Sync to remote': server.instances.is_same(instance),
                 'Remove': remove,
             })
-        st.data_editor(data=sid[server], width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key=f'select_instance_{server.name}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
+        st.data_editor(data=sid, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key=f'select_instance_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Running'])
+    # Start / Stop Instances
+    if f'select_run_{ed_key}' in st.session_state:
+        ed = st.session_state[f'select_run_{ed_key}']
+        for row in ed["edited_rows"]:
+            if "Local Start/Stop" in ed["edited_rows"][row]:
+                if instances.instances[row].is_running():
+                    instances.instances[row].enabled = False
+                else:
+                    lrun = True
+                    for rserver in remote.remote_servers:
+                        if rserver.is_running(instances.instances[row].user, instances.instances[row].symbol):
+                            lrun = None
+                    if lrun:
+                        instances.instances[row].enabled = True
+                st.session_state.ed_key += 1
+                st.experimental_rerun()
+            for rserver in remote.remote_servers:
+                if f'{rserver.name} Start/Stop' in ed["edited_rows"][row]:
+                    if rserver.is_running(instances.instances[row].user, instances.instances[row].symbol):
+                        rserver.send_to("stop", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                    else:
+                        rrun = True
+                        if instances.instances[row].is_running():
+                            rrun = None
+                        for rserver in remote.remote_servers:
+                            if rserver.is_running(instances.instances[row].user, instances.instances[row].symbol):
+                                rrun = None
+                        if not rserver.has_instance(instances.instances[row].user, instances.instances[row].symbol):
+                            rrun = None
+                        if rrun:
+                            rserver.send_to("start", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
+                    st.session_state.ed_key += 1
+                    st.experimental_rerun()
+    if "run_rserver" in st.session_state:
+        rlist = []
+        for id, instance in enumerate(instances):
+            lrun = False
+            for rserver in remote.remote_servers:
+                if rserver.is_running(instance.user, instance.symbol):
+                    lrun = None
+            if instance.is_running():
+                lrun = True
+            rid = {
+                'id': id,
+                'User': instance.user,
+                'Symbol': instance.symbol,
+                'Local Start/Stop': lrun,
+               }
+            rrun = False
+            for rserver in remote.remote_servers:
+                rrun = False
+                for rrserver in remote.remote_servers:
+                    if rserver.name != rrserver.name and rrserver.is_running(instance.user, instance.symbol):
+                        rrun = None
+                if not rserver.has_instance(instance.user, instance.symbol):
+                    rrun = None
+                if lrun:
+                    rrun = None
+                if rserver.is_running(instance.user, instance.symbol):
+                    rrun = True
+                rid.update({
+                    f'{rserver.name} Start/Stop': rrun,
+                })
+            rlist.append(rid)
+        st.data_editor(data=rlist, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key=f'select_run_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
     if instances.pbremote_log:
         instances.view_log("PBRemote")
 
