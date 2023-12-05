@@ -4,6 +4,7 @@ import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from PBRun import PBRun, RunInstance
+from PBRemote import PBRemote
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
@@ -22,7 +23,7 @@ class Instance(Base):
         self._instance_path = None
         self._enabled = False
         self._error = None # not saved
-        self._symbol_ccxt = None # not saved
+        self._symbol_ccxt = None
         self._config = Config() # not saved
         self._assigned_balance = 0
         self._co = -1
@@ -31,11 +32,7 @@ class Instance(Base):
         self._price_precision = 0.0
         self._price_step = 0.0
         self._long_mode = "normal"
-#        self._long_min_markup = 0.0
-#        self._long_markup_range = 0.0
         self._short_mode = "normal"
-#        self._short_min_markup = 0.0
-#        self._short_markup_range = 0.0
         self._tf = None
         self._ohlcv_df = None # not saved
         self._bt = None # not saved
@@ -50,6 +47,8 @@ class Instance(Base):
         self._status = {} # not saved
         self._statusll = 0 # not saved
 
+    @property
+    def config(self): return self._config.config
     @property
     def enabled(self): return self._enabled
     @property
@@ -194,6 +193,9 @@ class Instance(Base):
             self._enabled = new_enabled
             self.save()
             PBRun().update(self._instance_path, self._enabled)
+            if PBRemote().is_running():
+                PBRemote().stop()
+                PBRemote().run()
             st.experimental_rerun()
 
     @co.setter
@@ -603,12 +605,16 @@ class Instance(Base):
         if file.exists():
             with open(file, "r", encoding='utf-8') as f:
                 state = json.load(f)
-                self.__dict__.update(state)
-                self.user = state["_user"]
-                if not self._symbol_ccxt:
-                    self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
-                self._config = Config(f'{self._instance_path}/config.json')
-                self._config.load_config()
+            self.__dict__.update(state)
+            self._instance_path = path
+            self.user = state["_user"]
+            if not self._symbol_ccxt:
+                self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+                state["_symbol_ccxt"] = self._symbol_ccxt
+                with open(file, "w", encoding='utf-8') as f:
+                    json.dump(state, f, indent=4)
+            self._config = Config(f'{self._instance_path}/config.json')
+            self._config.load_config()
         else:
             print(f'{file} not found')
 
@@ -647,7 +653,9 @@ class Instance(Base):
             self._config.config_file = f'{self._instance_path}/config.json'
             self._config.save_config()
             file = Path(f'{instance_path}/instance.cfg')
+            self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
             state = self.__dict__.copy()
+            del state['_instance_path']
             del state['_error']
             del state['_market_types']
             del state['_users']
@@ -689,13 +697,17 @@ class Instance(Base):
         return run_instance.is_running()
 
 class Instances:
-    def __init__(self, backtest_path: str = None):
+    def __init__(self, ipath: str = None):
         self.instances = []
         self.index = 0
         self.pbrun_log = False
+        self.pbremote_log = False
         self.pbstat_log = False
         pbgdir = Path.cwd()
-        self.instances_path = f'{pbgdir}/data/instances'
+        if not ipath:
+            self.instances_path = f'{pbgdir}/data/instances'
+        else:
+            self.instances_path = f'{pbgdir}/data/remote/instances_{ipath}'
         self.load()
 
     def __iter__(self):
@@ -710,9 +722,48 @@ class Instances:
     def list(self):
         return list(map(lambda c: c.user, self.instances))
     
+    def is_user_used(self, user: str):
+        for instance in self.instances:
+           if user == instance.user:
+               return True
+        return False
+
+    def is_same(self, instance: Instance):
+        if instance:
+            local_instance = self.find_instance(instance.user, instance.symbol, instance.market_type)
+            if local_instance:
+                if (
+                    instance.config == local_instance.config
+                    and instance._ohlcv == local_instance._ohlcv
+                    and instance._assigned_balance == local_instance._assigned_balance
+                    and instance._leverage == local_instance._leverage
+                    and instance._price_distance_threshold == local_instance._price_distance_threshold
+                    and instance._price_precision == local_instance._price_precision
+                    and instance._price_step == local_instance._price_step
+                ):
+                    return True
+                else:
+                    return False
+            else:
+                return False
+        return None
+
+    def find_instance(self, user: str, symbol: str, market_type: str):
+        for instance in self.instances:
+            if (
+                instance.user == user
+                and instance.symbol == symbol
+                and instance.market_type == market_type
+            ):
+                return instance
+
     def remove(self, instance: Instance):
         instance.remove()
         self.instances.remove(instance)
+
+    def refresh(self):
+        for instance in self.instances:
+            instance.load(instance._instance_path)
 
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))
@@ -732,7 +783,14 @@ class Instances:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
-        st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
+        col_log, col_del, col_empty = st.columns([3,1,20])
+        with col_log:
+            st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
+        with col_del:
+            if st.button(f':wastebasket:', key=f'button__del_{log_filename}'):
+                with open(logfile,'r+') as file:
+                    file.truncate()
+                st.experimental_rerun()
         stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
 
     def import_manager(self):
