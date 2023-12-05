@@ -349,7 +349,7 @@ class PBRemote():
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
                     if command == "sync":
                         self.sync('up', 'instances')
-                    if command in ['start','stop','sync','sync_api']:
+                    if command in ['start','stop','sync','sync_api','remove']:
                         cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
 
