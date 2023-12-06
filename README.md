@@ -100,6 +100,7 @@ Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
 
 ## v0.8 (05-12-2023)
+- PBRemote: Fixed Start/Stop local
 - API-Editor: Full rewrite
 - Live: Remote Server Manager added
 - Live: Start / Stop Instances on local and remote servers
@@ -190,8 +191,6 @@ On your servers, you only need to run Streamlit once to configure the passivbot 
 First release with basic backtest and optimization functionality
 
 ## Roadmap
-- API-Editor: Rewrite the whole module and fix some errors
-- PBRemote: install api-keys
 - Live: Support Kucoin and OKX
 - Dashboard: Full Dashbord for history and results
 - Backtest: Configure Default Values
