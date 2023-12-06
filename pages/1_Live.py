@@ -10,6 +10,7 @@ from PBRemote import PBRemote
 import pbgui_help
 import pandas as pd
 import platform
+from time import sleep
 
 
 def bgcolor_positive_or_negative(value):
@@ -110,14 +111,18 @@ def list_remote():
         for row in ed["edited_rows"]:
             if "Local Start/Stop" in ed["edited_rows"][row]:
                 if instances.instances[row].is_running():
-                    instances.instances[row].enabled = False
+                    PBRun().stop_instance(f'{instances.instances[row].user}_{instances.instances[row].symbol}_{instances.instances[row].market_type}')
+                    while instances.instances[row].is_running():
+                        sleep(1)
                 else:
                     lrun = True
                     for rserver in remote.remote_servers:
                         if rserver.is_running(instances.instances[row].user, instances.instances[row].symbol):
                             lrun = None
                     if lrun:
-                        instances.instances[row].enabled = True
+                        PBRun().start_instance(f'{instances.instances[row].user}_{instances.instances[row].symbol}_{instances.instances[row].market_type}')
+                        while not instances.instances[row].is_running():
+                            sleep(1)
                 st.session_state.ed_key += 1
                 st.experimental_rerun()
             for rserver in remote.remote_servers:
