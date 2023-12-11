@@ -133,8 +133,8 @@ def list_remote():
                         rrun = True
                         if instances.instances[row].is_running():
                             rrun = None
-                        for rserver in remote.remote_servers:
-                            if rserver.is_running(instances.instances[row].user, instances.instances[row].symbol):
+                        for rrserver in remote.remote_servers:
+                            if rrserver.is_running(instances.instances[row].user, instances.instances[row].symbol):
                                 rrun = None
                         if not rserver.has_instance(instances.instances[row].user, instances.instances[row].symbol):
                             rrun = None
