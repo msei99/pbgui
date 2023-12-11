@@ -86,18 +86,21 @@ class Exchange:
 
     def fetch_open_orders(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
-        orders = self.instance.fetch_open_orders(symbol=symbol)
+        if self.id == "bybit" and market_type == "spot":
+            orders = self.instance.fetch_open_orders(symbol=symbol, params = {"type": market_type})
+        else:    
+            orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 
     def fetch_position(self, symbol: str, market_type: str):
+        if not self.instance: self.connect()
         if self.id == 'binance':
             position = self.instance.fetch_account_positions(symbols=[symbol])
             return position[0]
-        if not self.instance: self.connect()
         position = self.instance.fetch_position(symbol=symbol)
         return position
 
-    def fetch_balance(self, market_type: str):
+    def fetch_balance(self, market_type: str, symbol : str = None):
         if not self.instance: self.connect()
         try:
             balance = self.instance.fetch_balance(params = {"type": market_type})
@@ -106,10 +109,27 @@ class Exchange:
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
-            return float(balance["total"]["USDT"])
+            if market_type == 'swap': return float(balance["total"]["USDT"])
+            else:
+                if symbol:
+                    if symbol.endswith('USDT'):
+                        symbol = symbol.replace("USDT", "")
+                    elif symbol.endswith('USDC'):
+                        symbol = symbol.replace("USDC", "")
+                    elif symbol.endswith('BTC'):
+                        symbol = symbol.replace("BTC", "")
+                    elif symbol.endswith('EUR'):
+                        symbol = symbol.replace("EUR", "")
+                    return float(balance["total"][symbol])    
+                else:
+                    return float(balance["total"]["USDT"])
         elif self.id == "binance":
             if market_type == 'swap': return float(balance["info"]["totalWalletBalance"])
-            else: return float(balance["total"]["USDT"])
+            else:
+                if symbol:
+                    return float(balance["total"][symbol])    
+                else:
+                    return float(balance["total"]["USDT"])
         return float(balance["total"]["USDT"])
 
     def fetch_bill(self, symbol: str, market_type: str, since: int):
@@ -143,6 +163,10 @@ class Exchange:
             return all_trades
 
 
+    def fetch_timestamp(self):
+        if not self.instance: self.connect()
+        return self.instance.milliseconds()
+
     def fetch_trades(self, symbol: str, market_type: str, since: int):
         all_trades = []
         last_trade_id = ""
@@ -152,8 +176,11 @@ class Exchange:
             # With ccxt >= 4.1.7 we can use pagination in one line
             # trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "paginate": True, "paginationDirection": "forward", "until": self.instance.milliseconds()})
             if self.id == "binance":
-                week = 7 * 24 * 60 * 60 * 1000
-                now = self.instance.milliseconds ()
+                if market_type == "futures":
+                    week = 7 * 24 * 60 * 60 * 1000
+                else:
+                    week = 24 * 60 * 60 * 1000
+                now = self.instance.milliseconds()
                 all_trades = []
                 if since == 1577840461000:
                     first_trade = self.instance.fetch_my_trades(symbol, None, None, {'fromId': 0})
@@ -175,11 +202,11 @@ class Exchange:
                         since = end_time
             elif self.id == "bybit":
                 week = 7 * 24 * 60 * 60 * 1000
-                now = self.instance.milliseconds ()
+                now = self.instance.milliseconds()
                 all_trades = []
                 if since == 1577840461000:
                     end_time = since + week
-                    first_trade = self.instance.fetch_my_trades(symbol, since, 100, {"paginate": True, 'endTime': end_time })
+                    first_trade = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, "paginate": True, 'endTime': end_time })
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
@@ -187,7 +214,7 @@ class Exchange:
                     end_time = since + week
                     if end_time > now:
                         end_time = now
-                    trades = self.instance.fetch_my_trades(symbol, since, 100, {'endTime': end_time })
+                    trades = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, 'endTime': end_time })
                     if len(trades):
                         last_trade = trades[len(trades) - 1]
                         if "nextPageCursor" in last_trade["info"]:
@@ -195,7 +222,7 @@ class Exchange:
                             while True:
                                 print(f'User:{self.user.name} Symbol:{symbol} Fetching trades from', cursor)
                                 all_trades = all_trades + trades
-                                trades = self.instance.fetch_my_trades(symbol, since, 100, {'cursor': cursor, 'endTime': end_time })
+                                trades = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, 'cursor': cursor, 'endTime': end_time })
                                 if len(trades):
                                     lpage = trades[len(trades) - 1]
                                     if "nextPageCursor" in lpage["info"]:
