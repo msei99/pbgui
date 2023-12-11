@@ -65,6 +65,8 @@ def display_bots():
         st.write("#### **Edit**")
     with col5:
         st.write("#### **Configuration file**")
+    if not "pb_instances" in st.session_state:
+        return
     for instance in st.session_state.pb_instances:
         col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,3])
         with col1:
@@ -132,7 +134,10 @@ def button_handler(instance, button=None):
         st.session_state.del_instance = True
         save_yaml(instance)
         st.session_state.pb_manager = Manager()
-        st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
+        try:
+            st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
+        except Exception as e:
+            print(f'No Instances: {e}')
     else:
         st.session_state.editpb_instance = instance
         st.session_state.new_instance = False
@@ -369,8 +374,11 @@ else:
     Manager = getattr(manager,"Manager")
 
 if 'pb_manager' not in st.session_state:
-    st.session_state.pb_manager = Manager()
-    st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
+    try:
+        st.session_state.pb_manager = Manager()
+        st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
+    except Exception as e:
+        print(f'No Instances: {e}')
 if 'go_backtest' in st.session_state:
     if st.session_state.go_backtest:
         st.session_state.go_backtest = False
