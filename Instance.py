@@ -96,6 +96,7 @@ class Instance(Base):
     @property
     def we(self):
         if not self.load_status(): return 0
+        if self.market_type == "spot": return 0
         try:
             entry = self._status["position"]["entryPrice"]
             qty = self._status["position"]["contracts"]
@@ -111,6 +112,7 @@ class Instance(Base):
     @property
     def upnl(self):
         if not self.load_status(): return 0
+        if self.market_type == "spot": return 0
         try: 
             upnl = self._status["position"]["unrealizedPnl"]
             if not upnl: return 0
@@ -121,8 +123,11 @@ class Instance(Base):
     @property
     def psize(self):
         if not self.load_status(): return 0
-        try: 
-            psize = self._status["position"]["contracts"]
+        try:
+            if self.market_type == "futures":
+                psize = self._status["position"]["contracts"]
+            else:
+                psize = self._status["spot_balance"]
             if not psize: return 0
             return psize
         except Exception as e:
@@ -179,6 +184,7 @@ class Instance(Base):
     @property
     def entry(self):
         if not self.load_status(): return 0
+        if self.market_type == "spot": return 0
         try: 
             entry = self._status["position"]["entryPrice"]
             if not entry: return 0
@@ -431,11 +437,18 @@ class Instance(Base):
     def fetch_position(self):
         return self.exchange.fetch_position(self.symbol_ccxt, self._market_type)
 
+    def fetch_spot_balance(self):
+        symbol = self._symbol_ccxt.split('/')[0]
+        return self._exchange.fetch_balance(self._market_type, symbol)
+
     def fetch_price(self):
         return self.exchange.fetch_price(self.symbol_ccxt, self._market_type)
 
     def fetch_open_orders(self):
         return self.exchange.fetch_open_orders(self.symbol_ccxt, self._market_type)
+
+    def fetch_timestamp(self):
+        return self.exchange.fetch_timestamp()
 
     def remove(self):
         rmtree(self._instance_path, ignore_errors=True)
@@ -465,6 +478,7 @@ class Instance(Base):
 
     def fetch_trades(self):
         file = Path(f'{self._instance_path}/trades.json')
+        file_lft = Path(f'{self._instance_path}/last_fetch_trades.json')
         trades = []
         save = False
         ltrades = 0
@@ -477,13 +491,21 @@ class Instance(Base):
             else:
                 since = 1577840461000
         else:
-            since = 1577840461000
+            if file_lft.exists():
+                with open(file_lft, "r", encoding='utf-8') as f:
+                    since = json.load(f)
+            else:
+                since = 1577840461000
+        now = self.fetch_timestamp()
         new_trades = self._exchange.fetch_trades(self.symbol_ccxt, self._market_type, since)
         if new_trades:
             for trade in new_trades:
                 if not any(trade["id"] in sub["id"] for sub in trades):
                     trades.append(trade)
                     save = True
+        since = now
+        with open(file_lft, "w", encoding='utf-8') as f:
+            json.dump(since, f, indent=4)
         if save:
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(trades, f, indent=4)
@@ -503,13 +525,23 @@ class Instance(Base):
         p.segment(x0=self._ohlcv_df["timestamp"], y0=self._ohlcv_df["high"], x1=self._ohlcv_df["timestamp"], y1=self._ohlcv_df["low"], color=self._ohlcv_df["color"])
         p.vbar(x=self._ohlcv_df["timestamp"], width=w, top=self._ohlcv_df["open"], bottom=self._ohlcv_df["close"], color=self._ohlcv_df["color"])
         if self._status:
+            balance = self.balance
             price = self.price
-            position = self._status["position"]
             orders = self._status["orders"]
+            if self.market_type == "futures":
+                position = self._status["position"]
+            else: 
+                position = None
+                spot_balance = self._status["spot_balance"]
         else:
+            balance = self.fetch_balance()
             price = self.fetch_price()["last"]
-            position = self.fetch_position()
             orders = self.fetch_open_orders()
+            if self.market_type == "futures":
+                position = self.fetch_position()
+            else: 
+                position = None
+                spot_balance = self.fetch_spot_balance()
         # price
         color = "red" if price < self._ohlcv_df["open"].iloc[-1] else "green"
         p.line(x=self._ohlcv_df["timestamp"], y=price, color=color, legend_label=f'price: {str(price)}')
@@ -518,7 +550,12 @@ class Instance(Base):
             if position["entryPrice"]:
                 color = "red" if price < position["entryPrice"] else "green"
                 p.line(x=self._ohlcv_df["timestamp"], y=position["entryPrice"], color=color, line_dash="dashed", legend_label=f'position: {str(position["entryPrice"])} qty: {str(position["contracts"])} Pnl: {str(position["unrealizedPnl"])}')
-        st.markdown(f'### Symbol: {self.symbol} {self.balance} USDT')
+        if self.market_type == "futures":
+            st.markdown(f'### Symbol: {self.symbol} {round(self.balance,2)} USDT')
+        else: 
+            symbol = self._symbol_ccxt.split('/')[0]
+            st.markdown(f'### Symbol: {self.symbol} {round(balance,2)} USDT')
+            st.markdown(f'### Asset: {spot_balance} {symbol} = {round(spot_balance*price,2)} USDT')
         # open/close orders
         for order in orders:
             color = "red" if order["side"] == "sell" else "green"
@@ -635,7 +672,10 @@ class Instance(Base):
         status["timestamp"] = datetime.now().timestamp()
         status["balance"] = self.fetch_balance()
         status["price"] = self.fetch_price()
-        status["position"] = self.fetch_position()
+        if self.market_type == "futures":
+            status["position"] = self.fetch_position()
+        else:
+            status["spot_balance"] = self.fetch_spot_balance()
         status["orders"] = self.fetch_open_orders()
         with open(file, "w", encoding='utf-8') as f:
             json.dump(status, f, indent=4)
