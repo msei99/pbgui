@@ -11,6 +11,7 @@ class Exchanges(Enum):
     BITGET = 'bitget'
     OKX = 'okx'
     KUCOIN = 'kucoin'
+    BINGX = 'bingx'
     
     @staticmethod
     def list():
@@ -97,6 +98,10 @@ class Exchange:
         if self.id == 'binance':
             position = self.instance.fetch_account_positions(symbols=[symbol])
             return position[0]
+        elif self.id == 'bingx':
+            position = self.instance.fetch_positions(symbols=[symbol])
+            print(position)
+            return position
         position = self.instance.fetch_position(symbol=symbol)
         return position
 
@@ -235,6 +240,27 @@ class Exchange:
                         all_trades = all_trades + trades
                     else:
                         since = end_time
+            elif self.id == "kucoinfutures":
+                week = 7 * 24 * 60 * 60 * 1000
+                now = self.instance.milliseconds()
+                limit = 50
+                end = since + week
+                while True:
+                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, limit=limit, params = {"endAt": end})
+                    if trades:
+                        first_trade = trades[0]
+                        last_trade = trades[-1]
+                        all_trades = trades + all_trades
+                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['timestamp'], 'till', last_trade['timestamp'])
+                    if len(trades) == limit:
+                        end = trades[0]['timestamp']
+                    else:
+                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                        since += week
+                        end = since + week
+                    if since > now:
+                        print(f'User:{self.user.name} Symbol:{symbol} Done')
+                        break
             else:
                 while True:
                     trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "endTime": end_time})
@@ -251,6 +277,50 @@ class Exchange:
         if all_trades:
             sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])
             return sort_trades
+
+    def fetch_fundings(self, symbol: str, market_type: str, since: int):
+        all_fundings = []
+        if not self.instance: self.connect()
+        if self.id == "kucoinfutures":
+            week = 7 * 24 * 60 * 60 * 1000
+            now = self.instance.milliseconds()
+            limit = 50
+            end = since + week
+            while True:
+                fundings = self.instance.fetch_funding_history(symbol=symbol, since=since, limit=limit, params = {"endAt": end})
+                if fundings:
+                    first_funding = fundings[0]
+                    last_funding = fundings[-1]
+                    all_fundings = fundings + all_fundings
+                    print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(fundings), 'funding from', first_funding['timestamp'], 'till', last_funding['timestamp'])
+                if len(fundings) == limit:
+                    end = fundings[0]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(fundings), 'funding from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since += week
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Symbol:{symbol} Done')
+                    break
+        if self.id == "binance":
+            week = 7 * 24 * 60 * 60 * 1000
+            now = self.instance.milliseconds()
+            while since < now:
+                print(f'User:{self.user.name} Symbol:{symbol} Fetching fundings from', self.instance.iso8601(since))
+                end_time = since + week
+                if end_time > now:
+                    end_time = now
+                fundings = self.instance.fetch_funding_history(symbol, since, None, {
+                    'endTime': end_time,
+                })
+                if len(fundings):
+                    last_funding = fundings[-1]
+                    since = last_funding['timestamp'] + 1
+                    all_fundings = all_fundings + fundings
+                else:
+                    since = end_time
+        if all_fundings:
+            return all_fundings
 
     def symbol_to_exchange_symbol(self, symbol: str, market_type: str):
         if self.id == 'binance':
@@ -271,6 +341,8 @@ class Exchange:
             return f'{symbol}M'
         elif self.id == 'okx':
             return f'{symbol[0:-4]}-USDT-SWAP'
+        elif self.id == 'bingx':
+            return f'{symbol[0:-4]}-USDT'
         else:
             return symbol
 
@@ -294,7 +366,10 @@ class Exchange:
                         self.swap.append(''.join(v["id"].split("-")[0:2]))
                 elif self.id == "bybit":
                     if v["id"].endswith('USDT'):
-                        self.swap.append(''.join(v["id"].split("-")[0:2]))
+                        self.swap.append(v["id"])
+                elif self.id == "bingx":
+                    if v["id"].endswith('USDT'):
+                        self.swap.append(''.join(v["id"].split("-")))
                 else:
                     self.swap.append(v["id"])
             if v["spot"] and v["active"] and (self.id == "bybit" or self.id == "binance"):
