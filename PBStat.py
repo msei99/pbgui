@@ -45,7 +45,7 @@ class PBStat(Instances):
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch status')
         for instance in self.instances:
             instance.save_status()
-            if instance.exchange.id in ["bybit", "bitget", "binance"]:
+            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures"]:
                 instance.fetch_trades()
 
     def fetch_status(self):

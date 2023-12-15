@@ -383,10 +383,13 @@ class Instance(Base):
                         balance = self.sb
                 if trade["type"] and trade["side"] == "buy":
                     last_psize = psize
+                    if self.market_type == "spot":
+                        psize = psize - trade["fee"]["cost"]
+                    else:
+                        balance = balance - trade["fee"]["cost"]
                     psize = round(psize + trade["amount"],10)
                     pprice = (pprice*last_psize + trade["amount"]*trade["price"])/psize
                     price = trade["price"]
-                    balance = balance - trade["fee"]["cost"]
                 if trade["type"] and trade["side"] == "sell" and psize > 0:
                     last_psize = psize
                     psize = round(psize - trade["amount"],10)
@@ -400,7 +403,7 @@ class Instance(Base):
 #                    balance = balance - trade["fee"]["cost"]
                 timestamp = trade["timestamp"]
                 df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
-        elif self.exchange.id == "binance":
+        elif self.exchange.id == "kucoinfutures":
             for trade in trades:
                 if psize < 0:
                     psize = 0
@@ -425,8 +428,54 @@ class Instance(Base):
                     balance = balance + win
                 timestamp = trade["timestamp"]
                 df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
+        elif self.exchange.id == "binance":
+            for trade in trades:
+                if psize < 0:
+                    print(psize)
+                    psize = 0
+                    price = 0
+                    pprice = 0
+                    balance = 0
+                    df = pd.DataFrame(data)
+                    if self.sb_change:
+                        balance = self.sb
+                if trade["side"] == "buy":
+                    last_psize = psize
+                    if self.market_type == "spot":
+                        psize = psize - trade["fee"]["cost"]+trade["fee"]["cost"]/100*10
+                    else:
+                        balance = balance - trade["fee"]["cost"]
+                    psize = round(psize + trade["amount"],10)
+                    pprice = (pprice*last_psize + trade["amount"]*trade["price"])/psize
+                    price = trade["price"]
+                if trade["side"] == "sell" and psize > 0:
+                    last_psize = psize
+                    psize = round(psize - trade["amount"],10)
+                    win = trade["amount"] * trade["price"] - trade["amount"] * pprice
+                    price = trade["price"]
+                    balance = balance - trade["fee"]["cost"]
+                    balance = balance + win
+                timestamp = trade["timestamp"]
+                print(timestamp, psize, pprice, price, balance)
+                df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
         if not self.sb_change:
-            my_balance = self.balance
+            if self.market_type == "spot":
+                if self._status:
+                    spot_balance = self._status["spot_balance"]
+                    price = self.price
+                else:
+                    spot_balance = self.fetch_spot_balance()
+                    price = self.fetch_price()["last"]
+                my_balance = self.balance + (spot_balance * pprice)
+            else:
+                my_balance = self.balance
+            # remove funding from balance
+            ffile = Path(f'{self._instance_path}/fundings.json')
+            if ffile.exists():
+                with open(ffile, "r", encoding='utf-8') as f:
+                    fundings = json.load(f)
+                    for funding in fundings:
+                        my_balance -= funding["amount"]
             df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance)
 #        print(df)
         return df
@@ -511,6 +560,42 @@ class Instance(Base):
                 json.dump(trades, f, indent=4)
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(trades) - ltrades} trades')
 
+    def fetch_fundings(self):
+        file = Path(f'{self._instance_path}/fundings.json')
+        file_lff = Path(f'{self._instance_path}/last_fetch_fundings.json')
+        fundings = []
+        save = False
+        lfundings = 0
+        if file.exists():
+            with open(file, "r", encoding='utf-8') as f:
+                fundings = json.load(f)
+                lfundings = len(fundings)
+            if type(fundings[-1]["timestamp"]) == int:
+                since = fundings[-1]["timestamp"]
+            else:
+                since = 1577840461000
+        else:
+            if file_lff.exists():
+                with open(file_lff, "r", encoding='utf-8') as f:
+                    since = json.load(f)
+            else:
+                since = 1577840461000
+        now = self.fetch_timestamp()
+        new_fundings = self._exchange.fetch_fundings(self.symbol_ccxt, self._market_type, since)
+        if new_fundings:
+            for funding in new_fundings:
+                if not any(str(funding["id"]) in str(sub["id"]) for sub in fundings):
+                    fundings.append(funding)
+                    save = True
+        since = now
+        with open(file_lff, "w", encoding='utf-8') as f:
+            json.dump(since, f, indent=4)
+        if save:
+            sort_fundings = sorted(fundings, key=lambda d: d['timestamp'])
+            with open(file, "w", encoding='utf-8') as f:
+                json.dump(sort_fundings, f, indent=4)
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(fundings) - lfundings} fundings')
+
     def view_ohlcv(self):
         ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe=self.tf, limit=100)
         self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -565,11 +650,13 @@ class Instance(Base):
         st.bokeh_chart(p, use_container_width=True)
 
     def compare_history(self):
-        if self.exchange.id not in ["bybit", "bitget", "binance"]:
-            st.write("History is only supported on bybit, bitget and binance")
+        if self.exchange.id not in ["bybit", "bitget", "binance", "kucoinfutures"]:
+            st.write("History is only supported on bybit, bitget, binance and kucoin")
             return
         if not isinstance(self._trades, pd.DataFrame):
             self.fetch_trades()
+            if self.market_type == "futures" and self.exchange.id in ["binance", "kucoinfutures"]:
+                self.fetch_fundings()
             self._trades = self.trades_to_df()
         self.sb = self._trades["balance"][0]
         self.sd = datetime.fromtimestamp(self._trades["timestamp"][0]/1000).strftime("%Y-%m-%d")
