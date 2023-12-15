@@ -107,7 +107,7 @@ class Exchange:
                     return position
         else:
             position = self.instance.fetch_position(symbol=symbol)
-        return position
+            return position
 
     def fetch_balance(self, market_type: str, symbol : str = None):
         if not self.instance: self.connect()
