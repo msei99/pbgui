@@ -342,6 +342,9 @@ def edit_instance():
             st.session_state.edit_instance.save()
             if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
                 st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
+                if PBStat().is_running():
+                    PBStat().stop()
+                    PBStat().run()
 #            del st.session_state.edit_instance
             st.experimental_rerun()
         if st.button("Backtest"):
