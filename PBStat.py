@@ -42,7 +42,8 @@ class PBStat(Instances):
                 return process
 
     def fetch_all(self):
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch status')
+        self.fetch_status()
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch trades')
         for instance in self.instances:
             instance.save_status()
             if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures"]:
@@ -70,7 +71,8 @@ def main():
             else:
                 run.fetch_status()
             trade_count += 1
-            sleep(60)
+            if len(run.instances) < 20:
+                sleep(60)
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 
