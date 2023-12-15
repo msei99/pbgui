@@ -89,19 +89,22 @@ class Exchange:
         if not self.instance: self.connect()
         if self.id == "bybit" and market_type == "spot":
             orders = self.instance.fetch_open_orders(symbol=symbol, params = {"type": market_type})
+        elif self.id == 'bingx':
+            orders = self.instance.fetch_open_orders(symbol=symbol)
         else:    
             orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 
     def fetch_position(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
-        if self.id == 'binance':
+        if self.id in 'binance':
             position = self.instance.fetch_account_positions(symbols=[symbol])
             return position[0]
         elif self.id == 'bingx':
-            position = self.instance.fetch_positions(symbols=[symbol])
-            print(position)
-            return position
+            positions = self.instance.fetch_positions(symbols=[symbol])
+            for position in positions:
+                if position["symbol"] == symbol:
+                    return position
         position = self.instance.fetch_position(symbol=symbol)
         return position
 
@@ -342,7 +345,7 @@ class Exchange:
         elif self.id == 'okx':
             return f'{symbol[0:-4]}-USDT-SWAP'
         elif self.id == 'bingx':
-            return f'{symbol[0:-4]}-USDT'
+            return f'{symbol[0:-4]}/USDT:USDT'
         else:
             return symbol
 
