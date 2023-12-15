@@ -105,7 +105,8 @@ class Exchange:
             for position in positions:
                 if position["symbol"] == symbol:
                     return position
-        position = self.instance.fetch_position(symbol=symbol)
+        else:
+            position = self.instance.fetch_position(symbol=symbol)
         return position
 
     def fetch_balance(self, market_type: str, symbol : str = None):
