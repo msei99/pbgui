@@ -323,6 +323,21 @@ class Exchange:
                     all_fundings = all_fundings + fundings
                 else:
                     since = end_time
+        if self.id == "bitget":
+            end_time = self.instance.milliseconds()
+            last_funding_id = ""
+            while True:
+                fundings = self.instance.fetch_funding_history(symbol=symbol, since=since, limit=100, params = {"endTime": end_time})
+                if fundings and fundings[-1]['id'] != last_funding_id:
+                    first_funding = fundings[0]
+                    last_funding = fundings[-1]
+                    last_funding_id = fundings[-1]['id']
+                    end_time = first_funding['timestamp']
+                    all_fundings = fundings + all_fundings
+                    print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(fundings), 'fundings from', first_funding['datetime'], 'till', last_funding['datetime'])
+                else:
+                    print(f'User:{self.user.name} Symbol:{symbol} Done')
+                    break
         if all_fundings:
             return all_fundings
 
