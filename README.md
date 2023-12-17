@@ -100,6 +100,9 @@ Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
 
 ## v0.82 (11-12-2023)
+- Live: Bugfix for corrupted status.json in instances directory
+- Live: Bugfix WE (did not use contractSize for calculations)
+- Live: Add funding to calculations of history and starting balance (binance and kucoin)
 - Live: Restart PBStat when add/remove instance
 - Exchanges: Add support for BingX
 - Live: Trading History for Spot binance and bybit corrected

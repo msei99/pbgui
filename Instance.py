@@ -98,40 +98,52 @@ class Instance(Base):
         if not self.load_status(): return 0
         if self.market_type == "spot": return 0
         try:
-            entry = self._status["position"]["entryPrice"]
-            qty = self._status["position"]["contracts"]
-            if self.balance == 0 or not qty:
+            if self._status["position"]:
+                entry = self._status["position"]["entryPrice"]
+                qty = self._status["position"]["contracts"]*self._status["position"]["contractSize"]
+                print(f'{self.symbol} {qty}')
+                if self.balance == 0 or not qty:
+                    return 0
+                entry = float(entry)
+                qty = float(qty)
+                we = 100 / self.balance * entry * qty
+                return we
+            else:
                 return 0
-            entry = float(entry)
-            qty = float(qty)
-            we = 100 / self.balance * entry * qty
-            return we
         except Exception as e:
-            print(e)
+            print(f'Error calculating we: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def upnl(self):
         if not self.load_status(): return 0
         if self.market_type == "spot": return 0
         try: 
-            upnl = self._status["position"]["unrealizedPnl"]
-            if not upnl: return 0
-            return upnl
+            if self._status["position"]:
+                upnl = self._status["position"]["unrealizedPnl"]
+                if not upnl: return 0
+                return upnl
+            else:
+                return 0
         except Exception as e:
-            print(e)
+            print(f'Error calculating upnl: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def psize(self):
         if not self.load_status(): return 0
         try:
-            if self.market_type == "futures":
-                psize = self._status["position"]["contracts"]
+            if not "position" in self._status:
+                return 0
+            if self._status["position"]:
+                if self.market_type == "futures":
+                    psize = self._status["position"]["contracts"]
+                else:
+                    psize = self._status["spot_balance"]
+                if not psize: return 0
+                return psize
             else:
-                psize = self._status["spot_balance"]
-            if not psize: return 0
-            return psize
+                return 0
         except Exception as e:
-            print(e)
+            print(f'Error calculating psize: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def price(self):
@@ -141,7 +153,7 @@ class Instance(Base):
             if not price: return 0
             return price
         except Exception as e:
-            print(e)
+            print(f'Error calculating price: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def next_tp(self):
@@ -154,7 +166,7 @@ class Instance(Base):
                         next_tp = order["price"]
             return next_tp
         except Exception as e:
-            print(e)
+            print(f'Error calculating next_tp: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def next_dca(self):
@@ -167,7 +179,7 @@ class Instance(Base):
                         next_dca = order["price"]
             return next_dca
         except Exception as e:
-            print(e)
+            print(f'Error calculating next_dca: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def dca(self):
@@ -179,18 +191,21 @@ class Instance(Base):
                     dca += 1
             return dca
         except Exception as e:
-            print(e)
+            print(f'Error calculating dca: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def entry(self):
         if not self.load_status(): return 0
         if self.market_type == "spot": return 0
         try: 
-            entry = self._status["position"]["entryPrice"]
-            if not entry: return 0
-            return entry
+            if self._status["position"]:
+                entry = self._status["position"]["entryPrice"]
+                if not entry: return 0
+                return entry
+            else:
+                return 0
         except Exception as e:
-            print(e)
+            print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
 
     @enabled.setter
@@ -314,6 +329,11 @@ class Instance(Base):
             st.experimental_rerun()
 
     def trades_to_df(self):
+        ffile = Path(f'{self._instance_path}/fundings.json')
+        fundings = []
+        if ffile.exists():
+            with open(ffile, "r", encoding='utf-8') as f:
+                fundings = json.load(f)
         file = Path(f'{self._instance_path}/trades.json')
         if not file.exists():
             return
@@ -368,6 +388,12 @@ class Instance(Base):
                     win = trade["amount"] * trade["price"] - trade["amount"] * pprice
                     price = trade["price"]
                     balance = balance + win
+                if len(fundings) > 0:
+                    while fundings[0]["timestamp"] < trade["timestamp"]:
+                        funding = fundings.pop(0)
+                        balance = balance + funding["amount"]
+                        if len(fundings) == 0:
+                            break
                 timestamp = trade["timestamp"]
                 if price:
                     df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
@@ -426,12 +452,17 @@ class Instance(Base):
                     price = trade["price"]
                     balance = balance - trade["fee"]["cost"]
                     balance = balance + win
+                if len(fundings) > 0:
+                    while fundings[0]["timestamp"] < trade["timestamp"]:
+                        funding = fundings.pop(0)
+                        balance = balance + funding["amount"]
+                        if len(fundings) == 0:
+                            break
                 timestamp = trade["timestamp"]
                 df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
         elif self.exchange.id == "binance":
             for trade in trades:
                 if psize < 0:
-                    print(psize)
                     psize = 0
                     price = 0
                     pprice = 0
@@ -455,8 +486,13 @@ class Instance(Base):
                     price = trade["price"]
                     balance = balance - trade["fee"]["cost"]
                     balance = balance + win
+                if len(fundings) > 0:
+                    while fundings[0]["timestamp"] < trade["timestamp"]:
+                        funding = fundings.pop(0)
+                        balance = balance + funding["amount"]
+                        if len(fundings) == 0:
+                            break
                 timestamp = trade["timestamp"]
-                print(timestamp, psize, pprice, price, balance)
                 df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
         if not self.sb_change:
             if self.market_type == "spot":
@@ -469,13 +505,9 @@ class Instance(Base):
                 my_balance = self.balance + (spot_balance * pprice)
             else:
                 my_balance = self.balance
-            # remove funding from balance
-            ffile = Path(f'{self._instance_path}/fundings.json')
-            if ffile.exists():
-                with open(ffile, "r", encoding='utf-8') as f:
-                    fundings = json.load(f)
+                if len(fundings) > 0:
                     for funding in fundings:
-                        my_balance -= funding["amount"]
+                        my_balance = my_balance + funding["amount"]
             df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance)
 #        print(df)
         return df
@@ -655,7 +687,7 @@ class Instance(Base):
             return
         if not isinstance(self._trades, pd.DataFrame):
             self.fetch_trades()
-            if self.market_type == "futures" and self.exchange.id in ["binance", "kucoinfutures"]:
+            if self.market_type == "futures" and self.exchange.id in ["binance", "kucoinfutures", "bitget"]:
                 self.fetch_fundings()
             self._trades = self.trades_to_df()
         self.sb = self._trades["balance"][0]
@@ -750,7 +782,13 @@ class Instance(Base):
             return True
         self._statusll = datetime.now().timestamp()
         with open(file, "r", encoding='utf-8') as f:
-            self._status = json.load(f)
+            try: 
+                self._status = json.load(f)
+                return True
+            except Exception as e:
+                print(f'Error load_statis: {self.user} {self.symbol} {self.market_type} {e}')
+                return False
+
             return True
 
     def save_status(self):
