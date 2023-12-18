@@ -632,7 +632,7 @@ class Instance(Base):
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(trades) - ltrades} trades')
 
     def fetch_fundings(self):
-        if self.market_type != "futures" and self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bingx", "okx"]:
+        if self.market_type == "spot" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bingx", "okx"]:
             return
         file = Path(f'{self._instance_path}/fundings.json')
         file_lff = Path(f'{self._instance_path}/last_fetch_fundings.json')
