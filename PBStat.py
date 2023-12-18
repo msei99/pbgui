@@ -1,12 +1,8 @@
 import psutil
 import subprocess
-import configparser
-import shlex
 import sys
 from pathlib import Path, PurePath
 from time import sleep
-import glob
-import json
 from io import TextIOWrapper
 from datetime import datetime
 from Instance import Instances
@@ -43,11 +39,12 @@ class PBStat(Instances):
 
     def fetch_all(self):
         self.fetch_status()
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch trades')
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch trades and funding fees')
         for instance in self.instances:
             instance.save_status()
-            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures"]:
+            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "bingx"]:
                 instance.fetch_trades()
+                instance.fetch_fundings()
 
     def fetch_status(self):
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch status')
