@@ -232,12 +232,15 @@ def select_instance():
                 st.experimental_rerun()
             if "Delete" in ed["edited_rows"][row]:
                 if not "confirm" in st.session_state:
-                    st.session_state.confirm_text = f':red[Delete selected instance ?]'
+                    st.session_state.confirm_text = f':red[Delete selected instance ({instances.instances[row].user} {instances.instances[row].symbol} {instances.instances[row].market_type})?]'
                     st.session_state.confirm = False
                     st.experimental_rerun()
                 elif "confirm" in st.session_state:
                     if st.session_state.confirm:
                         instances.remove(instances.instances[row])
+                        if PBStat().is_running():
+                            PBStat().stop()
+                            PBStat().run()
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.experimental_rerun()
@@ -342,6 +345,9 @@ def edit_instance():
             st.session_state.edit_instance.save()
             if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
                 st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
+                if PBStat().is_running():
+                    PBStat().stop()
+                    PBStat().run()
 #            del st.session_state.edit_instance
             st.experimental_rerun()
         if st.button("Backtest"):
