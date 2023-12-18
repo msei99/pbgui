@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.81
+v0.82
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -98,6 +98,15 @@ rclone config create pbgui s3 provider=Synology region=eu-002 endpoint=eu-002.s3
 ```
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
+
+## v0.82 (18-12-2023)
+- Live: Bugfix for corrupted status.json in instances directory
+- Live: Bugfix WE (did not use contractSize for calculations)
+- Live: Add funding to calculations of history and starting balance
+- Live: Restart PBStat when add/remove instance
+- Live: Trading History for Spot binance and bybit corrected
+- Live: Trading History Support for kucoin, okx and bingx added
+- Exchanges: Add support for BingX
 
 ## v0.81 (11-12-2023)
 - PBStat: Fetches Spot Asset Balance and display it as Position
