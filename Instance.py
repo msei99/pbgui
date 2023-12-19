@@ -609,13 +609,12 @@ class Instance(Base):
         if file_lft.exists():
             with open(file_lft, "r", encoding='utf-8') as f:
                 since = json.load(f)
-        else:
-            if file.exists():
-                with open(file, "r", encoding='utf-8') as f:
-                    trades = json.load(f)
-                    ltrades = len(trades)
-                if type(trades[-1]["timestamp"]) == int:
-                    since = trades[-1]["timestamp"]
+        if file.exists():
+            with open(file, "r", encoding='utf-8') as f:
+                trades = json.load(f)
+                ltrades = len(trades)
+            if type(trades[-1]["timestamp"]) == int:
+                since = trades[-1]["timestamp"]
         now = self.fetch_timestamp()
         new_trades = self._exchange.fetch_trades(self.symbol_ccxt, self._market_type, since)
         if new_trades:
@@ -643,13 +642,12 @@ class Instance(Base):
         if file_lff.exists():
             with open(file_lff, "r", encoding='utf-8') as f:
                 since = json.load(f)
-        else:
-            if file.exists():
-                with open(file, "r", encoding='utf-8') as f:
-                    fundings = json.load(f)
-                    lfundings = len(fundings)
-                if type(fundings[-1]["timestamp"]) == int:
-                    since = fundings[-1]["timestamp"]
+        if file.exists():
+            with open(file, "r", encoding='utf-8') as f:
+                fundings = json.load(f)
+                lfundings = len(fundings)
+            if type(fundings[-1]["timestamp"]) == int:
+                since = fundings[-1]["timestamp"]
         now = self.fetch_timestamp()
         new_fundings = self._exchange.fetch_fundings(self.symbol_ccxt, self._market_type, since)
         if new_fundings:

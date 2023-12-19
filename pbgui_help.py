@@ -88,6 +88,20 @@ instance_enable = """
     Save config and start/stop Instance
     ```"""
 
+opt_iters = """
+    ```
+    n optimize iters
+    ```"""
+
+opt_reruns = """
+    ```
+    n optimizer reruns
+    An optimizer reruns can yield better results with the following settings:
+    Iters=25000 Reruns=20. This approach is more effective compared to running
+    the optimizer only once with 500000 iterations. By rerunning the optimizer,
+    you have a higher chance of finding good configurations that are not overfitted.
+    ```"""
+
 pbrun = """
     ```
     This is the Instance Manager from PBGUI.
