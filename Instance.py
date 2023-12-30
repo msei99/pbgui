@@ -134,7 +134,7 @@ class Instance(Base):
                 return 0
             if self._status["position"]:
                 if self.market_type == "futures":
-                    psize = self._status["position"]["contracts"]
+                    psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
                 else:
                     psize = self._status["spot_balance"]
                 if not psize: return 0
@@ -702,7 +702,13 @@ class Instance(Base):
         if position:
             if position["entryPrice"]:
                 color = "red" if price < position["entryPrice"] else "green"
-                p.line(x=self._ohlcv_df["timestamp"], y=position["entryPrice"], color=color, line_dash="dashed", legend_label=f'position: {str(position["entryPrice"])} qty: {str(position["contracts"])} Pnl: {str(position["unrealizedPnl"])}')
+                size = position["contractSize"]
+                qty = position["contracts"] * size
+                p.line(x=self._ohlcv_df["timestamp"], y=position["entryPrice"], color=color, line_dash="dashed", legend_label=f'position: {str(position["entryPrice"])} qty: {str(qty)} Pnl: {str(position["unrealizedPnl"])}')
+            else:
+                size = 1.0
+        else:
+            size = 1.0
         if self.market_type == "futures":
             st.markdown(f'### Symbol: {self.symbol} {round(balance,2)} USDT')
         else: 
@@ -712,7 +718,8 @@ class Instance(Base):
         # open/close orders
         for order in orders:
             color = "red" if order["side"] == "sell" else "green"
-            legend = f'close: {str(order["price"])} qty: {str(order["amount"])}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(order["amount"])}'
+            qty = order["amount"] * size
+            legend = f'close: {str(order["price"])} qty: {str(qty)}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(qty)}'
             p.line(x=self._ohlcv_df["timestamp"], y=order["price"], color=color, line_width=2, line_dash="dotted", legend_label=legend)
         p.legend.location = "bottom_left"
         st.bokeh_chart(p, use_container_width=True)

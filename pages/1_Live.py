@@ -187,6 +187,8 @@ def select_instance():
         st.session_state.confirm = st.checkbox(st.session_state.confirm_text)
     # Navigation
     with st.sidebar:
+        if st.button(":recycle:"):
+            st.experimental_rerun()
         if st.toggle("PBRun", value=PBRun().is_running(), key="pbrun", help=pbgui_help.pbrun):
             if not PBRun().is_running():
                 PBRun().run()
@@ -302,6 +304,10 @@ def view_instance():
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
+            del st.session_state.view_instance
+            st.experimental_rerun()
+        if st.button("Edit"):
+            st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
             st.experimental_rerun()
         if st.button("History"):

@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.82
+v0.90
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -98,6 +98,16 @@ rclone config create pbgui s3 provider=Synology region=eu-002 endpoint=eu-002.s3
 ```
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
+
+## v0.90 (31-12-2023)
+- PBRemote: cycle sync.log
+- Optimizer: 2 Modes, circular and linear
+- Optimizer: Rerun functionality for multiple searches
+- Optimizer: Automatic backtest best found config
+- Optimizer: Added queue to optimizer
+- Optimizer: Full edit of optimizer configs (.hjson)
+- Optimizer: Complete rewrite the optimizer module
+- Live: Bugfix okx position and order size
 
 ## v0.82 (18-12-2023)
 - Live: Bugfix for corrupted status.json in instances directory

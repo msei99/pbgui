@@ -320,6 +320,9 @@ class PBRemote():
         elif direction == 'down' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
+        if logfile.stat().st_size >= 10485760:
+            logfile.replace(f'{pbgdir}/data/logs/sync.log.old')
+            logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 #        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
