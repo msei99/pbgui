@@ -133,7 +133,10 @@ class Exchange:
                         symbol = symbol.replace("EUR", "")
                     return float(balance["total"][symbol])    
                 else:
-                    return float(balance["total"]["USDT"])
+                    if "USDT" in balance["total"]:
+                        return float(balance["total"]["USDT"])
+                    else:
+                        return float(0)
         elif self.id == "binance":
             if market_type == 'swap': return float(balance["info"]["totalWalletBalance"])
             else:

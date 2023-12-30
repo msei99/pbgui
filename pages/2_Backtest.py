@@ -111,7 +111,6 @@ def bt_queue():
                 'id': line["id"],
                 'log': my_btq.items[line["id"]].load_log()})
             st.session_state.ed_bt_key += 1
-            
             st.experimental_rerun()
         if line["Config"]:
             st.session_state.bt_config = ({
