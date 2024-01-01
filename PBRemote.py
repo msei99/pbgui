@@ -402,7 +402,8 @@ class PBRemote():
         cmd = ['rclone', 'listremotes']
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
-            return result.stdout.strip()
+            bucket = result.stdout.strip().split(':')[0]
+            return f'{bucket}:{bucket}'
         else:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not find bucket name')
             return None
