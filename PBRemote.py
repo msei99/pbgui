@@ -314,7 +314,7 @@ class PBRemote():
                 cmdline = process.cmdline()
             except psutil.AccessDenied:
                 continue
-            if any("rclone" in sub for sub in cmdline) and any("{self.bucket}pbgui" in sub for sub in cmdline):
+            if any("rclone" in sub for sub in cmdline) and any(f'{self.bucket}pbgui' in sub for sub in cmdline):
                 return process
 
     def sync(self, direction: str, spath: str):
