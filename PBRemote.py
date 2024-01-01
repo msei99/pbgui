@@ -26,6 +26,7 @@ class RemoteServer():
         self._unique = []
         self._api_md5 = None
         self._pbdir = None
+        self._bucket = None
     
     @property
     def name(self): return self._name
@@ -45,6 +46,8 @@ class RemoteServer():
     def api_md5(self): return self._api_md5
     @property
     def pbdir(self): return self._pbdir
+    @property
+    def bucket(self): return self._bucket
 
     @name.setter
     def name(self, new_name):
@@ -70,6 +73,10 @@ class RemoteServer():
     def pbdir(self, new_pbdir):
         if self._pbdir != new_pbdir:
             self._pbdir = new_pbdir
+    @bucket.setter
+    def bucket(self, new_bucket):
+        if self._bucket != new_bucket:
+            self._bucket = new_bucket
 
     def is_running(self, user : str, symbol : str):
         self.load()
@@ -247,7 +254,7 @@ class RemoteServer():
     def sync(self, pbname: str):
         pbgdir = Path.cwd()
         spath = 'instances'
-        cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
+        cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'{self.bucket}pbgui', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
@@ -271,6 +278,7 @@ class PBRemote():
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
+        self.bucket = self.find_bucket()
         self.load_remote()
         self.load_local()
 
@@ -306,19 +314,19 @@ class PBRemote():
                 cmdline = process.cmdline()
             except psutil.AccessDenied:
                 continue
-            if any("rclone" in sub for sub in cmdline) and any("pbgui:pbgui" in sub for sub in cmdline):
+            if any("rclone" in sub for sub in cmdline) and any("{self.bucket}pbgui" in sub for sub in cmdline):
                 return process
 
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}pbgui/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'pbgui:pbgui/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}pbgui/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'{self.bucket}pbgui', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'pbgui:pbgui', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'{self.bucket}pbgui', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
             if logfile.stat().st_size >= 10485760:
@@ -390,6 +398,15 @@ class PBRemote():
             file_contents = file_obj.read()
         return hashlib.md5(file_contents).hexdigest()
 
+    def find_bucket(self):
+        cmd = ['rclone', 'listremotes']
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        else:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not find bucket name')
+            return None
+
     def load_remote(self):
         pbgdir = Path.cwd()
         self.remote_servers = []
@@ -398,6 +415,7 @@ class PBRemote():
         for remote in found_remote:
             rserver = RemoteServer(remote)
             rserver.pbdir = self.pbdir
+            rserver.bucket = self.bucket
             rserver.load()
             self.add(rserver)
 
