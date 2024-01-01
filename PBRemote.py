@@ -254,7 +254,7 @@ class RemoteServer():
     def sync(self, pbname: str):
         pbgdir = Path.cwd()
         spath = 'instances'
-        cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'{self.bucket}pbgui', PurePath(f'{pbgdir}/data/remote')]
+        cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
@@ -314,19 +314,19 @@ class PBRemote():
                 cmdline = process.cmdline()
             except psutil.AccessDenied:
                 continue
-            if any("rclone" in sub for sub in cmdline) and any(f'{self.bucket}pbgui' in sub for sub in cmdline):
+            if any("rclone" in sub for sub in cmdline) and any(f'{self.bucket}' in sub for sub in cmdline):
                 return process
 
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}pbgui/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}pbgui/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'{self.bucket}pbgui', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'{self.bucket}pbgui', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
             if logfile.stat().st_size >= 10485760:
