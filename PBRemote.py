@@ -460,8 +460,8 @@ def main():
         dest.mkdir(parents=True)
     sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
     sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRemote.log'),"ab",0), write_through=True)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote')
     remote = PBRemote()
+    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
     remote.sync('up', 'instances')
     remote.sync('down', 'instances')
     while True:
