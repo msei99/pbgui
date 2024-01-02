@@ -1,8 +1,10 @@
 import streamlit as st
+from streamlit_extras.switch_page_button import switch_page
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from OptimizeConfig import OptimizeConfigs, OptimizeConfig
 from pathlib import Path, PurePath
+from shutil import rmtree
 import json
 import glob
 import datetime
@@ -69,7 +71,7 @@ class OptimizeItem(Base):
                     pass
                 except psutil.AccessDenied:
                     pass
-                if any(str(self.symbol) in sub for sub in cmdline) and any("optimize.py" in sub for sub in cmdline):
+                if any(str(self.symbol) in sub for sub in cmdline) and any(str(self.mode) in sub for sub in cmdline) and any(str(self.algo) in sub for sub in cmdline) and any("optimize.py" in sub for sub in cmdline):
                     return process
 
     def start(self, cpu: int):
@@ -400,6 +402,8 @@ class OptimizeQueue:
                     st.session_state.ed_key += 1
                     st.experimental_rerun()
                 if "remove" in ed["edited_rows"][row]:
+                    if self.items[row].is_running():
+                        self.items[row].stop()
                     self.remove_item(self.items[row])
                     st.session_state.ed_key += 1
                     st.experimental_rerun()
@@ -443,6 +447,335 @@ class OptimizeQueue:
                 del st.session_state.view_opt_log
                 st.experimental_rerun()
             self.view_log(st.session_state.view_opt_log)
+
+class OptimizeResults:
+    def __init__(self):
+        self.pbdir = None
+        self.layer = 1
+        self.almo = None
+        self.show_result = None
+        self.bt_results = None
+        self.l2_paths = []
+        self.results = []
+        self.results_d = []
+        self.hs_rg = []
+        self.hs_ng = []
+        self.hs_cl = []
+        self.ps_rg = []
+        self.ps_ng = []
+        self.ps_cl = []
+        self.initialize()
+
+    def initialize(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("main", "pbdir"):
+            self.pbdir = pb_config.get("main", "pbdir")
+        if "bt_results" in st.session_state:
+            self.bt_results = st.session_state.bt_results
+        else:     
+            st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
+            self.bt_results = st.session_state.bt_results
+    
+    def find_results_l1(self):
+        p_hs_rg = str(Path(f'{self.pbdir}/results_harmony_search_recursive_grid/**/*_result_*.json'))
+        p_hs_ng = str(Path(f'{self.pbdir}/results_harmony_search_neat_grid/**/*_result_*.json'))
+        p_hs_cl = str(Path(f'{self.pbdir}/results_harmony_search_clock/**/*_result_*.json'))
+        p_ps_rg = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_recursive_grid/**/*_result_*.json'))
+        p_ps_ng = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_neat_grid/**/*_result_*.json'))
+        p_ps_cl = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_clock/**/*_result_*.json'))
+        self.hs_rg = glob.glob(p_hs_rg, recursive=True)
+        self.hs_ng = glob.glob(p_hs_ng, recursive=True)
+        self.hs_cl = glob.glob(p_hs_cl, recursive=True)
+        self.ps_rg = glob.glob(p_ps_rg, recursive=True)
+        self.ps_ng = glob.glob(p_ps_ng, recursive=True)
+        self.ps_cl = glob.glob(p_ps_cl, recursive=True)
+
+    def find_results_l2(self):
+        if self.almo == 0:
+            p = str(Path(f'{self.pbdir}/results_harmony_search_recursive_grid/*'))
+        elif self.almo == 1:
+            p = str(Path(f'{self.pbdir}/results_harmony_search_neat_grid/*'))
+        elif self.almo == 2:
+            p = str(Path(f'{self.pbdir}/results_harmony_search_clock/*'))
+        elif self.almo == 3:
+            p = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_recursive_grid/*'))
+        elif self.almo == 4:
+            p = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_neat_grid/*'))
+        elif self.almo == 5:
+            p = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_clock/*'))
+        self.l2_paths = glob.glob(p, recursive=True)
+        self.l2_paths.sort(reverse=True)
+
+    def find_results_l3(self):
+        p = str(Path(f'{self.l3_path}/*_result_*.json'))
+        self.results = glob.glob(p, recursive=True)
+        self.results.sort(reverse=True)
+
+    def fetch_results(self, path = str):
+        file = Path(path)
+        if file.exists():
+            with open(file, "r", encoding='utf-8') as f:
+                results = json.load(f)
+                symbols = []
+                for symbol in list(results.keys()):
+                    symbols.append(symbol)
+                return symbols, results[list(results.keys())[0]]
+
+    def load_result(self, file = str):
+        p = Path(file)
+        if p.exists():
+            with open(p, 'r', encoding='utf-8') as f:
+                return f.read()
+
+    def load_config(self, file = str):
+        dir = PurePath(file).parent
+        result = PurePath(file).name.split('_')[0]
+        p = str(Path(f'{dir}/{result}_best_config_*.json'))
+        config = glob.glob(p)
+        if config:
+            config_file = Path(config[0])
+            if config_file.exists():
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    return f.read()
+
+    def remove_results(self, path = str):
+        p = Path(path)
+        print(p)
+        rmtree(p, ignore_errors=True)
+
+    def view_results_l1(self):
+        # Init
+        self.find_results_l1()
+        if not "ed_key" in st.session_state:
+            st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
+        if f'editor_opt_results_{ed_key}' in st.session_state:
+            ed = st.session_state[f'editor_opt_results_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "View" in ed["edited_rows"][row]:
+                    self.layer = 2
+                    self.almo = row
+                    st.session_state.ed_key += 1
+                    st.experimental_rerun()
+                if "Remove" in ed["edited_rows"][row]:
+                    if row == 0:
+                        self.remove_results(f'{self.pbdir}/results_harmony_search_recursive_grid')
+                    elif row == 1:
+                        self.remove_results(f'{self.pbdir}/results_harmony_search_neat_grid')
+                    elif row == 2:
+                        self.remove_results(f'{self.pbdir}/results_harmony_search_clock')
+                    elif row == 3:
+                        self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_recursive_grid')
+                    elif row == 4:
+                        self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_neat_grid')
+                    elif row == 5:
+                        self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_clock')
+                    st.session_state.ed_key += 1
+                    st.experimental_rerun()
+        d = []
+        column_config = {
+            "View": st.column_config.CheckboxColumn('View', default=False),
+            "Remove": st.column_config.CheckboxColumn('Remove All', default=False),
+            }
+        d.append({
+            'Algorithm / Mode': "Harmony Search / Reverse Grid",
+            'Results': len(self.hs_rg),
+            'View': False,
+            'Remove': False,
+        })
+        d.append({
+            'Algorithm / Mode': "Harmony Search / Neat Grid",
+            'Results': len(self.hs_ng),
+            'View': False,
+            'Remove': False,
+        })
+        d.append({
+            'Algorithm / Mode': "Harmony Search / Clock",
+            'Results': len(self.hs_cl),
+            'View': False,
+            'Remove': False,
+        })
+        d.append({
+            'Algorithm / Mode': "Particle Swarm / Reverse Grid",
+            'Results': len(self.ps_rg),
+            'View': False,
+            'Remove': False,
+        })
+        d.append({
+            'Algorithm / Mode': "Particle Swarm / Neat Grid",
+            'Results': len(self.ps_ng),
+            'View': False,
+            'Remove': False,
+        })
+        d.append({
+            'Algorithm / Mode': "Particle Swarm / Clock",
+            'Results': len(self.ps_cl),
+            'View': False,
+            'Remove': False,
+        })
+        st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, key=f'editor_opt_results_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['Algorithm / Mode','Results'])
+
+    def view_results_l2(self):
+        # Init
+        if not "ed_key" in st.session_state:
+            st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
+        if f'editor_opt_results_l2_{ed_key}' in st.session_state:
+            ed = st.session_state[f'editor_opt_results_l2_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "View" in ed["edited_rows"][row]:
+                    self.layer = 3
+                    self.l3_path = self.l2_paths[row]
+                    st.session_state.ed_key += 1
+                    st.experimental_rerun()
+                if "Remove" in ed["edited_rows"][row]:
+                    self.remove_results(self.l2_paths[row])
+                    st.session_state.ed_key += 1
+                    st.experimental_rerun()
+        d = []
+        column_config = {
+            "View": st.column_config.CheckboxColumn('View', default=False),
+            "Remove": st.column_config.CheckboxColumn('Remove Results', default=False),
+            }
+        self.find_results_l2()
+        for item in self.l2_paths:
+            self.l3_path = item
+            self.find_results_l3()
+            d.append({
+                'Name': item,
+                'Results': len(self.results),
+                'View': False,
+                'Remove': False,
+            })
+        st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, key=f'editor_opt_results_l2_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['Name'])
+
+    def view_results_l3(self):
+        # Init
+        if not "ed_key" in st.session_state:
+            st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
+        if f'editor_opt_results_l3_{ed_key}' in st.session_state:
+            ed = st.session_state[f'editor_opt_results_l3_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "View" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["View"]:
+                        self.results_d[row]["View"] = True
+                    else:
+                        self.results_d[row]["View"] = False
+                    st.experimental_rerun()
+                if "Backtest" in ed["edited_rows"][row]:
+                    st.session_state.ed_key += 1
+                    if not self.results_d[row]["Backtest"]:
+                        symbols, results = self.fetch_results(self.results_d[row]["path"])
+                        config = self.load_config(self.results_d[row]["path"])
+                        if config:
+                            st.session_state.my_bt = BacktestItem(config)
+                            # bt.user = self.user
+                            st.session_state.my_bt.symbol = symbols[0]
+                            # bt.market_type = self.market_type
+                            # bt.sb = self.sb
+                            # bt.sd = self.sd
+                            # bt.ed = self.ed
+                            # bt.ohlcv = self.ohlcv
+                            # bt.save()
+                            switch_page("Backtest")
+                    st.experimental_rerun()
+        d = []
+        column_config = {
+            "View": st.column_config.CheckboxColumn('View', default=False),
+            "Remove": st.column_config.CheckboxColumn('Remove', default=False),
+            }
+        if not self.results_d:
+            self.find_results_l3()
+            for item in self.results:
+                symbols, results = self.fetch_results(item)
+                config = self.load_config(item)
+                has_backtest = False
+                for symbol in symbols:
+                    if self.bt_results.has_backtest(symbol, config):
+                        has_backtest = True
+                if "sharpe_ratio_long" in results:
+                    self.results_d.append({
+                        'Name': PurePath(item).name,
+                        'path': item,
+                        'View': False,
+                        'Backtest': has_backtest,
+                        'adg_per_exposure_long': results["adg_per_exposure_long"],
+                        'adg_per_exposure_short': results["adg_per_exposure_short"],
+                        'adg_weighted_per_exposure_long': results["adg_weighted_per_exposure_long"],
+                        'adg_weighted_per_exposure_short': results["adg_weighted_per_exposure_short"],
+                        'drawdown_1pct_worst_mean_long': results["drawdown_1pct_worst_mean_long"],
+                        'drawdown_1pct_worst_mean_short': results["drawdown_1pct_worst_mean_short"],
+                        'drawdown_max_long': results["drawdown_max_long"],
+                        'drawdown_max_short': results["drawdown_max_short"],
+                        'exposure_ratios_mean_long': results["exposure_ratios_mean_long"],
+                        'exposure_ratios_mean_short': results["exposure_ratios_mean_short"],
+                        'hrs_stuck_max_long': results["hrs_stuck_max_long"],
+                        'hrs_stuck_max_short': results["hrs_stuck_max_short"],
+                        'loss_profit_ratio_long': results["loss_profit_ratio_long"],
+                        'loss_profit_ratio_short': results["loss_profit_ratio_short"],
+                        'pa_distance_1pct_worst_mean_long': results["pa_distance_1pct_worst_mean_long"],
+                        'pa_distance_1pct_worst_mean_short': results["pa_distance_1pct_worst_mean_short"],
+                        'pa_distance_max_long': results["pa_distance_max_long"],
+                        'pa_distance_max_short': results["pa_distance_max_short"],
+                        'pa_distance_mean_long': results["pa_distance_mean_long"],
+                        'pa_distance_mean_short': results["pa_distance_mean_short"],
+                        'pa_distance_std_long': results["pa_distance_std_long"],
+                        'pa_distance_std_short': results["pa_distance_std_short"],
+                        'sharpe_ratio_long': results["sharpe_ratio_long"],
+                        'sharpe_ratio_short': results["sharpe_ratio_short"],
+                        'time_at_max_exposure_long': results["time_at_max_exposure_long"],
+                        'time_at_max_exposure_short': results["time_at_max_exposure_short"],
+                    })
+                else:
+                    self.results_d.append({
+                        'Name': PurePath(item).name,
+                        'View': False,
+                        'Backtest': has_backtest,
+                        'adg_per_exposure_long': results["adg_per_exposure_long"],
+                        'adg_per_exposure_short': results["adg_per_exposure_short"],
+                        'adg_weighted_per_exposure_long': results["adg_weighted_per_exposure_long"],
+                        'adg_weighted_per_exposure_short': results["adg_weighted_per_exposure_short"],
+                        'eqbal_ratio_mean_of_10_worst_long': results["eqbal_ratio_mean_of_10_worst_long"],
+                        'eqbal_ratio_mean_of_10_worst_short': results["eqbal_ratio_mean_of_10_worst_short"],
+                        'eqbal_ratio_std_long': results["eqbal_ratio_std_long"],
+                        'eqbal_ratio_std_short': results["eqbal_ratio_std_short"],
+                        'exposure_ratios_mean_long': results["exposure_ratios_mean_long"],
+                        'exposure_ratios_mean_short': results["exposure_ratios_mean_short"],
+                        'hrs_stuck_max_long': results["hrs_stuck_max_long"],
+                        'hrs_stuck_max_short': results["hrs_stuck_max_short"],
+                        'loss_profit_ratio_long': results["loss_profit_ratio_long"],
+                        'loss_profit_ratio_short': results["loss_profit_ratio_short"],
+                        'pa_distance_mean_long': results["pa_distance_mean_long"],
+                        'pa_distance_mean_short': results["pa_distance_mean_short"],
+                        'pa_distance_std_long': results["pa_distance_std_long"],
+                        'pa_distance_std_short': results["pa_distance_std_short"],
+                    })
+        st.data_editor(data=self.results_d, width=None, height=(len(self.results_d)+1)*36, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['path'])
+        self.bt_results.backtests = []
+        for view in self.results_d:
+            if view["View"]:
+                if st.button(f':negative_squared_cross_mark: {view["Name"]}', key=f'view_l3_result_{view["Name"]}'):
+                    view["View"] = False
+                    st.experimental_rerun()
+                if view["Backtest"]:
+                    symbols, results = self.fetch_results(view["path"])
+                    config = self.load_config(view["path"])
+                    for symbol in symbols:
+                        self.bt_results.match_config(symbol, config)
+                    for bt in self.bt_results.backtests:
+                        if not bt.name:
+                            bt.name = view["Name"]
+                col_result, col_config = st.columns([1,1]) 
+                with col_result:
+                    st.code(self.load_result(view["path"]))
+                with col_config:
+                    st.code(self.load_config(view["path"]))
+        for bt in self.bt_results.backtests:
+            bt.selected = True
+            bt.load_stats()
+        self.bt_results.view(only=True)
 
 def main():
     opt = OptimizeQueue()

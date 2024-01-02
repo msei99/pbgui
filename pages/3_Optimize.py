@@ -1,7 +1,7 @@
 import streamlit as st
 from pbgui_func import set_page_config
 from streamlit_extras.switch_page_button import switch_page
-from Optimize import OptimizeItem, OptimizeQueue
+from Optimize import OptimizeItem, OptimizeQueue, OptimizeResults
 from OptimizeConfig import OptimizeConfigs
 
 def opt_edit_config():
@@ -25,6 +25,12 @@ def opt_edit():
         st.error(st.session_state.error, icon="🚨")
     # Navigation
     with st.sidebar:
+        if st.button("Results"):
+            st.session_state.opt_results = True
+            st.experimental_rerun()
+        if st.button("Queue"):
+            st.session_state.opt_queue = True
+            st.experimental_rerun()
         if my_opt_config.list():
             config = st.selectbox('Optimize Config',my_opt_config.list(), index = my_opt_config.list().index(my_opt.oc.name))    
             my_opt.oc = my_opt_config.find_config(config)
@@ -37,9 +43,6 @@ def opt_edit():
         if my_opt.file and my_opt.position >= 0:
            if st.button(":floppy_disk:"):
                my_opt.save(my_opt.position)
-        if st.button("Queue"):
-            st.session_state.opt_queue = True
-            st.experimental_rerun()
     # Create Optimizer GUI
     my_opt.edit_base()
     my_opt.edit_item()
@@ -62,6 +65,36 @@ def opt_queue():
             st.experimental_rerun()
     my_opt_queue.options()
     my_opt_queue.view_queue()
+
+def opt_results():
+    # Init OptimizeResults
+    if 'my_opt_results' in st.session_state:
+        my_opt_results = st.session_state.my_opt_results
+    else:
+        my_opt_results = OptimizeResults()
+        st.session_state.my_opt_results = my_opt_results
+    # Display Error
+    if "error" in st.session_state:
+        st.error(st.session_state.error, icon="🚨")
+    # Navigation
+    with st.sidebar:
+        if st.button(":recycle:"):
+            st.experimental_rerun()
+        if st.button(":back:"):
+            if my_opt_results.layer == 1:
+                del st.session_state.opt_results
+            elif my_opt_results.layer == 2:
+                my_opt_results.layer = 1
+            elif my_opt_results.layer == 3:
+                my_opt_results.layer = 2
+                my_opt_results.results_d = []
+            st.experimental_rerun()
+    if my_opt_results.layer == 1:
+        my_opt_results.view_results_l1()
+    elif my_opt_results.layer == 2:
+        my_opt_results.view_results_l2()
+    elif my_opt_results.layer == 3:
+        my_opt_results.view_results_l3()
 
 set_page_config()
 
@@ -92,6 +125,8 @@ else:
 
 if "opt_queue" in st.session_state:
     opt_queue()
+elif "opt_results" in st.session_state:
+    opt_results()
 elif "opt_edit_config" in st.session_state:
     opt_edit_config()
 else:

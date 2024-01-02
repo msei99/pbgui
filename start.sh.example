@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-venv=~/software/venv_pb39       #Path to python venv
+venv=~/software/pb_env          #Path to python venv
 pbgui=~/software/pbgui          #path to pbgui installation
 
 source ${venv}/bin/activate
