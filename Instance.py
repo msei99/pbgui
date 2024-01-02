@@ -553,7 +553,7 @@ class Instance(Base):
                     while fundings[0]["timestamp"] < trade["timestamp"]:
                         funding = fundings.pop(0)
                         balance = balance + funding["amount"]
-                        if len(fundings) == funding["amount"]:
+                        if len(fundings) == 0:
                             break
                 timestamp = trade["timestamp"]
                 df.loc[len(df.index)] = [timestamp, psize, pprice, price, balance, 0, 0]
