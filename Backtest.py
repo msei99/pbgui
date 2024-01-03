@@ -389,6 +389,7 @@ class BacktestResult:
         self.market_type = self.result["market_type"]
         self.stats = None
         self.selected = False
+        self.name = None
 
     def load_config(self):
         r = Path(f'{self.backtest_path}/live_config.json')
@@ -417,8 +418,8 @@ class BacktestResults:
         rmtree(bt_result.backtest_path, ignore_errors=True)
         self.backtests.remove(bt_result)
 
-    def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None):
-        if self.backtests or isinstance(trades, pd.DataFrame):
+    def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None, only : str = False):
+        if (self.backtests or isinstance(trades, pd.DataFrame)) and not only:
             d = []
             column_config = {
                 "Show": st.column_config.CheckboxColumn('Show', default=False),
@@ -458,7 +459,7 @@ class BacktestResults:
                         self.backtests[line["id"]].selected = False
                 st.experimental_rerun()
         else:
-            return
+            if not only: return
         hover_be = HoverTool(
             tooltips=[
                 ( 'name',   '$name'            ),
@@ -514,6 +515,8 @@ class BacktestResults:
             x = trades["timestamp"]
             be.line(x, trades["balance"], legend_label=f'History',color=Category20_20[color_b], line_width=2, name=f'History')
         for idx, bt in enumerate(self.backtests):
+            if not bt.name:
+                bt.name = f'{bt.exchange} {bt.symbol} {bt.sd} {bt.ed}'
             if bt.selected and bt.long_enabled:
                 color_b += 2
                 color_e += 2
@@ -521,17 +524,17 @@ class BacktestResults:
                 b_long[idx] = bt.stats["balance_long"]
                 e_long[idx] = bt.stats["equity_long"]
                 we_long[idx] = bt.stats["wallet_exposure_long"]
-                be.line(x, b_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_balance',color=Category20_20[color_b], line_width=2, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_balance')
-                be.line(x, e_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_equity',color=Category20_20[color_e], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} long_equity')
-                we.line(x, we_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_long',color=Category20_20[color_b], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_long')
+                be.line(x, b_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.name} long_balance',color=Category20_20[color_b], line_width=2, name=f'{self.backtests.index(bt)}: {bt.name} long_balance')
+                be.line(x, e_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.name} long_equity',color=Category20_20[color_e], line_width=1, name=f'{self.backtests.index(bt)}: {bt.name} long_equity')
+                we.line(x, we_long[idx], legend_label=f'{self.backtests.index(bt)}: {bt.name} wallet_exposure_long',color=Category20_20[color_b], line_width=1, name=f'{self.backtests.index(bt)}: {bt.name} wallet_exposure_long')
             if bt.selected and bt.short_enabled:
                 x = bt.stats["timestamp"]
                 b_short[idx] = bt.stats["balance_short"]
                 e_short[idx] = bt.stats["equity_short"]
                 we_short[idx] = -abs(bt.stats["wallet_exposure_short"])
-                be.line(x, b_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_balance',color=Category20_20[color_b], line_width=2, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_balance')
-                be.line(x, e_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_equity',color=Category20_20[color_e], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} short_equity')
-                we.line(x, we_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_short',color=Category20_20[color_b], line_width=1, name=f'{self.backtests.index(bt)}: {bt.exchange} {bt.symbol} {bt.sd} {bt.ed} wallet_exposure_short')
+                be.line(x, b_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.name} short_balance',color=Category20_20[color_b], line_width=2, name=f'{self.backtests.index(bt)}: {bt.name} short_balance')
+                be.line(x, e_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.name} short_equity',color=Category20_20[color_e], line_width=1, name=f'{self.backtests.index(bt)}: {bt.name} short_equity')
+                we.line(x, we_short[idx], legend_label=f'{self.backtests.index(bt)}: {bt.name} wallet_exposure_short',color=Category20_20[color_b], line_width=1, name=f'{self.backtests.index(bt)}: {bt.name} wallet_exposure_short')
         if be.legend:
             be.yaxis[0].formatter = NumeralTickFormatter(format="$ 0")
             be_leg = be.legend[0]
@@ -577,6 +580,36 @@ class BacktestResults:
                     self.symbols.append(bt.symbol)
                 if bt.exchange not in self.exchanges:
                     self.exchanges.append(bt.exchange)
+
+    def has_backtest(self, symbol, config: json):
+        long = json.loads(config)["long"]
+        short = json.loads(config)["short"]
+        p = str(Path(f'{self.backtest_path}/*/{symbol}/plots/*/result.json'))
+        found_bt = glob.glob(p, recursive=True)
+        if found_bt:
+            for p in found_bt:
+                bt = BacktestResult(PurePath(p).parent)
+                if (
+                    symbol == bt.symbol
+                    and long["ema_span_0"] == bt.long["ema_span_0"]
+                    and long["ema_span_1"] == bt.long["ema_span_1"]
+                    and long["enabled"] == bt.long["enabled"]
+                    and long["min_markup"] == bt.long["min_markup"]
+                    and long["markup_range"] == bt.long["markup_range"]
+                    and long["n_close_orders"] == bt.long["n_close_orders"]
+                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
+                    and long["backwards_tp"] == bt.long["backwards_tp"]
+                    and short["ema_span_0"] == bt.short["ema_span_0"]
+                    and short["ema_span_1"] == bt.short["ema_span_1"]
+                    and short["enabled"] == bt.short["enabled"]
+                    and short["min_markup"] == bt.short["min_markup"]
+                    and short["markup_range"] == bt.short["markup_range"]
+                    and short["n_close_orders"] == bt.short["n_close_orders"]
+                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
+                    and short["backwards_tp"] == bt.short["backwards_tp"]
+                ):
+                    return True
+            return False
 
     def match_item(self, item: BacktestItem = None):
         long = json.loads(item.config)["long"]
