@@ -23,6 +23,11 @@ class PBStat(Instances):
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBStat')
             self.pid().kill()
 
+    def restart(self):
+        if self.is_running():
+            self.stop()
+            self.run()
+
     def is_running(self):
         if self.pid():
             return True

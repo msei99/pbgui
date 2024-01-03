@@ -440,6 +440,11 @@ class PBRemote():
             return True
         return False
 
+    def restart(self):
+        if self.is_running():
+            self.stop()
+            self.run()
+
     def pid(self):
         for process in psutil.process_iter():
             try:

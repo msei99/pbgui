@@ -13,32 +13,32 @@ class Clock:
     EMA_SPAN_1_ROUND = 1
     EMA_SPAN_1_FORMAT = f'%.{EMA_SPAN_1_ROUND}f'
     EMA_DIST_ENTRY_MIN = -0.5
-    EMA_DIST_ENTRY_MAX = 0.01
+    EMA_DIST_ENTRY_MAX = 0.1
     EMA_DIST_ENTRY_STEP = 0.001
     EMA_DIST_ENTRY_ROUND = 3
     EMA_DIST_ENTRY_FORMAT = f'%.{EMA_DIST_ENTRY_ROUND}f'
     EMA_DIST_CLOSE_MIN = -0.5
-    EMA_DIST_CLOSE_MAX = 0.01
+    EMA_DIST_CLOSE_MAX = 0.1
     EMA_DIST_CLOSE_STEP = 0.001
     EMA_DIST_CLOSE_ROUND = 3
     EMA_DIST_CLOSE_FORMAT = f'%.{EMA_DIST_CLOSE_ROUND}f'
     QTY_PCT_ENTRY_MIN = 0.001
-    QTY_PCT_ENTRY_MAX = 0.1
+    QTY_PCT_ENTRY_MAX = 5.0
     QTY_PCT_ENTRY_STEP = 0.001
     QTY_PCT_ENTRY_ROUND = 3
     QTY_PCT_ENTRY_FORMAT = f'%.{QTY_PCT_ENTRY_ROUND}f'
     QTY_PCT_CLOSE_MIN = 0.001
-    QTY_PCT_CLOSE_MAX = 0.1
+    QTY_PCT_CLOSE_MAX = 5.0
     QTY_PCT_CLOSE_STEP = 0.001
     QTY_PCT_CLOSE_ROUND = 3
     QTY_PCT_CLOSE_FORMAT = f'%.{QTY_PCT_CLOSE_ROUND}f'
     WE_MULTIPLIER_ENTRY_MIN = 0.0
-    WE_MULTIPLIER_ENTRY_MAX = 50.0
+    WE_MULTIPLIER_ENTRY_MAX = 100.0
     WE_MULTIPLIER_ENTRY_STEP = 1.0
     WE_MULTIPLIER_ENTRY_ROUND = 1
     WE_MULTIPLIER_ENTRY_FORMAT = f'%.{WE_MULTIPLIER_ENTRY_ROUND}f'
     WE_MULTIPLIER_CLOSE_MIN = 0.0
-    WE_MULTIPLIER_CLOSE_MAX = 50.0
+    WE_MULTIPLIER_CLOSE_MAX = 100.0
     WE_MULTIPLIER_CLOSE_STEP = 1.0
     WE_MULTIPLIER_CLOSE_ROUND = 1
     WE_MULTIPLIER_CLOSE_FORMAT = f'%.{WE_MULTIPLIER_CLOSE_ROUND}f'
@@ -171,10 +171,6 @@ class Clock:
             self._wallet_exposure_limit_0 = float(self._config["wallet_exposure_limit"][0])
             self._wallet_exposure_limit_1 = float(self._config["wallet_exposure_limit"][1])
 
-    @property
-    def grid_span_0(self): return self._grid_span_0
-    @property
-    def grid_span_1(self): return self._grid_span_1
     @property
     def ema_span_0_0(self): return self._ema_span_0_0
     @property
