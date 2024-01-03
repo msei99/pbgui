@@ -238,6 +238,56 @@ ema_span = """
     ema_band_upper = max(emas)
     ```"""
 
+ema_dist = """
+    ```
+    offset from lower/upper ema band.
+    long_entry/short_close price is lower ema band minus offset
+    short_entry/long_close price is upper ema band plus offset
+    clock_bid_price = min(emas) * (1 - ema_dist_lower)
+    clock_ask_price = max(emas) * (1 + ema_dist_upper)
+    See ema_span_0/ema_span_1
+    ```"""
+
+qty_pct = """
+    ```
+    basic formula is entry_cost = balance * wallet_exposure_limit * qty_pct
+    ```"""
+
+delay_between_fills_minutes = """
+    ```
+    delay between entries/closes given in minutes
+    entry delay resets after full pos close
+    ```"""
+
+delay_weight = """
+    ```
+    delay between clock orders may be reduced, but not increased.
+    if pos size is zero, the timer is reset for entries, but not for closes.
+    the formula is:
+    modified_delay = delay_between_fills * min(1, (1 - pprice_diff * delay_weight))
+    where for bids (long entries and short closes):
+    pprice_diff = (pos_price / market_price - 1)
+    and for asks (short entries and long closes):
+    pprice_diff = (market_price / pos_price - 1)
+    this means (given delay_weights > 0):
+    if market_price > pprice_long (upnl is green):
+        entry_delay is unchanged and close_delay reduced
+    if market_price < pprice_long (upnl is red):
+        entry_delay is reduced and close_delay is unchanged
+    if market_price < pprice_short (upnl is green):
+        entry_delay is unchanged and close_delay is reduced
+    if market_price > pprice_short (upnl is red):
+        entry_delay is reduced and close_delay is unchanged
+    ```"""
+
+we_multiplier = """
+    ```
+    similar in function to Recursive Grid mode's ddown_factor
+    entry cost is modified according to:
+    entry_cost = balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)
+    where ratio = wallet_exposure / wallet_exposure_limit
+    ```"""
+
 initial_qty_pct = """
     ```
     initial_qty_pct: float

@@ -658,33 +658,17 @@ class OptimizeResults:
         if f'editor_opt_results_l3_{ed_key}' in st.session_state:
             ed = st.session_state[f'editor_opt_results_l3_{ed_key}']
             for row in ed["edited_rows"]:
-                if "View" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["View"]:
-                        self.results_d[row]["View"] = True
-                    else:
-                        self.results_d[row]["View"] = False
-                    st.experimental_rerun()
                 if "Backtest" in ed["edited_rows"][row]:
-                    st.session_state.ed_key += 1
                     if not self.results_d[row]["Backtest"]:
                         symbols, results = self.fetch_results(self.results_d[row]["path"])
                         config = self.load_config(self.results_d[row]["path"])
                         if config:
                             st.session_state.my_bt = BacktestItem(config)
-                            # bt.user = self.user
                             st.session_state.my_bt.symbol = symbols[0]
-                            # bt.market_type = self.market_type
-                            # bt.sb = self.sb
-                            # bt.sd = self.sd
-                            # bt.ed = self.ed
-                            # bt.ohlcv = self.ohlcv
-                            # bt.save()
                             switch_page("Backtest")
-                    st.experimental_rerun()
-        d = []
         column_config = {
             "View": st.column_config.CheckboxColumn('View', default=False),
-            "Remove": st.column_config.CheckboxColumn('Remove', default=False),
+            "path": None,
             }
         if not self.results_d:
             self.find_results_l3()
@@ -697,8 +681,8 @@ class OptimizeResults:
                         has_backtest = True
                 if "sharpe_ratio_long" in results:
                     self.results_d.append({
-                        'Name': PurePath(item).name,
                         'path': item,
+                        'Name': PurePath(item).name,
                         'View': False,
                         'Backtest': has_backtest,
                         'adg_per_exposure_long': results["adg_per_exposure_long"],
@@ -730,6 +714,7 @@ class OptimizeResults:
                     })
                 else:
                     self.results_d.append({
+                        'path': item,
                         'Name': PurePath(item).name,
                         'View': False,
                         'Backtest': has_backtest,
@@ -752,13 +737,13 @@ class OptimizeResults:
                         'pa_distance_std_long': results["pa_distance_std_long"],
                         'pa_distance_std_short': results["pa_distance_std_short"],
                     })
-        st.data_editor(data=self.results_d, width=None, height=(len(self.results_d)+1)*36, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['path'])
+            st.session_state.ed_key += 1
+            st.experimental_rerun()
+        results_d = st.data_editor(data=self.results_d, width=None, height=(len(self.results_d)+1)*36, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
         self.bt_results.backtests = []
-        for view in self.results_d:
+        for view in results_d:
             if view["View"]:
-                if st.button(f':negative_squared_cross_mark: {view["Name"]}', key=f'view_l3_result_{view["Name"]}'):
-                    view["View"] = False
-                    st.experimental_rerun()
+                st.info(f'{view["Name"]}', icon=None)
                 if view["Backtest"]:
                     symbols, results = self.fetch_results(view["path"])
                     config = self.load_config(view["path"])
