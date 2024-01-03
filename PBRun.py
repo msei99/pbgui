@@ -246,6 +246,11 @@ class PBRun():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBRun')
             self.pid().kill()
 
+    def restart_pbrun(self):
+        if self.is_running():
+            self.stop()
+            self.run()
+
     def is_running(self):
         if self.pid():
             return True

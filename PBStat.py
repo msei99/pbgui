@@ -23,6 +23,11 @@ class PBStat(Instances):
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBStat')
             self.pid().kill()
 
+    def restart(self):
+        if self.is_running():
+            self.stop()
+            self.run()
+
     def is_running(self):
         if self.pid():
             return True
@@ -41,15 +46,17 @@ class PBStat(Instances):
         self.fetch_status()
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch trades and funding fees')
         for instance in self.instances:
-            instance.save_status()
-            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "bingx"]:
+#            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "bingx"]:
+            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "okx"]:
+                instance.save_status()
                 instance.fetch_trades()
                 instance.fetch_fundings()
 
     def fetch_status(self):
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch status')
         for instance in self.instances:
-            instance.save_status()
+            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "okx"]:
+                instance.save_status()
 
 def main():
     pbgdir = Path.cwd()

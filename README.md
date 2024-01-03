@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.82
+v0.90
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -12,7 +12,9 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ![Alt text](docs/images/pbconfigdb.png)
 ![Alt text](docs/images/backtest.png)
 ![Alt text](docs/images/backtest2.png)
-![Alt text](docs/images/optimize.png)
+![Alt text](docs/images/optimize1.png)
+![Alt text](docs/images/optimize2.png)
+![Alt text](docs/images/optimize3.png)
 ![Alt text](docs/images/api-editor.png)
 ![Alt text](docs/images/remote.png)
 ![Alt text](docs/images/remote2.png)
@@ -51,7 +53,7 @@ To ensure that the Instance Manager starts after rebooting your server, you can 
 
 ```
 #!/usr/bin/bash
-venv=~/software/venv_pb39 # Path to your Python virtual environment
+venv=~/software/pb_env # Path to your Python virtual environment
 pbgui=~/software/pbgui # Path to your PBGui installation
 
 source ${venv}/bin/activate
@@ -91,13 +93,28 @@ sudo -v ; curl https://rclone.org/install.sh | sudo bash
 ```
 As a recommendation, Synology C2 Object Storage offers a reliable option.
 They provide 15GB of free storage, and you can sign up at https://c2.synology.com/en-uk/object-storage/overview.
-After registration, create a bucket named "pbgui" and configure rclone on your PC and servers using the following steps:
+After registration, create a bucket and configure rclone on your PC and servers using the following steps:
 Rclone configuration (Synology):
 ```
-rclone config create pbgui s3 provider=Synology region=eu-002 endpoint=eu-002.s3.synologyc2.net no_check_bucket=true access_key_id=<key> secret_access_key=<secret>
+rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=eu-002.s3.synologyc2.net no_check_bucket=true access_key_id=<key> secret_access_key=<secret>
 ```
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
+
+## v0.90 (02-01-2024)
+. Live: Bugfix Restart PBRun, PBStat and PBRemote after adding or removing instances
+- Live: Bugfix not fetching trades from bybit without running PBStat
+- Optimizer: Added Results Browser and Backtest View/Compare
+- PBRemote: Bugfix bucket naming
+- Live: Bugfix fetching fundings on binance (IndexError: list index out of range)
+- PBRemote: cycle sync.log
+- Optimizer: 2 Modes, circular and linear
+- Optimizer: Rerun functionality for multiple searches
+- Optimizer: Automatic backtest best found config
+- Optimizer: Added queue to optimizer
+- Optimizer: Full edit of optimizer configs (.hjson)
+- Optimizer: Complete rewrite the optimizer module
+- Live: Bugfix okx position and order size
 
 ## v0.82 (18-12-2023)
 - Live: Bugfix for corrupted status.json in instances directory
@@ -206,12 +223,8 @@ On your servers, you only need to run Streamlit once to configure the passivbot 
 First release with basic backtest and optimization functionality
 
 ## Roadmap
-- Live: Support Kucoin and OKX
 - Dashboard: Full Dashbord for history and results
 - Backtest: Configure Default Values
-- Code cleanup (Optimizer class)
-- Optimizer: add/edit configs/optimize/*.hjson
-- Optimizer: Queue for run multiple optimizers
 - Full support for Windows
 - PBRemote: update passivbot and pbgui
 - PBRemote: transfer logfiles
@@ -226,8 +239,11 @@ If you like to support pbgui, please join one of my copytradings:\
 Byybit:
 - manicptlowrisk1: ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0 https://i.bybit.com/28bMabOR
 - manicptlowrisk2: INJ, FET, DOGE, AGIX TWE 2.25 https://i.bybit.com/25alabs3
+- manicptlowrisk3: SOL, SHIB, INJ, RNDR TWE 2.25 https://i.bybit.com/1Kgab32u
 - manicptrndr: RNDR only https://i.bybit.com/1qabmY01
 
 Binance:
 - manicptlowrisk: INJ, FET, RNDR, DOGE TWE 2.0 https://www.binance.com/en/copy-trading/lead-details?portfolioId=3746904129636329728
 
+OKX:
+- manicptlowrisk: INJ, OP, FET, RNDT TWE 2.25 https://www.okx.com/de/copy-trading/account/818D80B303AF08B6/swap
