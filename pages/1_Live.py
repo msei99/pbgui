@@ -28,6 +28,8 @@ def list_remote():
     ed_key = st.session_state.ed_key
     # Navigation
     with st.sidebar:
+        if st.button(":recycle:"):
+            st.experimental_rerun()
         if st.button(":back:"):
             del st.session_state.list_remote
             st.experimental_rerun()

@@ -179,6 +179,7 @@ class RemoteServer():
                             command = cfg["command"]
                             if command == "sync_api":
                                 cfile = Path(f'{self._path}/../../cmd/{self.name}_api-keys.json')
+                                print(str(cfile))
                                 if cfile.exists():
                                     cfile.unlink(missing_ok=True)
                             cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd')
@@ -212,7 +213,7 @@ class RemoteServer():
                                     backup_dest = Path(f'{api_backup}/api-keys_{date}.json')
                                     shutil.copy(api_keys, backup_dest)
                                     # Copy new api-keys
-                                    src = PurePath(f'{self._path}/{self.name}_api-keys.json')
+                                    src = PurePath(f'{self._path}/{to}_api-keys.json')
                                     shutil.copy(src, api_keys)
                                 elif command == "sync":
                                     self.sync(pbname)
