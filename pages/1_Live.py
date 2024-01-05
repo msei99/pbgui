@@ -210,6 +210,9 @@ def select_instance():
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
             st.experimental_rerun()
+        if st.button("Refresh from Disk"):
+            del st.session_state.pbgui_instances
+            st.experimental_rerun()
         if st.button("Remote"):
             st.session_state.list_remote = True
             st.experimental_rerun()
@@ -240,9 +243,9 @@ def select_instance():
                 elif "confirm" in st.session_state:
                     if st.session_state.confirm:
                         instances.remove(instances.instances[row])
-                        if PBStat().is_running():
-                            PBStat().stop()
-                            PBStat().run()
+                        PBStat().restart()
+                        PBRun().restart_pbrun()
+                        PBRemote().restart()
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.experimental_rerun()
@@ -351,9 +354,9 @@ def edit_instance():
             st.session_state.edit_instance.save()
             if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
                 st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
-                if PBStat().is_running():
-                    PBStat().stop()
-                    PBStat().run()
+                PBStat().restart()
+                PBRun().restart_pbrun()
+                PBRemote().restart()
 #            del st.session_state.edit_instance
             st.experimental_rerun()
         if st.button("Backtest"):
