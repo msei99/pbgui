@@ -178,7 +178,7 @@ class RemoteServer():
                             instance = cfg["instance"]
                             command = cfg["command"]
                             if command == "sync_api":
-                                cfile = Path(f'{self._path}/../../cmd/api-keys.json')
+                                cfile = Path(f'{self._path}/../../cmd/{self.name}_api-keys.json')
                                 if cfile.exists():
                                     cfile.unlink(missing_ok=True)
                             cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd')
@@ -212,7 +212,7 @@ class RemoteServer():
                                     backup_dest = Path(f'{api_backup}/api-keys_{date}.json')
                                     shutil.copy(api_keys, backup_dest)
                                     # Copy new api-keys
-                                    src = PurePath(f'{self._path}/api-keys.json')
+                                    src = PurePath(f'{self._path}/{self.name}_api-keys.json')
                                     shutil.copy(src, api_keys)
                                 elif command == "sync":
                                     self.sync(pbname)
@@ -320,7 +320,7 @@ class PBRemote():
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
@@ -350,7 +350,7 @@ class PBRemote():
                     command = cfg["command"]
                     if command == "sync_api":
                         src = PurePath(f'{self.pbdir}/api-keys.json')
-                        dest = PurePath(f'{self.cmd_path}/api-keys.json')
+                        dest = PurePath(f'{self.cmd_path}/{to}_api-keys.json')
                         shutil.copy(src, dest)
                     if command == "copy":
                         src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
