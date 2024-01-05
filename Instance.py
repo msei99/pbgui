@@ -1010,10 +1010,14 @@ class Instances:
             return
         sys.path.insert(0,st.session_state.pbdir)
         sys.path.insert(0,f'{st.session_state.pbdir}/manager')
-        manager = __import__("manager")
-        Manager = getattr(manager,"Manager")
-        pb_manager = Manager()
-        pb_instances = pb_manager.get_instances()
+        try:
+            manager = __import__("manager")
+            Manager = getattr(manager,"Manager")
+            pb_manager = Manager()
+            pb_instances = pb_manager.get_instances()
+        except Exception as e:
+            st.write("### No Instances configured in passivbot instance manager. We have nothing to import.")
+            return
         d = []
         select_all = st.checkbox('Select All',value=False, key="select_all")
         column_config = {
