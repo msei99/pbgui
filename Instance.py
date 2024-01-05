@@ -16,6 +16,7 @@ from bokeh.plotting import figure
 import numpy as np
 from shutil import rmtree
 import sys
+import traceback
 
 class Instance(Base):
     def __init__(self):
@@ -798,20 +799,25 @@ class Instance(Base):
     def load(self, path: Path):
         file = Path(f'{path}/instance.cfg')
         if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                state = json.load(f)
-            self.__dict__.update(state)
-            self._instance_path = path
-            self.user = state["_user"]
-            if not self._symbol_ccxt:
-                self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
-                state["_symbol_ccxt"] = self._symbol_ccxt
-                with open(file, "w", encoding='utf-8') as f:
-                    json.dump(state, f, indent=4)
-            self._config = Config(f'{self._instance_path}/config.json')
-            self._config.load_config()
-        else:
-            print(f'{file} not found')
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    state = json.load(f)
+                self.__dict__.update(state)
+                self._instance_path = path
+                self.user = state["_user"]
+                if not self._symbol_ccxt:
+                    self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+                    state["_symbol_ccxt"] = self._symbol_ccxt
+                    with open(file, "w", encoding='utf-8') as f:
+                        json.dump(state, f, indent=4)
+                self._config = Config(f'{self._instance_path}/config.json')
+                self._config.load_config()
+                return True
+            except Exception as e:
+                print(f'Something went wrong, but continue {e}')
+                traceback.print_exc()
+        print(f'Error load Instance: {str(file)}')
+        False
 
     def load_status(self):
         file = Path(f'{self._instance_path}/status.json')
@@ -974,8 +980,8 @@ class Instances:
         instances = glob.glob(p)
         for instance in instances:
             inst = Instance()
-            inst.load(instance)
-            self.instances.append(inst)
+            if inst.load(instance):
+                self.instances.append(inst)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
 
     def view_log(self, log_filename: str):

@@ -679,60 +679,73 @@ class OptimizeResults:
                 for symbol in symbols:
                     if self.bt_results.has_backtest(symbol, config):
                         has_backtest = True
-                if "sharpe_ratio_long" in results:
-                    self.results_d.append({
+                r_dict = {
                         'path': item,
                         'Name': PurePath(item).name,
                         'View': False,
-                        'Backtest': has_backtest,
-                        'adg_per_exposure_long': results["adg_per_exposure_long"],
-                        'adg_per_exposure_short': results["adg_per_exposure_short"],
-                        'adg_weighted_per_exposure_long': results["adg_weighted_per_exposure_long"],
-                        'adg_weighted_per_exposure_short': results["adg_weighted_per_exposure_short"],
-                        'drawdown_1pct_worst_mean_long': results["drawdown_1pct_worst_mean_long"],
-                        'drawdown_1pct_worst_mean_short': results["drawdown_1pct_worst_mean_short"],
-                        'drawdown_max_long': results["drawdown_max_long"],
-                        'drawdown_max_short': results["drawdown_max_short"],
-                        'exposure_ratios_mean_long': results["exposure_ratios_mean_long"],
-                        'exposure_ratios_mean_short': results["exposure_ratios_mean_short"],
-                        'hrs_stuck_max_long': results["hrs_stuck_max_long"],
-                        'hrs_stuck_max_short': results["hrs_stuck_max_short"],
-                        'loss_profit_ratio_long': results["loss_profit_ratio_long"],
-                        'loss_profit_ratio_short': results["loss_profit_ratio_short"],
-                        'pa_distance_1pct_worst_mean_long': results["pa_distance_1pct_worst_mean_long"],
-                        'pa_distance_1pct_worst_mean_short': results["pa_distance_1pct_worst_mean_short"],
-                        'pa_distance_max_long': results["pa_distance_max_long"],
-                        'pa_distance_max_short': results["pa_distance_max_short"],
-                        'pa_distance_mean_long': results["pa_distance_mean_long"],
-                        'pa_distance_mean_short': results["pa_distance_mean_short"],
-                        'pa_distance_std_long': results["pa_distance_std_long"],
-                        'pa_distance_std_short': results["pa_distance_std_short"],
-                        'sharpe_ratio_long': results["sharpe_ratio_long"],
-                        'sharpe_ratio_short': results["sharpe_ratio_short"],
-                        'time_at_max_exposure_long': results["time_at_max_exposure_long"],
-                        'time_at_max_exposure_short': results["time_at_max_exposure_short"],
-                    })
-                else:
-                    self.results_d.append({
-                        'path': item,
-                        'Name': PurePath(item).name,
-                        'View': False,
-                        'Backtest': has_backtest,
-                        'adg_per_exposure_long': results["adg_per_exposure_long"],
-                        'adg_per_exposure_short': results["adg_per_exposure_short"],
-                        'adg_weighted_per_exposure_long': results["adg_weighted_per_exposure_long"],
-                        'adg_weighted_per_exposure_short': results["adg_weighted_per_exposure_short"],
-                        'exposure_ratios_mean_long': results["exposure_ratios_mean_long"],
-                        'exposure_ratios_mean_short': results["exposure_ratios_mean_short"],
-                        'hrs_stuck_max_long': results["hrs_stuck_max_long"],
-                        'hrs_stuck_max_short': results["hrs_stuck_max_short"],
-                        'loss_profit_ratio_long': results["loss_profit_ratio_long"],
-                        'loss_profit_ratio_short': results["loss_profit_ratio_short"],
-                        'pa_distance_mean_long': results["pa_distance_mean_long"],
-                        'pa_distance_mean_short': results["pa_distance_mean_short"],
-                        'pa_distance_std_long': results["pa_distance_std_long"],
-                        'pa_distance_std_short': results["pa_distance_std_short"],
-                    })
+                        'Backtest': has_backtest}
+                for r in results:
+                    if results["adg_per_exposure_long"] != 0:
+                        if r.endswith("_long"):
+                            r_dict[r] = results[r]
+                    if results["adg_per_exposure_short"] != 0:
+                        if r.endswith("_short"):
+                            r_dict[r] = results[r]
+                self.results_d.append(r_dict)
+                # if "sharpe_ratio_long" in results:
+                #     self.results_d.append({
+                #         'path': item,
+                #         'Name': PurePath(item).name,
+                #         'View': False,
+                #         'Backtest': has_backtest,
+                #         'adg_per_exposure_long': results["adg_per_exposure_long"],
+                #         'adg_per_exposure_short': results["adg_per_exposure_short"],
+                #         'adg_weighted_per_exposure_long': results["adg_weighted_per_exposure_long"],
+                #         'adg_weighted_per_exposure_short': results["adg_weighted_per_exposure_short"],
+                #         'drawdown_1pct_worst_mean_long': results["drawdown_1pct_worst_mean_long"],
+                #         'drawdown_1pct_worst_mean_short': results["drawdown_1pct_worst_mean_short"],
+                #         'drawdown_max_long': results["drawdown_max_long"],
+                #         'drawdown_max_short': results["drawdown_max_short"],
+                #         'exposure_ratios_mean_long': results["exposure_ratios_mean_long"],
+                #         'exposure_ratios_mean_short': results["exposure_ratios_mean_short"],
+                #         'hrs_stuck_max_long': results["hrs_stuck_max_long"],
+                #         'hrs_stuck_max_short': results["hrs_stuck_max_short"],
+                #         'loss_profit_ratio_long': results["loss_profit_ratio_long"],
+                #         'loss_profit_ratio_short': results["loss_profit_ratio_short"],
+                #         'pa_distance_1pct_worst_mean_long': results["pa_distance_1pct_worst_mean_long"],
+                #         'pa_distance_1pct_worst_mean_short': results["pa_distance_1pct_worst_mean_short"],
+                #         'pa_distance_max_long': results["pa_distance_max_long"],
+                #         'pa_distance_max_short': results["pa_distance_max_short"],
+                #         'pa_distance_mean_long': results["pa_distance_mean_long"],
+                #         'pa_distance_mean_short': results["pa_distance_mean_short"],
+                #         'pa_distance_std_long': results["pa_distance_std_long"],
+                #         'pa_distance_std_short': results["pa_distance_std_short"],
+                #         'sharpe_ratio_long': results["sharpe_ratio_long"],
+                #         'sharpe_ratio_short': results["sharpe_ratio_short"],
+                #         'time_at_max_exposure_long': results["time_at_max_exposure_long"],
+                #         'time_at_max_exposure_short': results["time_at_max_exposure_short"],
+                #     })
+                # else:
+                #     self.results_d.append({
+                #         'path': item,
+                #         'Name': PurePath(item).name,
+                #         'View': False,
+                #         'Backtest': has_backtest,
+                #         'adg_per_exposure_long': results["adg_per_exposure_long"],
+                #         'adg_per_exposure_short': results["adg_per_exposure_short"],
+                #         'adg_weighted_per_exposure_long': results["adg_weighted_per_exposure_long"],
+                #         'adg_weighted_per_exposure_short': results["adg_weighted_per_exposure_short"],
+                #         'exposure_ratios_mean_long': results["exposure_ratios_mean_long"],
+                #         'exposure_ratios_mean_short': results["exposure_ratios_mean_short"],
+                #         'hrs_stuck_max_long': results["hrs_stuck_max_long"],
+                #         'hrs_stuck_max_short': results["hrs_stuck_max_short"],
+                #         'loss_profit_ratio_long': results["loss_profit_ratio_long"],
+                #         'loss_profit_ratio_short': results["loss_profit_ratio_short"],
+                #         'pa_distance_mean_long': results["pa_distance_mean_long"],
+                #         'pa_distance_mean_short': results["pa_distance_mean_short"],
+                #         'pa_distance_std_long': results["pa_distance_std_long"],
+                #         'pa_distance_std_short': results["pa_distance_std_short"],
+                #     })
             st.session_state.ed_key += 1
             st.experimental_rerun()
         results_d = st.data_editor(data=self.results_d, width=None, height=(len(self.results_d)+1)*36, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
