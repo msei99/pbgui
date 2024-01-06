@@ -350,7 +350,11 @@ class BacktestQueue:
             dest = Path(f'{pbgdir}/data/logs')
             if not dest.exists():
                 dest.mkdir(parents=True)
-            log = open(Path(f'{dest}/Backtest.log'),"a")
+            logfile = Path(f'{dest}/Backtest.log')
+            if logfile.exists():
+                if logfile.stat().st_size >= 1048576:
+                    logfile.replace(f'{str(logfile)}.old')
+            log = open(logfile,"a")
             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def stop(self):

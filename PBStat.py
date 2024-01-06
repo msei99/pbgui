@@ -7,7 +7,6 @@ from io import TextIOWrapper
 from datetime import datetime
 from Instance import Instances
 
-
 class PBStat(Instances):
     def __init__(self):
         super().__init__()
@@ -63,13 +62,19 @@ def main():
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
         dest.mkdir(parents=True)
-    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBStat.log'),"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBStat.log'),"ab",0), write_through=True)
+    logfile = Path(f'{str(dest)}/PBStat.log')
+    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBStat')
     run = PBStat()
     trade_count = 0
     while True:
         try:
+            if logfile.exists():
+                if logfile.stat().st_size >= 10485760:
+                    logfile.replace(f'{str(logfile)}.old')
+                    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+                    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             if trade_count%5 == 0:
                 run.fetch_all()
             else:
