@@ -10,6 +10,7 @@ import json
 from io import TextIOWrapper
 from datetime import datetime
 import platform
+from shutil import copy
 
 class RunInstance():
     def __init__(self):
@@ -80,9 +81,18 @@ class RunInstance():
                 cmd_end = f'{self.parameter} {self.user} {self.symbol} {self.path}/config.json '.lstrip(' ')
                 cmd.extend(shlex.split(cmd_end))
                 logfile = Path(f'{self.path}/passivbot.log')
-                log = open(logfile,"w")
+                log = open(logfile,"ab")
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd_end}')
+
+    def clean_log(self):
+        logfile = Path(f'{self.path}/passivbot.log')
+        if logfile.exists():
+            if logfile.stat().st_size >= 10485760:
+                logfile_old = Path(f'{str(logfile)}.old')
+                copy(logfile,logfile_old)
+                with open(logfile,'r+') as file:
+                    file.truncate()
 
     def load(self):
         file = Path(f'{self.path}/instance.cfg')
@@ -275,18 +285,29 @@ def main():
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
         dest.mkdir(parents=True)
-    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRun.log'),"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRun.log'),"ab",0), write_through=True)
+    logfile = Path(f'{str(dest)}/PBRun.log')
+    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRun')
     run = PBRun()
     run.load_all()
+    count = 0
     while True:
         try:
+            if logfile.exists():
+                if logfile.stat().st_size >= 1048576:
+                    logfile.replace(f'{str(logfile)}.old')
+                    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+                    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.has_restart()
             run.has_update()
             for run_instance in run:
                 run_instance.watch()
+            if count%2 == 0:
+                for run_instance in run:
+                    run_instance.clean_log()
             sleep(5)
+            count += 1
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 

@@ -102,6 +102,12 @@ Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
 
 ## v0.91 (05-01-2024)
+- PBRemote: Error handling for corrupted .json files added
+- Live: passivbot.log in instances directory max. size = 10MB (cycle to .old)
+- Logfiles: Max size for all logfiles in /data/logs (cycle to .old)
+- Live: Bugfix for enable / disable logfiles
+- PBRemote: Added Refresh Button and Sync API to all Servers
+- PBRemote: Bugfix sync_api to multiple server at the same time
 - Live: Bugfix when press Import and no instances in passivbot manager configured
 - Live: Bugfix for errors in load instances. Try: except: for load instances
 - Live: Bugfix Reload Button not reload instances from disk

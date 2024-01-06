@@ -910,15 +910,39 @@ class Instances:
     def __init__(self, ipath: str = None):
         self.instances = []
         self.index = 0
-        self.pbrun_log = False
-        self.pbremote_log = False
-        self.pbstat_log = False
+        self._pbrun_log = False
+        self._pbremote_log = False
+        self._pbstat_log = False
         pbgdir = Path.cwd()
         if not ipath:
             self.instances_path = f'{pbgdir}/data/instances'
         else:
             self.instances_path = f'{pbgdir}/data/remote/instances_{ipath}'
         self.load()
+
+    @property
+    def pbrun_log(self): return self._pbrun_log
+    @pbrun_log.setter
+    def pbrun_log(self, new_pbrun_log):
+        if self.pbrun_log != new_pbrun_log:
+            self._pbrun_log = new_pbrun_log
+            st.experimental_rerun()
+
+    @property
+    def pbremote_log(self): return self._pbremote_log
+    @pbremote_log.setter
+    def pbremote_log(self, new_pbremote_log):
+        if self.pbremote_log != new_pbremote_log:
+            self._pbremote_log = new_pbremote_log
+            st.experimental_rerun()
+
+    @property
+    def pbstat_log(self): return self._pbstat_log
+    @pbstat_log.setter
+    def pbstat_log(self, new_pbstat_log):
+        if self.pbstat_log != new_pbstat_log:
+            self._pbstat_log = new_pbstat_log
+            st.experimental_rerun()
 
     def __iter__(self):
         return iter(self.instances)

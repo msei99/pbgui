@@ -42,14 +42,21 @@ def list_remote():
                 PBRemote().stop()
                 st.experimental_rerun()
         instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
+        api_sync = []
         for rserver in remote.remote_servers:
             if rserver.is_online():
                 color = "green"
+                if not rserver.is_api_md5_same(remote.api_md5):
+                    api_sync.append(rserver)
             else: color = "red"
             if st.button(f':{color}[{rserver.name}]'):
                 if "run_rserver" in st.session_state:
                     del st.session_state.run_rserver
                 st.session_state.server = rserver
+        if len(api_sync) > 0:
+            if st.button(f'Sync API to all'):
+                for s in api_sync:
+                    s.send_to("sync_api")
         if st.button(f'Start/Stop Instances'):
             if "server" in st.session_state:
                 del st.session_state.server
