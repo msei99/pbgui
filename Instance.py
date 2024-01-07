@@ -332,13 +332,19 @@ class Instance(Base):
         ffile = Path(f'{self._instance_path}/fundings.json')
         fundings = []
         if ffile.exists():
-            with open(ffile, "r", encoding='utf-8') as f:
-                fundings = json.load(f)
+            try:
+                with open(ffile, "r", encoding='utf-8') as f:
+                    fundings = json.load(f)
+            except Exception as e:
+                print(f'{str(ffile)} is corrupted {e}')
         file = Path(f'{self._instance_path}/trades.json')
         if not file.exists():
             return
-        with open(file, "r", encoding='utf-8') as f:
-            trades = json.load(f)
+        try:
+            with open(file, "r", encoding='utf-8') as f:
+                trades = json.load(f)
+        except Exception as e:
+            print(f'{str(file)} is corrupted {e}')
         if not trades:
             return
         data = {'timestamp': [],
@@ -572,7 +578,10 @@ class Instance(Base):
                 if len(fundings) > 0:
                     for funding in fundings:
                         my_balance = my_balance + funding["amount"]
-            df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance)
+            if self.exchange.id == "kucoinfutures":
+                df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance - self.upnl)
+            else:
+                df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance)
 #        print(df)
         return df
 
@@ -608,14 +617,21 @@ class Instance(Base):
         ltrades = 0
         since = 1577840461000
         if file_lft.exists():
-            with open(file_lft, "r", encoding='utf-8') as f:
-                since = json.load(f)
+            try:
+                with open(file_lft, "r", encoding='utf-8') as f:
+                    since = json.load(f)
+            except Exception as e:
+                print(f'{str(file_lft)} is corrupted {e}')
+                file_lft.unlink()
         if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                trades = json.load(f)
-                ltrades = len(trades)
-            if type(trades[-1]["timestamp"]) == int:
-                since = trades[-1]["timestamp"]
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    trades = json.load(f)
+                    ltrades = len(trades)
+                if type(trades[-1]["timestamp"]) == int:
+                    since = trades[-1]["timestamp"]
+            except Exception as e:
+                print(f'{str(file)} is corrupted {e}')
         now = self.fetch_timestamp()
         new_trades = self._exchange.fetch_trades(self.symbol_ccxt, self._market_type, since)
         if new_trades:
@@ -641,14 +657,21 @@ class Instance(Base):
         lfundings = 0
         since = 1577840461000
         if file_lff.exists():
-            with open(file_lff, "r", encoding='utf-8') as f:
-                since = json.load(f)
+            try:
+                with open(file_lff, "r", encoding='utf-8') as f:
+                    since = json.load(f)
+            except Exception as e:
+                print(f'{str(file_lff)} is corrupted {e}')
+                file_lff.unlink()
         if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                fundings = json.load(f)
-                lfundings = len(fundings)
-            if type(fundings[-1]["timestamp"]) == int:
-                since = fundings[-1]["timestamp"]
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    fundings = json.load(f)
+                    lfundings = len(fundings)
+                if type(fundings[-1]["timestamp"]) == int:
+                    since = fundings[-1]["timestamp"]
+            except Exception as e:
+                print(f'{str(file)} is corrupted {e}')
         now = self.fetch_timestamp()
         new_fundings = self._exchange.fetch_fundings(self.symbol_ccxt, self._market_type, since)
         if new_fundings:
