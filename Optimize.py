@@ -183,28 +183,32 @@ class OptimizeItem(Base):
     def load(self, file: str):
         self.file = Path(file)
         self.log = Path(f'{self.file}.log')
-        with open(self.file, "r", encoding='utf-8') as f:
-            t = json.load(f)
-            if t["market_type"] == "futures":
-                self._market_type = "swap"
-            else:
-                self._market_type = "spot"
-            self.user = t["user"]
-            self.symbol = t["symbol"]
-            self.sd = t["sd"]
-            self.ed = t["ed"]
-            self.sb = t["sb"]
-            self.ohlcv = t["ohlcv"]
-            self.mode = t["mode"]
-            self.algo = t["algo"]
-            self.iters = t["iters"]
-            self.long_enabled = t["long_enabled"]
-            self.short_enabled = t["short_enabled"]
-            self.reruns = t["reruns"]
-            self.finish = t["finish"]
-            self.position = t["position"]
-            self.oc = OptimizeConfigs().find_config(t["oc"])
-
+        try:
+            with open(self.file, "r", encoding='utf-8') as f:
+                t = json.load(f)
+                if t["market_type"] == "futures":
+                    self._market_type = "swap"
+                else:
+                    self._market_type = "spot"
+                self.user = t["user"]
+                self.symbol = t["symbol"]
+                self.sd = t["sd"]
+                self.ed = t["ed"]
+                self.sb = t["sb"]
+                self.ohlcv = t["ohlcv"]
+                self.mode = t["mode"]
+                self.algo = t["algo"]
+                self.iters = t["iters"]
+                self.long_enabled = t["long_enabled"]
+                self.short_enabled = t["short_enabled"]
+                self.reruns = t["reruns"]
+                self.finish = t["finish"]
+                self.position = t["position"]
+                self.oc = OptimizeConfigs().find_config(t["oc"])
+                return True
+        except Exception as e:
+            print(f'{str(file)} is corrupted {e}')
+            return False
 
     def save(self, pos: int):
         opt_dict = {
@@ -328,8 +332,8 @@ class OptimizeQueue:
         self.items = []
         for item in items:
             opt_item = OptimizeItem()
-            opt_item.load(item)
-            self.add(opt_item)
+            if opt_item.load(item):
+                self.add(opt_item)
         self.items = sorted(self.items, key=lambda d: d.position) 
 
     def save(self):
@@ -468,6 +472,8 @@ class OptimizeResults:
         self.ps_rg = []
         self.ps_ng = []
         self.ps_cl = []
+        self.symbols = {}
+        self.symbol_names = []
         self.initialize()
 
     def initialize(self):
@@ -494,6 +500,23 @@ class OptimizeResults:
         self.ps_rg = glob.glob(p_ps_rg, recursive=True)
         self.ps_ng = glob.glob(p_ps_ng, recursive=True)
         self.ps_cl = glob.glob(p_ps_cl, recursive=True)
+        results = self.hs_rg + self.hs_ng + self.hs_cl + self.ps_rg + self.ps_ng + self.ps_cl
+        symbols = {}
+        for result in results:
+            fullname = PurePath(result).parts[-2].split("_")
+            if fullname[-1] == "PERP" or fullname[-1] == "symbols":
+                symbol = fullname[-2] + "_" + fullname[-1]
+            else:
+                symbol = fullname[-1]
+            if symbol in symbols:
+                symbol_list = symbols[symbol]
+            else:
+                symbol_list = []
+            symbol_list.append(result)
+            symbols.update({
+                            symbol: symbol_list
+                            })
+        self.symbols = symbols
 
     def find_results_l2(self):
         if self.almo == 0:
@@ -512,6 +535,7 @@ class OptimizeResults:
         self.l2_paths.sort(reverse=True)
 
     def find_results_l3(self):
+        if self.results: return
         p = str(Path(f'{self.l3_path}/*_result_*.json'))
         self.results = glob.glob(p, recursive=True)
         self.results.sort(reverse=True)
@@ -519,12 +543,15 @@ class OptimizeResults:
     def fetch_results(self, path = str):
         file = Path(path)
         if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                results = json.load(f)
-                symbols = []
-                for symbol in list(results.keys()):
-                    symbols.append(symbol)
-                return symbols, results[list(results.keys())[0]]
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    results = json.load(f)
+                    symbols = []
+                    for symbol in list(results.keys()):
+                        symbols.append(symbol)
+                    return symbols, results[list(results.keys())[0]]
+            except Exception as e:
+                print(f'{str(file)} is corrupted {e}')
 
     def load_result(self, file = str):
         p = Path(file)
@@ -544,9 +571,12 @@ class OptimizeResults:
                     return f.read()
 
     def remove_results(self, path = str):
-        p = Path(path)
-        print(p)
-        rmtree(p, ignore_errors=True)
+        if PurePath(path).name.startswith("results_"):
+            paths = glob.glob(f'{path}/*')
+            for path in paths:
+                rmtree(path, ignore_errors=True)
+        else:
+            rmtree(path, ignore_errors=True)
 
     def view_results_l1(self):
         # Init
@@ -558,6 +588,12 @@ class OptimizeResults:
             ed = st.session_state[f'editor_opt_results_{ed_key}']
             for row in ed["edited_rows"]:
                 if "View" in ed["edited_rows"][row]:
+                    if row > 5:
+                        self.almo = row
+                        self.layer = 3
+                        self.results = self.symbols[list(self.symbols.keys())[row-6]]
+                        st.session_state.ed_key += 1
+                        st.experimental_rerun()
                     self.layer = 2
                     self.almo = row
                     st.session_state.ed_key += 1
@@ -575,6 +611,9 @@ class OptimizeResults:
                         self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_neat_grid')
                     elif row == 5:
                         self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_clock')
+                    elif row > 5:
+                        for result in self.symbols[list(self.symbols.keys())[row-6]]:
+                            self.remove_results(str(PurePath(result).parent))
                     st.session_state.ed_key += 1
                     st.experimental_rerun()
         d = []
@@ -618,6 +657,13 @@ class OptimizeResults:
             'View': False,
             'Remove': False,
         })
+        for symbol in self.symbols:
+            d.append({
+                'Algorithm / Mode': symbol,
+                'Results': len(self.symbols[symbol]),
+                'View': False,
+                'Remove': False,
+            })
         st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, key=f'editor_opt_results_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['Algorithm / Mode','Results'])
 
     def view_results_l2(self):
@@ -631,6 +677,7 @@ class OptimizeResults:
                 if "View" in ed["edited_rows"][row]:
                     self.layer = 3
                     self.l3_path = self.l2_paths[row]
+                    self.results = []
                     st.session_state.ed_key += 1
                     st.experimental_rerun()
                 if "Remove" in ed["edited_rows"][row]:
@@ -645,6 +692,7 @@ class OptimizeResults:
         self.find_results_l2()
         for item in self.l2_paths:
             self.l3_path = item
+            self.results = []
             self.find_results_l3()
             d.append({
                 'Name': item,
@@ -676,11 +724,17 @@ class OptimizeResults:
             }
         if not self.results_d:
             self.find_results_l3()
+            if len(self.results) == 0:
+                st.write('### No Results found')
+                return
             for item in self.results:
                 symbols, results = self.fetch_results(item)
                 config = self.load_config(item)
                 has_backtest = False
+                self.symbol_names = []
                 for symbol in symbols:
+                    if symbol not in self.symbol_names:
+                        self.symbol_names.append(symbol)
                     if self.bt_results.has_backtest(symbol, config):
                         has_backtest = True
                 r_dict = {
@@ -698,6 +752,14 @@ class OptimizeResults:
                 self.results_d.append(r_dict)
             st.session_state.ed_key += 1
             st.experimental_rerun()
+        symbol_names = ''
+        for symbol_name in self.symbol_names:
+            symbol_names += "- " + symbol_name + "\n"
+        if len(self.symbol_names) > 1:
+            st.markdown('#### Symbols:')
+            st.markdown(symbol_names)
+        else:
+            st.markdown(f'#### Symbol: {self.symbol_names[0]}')
         results_d = st.data_editor(data=self.results_d, width=None, height=(len(self.results_d)+1)*36, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
         self.bt_results.backtests = []
         for view in results_d:

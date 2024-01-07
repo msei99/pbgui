@@ -104,8 +104,13 @@ def opt_results():
             elif my_opt_results.layer == 2:
                 my_opt_results.layer = 1
             elif my_opt_results.layer == 3:
-                my_opt_results.layer = 2
-                my_opt_results.results_d = []
+                if my_opt_results.almo > 5:
+                    my_opt_results.layer = 1
+                    my_opt_results.results = []
+                    my_opt_results.results_d = []
+                else:
+                    my_opt_results.layer = 2
+                    my_opt_results.results_d = []
             st.experimental_rerun()
     if my_opt_results.layer == 1:
         my_opt_results.view_results_l1()

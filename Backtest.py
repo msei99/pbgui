@@ -154,17 +154,20 @@ class BacktestItem(Base):
         self._config = Config(f'{self.file}.cfg')
         self._config.load_config()
         self.log = Path(f'{self.file}.log')
-        with open(self.file, "r", encoding='utf-8') as f:
-            t = json.load(f)
-            if t["market_type"] == "futures":
-                self._market_type = "swap"
-            else:
-                self._market_type = "spot"
-            self.user = t["user"]
-            self.symbol = t["symbol"]
-            self.sd = t["sd"]
-            self.ed = t["ed"]
-            self.sb = t["sb"]
+        try:
+            with open(self.file, "r", encoding='utf-8') as f:
+                t = json.load(f)
+                if t["market_type"] == "futures":
+                    self._market_type = "swap"
+                else:
+                    self._market_type = "spot"
+                self.user = t["user"]
+                self.symbol = t["symbol"]
+                self.sd = t["sd"]
+                self.ed = t["ed"]
+                self.sb = t["sb"]
+        except Exception as e:
+            print(f'{str(file)} is corrupted {e}')
 
     def save(self):
         pbgdir = Path.cwd()
@@ -401,8 +404,12 @@ class BacktestResult:
             return f.read()
     def load_result(self):
         r = Path(f'{self.backtest_path}/result.json')
-        with open(r, "r", encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(r, "r", encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f'{str(r)} is corrupted {e}')
+
     def load_result_txt(self):
         r = Path(f'{self.backtest_path}/backtest_result.txt')
         with open(r, "r", encoding='utf-8') as f:
