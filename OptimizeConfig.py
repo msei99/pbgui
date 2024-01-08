@@ -320,6 +320,8 @@ class OptimizeConfig:
             self._iters = t["iters"]
         if "n_cpus" in t:
             self.n_cpus = t["n_cpus"]
+            if self.n_cpus > multiprocessing.cpu_count():
+                self.n_cpus = multiprocessing.cpu_count()
         if "clip_threshold" in t:
             self._clip_threshold = t["clip_threshold"]
         if "n_backtest_slices" in t:
