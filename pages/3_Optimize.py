@@ -43,9 +43,6 @@ def opt_edit():
             if config != my_opt.oc.name:
                 my_opt.oc = my_opt_config.find_config(config)
                 my_opt.oc.load()
-                my_opt.mode = my_opt.oc.passivbot_mode
-                my_opt.algo = my_opt.oc.algorithm
-                my_opt.iters = my_opt.oc.iters
                 st.experimental_rerun()
         if st.button(f"Edit {my_opt.oc.name}"):
             st.session_state.opt_edit_config = True
@@ -125,23 +122,19 @@ set_page_config()
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
 
-# Init Optimizer
-if 'my_opt' in st.session_state:
-    my_opt = st.session_state.my_opt
-else:
-    my_opt = OptimizeItem()
-    my_opt.oc.load()
-    my_opt.mode = my_opt.oc.passivbot_mode
-    my_opt.algo = my_opt.oc.algorithm
-    my_opt.iters = my_opt.oc.iters
-    st.session_state.my_opt = my_opt
-
 # Init OptimizeConfigs
 if 'my_opt_config' in st.session_state:
     my_opt_config = st.session_state.my_opt_config
 else:
     my_opt_config = OptimizeConfigs()
     st.session_state.my_opt_config = my_opt_config
+
+# Init Optimizer
+if 'my_opt' in st.session_state:
+    my_opt = st.session_state.my_opt
+else:
+    my_opt = OptimizeItem()
+    st.session_state.my_opt = my_opt
 
 # Init Optimizer Queue
 if 'my_opt_queue' in st.session_state:

@@ -101,7 +101,12 @@ rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=e
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
 
-## v0.91 (05-01-2024)
+## v0.91 (07-01-2024)
+- Optimizer: Added error handling for load hjson files with strange numbers
+- Optimizer: Bugfix for number of cpu lower as in pbgui.ini
+- Optimizer: Added new Symbol View to the Optimizer Results Browser
+- Live: Bugfix History for kucoin
+- Errorhandling: Added try: except to all json.load()
 - PBRemote: Error handling for corrupted .json files added
 - Live: passivbot.log in instances directory max. size = 10MB (cycle to .old)
 - Logfiles: Max size for all logfiles in /data/logs (cycle to .old)
