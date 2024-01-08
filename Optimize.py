@@ -27,11 +27,6 @@ class OptimizeItem(Base):
         self.sd = None
         self.ed = None
         self.sb = None
-        self.long_enabled = True
-        self.short_enabled = False
-        self.mode = "recursive_grid"
-        self.algo = "harmony_search"
-        self.iters = 10000
         self.reruns = 1
         self.finish = 0
         self.position = None
@@ -39,7 +34,8 @@ class OptimizeItem(Base):
         self.initialize()
 
     def initialize(self):
-        self.oc.name = OptimizeConfigs().default()
+        self.oc = OptimizeConfigs().find_config(OptimizeConfigs().default())
+        self.oc.load()
         self.sd = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.ed = datetime.date.today().strftime("%Y-%m-%d")
         self.sb = 1000
@@ -71,7 +67,7 @@ class OptimizeItem(Base):
                     pass
                 except psutil.AccessDenied:
                     pass
-                if any(str(self.symbol) in sub for sub in cmdline) and any(str(self.mode) in sub for sub in cmdline) and any(str(self.algo) in sub for sub in cmdline) and any("optimize.py" in sub for sub in cmdline):
+                if any(str(self.symbol) in sub for sub in cmdline) and any(str(self.oc.passivbot_mode) in sub for sub in cmdline) and any(str(self.oc.algorithm) in sub for sub in cmdline) and any("optimize.py" in sub for sub in cmdline):
                     return process
 
     def start(self, cpu: int):
@@ -80,15 +76,15 @@ class OptimizeItem(Base):
             pb_config.read('pbgui.ini')
             if self.pbdir:
                 cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/optimize.py')]
-                cmd_end = f'-u {self.user} -s {self.symbol} -i {self.iters} -pm {self.mode} -a {self.algo} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.long_enabled} -se {self.short_enabled} -oc {self.oc.config_file}'
+                cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.oc.do_long} -se {self.oc.do_short} -oc {self.oc.config_file}'
                 cmd.extend(shlex.split(cmd_end))
-                if self.long_enabled and not self.short_enabled:
+                if self.oc.do_long and not self.oc.do_short:
                     cmd_end = f'-le y -se n'
                     cmd.extend(shlex.split(cmd_end))
-                if self.short_enabled and not self.long_enabled:
+                if self.oc.do_short and not self.oc.do_long:
                     cmd_end = f'-le n -se y'
                     cmd.extend(shlex.split(cmd_end))
-                if self.short_enabled and self.long_enabled:
+                if self.oc.do_short and self.oc.do_long:
                     cmd_end = f'-le y -se y'
                     cmd.extend(shlex.split(cmd_end))
                 cmd.extend(['-bd', str(PurePath(f'{self.pbdir}/backtests/pbgui'))])
@@ -104,15 +100,15 @@ class OptimizeItem(Base):
         self.log.unlink(missing_ok=True)
 
     def generate_backtest(self):
-        if self.long_enabled:
+        if self.oc.do_long:
             long = self.find_best("long")
             if long:
                 self.add_to_backtest(long)
-        if self.short_enabled:
+        if self.oc.do_short:
             short = self.find_best("short")
             if short:
                 self.add_to_backtest(short)
-        if self.short_enabled and self.long_enabled:
+        if self.oc.do_short and self.oc.do_long:
             long_short = self.find_best("long_short")
             if long_short:
                 self.add_to_backtest(long_short)
@@ -159,25 +155,15 @@ class OptimizeItem(Base):
         col_1, col_2, col_3 = st.columns([1,1,1])
         with col_1:
             self.sb = st.number_input('STARTING_BALANCE',value=self.sb,step=500)
-            self.long_enabled = st.toggle("Long enabled", value=self.long_enabled, key="opt_long_enabled", help=None)
-            if self.mode == "recursive_grid":
-                mode_index = 0
-            elif self.mode == "neat_grid":
-                mode_index = 1
-            else:
-                mode_index = 2
-            self.mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'), index=mode_index)
+            self.oc.do_long = st.toggle("Long enabled", value=self.oc.do_long, key="opt_long_enabled", help=None)
+            self.oc.passivbot_mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'), index=self.oc.passivbot_mode_index)
         with col_2:
             self.sd = st.date_input("START_DATE", datetime.datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
-            self.short_enabled = st.toggle("Short enabled", value=self.short_enabled, key="opt_short_enabled", help=None)
-            if self.algo == "harmony_search":
-                algo_index = 0
-            else:
-                algo_index = 1
-            self.algo = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'),index=algo_index)
+            self.oc.do_short = st.toggle("Short enabled", value=self.oc.do_short, key="opt_short_enabled", help=None)
+            self.oc.algorithm = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'),index=self.oc.algorithm_index)
         with col_3:
             self.ed = st.date_input("END_DATE", datetime.datetime.strptime(self.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
-            self.iters = st.number_input('ITERS',value=self.iters,step=1000, help=pbgui_help.opt_iters)
+            self.oc.iters = st.number_input('ITERS',value=self.oc.iters,step=1000, help=pbgui_help.opt_iters)
             self.reruns = st.number_input('Reruns',value=self.reruns,step=5, help=pbgui_help.opt_reruns)
 
     def load(self, file: str):
@@ -196,11 +182,11 @@ class OptimizeItem(Base):
                 self.ed = t["ed"]
                 self.sb = t["sb"]
                 self.ohlcv = t["ohlcv"]
-                self.mode = t["mode"]
-                self.algo = t["algo"]
-                self.iters = t["iters"]
-                self.long_enabled = t["long_enabled"]
-                self.short_enabled = t["short_enabled"]
+                self.oc._passivbot_mode = t["mode"]
+                self.oc._algorithm = t["algo"]
+                self.oc._iters = t["iters"]
+                self.oc._do_long = t["long_enabled"]
+                self.oc._do_short = t["short_enabled"]
                 self.reruns = t["reruns"]
                 self.finish = t["finish"]
                 self.position = t["position"]
@@ -219,11 +205,11 @@ class OptimizeItem(Base):
             "sb": self.sb,
             "market_type": self.market_type,
             "ohlcv": self.ohlcv,
-            "mode": self.mode,
-            "algo": self.algo,
-            "iters": self.iters,
-            "long_enabled": self.long_enabled,
-            "short_enabled": self.short_enabled,
+            "mode": self.oc.passivbot_mode,
+            "algo": self.oc.algorithm,
+            "iters": self.oc.iters,
+            "long_enabled": self.oc.do_long,
+            "short_enabled": self.oc.do_short,
             "oc": self.oc.name,
             "reruns": self.reruns,
             "finish": self.finish,
@@ -241,7 +227,8 @@ class OptimizeQueue:
             self.pb_config.add_section("optimize")
             self.pb_config.set("optimize", "cpu", str(multiprocessing.cpu_count()-2))
             self.pb_config.set("optimize", "mode", "linear")
-        self._cpu = int(self.pb_config.get("optimize", "cpu"))
+#        self._cpu = int(self.pb_config.get("optimize", "cpu"))
+        self._cpu = self.cpu
         self._mode = str(self.pb_config.get("optimize", "mode"))
         self.pbgdir = Path.cwd()
         self.dest = Path(f'{self.pbgdir}/data/opt_queue')
@@ -253,6 +240,8 @@ class OptimizeQueue:
     def cpu(self):
         self.pb_config.read('pbgui.ini')
         self._cpu = int(self.pb_config.get("optimize", "cpu"))
+        if self._cpu > multiprocessing.cpu_count():
+            self.cpu = multiprocessing.cpu_count()
         return self._cpu
 
     @cpu.setter
@@ -438,11 +427,11 @@ class OptimizeQueue:
                 'sb': item.sb,
                 'market_type': item.market_type,
                 'ohlcv': item.ohlcv,
-                'mode': item.mode,
-                'algo': item.algo,
-                'iters': item.iters,
-                'long': item.long_enabled,
-                'short': item.short_enabled,
+                'mode': item.oc.passivbot_mode,
+                'algo': item.oc.algorithm,
+                'iters': item.oc.iters,
+                'long': item.oc.do_long,
+                'short': item.oc.do_short,
                 'log': False,
                 'run': item.is_running(),
                 'reruns': item.reruns,
