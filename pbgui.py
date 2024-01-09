@@ -1,9 +1,13 @@
 import streamlit as st
+from streamlit_js_eval import streamlit_js_eval
 import configparser
 import os
 import inspect
 import platform
 from pbgui_func import check_password, set_page_config
+
+def fetch_screen_height():
+    return streamlit_js_eval(js_expressions='parent.innerHeight', key = "scr_hei")
 
 def update_dir(key):
     choice = st.session_state[key]
@@ -59,6 +63,7 @@ if pb_config.has_option("main", "pbname"):
 else:
     st.session_state.pbname = platform.node()
 
+st.session_state.height = fetch_screen_height()
 st.session_state.pbdir = os.path.abspath(st_file_selector(st, path=st.session_state.pbdir, key = 'pbdir_selected', label = 'Choose passivbot directory'))
 st.session_state.pbname = st.text_input("Bot Name", value=st.session_state.pbname, max_chars=32)
 if not pb_config.has_section("main"):
