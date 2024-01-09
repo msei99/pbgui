@@ -457,7 +457,7 @@ class BacktestResults:
                             'Delete': False,
                         }
                     )
-            new_bt = st.data_editor(data=d, width=None, height=None, use_container_width=True, hide_index=None, column_order=None, column_config=column_config, disabled=['Symbol','Exchange','Start','End','Balance','Market','LE','SE','Name'])
+            new_bt = st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, hide_index=None, column_order=None, column_config=column_config, disabled=['Symbol','Exchange','Start','End','Balance','Market','LE','SE','Name'])
             if new_bt != d:
                 for line in new_bt:
                     if line["Delete"] == True:
