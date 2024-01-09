@@ -32,7 +32,8 @@ class OptimizeConfig:
         self._do_short = False
         self._backwards_tp_long = True
         self._backwards_tp_short = True
-        self._passivbot_mode = "recursive_grid"
+        self._passivbot_mode = None
+#        self._passivbot_mode = "recursive_grid"
         self._algorithm = "harmony_search"
         self._iters = 4000
         self._n_cpus = multiprocessing.cpu_count()-2

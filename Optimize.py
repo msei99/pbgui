@@ -17,6 +17,8 @@ import sys
 import multiprocessing
 import configparser
 import pbgui_help
+from time import sleep
+import traceback
 
 class OptimizeItem(Base):
     def __init__(self):
@@ -31,6 +33,17 @@ class OptimizeItem(Base):
         self.finish = 0
         self.position = None
         self.pbdir = None
+        self.results = []
+        self.best_long = []
+        self.best_short = []
+        self.sharp_long = []
+        self.sharp_short = []
+        self.adg_long = []
+        self.adg_short = []
+        self.drawdown_long = []
+        self.drawdown_short = []
+        self.stuck_long = []
+        self.stuck_short = []
         self.initialize()
 
     def initialize(self):
@@ -39,11 +52,16 @@ class OptimizeItem(Base):
         self.sd = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.ed = datetime.date.today().strftime("%Y-%m-%d")
         self.sb = 1000
+        self.backtest_best = 1
+        self.backtest_sharp = 0
+        self.backtest_adg = 0
+        self.backtest_drawdown = 0
+        self.backtest_stuck = 0
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
         if pb_config.has_option("main", "pbdir"):
             self.pbdir = pb_config.get("main", "pbdir")
-    
+   
     def is_finish(self):
         if self.finish < self.reruns:
             return False
@@ -99,19 +117,87 @@ class OptimizeItem(Base):
         self.file.unlink(missing_ok=True)
         self.log.unlink(missing_ok=True)
 
+    def load_options(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("optimize", "backtest_best"):
+            self.backtest_best = int(pb_config.get("optimize", "backtest_best"))
+        if pb_config.has_option("optimize", "backtest_sharp"):
+            self.backtest_sharp = int(pb_config.get("optimize", "backtest_sharp"))
+        if pb_config.has_option("optimize", "backtest_adg"):
+            self.backtest_adg = int(pb_config.get("optimize", "backtest_adg"))
+        if pb_config.has_option("optimize", "backtest_drawdown"):
+            self.backtest_drawdown = int(pb_config.get("optimize", "backtest_drawdown"))
+        if pb_config.has_option("optimize", "backtest_stuck"):
+            self.backtest_stuck = int(pb_config.get("optimize", "backtest_stuck"))
+
     def generate_backtest(self):
-        if self.oc.do_long:
-            long = self.find_best("long")
-            if long:
-                self.add_to_backtest(long)
-        if self.oc.do_short:
-            short = self.find_best("short")
-            if short:
-                self.add_to_backtest(short)
-        if self.oc.do_short and self.oc.do_long:
-            long_short = self.find_best("long_short")
-            if long_short:
-                self.add_to_backtest(long_short)
+        self.load_options()
+        self.load_results()
+        self.find_best()
+        backtests = []
+        if self.backtest_best > 0:
+            if self.oc.do_long:
+                if self.best_long:
+                    for result in self.best_long:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+            if self.oc.do_short:
+                if self.best_short:
+                    for result in self.best_short:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+        if self.backtest_sharp > 0:
+            if self.oc.do_long:
+                if self.sharp_long:
+                    for result in self.sharp_long:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+            if self.oc.do_short:
+                if self.sharp_short:
+                    for result in self.sharp_short:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+        if self.backtest_adg > 0:
+            if self.oc.do_long:
+                if self.adg_long:
+                    for result in self.adg_long:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+            if self.oc.do_short:
+                if self.adg_short:
+                    for result in self.adg_short:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+        if self.backtest_drawdown > 0:
+            if self.oc.do_long:
+                if self.drawdown_long:
+                    for result in self.drawdown_long:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+            if self.oc.do_short:
+                if self.drawdown_short:
+                    for result in self.drawdown_short:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+        if self.backtest_stuck > 0:
+            if self.oc.do_long:
+                if self.stuck_long:
+                    for result in self.stuck_long:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+            if self.oc.do_short:
+                if self.stuck_short:
+                    for result in self.stuck_short:
+                        if not result["id"] in [sub["id"] for sub in backtests]:
+                            backtests.append(result)
+        for backtest in backtests:
+            dir = PurePath(backtest["path"]).parent
+            name = PurePath(backtest["path"]).name
+            bname = name.split("_")[0]
+            p = f'{dir}/{bname}*config*'
+            config = glob.glob(p)
+            self.add_to_backtest(config[0])
     
     def add_to_backtest(self, config : str):
         config_file = Path(config)
@@ -128,19 +214,95 @@ class OptimizeItem(Base):
             bt.ohlcv = self.ohlcv
             bt.save()
 
-    def find_best(self, sl : str):
-        results_fpath = self.fetch_results_fpath()
-        if results_fpath and self.pbdir:
-            dirs = glob.glob(f'{self.pbdir}/{results_fpath}*_best_*')
-            dirs.sort(reverse=True)
-            for dir in dirs:
-                if dir.endswith('_best_config_long.json') and sl == "long":
-                    return dir
-                elif dir.endswith('_best_config_short.json') and sl == "short":
-                    return dir
-                elif dir.endswith('_best_config_long_short.json') and sl == "long_short":
-                    return dir
-        return None
+    def find_best(self):
+        results = sorted(self.results, key=lambda d: d['path'])
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_long.json'):
+                    if len(self.best_long) < self.backtest_best:
+                        self.best_long.append(result)
+                elif result["path"].endswith('_result_short.json'):
+                    if len(self.best_short) < self.backtest_best:
+                        self.best_short.append(result)
+        results = sorted(self.results, key=lambda d: d['sharpe_ratio_long'])
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_long.json'):
+                    if len(self.sharp_long) < self.backtest_sharp:
+                        self.sharp_long.append(result)
+        results = sorted(self.results, key=lambda d: d['sharpe_ratio_short'])
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_short.json'):
+                    if len(self.sharp_short) < self.backtest_sharp:
+                        self.sharp_short.append(result)
+        results = sorted(self.results, key=lambda d: d['adg_per_exposure_long'])
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_long.json'):
+                    if len(self.adg_long) < self.backtest_adg:
+                        self.adg_long.append(result)
+        results = sorted(self.results, key=lambda d: d['adg_per_exposure_short'])
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_short.json'):
+                    if len(self.adg_short) < self.backtest_adg:
+                        self.adg_short.append(result)
+        results = sorted(self.results, key=lambda d: d['drawdown_max_long'], reverse=True)
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_long.json'):
+                    if len(self.drawdown_long) < self.backtest_drawdown:
+                        self.drawdown_long.append(result)
+        results = sorted(self.results, key=lambda d: d['drawdown_max_short'], reverse=True)
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_short.json'):
+                    if len(self.drawdown_short) < self.backtest_drawdown:
+                        self.drawdown_short.append(result)
+        results = sorted(self.results, key=lambda d: d['hrs_stuck_max_long'], reverse=True)
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_long.json'):
+                    if len(self.stuck_long) < self.backtest_stuck:
+                        self.stuck_long.append(result)
+        results = sorted(self.results, key=lambda d: d['hrs_stuck_max_short'], reverse=True)
+        if results:
+            while len(results) > 0:
+                result = results.pop()
+                if result["path"].endswith('_result_short.json'):
+                    if len(self.stuck_short) < self.backtest_stuck:
+                        self.stuck_short.append(result)
+
+    def load_results(self):
+        p = self.fetch_results_fpath()
+        results = glob.glob(p, recursive=True)
+        self.results = []
+        for i, result in enumerate(results):
+            if Path(result).exists():
+                try:
+                    with open(result, "r", encoding='utf-8') as f:
+                        results_dict = {}
+                        r = json.load(f)
+                        for symbol in list(r.keys()):
+                            r_keys = list(r[symbol].keys())
+                            for k in r_keys:
+                                results_dict["id"] = i
+                                results_dict["path"] = result
+                                results_dict["symbol"] = symbol
+                                results_dict[k] = r[symbol][k]
+                except Exception as e:
+                    print(f'{str(result)} is corrupted {e}')
+                    traceback.print_exc()
+            self.results.append(results_dict)
 
     def fetch_results_fpath(self):
         if self.log.exists():
@@ -182,6 +344,7 @@ class OptimizeItem(Base):
                 self.ed = t["ed"]
                 self.sb = t["sb"]
                 self.ohlcv = t["ohlcv"]
+                self.oc = OptimizeConfigs().find_config(t["oc"])
                 self.oc._passivbot_mode = t["mode"]
                 self.oc._algorithm = t["algo"]
                 self.oc._iters = t["iters"]
@@ -190,7 +353,6 @@ class OptimizeItem(Base):
                 self.reruns = t["reruns"]
                 self.finish = t["finish"]
                 self.position = t["position"]
-                self.oc = OptimizeConfigs().find_config(t["oc"])
                 return True
         except Exception as e:
             print(f'{str(file)} is corrupted {e}')
@@ -225,11 +387,21 @@ class OptimizeQueue:
         self.pb_config.read('pbgui.ini')
         if not self.pb_config.has_section("optimize"):
             self.pb_config.add_section("optimize")
+        if not self.pb_config.has_option("optimize", "cpu"):
             self.pb_config.set("optimize", "cpu", str(multiprocessing.cpu_count()-2))
+        if not self.pb_config.has_option("optimize", "mode"):
             self.pb_config.set("optimize", "mode", "linear")
-#        self._cpu = int(self.pb_config.get("optimize", "cpu"))
-        self._cpu = self.cpu
-        self._mode = str(self.pb_config.get("optimize", "mode"))
+        if not self.pb_config.has_option("optimize", "backtest_best"):
+            self.pb_config.set("optimize", "backtest_best", "1")
+        if not self.pb_config.has_option("optimize", "backtest_sharp"):
+            self.pb_config.set("optimize", "backtest_sharp", "0")
+        if not self.pb_config.has_option("optimize", "backtest_adg"):
+            self.pb_config.set("optimize", "backtest_adg", "0")
+        if not self.pb_config.has_option("optimize", "backtest_drawdown"):
+            self.pb_config.set("optimize", "backtest_drawdown", "0")
+        if not self.pb_config.has_option("optimize", "backtest_stuck"):
+            self.pb_config.set("optimize", "backtest_stuck", "0")
+        self.load_options()
         self.pbgdir = Path.cwd()
         self.dest = Path(f'{self.pbgdir}/data/opt_queue')
         if not self.dest.exists():
@@ -237,36 +409,84 @@ class OptimizeQueue:
         self.load()
 
     @property
-    def cpu(self):
-        self.pb_config.read('pbgui.ini')
-        self._cpu = int(self.pb_config.get("optimize", "cpu"))
-        if self._cpu > multiprocessing.cpu_count():
-            self.cpu = multiprocessing.cpu_count()
-        return self._cpu
+    def cpu(self): return self._cpu
+    @property
+    def mode(self): return self._mode
+    @property
+    def backtest_best(self): return self._backtest_best
+    @property
+    def backtest_sharp(self): return self._backtest_sharp
+    @property
+    def backtest_adg(self): return self._backtest_adg
+    @property
+    def backtest_drawdown(self): return self._backtest_drawdown
+    @property
+    def backtest_stuck(self): return self._backtest_stuck
 
+    @backtest_best.setter
+    def backtest_best(self, new_backtest_best):
+        if self._backtest_best != new_backtest_best:
+            self._backtest_best = new_backtest_best
+            self.save_options()
+            st.experimental_rerun()
+    @backtest_sharp.setter
+    def backtest_sharp(self, new_backtest_sharp):
+        if self._backtest_sharp != new_backtest_sharp:
+            self._backtest_sharp = new_backtest_sharp
+            self.save_options()
+            st.experimental_rerun()
+    @backtest_adg.setter
+    def backtest_adg(self, new_backtest_adg):
+        if self._backtest_adg != new_backtest_adg:
+            self._backtest_adg = new_backtest_adg
+            self.save_options()
+            st.experimental_rerun()
+    @backtest_drawdown.setter
+    def backtest_drawdown(self, new_backtest_drawdown):
+        if self._backtest_drawdown != new_backtest_drawdown:
+            self._backtest_drawdown = new_backtest_drawdown
+            self.save_options()
+            st.experimental_rerun()
+    @backtest_stuck.setter
+    def backtest_stuck(self, new_backtest_stuck):
+        if self._backtest_stuck != new_backtest_stuck:
+            self._backtest_stuck = new_backtest_stuck
+            self.save_options()
+            st.experimental_rerun()
     @cpu.setter
     def cpu(self, new_cpu):
         if new_cpu != self._cpu:
             self._cpu = new_cpu
-            self.pb_config.set("optimize", "cpu", str(self._cpu))
-            with open('pbgui.ini', 'w') as f:
-                self.pb_config.write(f)
+            self.save_options()
             st.experimental_rerun()
-
-    @property
-    def mode(self):
-        self.pb_config.read('pbgui.ini')
-        self._mode = str(self.pb_config.get("optimize", "mode"))
-        return self._mode
-
     @mode.setter
     def mode(self, new_mode):
         if new_mode != self._mode:
             self._mode = new_mode
-            self.pb_config.set("optimize", "mode", str(self._mode))
-            with open('pbgui.ini', 'w') as f:
-                self.pb_config.write(f)
+            self.save_options()
             st.experimental_rerun()
+
+    def load_options(self):
+        self._cpu = int(self.pb_config.get("optimize", "cpu"))
+        if self._cpu > multiprocessing.cpu_count():
+            self.cpu = multiprocessing.cpu_count()
+        self._mode = str(self.pb_config.get("optimize", "mode"))
+        self._backtest_best = int(self.pb_config.get("optimize", "backtest_best"))
+        self._backtest_sharp = int(self.pb_config.get("optimize", "backtest_sharp"))
+        self._backtest_adg = int(self.pb_config.get("optimize", "backtest_adg"))
+        self._backtest_drawdown = int(self.pb_config.get("optimize", "backtest_drawdown"))
+        self._backtest_stuck = int(self.pb_config.get("optimize", "backtest_stuck"))
+
+    def save_options(self):
+        self.pb_config.set("optimize", "cpu", str(self._cpu))
+        self.pb_config.set("optimize", "mode", str(self._mode))
+        self.pb_config.set("optimize", "backtest_best", str(self._backtest_best))
+        self.pb_config.set("optimize", "backtest_sharp", str(self._backtest_sharp))
+        self.pb_config.set("optimize", "backtest_adg", str(self._backtest_adg))
+        self.pb_config.set("optimize", "backtest_drawdown", str(self._backtest_drawdown))
+        self.pb_config.set("optimize", "backtest_stuck", str(self._backtest_stuck))
+        with open('pbgui.ini', 'w') as f:
+            self.pb_config.write(f)
 
     def is_running(self):
         if self.pid():
@@ -341,7 +561,7 @@ class OptimizeQueue:
 
     def options(self):
         # Options
-        col_run, col_mode, col_cpu = st.columns([1,1,1]) 
+        col_run, col_mode, col_cpu, col_best = st.columns([1,1,1,1])
         with col_run:
             if st.toggle("Run Optimizer", value=self.is_running(), key="opt_run", help=None):
                 if not self.is_running():
@@ -359,7 +579,17 @@ class OptimizeQueue:
             self.mode = st.radio("Queue Mode", ('linear', 'circular'), index=queue_mode, key="opt_mode", help=None, horizontal=False)
         with col_cpu:
             self.cpu = st.number_input(f'CPU used for Optimizer(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=self.cpu, step=1)
-
+        with col_best:
+            self.backtest_best = st.number_input("backtest_best", min_value=0, max_value=1000, value=self.backtest_best, step=1, format='%d', key="opt_backtest_best", help=pbgui_help.backtest_best)
+        col_sharp, col_adg, col_drawdown, col_stuck = st.columns([1,1,1,1])
+        with col_sharp:
+            self.backtest_sharp = st.number_input("backtest_sharp", min_value=0, max_value=1000, value=self.backtest_sharp, step=1, format='%d', key="opt_backtest_sharp", help=pbgui_help.backtest_sharp)
+        with col_adg:
+            self.backtest_adg = st.number_input("backtest_adg", min_value=0, max_value=1000, value=self.backtest_adg, step=1, format='%d', key="opt_backtest_adg", help=pbgui_help.backtest_adg)
+        with col_drawdown:
+            self.backtest_drawdown = st.number_input("backtest_drawdown", min_value=0, max_value=1000, value=self.backtest_drawdown, step=1, format='%d', key="opt_backtest_drawdown", help=pbgui_help.backtest_drawdown)
+        with col_stuck:
+            self.backtest_stuck = st.number_input("backtest_stuck", min_value=0, max_value=1000, value=self.backtest_stuck, step=1, format='%d', key="opt_backtest_stuck", help=pbgui_help.backtest_stuck)
 
     def view_log(self, item: OptimizeItem):
         if item.log.exists():
