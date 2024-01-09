@@ -979,7 +979,7 @@ class OptimizeResults:
             st.markdown(symbol_names)
         else:
             st.markdown(f'#### Symbol: {self.symbol_names[0]}')
-        results_d = st.data_editor(data=self.results_d, width=None, height=(len(self.results_d)+1)*36, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
+        results_d = st.data_editor(data=self.results_d, width=None, height=st.session_state.height-200, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
         self.bt_results.backtests = []
         for view in results_d:
             if view["View"]:
