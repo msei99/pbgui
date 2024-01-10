@@ -283,7 +283,8 @@ class OptimizeItem(Base):
                         self.stuck_short.append(result)
 
     def load_results(self):
-        p = self.fetch_results_fpath()
+        fpath = self.fetch_results_fpath()
+        p = f'{self.pbdir}/{fpath}*_result_*.json'
         results = glob.glob(p, recursive=True)
         self.results = []
         for i, result in enumerate(results):
@@ -936,6 +937,14 @@ class OptimizeResults:
                         if config:
                             st.session_state.my_bt = BacktestItem(config)
                             st.session_state.my_bt.symbol = symbols[0]
+                            if "bt_queue" in st.session_state:
+                                del st.session_state.bt_queue
+                            if "bt_view" in st.session_state:
+                                del st.session_state.bt_view
+                            if "bt_compare" in st.session_state:
+                                del st.session_state.bt_compare
+                            if "bt_import" in st.session_state:
+                                del st.session_state.bt_import
                             switch_page("Backtest")
         column_config = {
             "View": st.column_config.CheckboxColumn('View', default=False),
@@ -979,7 +988,8 @@ class OptimizeResults:
             st.markdown(symbol_names)
         else:
             st.markdown(f'#### Symbol: {self.symbol_names[0]}')
-        results_d = st.data_editor(data=self.results_d, width=None, height=st.session_state.height-200, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
+        height = round(st.session_state.height*0.65) if st.session_state.height else 1080
+        results_d = st.data_editor(data=self.results_d, width=None, height=height, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
         self.bt_results.backtests = []
         for view in results_d:
             if view["View"]:

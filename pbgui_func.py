@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit_js_eval import streamlit_js_eval
 import json
 import pprint
 import uuid
@@ -43,6 +44,7 @@ def set_page_config():
             'About': "Passivbot GUI v0.91"
         }
     )
+    streamlit_js_eval(js_expressions='parent.innerHeight', key = "height")
 
 def validateJSON(jsonData):
     try:
