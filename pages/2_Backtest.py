@@ -164,6 +164,9 @@ def bt_view():
 def bt_compare():
     # Navigation
     with st.sidebar:
+        if st.button(":recycle:"):
+            del st.session_state.bt_results
+            st.experimental_rerun()
         if st.button("Queue"):
             st.session_state.bt_queue = True
             del st.session_state.bt_compare
