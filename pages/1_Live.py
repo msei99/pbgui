@@ -304,7 +304,10 @@ def select_instance():
             "id": None}
         df = pd.DataFrame(d)
         sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
-        st.data_editor(data=sdf, width=None, height=st.session_state.height-150, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+        item_height = (len(sdf)+1)*36 
+        window_height = round(st.session_state.height*0.75)
+        height = 1080 if not st.session_state.height else item_height if item_height < window_height else window_height
+        st.data_editor(data=sdf, width=None, height=height, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
     if instances.pbstat_log:
