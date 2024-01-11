@@ -1040,7 +1040,7 @@ class Instances:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
-        col_log, col_del, col_empty = st.columns([3,1,20])
+        col_log, col_del, col_empty = st.columns([5,1,18])
         with col_log:
             st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
         with col_del:

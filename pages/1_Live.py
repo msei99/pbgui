@@ -23,6 +23,14 @@ def list_remote():
     if 'remote' not in st.session_state:
         st.session_state.remote = PBRemote()
     remote = st.session_state.remote
+    if not remote.bucket:
+        with st.sidebar:
+            if st.button(":back:"):
+                del st.session_state.list_remote
+                del st.session_state.remote
+                st.experimental_rerun()
+        st.error(remote.error)
+        return
     if not "ed_key" in st.session_state:
         st.session_state.ed_key = 0
     ed_key = st.session_state.ed_key

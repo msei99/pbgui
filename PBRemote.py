@@ -284,6 +284,7 @@ class RemoteServer():
 
 class PBRemote():
     def __init__(self):
+        self.error = None          
         self.remote_servers = []
         self.local_run = PBRun()
         self.index = 0
@@ -300,8 +301,10 @@ class PBRemote():
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
-            Path(self.cmd_path).mkdir(parents=True)            
+            Path(self.cmd_path).mkdir(parents=True)  
         self.bucket = self.find_bucket()
+        if not self.bucket:
+            return
         self.load_remote()
         self.load_local()
 
@@ -425,13 +428,19 @@ class PBRemote():
 
     def find_bucket(self):
         cmd = ['rclone', 'listremotes']
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            bucket = result.stdout.strip().split(':')[0]
-            return f'{bucket}:{bucket}'
-        else:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not find bucket name')
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except Exception as e:
+            self.error = "rclone not installed"
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: {self.error} {e}')
             return None
+        if result.returncode == 0:
+            if result.stdout:
+                bucket = result.stdout.strip().split(':')[0]
+                return f'{bucket}:{bucket}'
+        self.error = "Can not find bucket name"
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: {self.error}')
+        return None
 
     def load_remote(self):
         pbgdir = Path.cwd()
@@ -481,10 +490,11 @@ class PBRemote():
 
 
 def main():
-    # Not supported on windows
-    if platform.system() == "Windows":
-        print("PBRemote Module is not supported on Windows")
-        exit()
+    print("Start PBRemote")
+    # # Not supported on windows
+    # if platform.system() == "Windows":
+    #     print("PBRemote Module is not supported on Windows")
+    #     exit()
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
@@ -492,7 +502,13 @@ def main():
     logfile = Path(f'{str(dest)}/PBRemote.log')
     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
+    if not remote.bucket:
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        print(remote.error)
+        exit(1)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
     remote.sync('up', 'instances')
     remote.sync('down', 'instances')
