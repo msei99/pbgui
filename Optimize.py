@@ -669,7 +669,10 @@ class OptimizeQueue:
                 'finish': item.finish,
                 'remove': False,
             })
-        st.data_editor(data=d, width=None, height=(len(self.items)+1)*36, use_container_width=True, key=f'editor_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['user','symbol'])
+        item_height = (len(self.items)+1)*36 
+        window_height = round(st.session_state.height*0.5)
+        height = 1080 if not st.session_state.height else item_height if item_height < window_height else window_height
+        st.data_editor(data=d, width=None, height=height, use_container_width=True, key=f'editor_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['user','symbol'])
         if "view_opt_log" in st.session_state:
             if st.button(f':negative_squared_cross_mark:', key="close_view_opt_log"):
                 del st.session_state.view_opt_log
@@ -988,7 +991,9 @@ class OptimizeResults:
             st.markdown(symbol_names)
         else:
             st.markdown(f'#### Symbol: {self.symbol_names[0]}')
-        height = round(st.session_state.height*0.65) if st.session_state.height else 1080
+        item_height = (len(self.results_d)+1)*36 
+        window_height = round(st.session_state.height*0.65)
+        height = 1080 if not st.session_state.height else item_height if item_height < window_height else window_height
         results_d = st.data_editor(data=self.results_d, width=None, height=height, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
         self.bt_results.backtests = []
         for view in results_d:
