@@ -13,6 +13,7 @@ from PBRun import PBRun, RunInstance
 import uuid
 import shutil
 import hashlib
+import traceback
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -262,6 +263,7 @@ class RemoteServer():
                     try:
                         with open(afile, "r", encoding='utf-8') as f:
                             cfg = json.load(f)
+                        if cfg:
                             to = cfg["to"]
                             unique = cfg["unique"]
                             instance = cfg["instance"]
@@ -273,6 +275,7 @@ class RemoteServer():
                                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {self.name} {command} {instance} {unique}')
                     except Exception as e:
                         print(f'{str(afile)} is corrupted {e}')
+                        traceback.print_exc()
 
     def sync(self, pbname: str):
         pbgdir = Path.cwd()

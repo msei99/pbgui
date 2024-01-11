@@ -196,6 +196,8 @@ def list_remote():
         instances.view_log("PBRemote")
 
 def select_instance():
+    if "pbgui_instances" not in st.session_state:
+        return
     instances = st.session_state.pbgui_instances
     # Display Error
     if "error" in st.session_state:
