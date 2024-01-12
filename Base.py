@@ -73,13 +73,13 @@ class Base:
                 self._symbols = self._exchange.spot
             if self._symbol not in self._symbols:
                 self._symbol = self._symbols[0]
-            st.experimental_rerun()
+#            st.experimental_rerun()
 
     @ohlcv.setter
     def ohlcv(self, new_ohlcv):
         if self._ohlcv != new_ohlcv:
             self._ohlcv = new_ohlcv
-            st.experimental_rerun()
+#            st.experimental_rerun()
 
     def update_symbols(self):
         self.exchange.fetch_symbols()
@@ -91,15 +91,33 @@ class Base:
             self._symbol = self._symbols[0]
 
     def edit_base(self):
+        # Init session_state
+        if not "base_market_type" in st.session_state:
+            st.session_state.base_user = self.user
+            self.user = self.user
+            st.session_state.base_symbol = self.symbol
+            st.session_state.base_market_type = self.market_type
+            st.session_state.base_ohlcv = self.ohlcv
+        else:
+            if st.session_state.base_market_type != self.market_type:
+                self.market_type = st.session_state.base_market_type
+            if st.session_state.base_user != self.user:
+                self.user = st.session_state.base_user
+            if st.session_state.base_symbol not in self.symbols:
+                print("print rerun wegen symbol not in list")
+                st.experimental_rerun()
+            if st.session_state.base_market_type not in self.market_types:
+                print("print rerun wegen market_type not in list")
+                st.experimental_rerun()
         col_1, col_2, col_3 = st.columns([1,1,1])
         with col_1:
-            self.user = st.selectbox('User',self._users.list(), index = self._users.list().index(self.user))
+            self.user = st.selectbox('User',self._users.list(), index = self._users.list().index(st.session_state.base_user), key="base_user")
             st.session_state.placeholder = st.empty()
         with col_2:
-            self.symbol = st.selectbox('SYMBOL', self.symbols, index=self.symbols.index(self.symbol))
+            self.symbol = st.selectbox('SYMBOL', self.symbols, index=self.symbols.index(st.session_state.base_symbol), key="base_symbol")
             if st.button("Update Symbols from Exchange"):
                 self.update_symbols()
                 st.experimental_rerun()
         with col_3:
-            self.market_type = st.radio("MARKET_TYPE", self.market_types, index=self.market_types.index(self.market_type))
-            self.ohlcv = st.checkbox("OHLCV", value=self.ohlcv, key="live_ohlcv", help=pbgui_help.ohlcv)
+            self.market_type = st.radio("MARKET_TYPE", self.market_types, index=self.market_types.index(st.session_state.base_market_type), key="base_market_type")
+            self.ohlcv = st.checkbox("OHLCV", value=st.session_state.base_ohlcv, help=pbgui_help.ohlcv, key="base_ohlcv")
