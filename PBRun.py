@@ -85,7 +85,12 @@ class RunInstance():
                 cmd.extend([config])
                 logfile = Path(f'{self.path}/passivbot.log')
                 log = open(logfile,"ab")
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
+                if platform.system() == "Windows":
+                    creationflags = subprocess.DETACHED_PROCESS
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd_end}')
 
     def clean_log(self):
@@ -257,7 +262,12 @@ class PBRun():
         if not self.is_running():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/PBRun.py')]
-            subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
             count = 0
             while True:
                 if count > 5:
