@@ -284,7 +284,11 @@ class RemoteServer():
         cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
-        subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        if platform.system() == "Windows":
+            creationflags |= subprocess.CREATE_NO_WINDOW
+            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+        else:
+            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
 class PBRemote():
     def __init__(self):
@@ -368,7 +372,11 @@ class PBRemote():
                 logfile.replace(f'{pbgdir}/data/logs/sync.log.old')
                 logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
-        subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        if platform.system() == "Windows":
+            creationflags |= subprocess.CREATE_NO_WINDOW
+            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+        else:
+            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 #        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
 
     def sync_to(self):
@@ -438,7 +446,11 @@ class PBRemote():
     def find_bucket(self):
         cmd = ['rclone', 'listremotes']
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            if platform.system() == "Windows":
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
+            else:
+                result = subprocess.run(cmd, capture_output=True, text=True)
         except Exception as e:
             self.error = "rclone not installed"
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: {self.error} {e}')

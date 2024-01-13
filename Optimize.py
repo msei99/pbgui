@@ -109,7 +109,11 @@ class OptimizeItem(Base):
                 cmd.extend(['-bd', str(PurePath(f'{self.pbdir}/backtests/pbgui'))])
                 log = open(self.log,"w")
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
-                subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True)
+                if platform.system() == "Windows":
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True)
                 self.generate_backtest()
                 self.finish +=1
                 self.save(self.position)
