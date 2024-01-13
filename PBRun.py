@@ -11,6 +11,7 @@ from io import TextIOWrapper
 from datetime import datetime
 import platform
 from shutil import copy
+import os
 
 class RunInstance():
     def __init__(self):
@@ -77,9 +78,11 @@ class RunInstance():
             pb_config.read('pbgui.ini')
             if pb_config.has_option("main", "pbdir"):
                 pbdir = pb_config.get("main", "pbdir")
+                config = PurePath(f'{self.path}/config.json')
                 cmd = [sys.executable, '-u', PurePath(f'{pbdir}/passivbot.py')]
-                cmd_end = f'{self.parameter} {self.user} {self.symbol} {self.path}/config.json '.lstrip(' ')
+                cmd_end = f'{self.parameter} {self.user} {self.symbol} '.lstrip(' ')
                 cmd.extend(shlex.split(cmd_end))
+                cmd.extend([config])
                 logfile = Path(f'{self.path}/passivbot.log')
                 log = open(logfile,"ab")
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
@@ -140,6 +143,11 @@ class PBRun():
         self.cmd_path = f'{pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
+        self.piddir = Path(f'{pbgdir}/data/pid')
+        if not self.piddir.exists():
+            self.piddir.mkdir(parents=True)
+        self.pidfile = Path(f'{self.piddir}/pbrun.pid')
+        self.my_pid = None
 
     def __iter__(self):
         return iter(self.run_instances)
@@ -250,11 +258,19 @@ class PBRun():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/PBRun.py')]
             subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
+            count = 0
+            while True:
+                if count > 5:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRun')
+                sleep(1)
+                if self.is_running():
+                    break
+                count += 1
 
     def stop(self):
         if self.is_running():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBRun')
-            self.pid().kill()
+            psutil.Process(self.my_pid).kill()
 
     def restart_pbrun(self):
         if self.is_running():
@@ -262,25 +278,27 @@ class PBRun():
             self.run()
 
     def is_running(self):
-        if self.pid():
-            return True
+        self.load_pid()
+        try:
+            if self.my_pid and psutil.pid_exists(self.my_pid) and any(sub.lower().endswith("pbrun.py") for sub in psutil.Process(self.my_pid).cmdline()):
+                return True
+        except psutil.NoSuchProcess:
+            pass
         return False
+    
+    def load_pid(self):
+        if self.pidfile.exists():
+            with open(self.pidfile) as f:
+                pid = f.read()
+                self.my_pid = int(pid) if pid.isnumeric() else None
 
-    def pid(self):
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except psutil.AccessDenied:
-                continue
-            if any("PBRun.py" in sub for sub in cmdline):
-                return process
+    def save_pid(self):
+        self.my_pid = os.getpid()
+        with open(self.pidfile, 'w') as f:
+            f.write(str(self.my_pid))
 
 
 def main():
-    # Not supported on windows
-    if platform.system() == "Windows":
-        print("PBRun Module is not supported on Windows")
-        exit()
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
@@ -290,6 +308,12 @@ def main():
     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRun')
     run = PBRun()
+    if run.is_running():
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
+        exit(1)
+    run.save_pid()
     run.load_all()
     count = 0
     while True:

@@ -20,9 +20,19 @@ def bgcolor_positive_or_negative(value):
 def list_remote():
     # Init
     instances = st.session_state.pbgui_instances
+    # Init PBremote
     if 'remote' not in st.session_state:
         st.session_state.remote = PBRemote()
     remote = st.session_state.remote
+    # Init PBRemote Toggle
+    if "key_pbremote" in st.session_state:
+        pbremote_status = remote.is_running()
+        if st.session_state.key_pbremote != pbremote_status:
+            if st.session_state.key_pbremote:
+                remote.run()
+            else:
+                remote.stop()
+    pbremote_status = remote.is_running()
     if not remote.bucket:
         with st.sidebar:
             if st.button(":back:"):
@@ -41,14 +51,7 @@ def list_remote():
         if st.button(":back:"):
             del st.session_state.list_remote
             st.experimental_rerun()
-        if st.toggle("PBRemote", value=PBRemote().is_running(), key="pbremote", help=pbgui_help.pbremote):
-            if not PBRemote().is_running():
-                PBRemote().run()
-                st.experimental_rerun()
-        else:
-            if PBRemote().is_running():
-                PBRemote().stop()
-                st.experimental_rerun()
+        st.toggle("PBRemote", value=pbremote_status, key="key_pbremote", help=pbgui_help.pbremote)
         instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
         api_sync = []
         for rserver in remote.remote_servers:
@@ -196,9 +199,28 @@ def list_remote():
         instances.view_log("PBRemote")
 
 def select_instance():
+    # Init Instances
     if "pbgui_instances" not in st.session_state:
         return
     instances = st.session_state.pbgui_instances
+    # Init PBRun Toggle
+    if "pbrun" in st.session_state:
+        pbrun_status = PBRun().is_running()
+        if st.session_state.pbrun != pbrun_status:
+            if st.session_state.pbrun:
+                PBRun().run()
+            else:
+                PBRun().stop()
+    pbrun_status = PBRun().is_running()
+    # Init PBStat Toggle
+    if "pbstat" in st.session_state:
+        pbstat_status = PBStat().is_running()
+        if st.session_state.pbstat != pbstat_status:
+            if st.session_state.pbstat:
+                PBStat().run()
+            else:
+                PBStat().stop()
+    pbstat_status = PBStat().is_running()
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
@@ -208,23 +230,9 @@ def select_instance():
     with st.sidebar:
         if st.button(":recycle:"):
             st.experimental_rerun()
-        if st.toggle("PBRun", value=PBRun().is_running(), key="pbrun", help=pbgui_help.pbrun):
-            if not PBRun().is_running():
-                PBRun().run()
-                st.experimental_rerun()
-        else:
-            if PBRun().is_running():
-                PBRun().stop()
-                st.experimental_rerun()
+        st.toggle("PBRun", value=pbrun_status, key="pbrun", help=pbgui_help.pbrun)
         instances.pbrun_log = st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="view_pbrun_log")
-        if st.toggle("PBStat", value=PBStat().is_running(), key="pbstat", help=pbgui_help.pbstat):
-            if not PBStat().is_running():
-                PBStat().run()
-                st.experimental_rerun()
-        else:
-            if PBStat().is_running():
-                PBStat().stop()
-                st.experimental_rerun()
+        st.toggle("PBStat", value=pbstat_status, key="pbstat", help=pbgui_help.pbstat)
         instances.pbstat_log = st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="view_pbstat_log")
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
@@ -426,10 +434,8 @@ set_page_config()
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
-
 if 'pbgui_instances' not in st.session_state:
     st.session_state.pbgui_instances = Instances()
-#instances = st.session_state.pbgui_instances
 
 if 'view_history' in st.session_state:
     view_history()
