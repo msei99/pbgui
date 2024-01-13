@@ -2,6 +2,7 @@ import psutil
 import subprocess
 import configparser
 import sys
+import os
 from pathlib import Path, PurePath
 from time import sleep
 import glob
@@ -310,6 +311,11 @@ class PBRemote():
             return
         self.load_remote()
         self.load_local()
+        self.piddir = Path(f'{pbgdir}/data/pid')
+        if not self.piddir.exists():
+            self.piddir.mkdir(parents=True)
+        self.pidfile = Path(f'{self.piddir}/pbremote.pid')
+        self.my_pid = None
 
 
     def __iter__(self):
@@ -466,15 +472,27 @@ class PBRemote():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/PBRemote.py')]
             subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
+            count = 0
+            while True:
+                if count > 5:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRemote')
+                sleep(1)
+                if self.is_running():
+                    break
+                count += 1
 
     def stop(self):
         if self.is_running():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBRemote')
-            self.pid().kill()
+            psutil.Process(self.my_pid).kill()
 
     def is_running(self):
-        if self.pid():
-            return True
+        self.load_pid()
+        try:
+            if self.my_pid and psutil.pid_exists(self.my_pid) and any(sub.lower().endswith("pbremote.py") for sub in psutil.Process(self.my_pid).cmdline()):
+                return True
+        except psutil.NoSuchProcess:
+            pass
         return False
 
     def restart(self):
@@ -482,22 +500,20 @@ class PBRemote():
             self.stop()
             self.run()
 
-    def pid(self):
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except psutil.AccessDenied:
-                continue
-            if any("PBRemote.py" in sub for sub in cmdline):
-                return process
+    def load_pid(self):
+        if self.pidfile.exists():
+            with open(self.pidfile) as f:
+                pid = f.read()
+                self.my_pid = int(pid) if pid.isnumeric() else None
+
+    def save_pid(self):
+        self.my_pid = os.getpid()
+        with open(self.pidfile, 'w') as f:
+            f.write(str(self.my_pid))
 
 
 def main():
     print("Start PBRemote")
-    # # Not supported on windows
-    # if platform.system() == "Windows":
-    #     print("PBRemote Module is not supported on Windows")
-    #     exit()
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
@@ -507,6 +523,12 @@ def main():
     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
+    if remote.is_running():
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRemote already started')
+        exit(1)
+    remote.save_pid()
     if not remote.bucket:
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
@@ -532,7 +554,6 @@ def main():
                     remote.load_local()
                 if server.ack_from(remote.name):
                     remote.sync("down", 'instances')
-#            sleep(2)
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 

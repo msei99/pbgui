@@ -101,7 +101,9 @@ rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=e
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
 
-## v0.91 (09-01-2024)
+## v0.91 (13-01-2024)
+- PBRun, PBStat and PBRemote added pidfile for check that it's not started more than one time
+- PBRemote: Now runs on Windows. Added errorhandling for missing rclone and bucket
 - Optimizer: Bugfix automatic backtest results not working
 - Optimizer: Automatic backtest options. n_best, n_sharp, n_stuck, n_adg, n_drawdown
 - Optimizer: Bugfix for wrong queue informations
