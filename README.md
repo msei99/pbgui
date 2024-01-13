@@ -102,6 +102,7 @@ Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
 
 ## v0.91 (13-01-2024)
+- PBRun and PBRemote can now be running on Windows
 - PBRun, PBStat and PBRemote added pidfile for check that it's not started more than one time
 - PBRemote: Now runs on Windows. Added errorhandling for missing rclone and bucket
 - Optimizer: Bugfix automatic backtest results not working

@@ -5,6 +5,7 @@ from bokeh.models import NumeralTickFormatter, HoverTool
 import json
 import psutil
 import sys
+import platform
 import subprocess
 import shlex
 import glob
@@ -266,7 +267,12 @@ class BacktestItem(Base):
                 cmd.extend(shlex.split(cmd_end))
                 cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self._config.config_file)}')])
                 log = open(self.log,"w")
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True)
+                if platform.system() == "Windows":
+                    creationflags = subprocess.DETACHED_PROCESS
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
 
 class BacktestQueue:
     def __init__(self):
@@ -358,7 +364,12 @@ class BacktestQueue:
                 if logfile.stat().st_size >= 1048576:
                     logfile.replace(f'{str(logfile)}.old')
             log = open(logfile,"a")
-            subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, start_new_session=True)
 
     def stop(self):
         if self.is_running():

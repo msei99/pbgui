@@ -7,6 +7,7 @@ from time import sleep
 from io import TextIOWrapper
 from datetime import datetime
 from Instance import Instances
+import platform
 
 class PBStat(Instances):
     def __init__(self):
@@ -22,7 +23,12 @@ class PBStat(Instances):
         if not self.is_running():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/PBStat.py')]
-            subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
             count = 0
             while True:
                 if count > 5:
