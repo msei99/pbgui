@@ -14,6 +14,7 @@ import psutil
 import shlex
 import subprocess
 import sys
+import platform
 import multiprocessing
 import configparser
 import pbgui_help
@@ -518,7 +519,12 @@ class OptimizeQueue:
                 if logfile.stat().st_size >= 1048576:
                     logfile.replace(f'{str(logfile)}.old')
             log = open(logfile,"a")
-            subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbgdir, text=True)
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbgdir, text=True, start_new_session=True)
 
     def add(self, item: OptimizeItem = None):
         if item:
