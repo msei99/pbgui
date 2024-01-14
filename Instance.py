@@ -210,50 +210,36 @@ class Instance(Base):
 
     @enabled.setter
     def enabled(self, new_enabled):
-        if self._enabled != new_enabled:
-            self._enabled = new_enabled
-            self.save()
-            PBRun().update(self._instance_path, self._enabled)
-            if PBRemote().is_running():
-                PBRemote().stop()
-                PBRemote().run()
-            st.experimental_rerun()
+        self._enabled = new_enabled
+        self.save()
+        PBRun().update(self._instance_path, self._enabled)
+        if PBRemote().is_running():
+            PBRemote().stop()
+            PBRemote().run()
 
     @co.setter
     def co(self, new_co):
-        if self._co != new_co:
-            self._co = new_co
-            st.experimental_rerun()
+        self._co = new_co
 
     @leverage.setter
     def leverage(self, new_leverage):
-        if self._leverage != new_leverage:
-            self._leverage = new_leverage
-            st.experimental_rerun()
+        self._leverage = new_leverage
 
     @assigned_balance.setter
     def assigned_balance(self, new_assigned_balance):
-        if self._assigned_balance != new_assigned_balance:
-            self._assigned_balance = new_assigned_balance
-            st.experimental_rerun()
+        self._assigned_balance = new_assigned_balance
 
     @price_distance_threshold.setter
     def price_distance_threshold(self, new_price_distance_threshold):
-        if self._price_distance_threshold != new_price_distance_threshold:
-            self._price_distance_threshold = new_price_distance_threshold
-            st.experimental_rerun()
+        self._price_distance_threshold = new_price_distance_threshold
 
     @price_precision.setter
     def price_precision(self, new_price_precision):
-        if self._price_precision != new_price_precision:
-            self._price_precision = new_price_precision
-            st.experimental_rerun()
+        self._price_precision = new_price_precision
 
     @price_step.setter
     def price_step(self, new_price_step):
-        if self._price_step != new_price_step:
-            self._price_step = new_price_step
-            st.experimental_rerun()
+        self._price_step = new_price_step
 
     @long_mode.setter
     def long_mode(self, new_long_mode):
