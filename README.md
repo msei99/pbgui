@@ -33,7 +33,8 @@ pip install -r requirements.txt
 ```
 ## Running
 ```
-streamlit run pbgui.py &
+streamlit run pbgui.py
+
 ```
 Open http://localhost:8501 with Browser\
 Password = PBGui$Bot!\
@@ -100,6 +101,11 @@ rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=e
 ```
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
+
+## Running on Windows
+Copy the start.bat.example to start.bat
+Edit pbguipath in the start.bat to your pbgui installation path
+Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v0.91 (13-01-2024)
 - PBRun and PBRemote can now be running on Windows
