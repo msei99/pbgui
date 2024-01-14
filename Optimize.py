@@ -110,7 +110,7 @@ class OptimizeItem(Base):
                 log = open(self.log,"w")
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
                 if platform.system() == "Windows":
-                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    creationflags = subprocess.CREATE_NO_WINDOW
                     subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
                 else:
                     subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True)
