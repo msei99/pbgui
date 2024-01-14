@@ -285,7 +285,7 @@ class RemoteServer():
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
         if platform.system() == "Windows":
-            creationflags |= subprocess.CREATE_NO_WINDOW
+            creationflags = subprocess.CREATE_NO_WINDOW
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
         else:
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
@@ -373,7 +373,7 @@ class PBRemote():
                 logfile = Path(f'{pbgdir}/data/logs/sync.log')
         log = open(logfile,"ab")
         if platform.system() == "Windows":
-            creationflags |= subprocess.CREATE_NO_WINDOW
+            creationflags = subprocess.CREATE_NO_WINDOW
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
         else:
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
@@ -447,7 +447,7 @@ class PBRemote():
         cmd = ['rclone', 'listremotes']
         try:
             if platform.system() == "Windows":
-                creationflags |= subprocess.CREATE_NO_WINDOW
+                creationflags = subprocess.CREATE_NO_WINDOW
                 result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
             else:
                 result = subprocess.run(cmd, capture_output=True, text=True)
