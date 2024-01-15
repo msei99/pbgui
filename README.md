@@ -108,6 +108,7 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v0.91 (13-01-2024)
+- Backtester: Bugfix not finding backtest from queue (spot)
 - PBRun and PBRemote can now be running on Windows
 - PBRun, PBStat and PBRemote added pidfile for check that it's not started more than one time
 - PBRemote: Now runs on Windows. Added errorhandling for missing rclone and bucket
