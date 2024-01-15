@@ -739,6 +739,9 @@ class Instance(Base):
             self.fetch_trades()
             self.fetch_fundings()
             self._trades = self.trades_to_df()
+        if not self._trades:
+            st.write("### No Trades available.")
+            return
         self.sb = self._trades["balance"][0]
         self.sd = datetime.fromtimestamp(self._trades["timestamp"][0]/1000).strftime("%Y-%m-%d")
         self.ed = datetime.fromtimestamp(self._trades.iloc[-1]["timestamp"]/1000).strftime("%Y-%m-%d")
