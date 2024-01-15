@@ -220,7 +220,7 @@ class PBRun():
     def update(self, instance_path : str, enabled : bool):
         cfile = Path(f'{self.cmd_path}/update.cmd')
         cfg = ({
-            "path": instance_path,
+            "path": str(PurePath(instance_path)),
             "enabled": enabled})
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
