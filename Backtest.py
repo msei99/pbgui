@@ -618,24 +618,9 @@ class BacktestResults:
                 bt = BacktestResult(PurePath(p).parent)
                 if (
                     symbol == bt.symbol
-                    and long["ema_span_0"] == bt.long["ema_span_0"]
-                    and long["ema_span_1"] == bt.long["ema_span_1"]
-                    and long["enabled"] == bt.long["enabled"]
-                    and long["min_markup"] == bt.long["min_markup"]
-                    and long["markup_range"] == bt.long["markup_range"]
-                    and long["n_close_orders"] == bt.long["n_close_orders"]
-                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
-                    and long["backwards_tp"] == bt.long["backwards_tp"]
-                    and short["ema_span_0"] == bt.short["ema_span_0"]
-                    and short["ema_span_1"] == bt.short["ema_span_1"]
-                    and short["enabled"] == bt.short["enabled"]
-                    and short["min_markup"] == bt.short["min_markup"]
-                    and short["markup_range"] == bt.short["markup_range"]
-                    and short["n_close_orders"] == bt.short["n_close_orders"]
-                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
-                    and short["backwards_tp"] == bt.short["backwards_tp"]
                 ):
-                    return True
+                    if self.compare_config(bt, long, short, "spot"):
+                        return True
             return False
 
     def match_item(self, item: BacktestItem = None):
@@ -653,22 +638,9 @@ class BacktestResults:
                     and item.sb == bt.sb
                     and item.market_type == bt.market_type
                     and item.exchange.name == bt.exchange
-                    and long["ema_span_0"] == bt.long["ema_span_0"]
-                    and long["ema_span_1"] == bt.long["ema_span_1"]
-                    and long["enabled"] == bt.long["enabled"]
-                    and long["min_markup"] == bt.long["min_markup"]
-                    and long["markup_range"] == bt.long["markup_range"]
-                    and long["n_close_orders"] == bt.long["n_close_orders"]
-                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
-                    and short["ema_span_0"] == bt.short["ema_span_0"]
-                    and short["ema_span_1"] == bt.short["ema_span_1"]
-                    and short["enabled"] == bt.short["enabled"]
-                    and short["min_markup"] == bt.short["min_markup"]
-                    and short["markup_range"] == bt.short["markup_range"]
-                    and short["n_close_orders"] == bt.short["n_close_orders"]
-                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
                 ):
-                    self.backtests.append(bt)
+                    if self.compare_config(bt, long, short, item.market_type):
+                        self.backtests.append(bt)
             if not self.backtests:
                 st.write("Backtest result not found. Please Run it again")
                 item.remove_log()
@@ -676,8 +648,7 @@ class BacktestResults:
             st.write("Backtest result not found. Please Run it again")
             item.remove_log()
 
-
-    def match_config(self, symbol, config: json = None):
+    def match_config(self, symbol, config: json = None, market_type : str = "spot"):
         long = json.loads(config)["long"]
         short = json.loads(config)["short"]
         p = str(Path(f'{self.backtest_path}/*/{symbol}/plots/*/result.json'))
@@ -687,28 +658,60 @@ class BacktestResults:
                 bt = BacktestResult(PurePath(p).parent)
                 if (
                     symbol == bt.symbol
-                    and long["ema_span_0"] == bt.long["ema_span_0"]
-                    and long["ema_span_1"] == bt.long["ema_span_1"]
-                    and long["enabled"] == bt.long["enabled"]
-                    and long["min_markup"] == bt.long["min_markup"]
-                    and long["markup_range"] == bt.long["markup_range"]
-                    and long["n_close_orders"] == bt.long["n_close_orders"]
-                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
-                    and long["backwards_tp"] == bt.long["backwards_tp"]
-                    and short["ema_span_0"] == bt.short["ema_span_0"]
-                    and short["ema_span_1"] == bt.short["ema_span_1"]
-                    and short["enabled"] == bt.short["enabled"]
-                    and short["min_markup"] == bt.short["min_markup"]
-                    and short["markup_range"] == bt.short["markup_range"]
-                    and short["n_close_orders"] == bt.short["n_close_orders"]
-                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
-                    and short["backwards_tp"] == bt.short["backwards_tp"]
                 ):
-                    self.backtests.append(bt)
-                    if bt.symbol not in self.symbols:
-                        self.symbols.append(bt.symbol)
-                    if bt.exchange not in self.exchanges:
-                        self.exchanges.append(bt.exchange)
+                    if self.compare_config(bt, long, short, market_type):
+                        self.backtests.append(bt)
+                        if bt.symbol not in self.symbols:
+                            self.symbols.append(bt.symbol)
+                        if bt.exchange not in self.exchanges:
+                            self.exchanges.append(bt.exchange)
+
+    def compare_config(self,bt : BacktestResult, long : json, short : json, market_type : str):
+        compare_long = False
+        compare_short = False
+        compare_long_we = False
+        compare_short_we = False
+        if (
+            long["ema_span_0"] == bt.long["ema_span_0"]
+            and long["ema_span_1"] == bt.long["ema_span_1"]
+            and long["enabled"] == bt.long["enabled"]
+            and long["min_markup"] == bt.long["min_markup"]
+            and long["markup_range"] == bt.long["markup_range"]
+            and long["n_close_orders"] == bt.long["n_close_orders"]
+        ): compare_long = True
+        if (
+            long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
+        ): compare_long_we = True
+        if (
+            short["ema_span_0"] == bt.short["ema_span_0"]
+            and short["ema_span_1"] == bt.short["ema_span_1"]
+            and short["enabled"] == bt.short["enabled"]
+            and short["min_markup"] == bt.short["min_markup"]
+            and short["markup_range"] == bt.short["markup_range"]
+            and short["n_close_orders"] == bt.short["n_close_orders"]
+        ): compare_short = True
+        if (
+            short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
+        ): compare_short_we = True
+        if long["enabled"] and short["enabled"] and market_type == "spot":
+            if all([compare_long, compare_short]):
+                return True
+        if long["enabled"] and short["enabled"] and market_type == "futures":
+            if all([compare_long, compare_short, compare_long_we, compare_short_we]):
+                return True
+        if long["enabled"] and market_type == "spot":
+            if all([compare_long]):
+                return True
+        if short["enabled"] and market_type == "spot":
+            if all([compare_short]):
+                return True
+        if long["enabled"] and market_type == "futures":
+            if all([compare_long, compare_long_we]):
+                return True
+        if short["enabled"] and market_type == "futures":
+            if all([compare_short, compare_short_we]):
+                return True
+
 
 def main():
     bt = BacktestQueue()

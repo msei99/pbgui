@@ -770,7 +770,7 @@ class Instance(Base):
             elif self._bt.is_finish():
                 self._bt.remove()
                 self._btresults = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
-                self._btresults.match_config(self.symbol, self._config.config)
+                self._btresults.match_config(self.symbol, self._config.config, self.market_type)
                 st.experimental_rerun()
             else:
                 if st.button("Run"):
@@ -780,7 +780,7 @@ class Instance(Base):
                     st.experimental_rerun()
         if not self._btresults:
             self._btresults = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
-            self._btresults.match_config(self.symbol, self._config.config)
+            self._btresults.match_config(self.symbol, self._config.config, self.market_type)
         self._btresults.view(trades = self._trades)
         if self._bt.is_running():
             st_autorefresh(interval=10000, limit=None, key="refresh_backtest_running")

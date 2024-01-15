@@ -124,7 +124,7 @@ def list_remote():
                 'Sync to remote': server.instances.is_same(instance),
                 'Remove': remove,
             })
-        st.data_editor(data=sid, width=None, height=st.session_state.height-500, use_container_width=True, key=f'select_instance_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Running'])
+        st.data_editor(data=sid, width=None, height=36+(len(sid))*35, use_container_width=True, key=f'select_instance_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Running'])
     # Start / Stop Instances
     if f'select_run_{ed_key}' in st.session_state:
         ed = st.session_state[f'select_run_{ed_key}']
@@ -194,7 +194,7 @@ def list_remote():
                     f'{rserver.name} Start/Stop': rrun,
                 })
             rlist.append(rid)
-        st.data_editor(data=rlist, width=None, height=st.session_state.height-500, use_container_width=True, key=f'select_run_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
+        st.data_editor(data=rlist, width=None, height=36+(len(rlist))*35, use_container_width=True, key=f'select_run_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
     if instances.pbremote_log:
         instances.view_log("PBRemote")
 
@@ -322,10 +322,7 @@ def select_instance():
             "id": None}
         df = pd.DataFrame(d)
         sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
-        item_height = (len(d)+1)*36 
-        window_height = round(st.session_state.height*0.75)
-        height = 1080 if not st.session_state.height else item_height if item_height < window_height else window_height
-        st.data_editor(data=sdf, width=None, height=height, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+        st.data_editor(data=sdf, width=None, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
     if instances.pbstat_log:
@@ -374,7 +371,7 @@ def edit_instance():
         st.error(st.session_state.error, icon="🚨")
     # Init instance
     instance = st.session_state.edit_instance
-    # Init keys
+    # Init session_state for keys
     if "live_enable" in st.session_state:
         if st.session_state.live_enable != instance.enabled:
             instance.enabled = st.session_state.live_enable
@@ -409,8 +406,7 @@ def edit_instance():
                 PBStat().restart()
                 PBRun().restart_pbrun()
                 PBRemote().restart()
-#            del st.session_state.edit_instance
-            st.experimental_rerun()
+#            st.experimental_rerun()
         if st.button("Backtest"):
             st.session_state.my_bt = BacktestItem(instance._config.config)
             st.session_state.my_bt.user = instance.user
