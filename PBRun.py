@@ -165,7 +165,11 @@ class PBRun():
 
     def add(self, run_instance: RunInstance):
         if run_instance:
-            self.run_instances.append(run_instance)
+            if run_instance.path:
+                for instance in self.run_instances:
+                    if instance.path == run_instance.path:
+                        return
+                self.run_instances.append(run_instance)
 
     def remove(self, run_instance: RunInstance):
         if run_instance:
@@ -181,11 +185,25 @@ class PBRun():
         ipath = f'{self.instances_path}/{instance}'
         self.update(ipath, False)
 
+    def restart_instance(self, instance):
+        user = "_".join(instance.split("_")[0:-2])
+        symbol = instance.split("_")[-2]
+        self.restart(user, symbol)
+
     def disable_instance(self, instance):
         self.change_enabled(instance, False)
 
     def enable_instance(self, instance):
         self.change_enabled(instance, True)
+
+    def is_enabled_instance(self, instance):
+        ipath = f'{self.instances_path}/{instance}'
+        ifile = Path(f'{ipath}/instance.cfg')
+        with open(ifile, "r", encoding='utf-8') as f:
+            inst = json.load(f)
+        if inst["_enabled"]:
+            return True
+        else: False
 
     def change_enabled(self, instance : str, enabled : bool):
         ipath = f'{self.instances_path}/{instance}'
@@ -220,7 +238,7 @@ class PBRun():
     def update(self, instance_path : str, enabled : bool):
         cfile = Path(f'{self.cmd_path}/update.cmd')
         cfg = ({
-            "path": instance_path,
+            "path": str(PurePath(instance_path)),
             "enabled": enabled})
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)

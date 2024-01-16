@@ -237,8 +237,13 @@ class RemoteServer():
                                         self.sync(pbname)
                                         src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
                                         dest = PurePath(f'{self._path}/../../instances/{instance}')
-                                        shutil.copytree(src, dest, dirs_exist_ok=True)
-                                        PBRun().disable_instance(instance)
+                                        if PBRun().is_enabled_instance(instance):
+                                            shutil.copytree(src, dest, dirs_exist_ok=True)
+                                            PBRun().enable_instance(instance)
+                                            PBRun().restart_instance(instance)
+                                        else:
+                                            shutil.copytree(src, dest, dirs_exist_ok=True)
+                                            PBRun().disable_instance(instance)
                                     elif command == "remove":
                                         dest = PurePath(f'{self._path}/../../instances/{instance}')
                                         shutil.rmtree(dest, ignore_errors=True)
@@ -388,26 +393,26 @@ class PBRemote():
                 try:
                     with open(cfile, "r", encoding='utf-8') as f:
                         cfg = json.load(f)
-                        to = cfg["to"]
-                        unique = cfg["unique"]
-                        instance = cfg["instance"]
-                        command = cfg["command"]
-                        if command == "sync_api":
-                            src = PurePath(f'{self.pbdir}/api-keys.json')
-                            dest = PurePath(f'{self.cmd_path}/{to}_api-keys.json')
-                            shutil.copy(src, dest)
-                        if command == "copy":
-                            src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
-                            dest = PurePath(f'{self.instances_path}/{instance}')
-                            shutil.copytree(src, dest, dirs_exist_ok=True)
-                            PBRun().disable_instance(instance)
-                            cfile.unlink(missing_ok=True)
-                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
-                        if command == "sync":
-                            self.sync('up', 'instances')
-                        if command in ['start','stop','sync','sync_api','remove']:
-                            cfile.rename(f'{self.cmd_path}/sync_{to}_{unique}.cmd')
-                            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
+                    to = cfg["to"]
+                    unique = cfg["unique"]
+                    instance = cfg["instance"]
+                    command = cfg["command"]
+                    if command == "sync_api":
+                        src = PurePath(f'{self.pbdir}/api-keys.json')
+                        dest = PurePath(f'{self.cmd_path}/{to}_api-keys.json')
+                        shutil.copy(src, dest)
+                    if command == "copy":
+                        src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
+                        dest = PurePath(f'{self.instances_path}/{instance}')
+                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        PBRun().disable_instance(instance)
+                        cfile.unlink(missing_ok=True)
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
+                    if command == "sync":
+                        self.sync('up', 'instances')
+                    if command in ['start','stop','sync','sync_api','remove']:
+                        cfile.rename(PurePath(f'{self.cmd_path}/sync_{to}_{unique}.cmd'))
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
                 except Exception as e:
                     print(f'{str(cfile)} is corrupted {e}')
 
