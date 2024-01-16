@@ -117,7 +117,6 @@ class Instance(Base):
     def upnl(self):
         if not self.load_status(): return 0
         try: 
-            print(self._instance_path)
             if self.market_type == "spot":
                 upnl = self._status["spot_balance"] * self._status["price"]["last"]
             elif self.market_type == "futures":
@@ -126,7 +125,6 @@ class Instance(Base):
                 upnl = 0
             if not upnl:
                 upnl = 0
-            print(upnl)
             return upnl
         except Exception as e:
             print(f'Error calculating upnl: {self.user} {self.symbol} {self.market_type} {e}')
