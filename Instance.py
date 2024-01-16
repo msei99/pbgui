@@ -116,14 +116,18 @@ class Instance(Base):
     @property
     def upnl(self):
         if not self.load_status(): return 0
-        if self.market_type == "spot": return 0
         try: 
-            if self._status["position"]:
+            print(self._instance_path)
+            if self.market_type == "spot":
+                upnl = self._status["spot_balance"] * self._status["price"]["last"]
+            elif self.market_type == "futures":
                 upnl = self._status["position"]["unrealizedPnl"]
-                if not upnl: return 0
-                return upnl
             else:
-                return 0
+                upnl = 0
+            if not upnl:
+                upnl = 0
+            print(upnl)
+            return upnl
         except Exception as e:
             print(f'Error calculating upnl: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
@@ -131,17 +135,15 @@ class Instance(Base):
     def psize(self):
         if not self.load_status(): return 0
         try:
-            if not "position" in self._status:
-                return 0
-            if self._status["position"]:
-                if self.market_type == "futures":
-                    psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
-                else:
+            if self.market_type == "spot":
+                if "spot_balance" in self._status:
                     psize = self._status["spot_balance"]
-                if not psize: return 0
-                return psize
+            elif self.market_type == "futures":
+                if "position" in self._status:
+                    psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
             else:
-                return 0
+                psize = 0
+            return psize
         except Exception as e:
             print(f'Error calculating psize: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
