@@ -60,6 +60,7 @@ class BacktestItem(Base):
             "net_pnl_plus_fees", 
             "quality_score", 
             "balance_needed",
+            "source_name",
             "source",
             "hash"]]
         column_config = {
@@ -94,7 +95,7 @@ class BacktestItem(Base):
                 df_min = df_min[df_min['strategy'].isin(strategy)]
             df_min = df_min[df_min['quality_score'].ge(quality_score)]
         df_min = df_min.reset_index(drop=True)
-        selected = st.data_editor(data=df_min, width=None, height=None, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
+        selected = st.data_editor(data=df_min, width=None, height=1200, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
         col_image, col_config = st.columns([1,1])
         view = selected[selected['View']==True]
         view = view.reset_index()
@@ -400,16 +401,34 @@ class BacktestResult:
         self.config = self.load_config()
         self.result = self.load_result()
         self.result_txt = self.load_result_txt()
+        self.market_type = self.result["market_type"]
+        self.sb = self.result["starting_balance"]
+        self.sd = self.result["start_date"]
+        self.ed = self.result["end_date"]
+        self.exchange = self.result["exchange"]
+        self.symbol = self.result["symbol"]
+        # config infos
         self.long = self.result["long"]
         self.short = self.result["short"]
         self.long_enabled = self.result["long"]["enabled"]
         self.short_enabled = self.result["short"]["enabled"]
-        self.symbol = self.result["symbol"]
-        self.sd = self.result["start_date"]
-        self.ed = self.result["end_date"]
-        self.sb = self.result["starting_balance"]
-        self.exchange = self.result["exchange"]
-        self.market_type = self.result["market_type"]
+        self.passivbot_mode = self.result["passivbot_mode"]
+        self.n_days = self.result["n_days"]
+        # results
+        # self.adg_long = self.result["result"]["adg_long"]
+        # self.adg_short = self.result["result"]["adg_short"]
+        # self.adg_weighted_long = self.result["result"]["adg_weighted_long"]
+        # self.adg_weighted_short = self.result["result"]["adg_weighted_short"]
+        # self.drawdown_max_long = self.result["result"]["drawdown_max_long"]
+        # self.drawdown_max_short = self.result["result"]["drawdown_max_short"]
+        # self.final_balance_long = self.result["result"]["final_balance_long"]
+        # self.final_balance_short = self.result["result"]["final_balance_short"]
+        # self.gain_long = self.result["result"]["gain_long"]
+        # self.gain_short = self.result["result"]["gain_short"]
+        # self.hrs_stuck_max_long = self.result["result"]["hrs_stuck_max_long"]
+        # self.hrs_stuck_max_short = self.result["result"]["hrs_stuck_max_short"]
+        # self.loss_profit_ratio_long = self.result["result"]["loss_profit_ratio_long"]
+        # self.loss_profit_ratio_short = self.result["result"]["loss_profit_ratio_short"]
         self.stats = None
         self.selected = False
         self.name = None
@@ -440,6 +459,7 @@ class BacktestResults:
         self.backtests = []
         self.symbols = []
         self.exchanges = []
+        self.results_d = []
 
     def remove(self, bt_result: BacktestResult):
         rmtree(bt_result.backtest_path, ignore_errors=True)
@@ -447,44 +467,58 @@ class BacktestResults:
 
     def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None, only : str = False):
         if (self.backtests or isinstance(trades, pd.DataFrame)) and not only:
-            d = []
             column_config = {
                 "Show": st.column_config.CheckboxColumn('Show', default=False),
                 "Delete": st.column_config.CheckboxColumn('Delete', default=False),
                 }
-            for bt in self.backtests:
-                if (bt.symbol in symbols or not symbols) and (bt.exchange in exchanges or not exchanges):
-                    if bt.market_type == "spot":
-                        filename = str(bt.backtest_path).partition(f'{bt.exchange}_spot/')[-1]
-                    else:
-                        filename = str(bt.backtest_path).partition(f'{bt.exchange}/')[-1]
-                    d.append({
-                            'id': self.backtests.index(bt),
-                            'Show': bt.selected,
-                            'Symbol': bt.symbol,
-                            'Exchange': bt.exchange,
-                            'Start':  bt.sd,
-                            'End': bt.ed,
-                            'Balance': bt.sb,
-                            'Market': bt.market_type,
-                            'LE': bt.long_enabled,
-                            'SE': bt.short_enabled,
-                            'Name': filename,
-                            'Delete': False,
+            if not "editor_backtest_view" in st.session_state:
+                for bt in self.backtests:
+                    if (bt.symbol in symbols or not symbols) and (bt.exchange in exchanges or not exchanges):
+                        if bt.market_type == "spot":
+                            filename = str(bt.backtest_path).partition(f'{bt.exchange}_spot/')[-1]
+                        else:
+                            filename = str(bt.backtest_path).partition(f'{bt.exchange}/')[-1]
+                        r_dict = {
+                                'id': self.backtests.index(bt),
+                                'Show': bt.selected,
+                                'Symbol': bt.symbol,
+                                'Exchange': bt.exchange,
+                                'Start':  bt.sd,
+                                'End': bt.ed,
+                                'Balance': bt.sb,
+                                'Market': bt.market_type,
+                                'LE': bt.long_enabled,
+                                'SE': bt.short_enabled,
+                                'Name': filename,
+                                'Delete': False,
                         }
-                    )
-            new_bt = st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, hide_index=None, column_order=None, column_config=column_config, disabled=['Symbol','Exchange','Start','End','Balance','Market','LE','SE','Name'])
-            if new_bt != d:
-                for line in new_bt:
-                    if line["Delete"] == True:
-                        self.remove(self.backtests[line["id"]])
-                        st.experimental_rerun()
-                    elif line["Show"] == True:
-                        self.backtests[line["id"]].load_stats()
-                        self.backtests[line["id"]].selected = True
-                    else:
-                        self.backtests[line["id"]].selected = False
-                st.experimental_rerun()
+                        for r in bt.result["result"]:
+                            r_dict[r] = bt.result["result"][r]
+                        self.results_d.append(r_dict)
+#            column_config = {}
+            all_col = ["adg_long", "adg_short", "Exchange", "Start", "End", "Balance", "Market", "LE", "SE", "Name"]
+            selected_col = st.multiselect("Column", all_col, default=all_col, key="select_col", on_change=None, args=None)
+            for item in all_col:
+                if item not in selected_col:
+                    column_config[item] = None
+            self.results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view", hide_index=None, column_order=None, column_config=column_config, disabled="id")
+            # if new_bt != d:
+            for line in self.results_d:
+                if line["Show"]:
+                    self.backtests[line["id"]].load_stats()
+                    self.backtests[line["id"]].selected = True
+                # else:
+                #     self.backtests[line["id"]].selected = False
+#                 if line["Delete"] == True:
+#                     print(self.backtests[line["id"]])
+# #                    self.remove(self.backtests[line["id"]])
+#                     # st.experimental_rerun()
+#                 elif line["Show"] == True:
+#                     self.backtests[line["id"]].load_stats()
+#                     self.backtests[line["id"]].selected = True
+#                 else:
+#                     self.backtests[line["id"]].selected = False
+#                 # st.experimental_rerun()
         else:
             if not only: return
         hover_be = HoverTool(
