@@ -739,7 +739,7 @@ class Instance(Base):
             self.fetch_trades()
             self.fetch_fundings()
             self._trades = self.trades_to_df()
-        if not self._trades:
+        if self._trades is None:
             st.write("### No Trades available.")
             return
         self.sb = self._trades["balance"][0]
