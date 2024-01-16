@@ -107,7 +107,8 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.91 (13-01-2024)
+## v0.91 (16-01-2024)
+- Live: Spot now display SpotBalance as Position and uPnL as (Position * lasPrice)
 - Optimize: When copy from optimize to backtest, now backtester keeps your settings
 - PBRun: Added check for already running instances
 - PBRemote: Sync to a running instance is now correct
