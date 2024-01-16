@@ -185,10 +185,10 @@ def bt_compare():
         st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
         bt_results = st.session_state.bt_results
         bt_results.find_all()
-    col_symbol, col_exchange = st.columns([1,1])
-    with col_symbol:
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
         symbols = st.multiselect("Symbols", bt_results.symbols, default=None, key=None, on_change=None, args=None)
-    with col_exchange:
+    with col2:
         exchanges = st.multiselect("Exchanges", bt_results.exchanges, default=None, key=None, on_change=None, args=None)
     bt_results.view(symbols = symbols, exchanges = exchanges)
 
