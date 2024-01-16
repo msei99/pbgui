@@ -945,7 +945,10 @@ class OptimizeResults:
                         symbols, results = self.fetch_results(self.results_d[row]["path"])
                         config = self.load_config(self.results_d[row]["path"])
                         if config:
-                            st.session_state.my_bt = BacktestItem(config)
+                            if "my_bt" not in st.session_state:
+                                st.session_state.my_bt = BacktestItem(config)
+                            else:
+                                st.session_state.my_bt.config
                             st.session_state.my_bt.symbol = symbols[0]
                             if "bt_queue" in st.session_state:
                                 del st.session_state.bt_queue
