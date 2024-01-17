@@ -1023,7 +1023,6 @@ class OptimizeResults:
                     st.code(self.load_config(view["path"]))
         for bt in self.bt_results.backtests:
             bt.selected = True
-            bt.load_stats()
         self.bt_results.view(only=True)
 
 def main():
