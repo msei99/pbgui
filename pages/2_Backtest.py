@@ -159,7 +159,10 @@ def bt_view():
             st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
             bt_results = st.session_state.bt_results
             bt_results.match_item(st.session_state.bt_view)
-    bt_results.view()
+            print(bt_results.backtests)
+    for bt in bt_results.backtests:
+        bt.selected = True
+    bt_results.view(only=True)
 
 def bt_compare():
     # Navigation

@@ -282,6 +282,7 @@ class BacktestQueue:
         self.pb_config.read('pbgui.ini')
         if not self.pb_config.has_section("backtest"):
             self.pb_config.add_section("backtest")
+        if not self.pb_config.has_option("backtest", "cpu"):
             self.pb_config.set("backtest", "autostart", "False")
             my_cpu = multiprocessing.cpu_count()
             if my_cpu > 1:
@@ -407,31 +408,24 @@ class BacktestResult:
         self.ed = self.result["end_date"]
         self.exchange = self.result["exchange"]
         self.symbol = self.result["symbol"]
+        self.passivbot_mode = self.result["passivbot_mode"]
+        self.n_days = self.result["n_days"]
         # config infos
         self.long = self.result["long"]
         self.short = self.result["short"]
         self.long_enabled = self.result["long"]["enabled"]
         self.short_enabled = self.result["short"]["enabled"]
-        self.passivbot_mode = self.result["passivbot_mode"]
-        self.n_days = self.result["n_days"]
-        # results
-        # self.adg_long = self.result["result"]["adg_long"]
-        # self.adg_short = self.result["result"]["adg_short"]
-        # self.adg_weighted_long = self.result["result"]["adg_weighted_long"]
-        # self.adg_weighted_short = self.result["result"]["adg_weighted_short"]
-        # self.drawdown_max_long = self.result["result"]["drawdown_max_long"]
-        # self.drawdown_max_short = self.result["result"]["drawdown_max_short"]
-        # self.final_balance_long = self.result["result"]["final_balance_long"]
-        # self.final_balance_short = self.result["result"]["final_balance_short"]
-        # self.gain_long = self.result["result"]["gain_long"]
-        # self.gain_short = self.result["result"]["gain_short"]
-        # self.hrs_stuck_max_long = self.result["result"]["hrs_stuck_max_long"]
-        # self.hrs_stuck_max_short = self.result["result"]["hrs_stuck_max_short"]
-        # self.loss_profit_ratio_long = self.result["result"]["loss_profit_ratio_long"]
-        # self.loss_profit_ratio_short = self.result["result"]["loss_profit_ratio_short"]
         self.stats = None
-        self.selected = False
+        self._selected = False
         self.name = None
+
+    @property
+    def selected(self): return self._selected
+    @selected.setter
+    def selected(self, new_selected):
+        self._selected = new_selected
+        if self.stats is None:
+            self.load_stats()
 
     def load_config(self):
         r = Path(f'{self.backtest_path}/live_config.json')
@@ -455,9 +449,14 @@ class BacktestResult:
 
 class BacktestResults:
     def __init__(self, backtest_path: str = None):
+        self.pb_config = configparser.ConfigParser()
+        self.view_col = self.load_view_col()
         self.backtest_path = backtest_path
         self.backtests = []
         self.symbols = []
+        self.symbols_selected = []
+        self.side_selected = []
+        self.mode_selected = []
         self.exchanges = []
         self.results_d = []
 
@@ -465,63 +464,107 @@ class BacktestResults:
         rmtree(bt_result.backtest_path, ignore_errors=True)
         self.backtests.remove(bt_result)
 
-    def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None, only : str = False):
-        if (self.backtests or isinstance(trades, pd.DataFrame)) and not only:
+    def load_view_col(self):
+        self.pb_config.read('pbgui.ini')
+        if self.pb_config.has_option("backtest", "view_col"):
+            return eval(self.pb_config.get("backtest", "view_col"))
+        return None
+
+    def save_view_col(self):
+        self.pb_config.read('pbgui.ini')
+        if not self.pb_config.has_section("backtest"):
+            self.pb_config.add_section("backtest")
+        self.pb_config.set("backtest", "view_col", f'{self.view_col}')
+        with open('pbgui.ini', 'w') as f:
+            self.pb_config.write(f)
+
+    def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None, only : bool = False):
+        if (self.backtests or trades is not None) and not only:
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                if "symbol_backtest_view" in st.session_state:
+                    if st.session_state.symbol_backtest_view != self.symbols_selected:
+                        self.symbols_selected = st.session_state.symbol_backtest_view
+                        self.results_d = []
+                st.multiselect("Symbols", self.symbols, default=None, key="symbol_backtest_view")
+            with col2:
+                if "side_backtest_view" in st.session_state:
+                    if st.session_state.side_backtest_view != self.side_selected:
+                        self.side_selected = st.session_state.side_backtest_view
+                        self.results_d = []
+                st.multiselect("Side", options = ['long', 'short'], default=['long','short'], key="side_backtest_view")
+            with col3:
+                if "mode_backtest_view" in st.session_state:
+                    if st.session_state.mode_backtest_view != self.mode_selected:
+                        self.mode_selected = st.session_state.mode_backtest_view
+                        self.results_d = []
+                st.multiselect("Strategy", options = ['recursive_grid', 'neat_grid', 'clock'], default=['recursive_grid', 'neat_grid', 'clock'], key="mode_backtest_view")
             column_config = {
-                "Show": st.column_config.CheckboxColumn('Show', default=False),
-                "Delete": st.column_config.CheckboxColumn('Delete', default=False),
-                "Exchange": "Exchange",
+                "show": st.column_config.CheckboxColumn('show', default=False),
+                "delete": st.column_config.CheckboxColumn('delete', default=False),
                 }
             if not self.results_d:
                 for bt in self.backtests:
-                    if (bt.symbol in symbols or not symbols) and (bt.exchange in exchanges or not exchanges):
+                    side = []
+                    if bt.long_enabled and "long" in self.side_selected or bt.short_enabled and "short" in self.side_selected:
+                        side = True
+                    else:
+                        side = False
+                    if (
+                        bt.symbol in self.symbols_selected and
+                        side and
+                        bt.passivbot_mode in self.mode_selected
+                        ):
                         if bt.market_type == "spot":
                             filename = str(bt.backtest_path).partition(f'{bt.exchange}_spot/')[-1]
                         else:
                             filename = str(bt.backtest_path).partition(f'{bt.exchange}/')[-1]
                         r_dict = {
                                 'id': self.backtests.index(bt),
-                                'Show': bt.selected,
-                                'Symbol': bt.symbol,
-                                'Exchange': bt.exchange,
-                                'Start':  bt.sd,
-                                'End': bt.ed,
-                                'Balance': bt.sb,
-                                'Market': bt.market_type,
+                                'show': bt.selected,
+                                'delete': False,
+                                'symbol': bt.symbol,
+                                'exchange': bt.exchange,
+                                'start_date':  bt.sd,
+                                'end_date': bt.ed,
+                                'starting_balance': bt.sb,
+                                'market_type': bt.market_type,
+                                'passivbot_mode': bt.passivbot_mode,
+                                'n_days': bt.n_days,
                                 'LE': bt.long_enabled,
                                 'SE': bt.short_enabled,
-                                'Name': filename,
-                                'Delete': False,
+                                'filename': filename,
                         }
                         for r in bt.result["result"]:
                             r_dict[r] = bt.result["result"][r]
                         self.results_d.append(r_dict)
-#            column_config = {}
-            all_col = ["adg_long", "adg_short", "Exchange", "Start", "End", "Balance", "Market", "LE", "SE", "Name"]
-            selected_col = st.multiselect("Column", all_col, default=all_col, key="select_col", on_change=None, args=None)
-            for item in all_col:
-                if item not in selected_col:
-                    column_config[item] = None
-                    st.session_state.ed_key += 1
-            results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view", hide_index=None, column_order=None, column_config=column_config, disabled="id")
-            st.session_state.results_d_new = results_d
-            # if new_bt != d:
-            for line in results_d:
-                if line["Show"]:
-                    self.backtests[line["id"]].load_stats()
-                    self.backtests[line["id"]].selected = True
-                else:
-                    self.backtests[line["id"]].selected = False
-#                 if line["Delete"] == True:
-#                     print(self.backtests[line["id"]])
-# #                    self.remove(self.backtests[line["id"]])
-#                     # st.experimental_rerun()
-#                 elif line["Show"] == True:
-#                     self.backtests[line["id"]].load_stats()
-#                     self.backtests[line["id"]].selected = True
-#                 else:
-#                     self.backtests[line["id"]].selected = False
-#                 # st.experimental_rerun()
+            if self.results_d:
+                all_col = set().union(*(d.keys() for d in self.results_d))
+                st.session_state.select_col = all_col
+                if not self.view_col:
+                    self.view_col = all_col
+                cleanup_col = self.view_col.copy()
+                for col in cleanup_col:
+                    if col not in all_col:
+                        self.view_col.remove(col)
+                selected_col = st.multiselect("Column", all_col, default=self.view_col, key="select_col", on_change=None, args=None)
+                if selected_col != self.view_col:
+                    self.view_col = selected_col
+                    self.save_view_col()
+                for item in all_col:
+                    if item not in selected_col:
+                        column_config[item] = None
+                results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view", hide_index=None, column_order=None, column_config=column_config, disabled="id")
+                # if new_bt != d:
+                for line in results_d:
+                    if line["show"]:
+                        self.backtests[line["id"]].selected = True
+                    else:
+                        self.backtests[line["id"]].selected = False
+                    if line["delete"] == True:
+                        print(self.backtests[line["id"]])
+#                       self.remove(self.backtests[line["id"]])
+
         else:
             if not only: return
         hover_be = HoverTool(
