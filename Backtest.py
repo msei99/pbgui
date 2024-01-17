@@ -470,8 +470,9 @@ class BacktestResults:
             column_config = {
                 "Show": st.column_config.CheckboxColumn('Show', default=False),
                 "Delete": st.column_config.CheckboxColumn('Delete', default=False),
+                "Exchange": "Exchange",
                 }
-            if not "editor_backtest_view" in st.session_state:
+            if not self.results_d:
                 for bt in self.backtests:
                     if (bt.symbol in symbols or not symbols) and (bt.exchange in exchanges or not exchanges):
                         if bt.market_type == "spot":
@@ -501,14 +502,16 @@ class BacktestResults:
             for item in all_col:
                 if item not in selected_col:
                     column_config[item] = None
-            self.results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view", hide_index=None, column_order=None, column_config=column_config, disabled="id")
+                    st.session_state.ed_key += 1
+            results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view", hide_index=None, column_order=None, column_config=column_config, disabled="id")
+            st.session_state.results_d_new = results_d
             # if new_bt != d:
-            for line in self.results_d:
+            for line in results_d:
                 if line["Show"]:
                     self.backtests[line["id"]].load_stats()
                     self.backtests[line["id"]].selected = True
-                # else:
-                #     self.backtests[line["id"]].selected = False
+                else:
+                    self.backtests[line["id"]].selected = False
 #                 if line["Delete"] == True:
 #                     print(self.backtests[line["id"]])
 # #                    self.remove(self.backtests[line["id"]])
