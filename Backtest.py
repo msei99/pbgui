@@ -503,6 +503,14 @@ class BacktestResults:
                 "show": st.column_config.CheckboxColumn('show', default=False),
                 "delete": st.column_config.CheckboxColumn('delete', default=False),
                 }
+            if "selected_col" in st.session_state:
+                print(self.view_col)
+                print(st.session_state.selected_col)
+                if st.session_state.selected_col != self.view_col:
+                    print(self.view_col)
+                    print(st.session_state.selected_col)
+                    self.view_col = st.session_state.selected_col
+                    self.save_view_col()
             if not self.results_d:
                 for bt in self.backtests:
                     side = []
@@ -547,12 +555,9 @@ class BacktestResults:
                 for col in cleanup_col:
                     if col not in all_col:
                         self.view_col.remove(col)
-                selected_col = st.multiselect("Column", all_col, default=self.view_col, key="select_col", on_change=None, args=None)
-                if selected_col != self.view_col:
-                    self.view_col = selected_col
-                    self.save_view_col()
+                st.session_state.selected_col = st.multiselect("Column", all_col, default=self.view_col, key="select_col", on_change=None, args=None)
                 for item in all_col:
-                    if item not in selected_col:
+                    if item not in st.session_state.selected_col:
                         column_config[item] = None
                 results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view", hide_index=None, column_order=None, column_config=column_config, disabled="id")
                 # if new_bt != d:
