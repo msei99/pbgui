@@ -170,30 +170,27 @@ def bt_compare():
         if st.button(":recycle:"):
             del st.session_state.bt_results
             st.experimental_rerun()
+        if st.button(":back:"):
+            if "setup_table_bt" in st.session_state:
+                del st.session_state.setup_table_bt
+                st.experimental_rerun()
+            if "bt_results" in st.session_state:
+                del st.session_state.bt_results
+            del st.session_state.bt_compare
+            st.experimental_rerun()
         if st.button("Queue"):
             st.session_state.bt_queue = True
             del st.session_state.bt_compare
             if "bt_results" in st.session_state:
                 del st.session_state.bt_results
             st.experimental_rerun()
-        if st.button(":back:"):
-            if "bt_results" in st.session_state:
-                del st.session_state.bt_results
-            del st.session_state.bt_compare
-            st.experimental_rerun()
-    st.markdown('### Filter and select backtests for view')
     if "bt_results" in st.session_state:
         bt_results = st.session_state.bt_results
     else:     
         st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
         bt_results = st.session_state.bt_results
         bt_results.find_all()
-    col1, col2, col3, col4 = st.columns([1,1,1,1])
-    with col1:
-        symbols = st.multiselect("Symbols", bt_results.symbols, default=None, key=None, on_change=None, args=None)
-    with col2:
-        exchanges = st.multiselect("Exchanges", bt_results.exchanges, default=None, key=None, on_change=None, args=None)
-    bt_results.view(symbols = symbols, exchanges = exchanges)
+    bt_results.view()
 
 def bt_import():
     # Navigation

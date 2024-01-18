@@ -448,6 +448,9 @@ class BacktestResult:
         self.stats = pd.read_csv(stats)
 
 class BacktestResults:
+    SIDES = ['long','short']
+    MODES = ['recursive_grid', 'neat_grid', 'clock']
+    
     def __init__(self, backtest_path: str = None):
         self.pb_config = configparser.ConfigParser()
         self.view_col = self.load_view_col()
@@ -455,8 +458,8 @@ class BacktestResults:
         self.backtests = []
         self.symbols = []
         self.symbols_selected = []
-        self.side_selected = []
-        self.mode_selected = []
+        self.side_selected = self.SIDES
+        self.mode_selected = self.MODES
         self.exchanges = []
         self.results_d = []
 
@@ -478,39 +481,69 @@ class BacktestResults:
         with open('pbgui.ini', 'w') as f:
             self.pb_config.write(f)
 
+    def setup_table(self):
+        with st.sidebar:
+            if st.button(":floppy_disk:"):
+                st.write("save")
+                del st.session_state.setup_table_bt
+                st.experimental_rerun()
+        if self.results_d:
+            backtest_view_keys = set().union(*(d.keys() for d in self.results_d))
+        else:
+            return
+        if not self.view_col:
+            self.view_col = backtest_view_keys
+        cleanup_col = self.view_col.copy()
+        for col in cleanup_col:
+            if col not in backtest_view_keys:
+                self.view_col.remove(col)
+        column_config = {}
+        for item in backtest_view_keys:
+            if item not in self.view_col:
+                column_config[item] = None
+        st.multiselect("Column", backtest_view_keys, default=self.view_col, key="setup_backtest_col", on_change=None, args=None)
+        st.dataframe(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
     def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None, only : bool = False):
+        # if "symbol_backtest_view" not in st.session_state:
+        #     st.session_state.symbol_backtest_view = self.symbols_selected
+        if "setup_table_bt" in st.session_state:
+            self.setup_table()
+            return
         if (self.backtests or trades is not None) and not only:
+            with st.sidebar:
+                if st.button("Setup"):
+                    st.session_state.setup_table_bt = True
+                    st.experimental_rerun()
+            st.markdown('### Filter and select backtests for view')
             col1, col2, col3, col4 = st.columns([1,1,1,1])
             with col1:
                 if "symbol_backtest_view" in st.session_state:
                     if st.session_state.symbol_backtest_view != self.symbols_selected:
                         self.symbols_selected = st.session_state.symbol_backtest_view
                         self.results_d = []
-                st.multiselect("Symbols", self.symbols, default=None, key="symbol_backtest_view")
+                else:
+                    st.session_state.symbol_backtest_view = self.symbols_selected
+                self.symbols_selected = st.multiselect("Symbols", self.symbols, default=None, key="symbol_backtest_view")
             with col2:
                 if "side_backtest_view" in st.session_state:
                     if st.session_state.side_backtest_view != self.side_selected:
                         self.side_selected = st.session_state.side_backtest_view
                         self.results_d = []
-                st.multiselect("Side", options = ['long', 'short'], default=['long','short'], key="side_backtest_view")
+                else:
+                    st.session_state.side_backtest_view = self.side_selected
+                self.side_selected = st.multiselect("Side", options = self.SIDES, key="side_backtest_view")
             with col3:
                 if "mode_backtest_view" in st.session_state:
                     if st.session_state.mode_backtest_view != self.mode_selected:
                         self.mode_selected = st.session_state.mode_backtest_view
                         self.results_d = []
-                st.multiselect("Strategy", options = ['recursive_grid', 'neat_grid', 'clock'], default=['recursive_grid', 'neat_grid', 'clock'], key="mode_backtest_view")
+                else:
+                    st.session_state.mode_backtest_view = self.mode_selected
+                self.mode_selected = st.multiselect("Strategy", options = self.MODES, key="mode_backtest_view")
             column_config = {
                 "show": st.column_config.CheckboxColumn('show', default=False),
                 "delete": st.column_config.CheckboxColumn('delete', default=False),
                 }
-            if "selected_col" in st.session_state:
-                print(self.view_col)
-                print(st.session_state.selected_col)
-                if st.session_state.selected_col != self.view_col:
-                    print(self.view_col)
-                    print(st.session_state.selected_col)
-                    self.view_col = st.session_state.selected_col
-                    self.save_view_col()
             if not self.results_d:
                 for bt in self.backtests:
                     side = []
@@ -548,16 +581,14 @@ class BacktestResults:
                         self.results_d.append(r_dict)
             if self.results_d:
                 all_col = set().union(*(d.keys() for d in self.results_d))
-                st.session_state.select_col = all_col
                 if not self.view_col:
                     self.view_col = all_col
                 cleanup_col = self.view_col.copy()
                 for col in cleanup_col:
                     if col not in all_col:
                         self.view_col.remove(col)
-                st.session_state.selected_col = st.multiselect("Column", all_col, default=self.view_col, key="select_col", on_change=None, args=None)
                 for item in all_col:
-                    if item not in st.session_state.selected_col:
+                    if item not in self.view_col:
                         column_config[item] = None
                 results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view", hide_index=None, column_order=None, column_config=column_config, disabled="id")
                 # if new_bt != d:
