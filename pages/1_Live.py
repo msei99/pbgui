@@ -256,6 +256,13 @@ def select_instance():
                     del st.session_state.confirm
                     del st.session_state.confirm_text
                 st.experimental_rerun()
+            if "History" in ed["edited_rows"][row]:
+                st.session_state.view_instance = instances.instances[row]
+                st.session_state.view_history = True
+                if "confirm" in st.session_state:
+                    del st.session_state.confirm
+                    del st.session_state.confirm_text
+                st.experimental_rerun()
             if "Edit" in ed["edited_rows"][row]:
                 st.session_state.edit_instance = instances.instances[row]
                 if "confirm" in st.session_state:
@@ -291,6 +298,7 @@ def select_instance():
         d.append({
             'id': id,
             'View': False,
+            'History': False,
             'Edit': False,
             'Running': instance.is_running(),
             'User': instance.user,
@@ -360,7 +368,11 @@ def view_history():
     instance = st.session_state.view_instance
     # Navigation
     with st.sidebar:
-        if st.button(":back:"):
+        if st.button(":top:"):
+            del st.session_state.view_history
+            del st.session_state.view_instance
+            st.experimental_rerun()
+        if st.button("View"):
             del st.session_state.view_history
             st.experimental_rerun()
     instance.compare_history()
