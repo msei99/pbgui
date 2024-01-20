@@ -36,6 +36,9 @@ class BacktestItem(Base):
 
     @property
     def config(self): return self._config.config
+    @config.setter
+    def config(self, new_config):
+        self._config.config = new_config
 
     def initialize(self):
         self.sd = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")

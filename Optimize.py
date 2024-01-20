@@ -948,7 +948,7 @@ class OptimizeResults:
                             if "my_bt" not in st.session_state:
                                 st.session_state.my_bt = BacktestItem(config)
                             else:
-                                st.session_state.my_bt.config
+                                st.session_state.my_bt.config = config
                             st.session_state.my_bt.symbol = symbols[0]
                             if "bt_queue" in st.session_state:
                                 del st.session_state.bt_queue
