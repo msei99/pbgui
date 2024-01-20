@@ -12,11 +12,11 @@ def bt_add():
         st.error(st.session_state.error, icon="🚨")
     # Navigation
     with st.sidebar:
+        if st.button("Results"):
+            st.session_state.bt_compare = True
+            st.experimental_rerun()
         if st.button("Queue"):
             st.session_state.bt_queue = True
-            st.experimental_rerun()
-        if st.button("Compare"):
-            st.session_state.bt_compare = True
             st.experimental_rerun()
         if st.button("Import"):
             st.session_state.bt_import = True
@@ -135,17 +135,17 @@ def bt_queue():
 def bt_view():
     # Navigation
     with st.sidebar:
+        if st.button("Results"):
+            st.session_state.bt_compare = True
+            del st.session_state.bt_view
+            if "bt_results" in st.session_state:
+                del st.session_state.bt_results
+            st.experimental_rerun()
         if st.button("Queue"):
             if "bt_results" in st.session_state:
                 del st.session_state.bt_results
             st.session_state.bt_queue = True
             del st.session_state.bt_view
-            st.experimental_rerun()
-        if st.button("Compare"):
-            st.session_state.bt_compare = True
-            del st.session_state.bt_view
-            if "bt_results" in st.session_state:
-                del st.session_state.bt_results
             st.experimental_rerun()
         if st.button(":back:"):
             del st.session_state.bt_view
@@ -159,20 +159,24 @@ def bt_view():
             st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
             bt_results = st.session_state.bt_results
             bt_results.match_item(st.session_state.bt_view)
-            print(bt_results.backtests)
     for bt in bt_results.backtests:
         bt.selected = True
     bt_results.view(only=True)
 
 def bt_compare():
+    # Init bt_results
+    if "bt_results" in st.session_state:
+        bt_results = st.session_state.bt_results
+    else:     
+        st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests')
+        bt_results = st.session_state.bt_results
+        bt_results.find_all()
     # Navigation
     with st.sidebar:
-        if st.button(":recycle:"):
-            del st.session_state.bt_results
-            st.experimental_rerun()
         if st.button(":back:"):
-            if "setup_table_bt" in st.session_state:
-                del st.session_state.setup_table_bt
+            if f"setup_table_bt_{bt_results}" in st.session_state:
+                del st.session_state[f'setup_table_bt_{bt_results}']
+                del st.session_state.backtest_view_keys
                 st.experimental_rerun()
             if "bt_results" in st.session_state:
                 del st.session_state.bt_results
@@ -184,12 +188,6 @@ def bt_compare():
             if "bt_results" in st.session_state:
                 del st.session_state.bt_results
             st.experimental_rerun()
-    if "bt_results" in st.session_state:
-        bt_results = st.session_state.bt_results
-    else:     
-        st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
-        bt_results = st.session_state.bt_results
-        bt_results.find_all()
     bt_results.view()
 
 def bt_import():
@@ -201,8 +199,7 @@ def bt_import():
     my_bt.import_pbconfigdb()
 #    st.data_editor(data=df, width=None, height=None, use_container_width=True, hide_index=None, column_order=None)
 
-
-set_page_config()
+set_page_config("Backtest")
 
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:

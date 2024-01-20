@@ -784,6 +784,10 @@ class Instance(Base):
         if not self._btresults:
             self._btresults = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
             self._btresults.match_config(self.symbol, self._config.config, self.market_type)
+        if self.symbol in self._btresults.symbols:
+            self._btresults.symbols_selected = self.symbol
+        self._btresults.side_selected = self._btresults.SIDES
+        self._btresults.mode_selected = self._btresults.MODES
         self._btresults.view(trades = self._trades)
         if self._bt.is_running():
             st_autorefresh(interval=10000, limit=None, key="refresh_backtest_running")

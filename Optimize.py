@@ -711,11 +711,11 @@ class OptimizeResults:
         pb_config.read('pbgui.ini')
         if pb_config.has_option("main", "pbdir"):
             self.pbdir = pb_config.get("main", "pbdir")
-        if "bt_results" in st.session_state:
-            self.bt_results = st.session_state.bt_results
+        if "opt_bt_results" in st.session_state:
+            self.bt_results = st.session_state.opt_bt_results
         else:     
-            st.session_state.bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
-            self.bt_results = st.session_state.bt_results
+            st.session_state.opt_bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
+            self.bt_results = st.session_state.opt_bt_results
     
     def find_results_l1(self):
         p_hs_rg = str(Path(f'{self.pbdir}/results_harmony_search_recursive_grid/**/*_result_*.json'))
