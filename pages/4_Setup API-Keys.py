@@ -5,6 +5,7 @@ import pbgui_help
 from User import Users, User
 from Instance import Instances
 from Exchange import Exchange, Exchanges, Spot, Passphrase
+from PBRemote import PBRemote
 
 def edit_user():
     # Init
@@ -32,12 +33,20 @@ def edit_user():
                     del st.session_state.error
                 del st.session_state.edit_user
                 del st.session_state.users
+                # cleanup for Remote Server Manager
+                if "remote" in st.session_state:
+                    del st.session_state.remote
+                PBRemote().restart()
                 st.experimental_rerun()
         if user.name and not "error" in st.session_state:
             if st.button(":floppy_disk:"):
                 if not users.has_user(user):
                     users.users.append(user)
                 users.save()
+                # cleanup for Remote Server Manager
+                if "remote" in st.session_state:
+                    del st.session_state.remote
+                PBRemote().restart()
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:
         new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)

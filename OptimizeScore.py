@@ -22,32 +22,32 @@ class OptimizeScore:
     MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_SHORT_ROUND = 2
     MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_SHORT_FORMAT = f'%.{MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_SHORT_ROUND}f'
     MAXIMUM_PA_DISTANCE_STD_LONG_MIN = -1.0
-    MAXIMUM_PA_DISTANCE_STD_LONG_MAX = 10.0
+    MAXIMUM_PA_DISTANCE_STD_LONG_MAX = 1000.0
     MAXIMUM_PA_DISTANCE_STD_LONG_STEP = 0.001
     MAXIMUM_PA_DISTANCE_STD_LONG_ROUND = 3
     MAXIMUM_PA_DISTANCE_STD_LONG_FORMAT = f'%.{MAXIMUM_PA_DISTANCE_STD_LONG_ROUND}f'
     MAXIMUM_PA_DISTANCE_STD_SHORT_MIN = -1.0
-    MAXIMUM_PA_DISTANCE_STD_SHORT_MAX = 10.0
+    MAXIMUM_PA_DISTANCE_STD_SHORT_MAX = 1000.0
     MAXIMUM_PA_DISTANCE_STD_SHORT_STEP = 0.001
     MAXIMUM_PA_DISTANCE_STD_SHORT_ROUND = 3
     MAXIMUM_PA_DISTANCE_STD_SHORT_FORMAT = f'%.{MAXIMUM_PA_DISTANCE_STD_SHORT_ROUND}f'
     MAXIMUM_PA_DISTANCE_MEAN_LONG_MIN = -1.0
-    MAXIMUM_PA_DISTANCE_MEAN_LONG_MAX = 10.0
+    MAXIMUM_PA_DISTANCE_MEAN_LONG_MAX = 1000.0
     MAXIMUM_PA_DISTANCE_MEAN_LONG_STEP = 0.001
     MAXIMUM_PA_DISTANCE_MEAN_LONG_ROUND = 3
     MAXIMUM_PA_DISTANCE_MEAN_LONG_FORMAT = f'%.{MAXIMUM_PA_DISTANCE_MEAN_LONG_ROUND}f'
     MAXIMUM_PA_DISTANCE_MEAN_SHORT_MIN = -1.0
-    MAXIMUM_PA_DISTANCE_MEAN_SHORT_MAX = 10.0
+    MAXIMUM_PA_DISTANCE_MEAN_SHORT_MAX = 1000.0
     MAXIMUM_PA_DISTANCE_MEAN_SHORT_STEP = 0.001
     MAXIMUM_PA_DISTANCE_MEAN_SHORT_ROUND = 3
     MAXIMUM_PA_DISTANCE_MEAN_SHORT_FORMAT = f'%.{MAXIMUM_PA_DISTANCE_MEAN_SHORT_ROUND}f'
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_MIN = -1.0
-    MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_MAX = 10.0
+    MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_MAX = 1000.0
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_STEP = 0.001
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_ROUND = 3
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_FORMAT = f'%.{MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_ROUND}f'
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_MIN = -1.0
-    MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_MAX = 10.0
+    MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_MAX = 1000.0
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_STEP = 0.001
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_ROUND = 3
     MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_FORMAT = f'%.{MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_ROUND}f'
@@ -62,12 +62,12 @@ class OptimizeScore:
     MAXIMUM_LOSS_PROFIT_RATIO_SHORT_ROUND = 3
     MAXIMUM_LOSS_PROFIT_RATIO_SHORT_FORMAT = f'%.{MAXIMUM_LOSS_PROFIT_RATIO_SHORT_ROUND}f'
     MAXIMUM_HRS_STUCK_MAX_LONG_MIN = -1.0
-    MAXIMUM_HRS_STUCK_MAX_LONG_MAX = 87600.0
+    MAXIMUM_HRS_STUCK_MAX_LONG_MAX = 1000000.0
     MAXIMUM_HRS_STUCK_MAX_LONG_STEP = 10.0
     MAXIMUM_HRS_STUCK_MAX_LONG_ROUND = 1
     MAXIMUM_HRS_STUCK_MAX_LONG_FORMAT = f'%.{MAXIMUM_HRS_STUCK_MAX_LONG_ROUND}f'
     MAXIMUM_HRS_STUCK_MAX_SHORT_MIN = -1.0
-    MAXIMUM_HRS_STUCK_MAX_SHORT_MAX = 87600.0
+    MAXIMUM_HRS_STUCK_MAX_SHORT_MAX = 1000000.0
     MAXIMUM_HRS_STUCK_MAX_SHORT_STEP = 10.0
     MAXIMUM_HRS_STUCK_MAX_SHORT_ROUND = 1
     MAXIMUM_HRS_STUCK_MAX_SHORT_FORMAT = f'%.{MAXIMUM_HRS_STUCK_MAX_SHORT_ROUND}f'
@@ -137,40 +137,112 @@ class OptimizeScore:
     def config(self, new_config):
         if "maximum_drawdown_max_long" in new_config:
             self.maximum_drawdown_max_long = new_config["maximum_drawdown_max_long"]
+            if self._maximum_drawdown_max_long < self.MAXIMUM_DRAWDOWN_MAX_LONG_MIN:
+                self._maximum_drawdown_max_long = self.MAXIMUM_DRAWDOWN_MAX_LONG_MIN
+            if self._maximum_drawdown_max_long > self.MAXIMUM_DRAWDOWN_MAX_LONG_MAX:
+                self._maximum_drawdown_max_long = self.MAXIMUM_DRAWDOWN_MAX_LONG_MAX
         if "maximum_drawdown_max_short" in new_config:
             self.maximum_drawdown_max_short = new_config["maximum_drawdown_max_short"]
+            if self._maximum_drawdown_max_short < self.MAXIMUM_DRAWDOWN_MAX_SHORT_MIN:
+                self._maximum_drawdown_max_short = self.MAXIMUM_DRAWDOWN_MAX_SHORT_MIN
+            if self._maximum_drawdown_max_short > self.MAXIMUM_DRAWDOWN_MAX_SHORT_MAX:
+                self._maximum_drawdown_max_short = self.MAXIMUM_DRAWDOWN_MAX_SHORT_MAX
         if "maximum_drawdown_1pct_worst_mean_long" in new_config:
             self.maximum_drawdown_1pct_worst_mean_long = new_config["maximum_drawdown_1pct_worst_mean_long"]
+            if self._maximum_drawdown_1pct_worst_mean_long < self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_LONG_MIN:
+                self._maximum_drawdown_1pct_worst_mean_long = self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_LONG_MIN
+            if self._maximum_drawdown_1pct_worst_mean_long > self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_LONG_MAX:
+                self._maximum_drawdown_1pct_worst_mean_long = self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_LONG_MAX
         if "maximum_drawdown_1pct_worst_mean_short" in new_config:
             self.maximum_drawdown_1pct_worst_mean_short = new_config["maximum_drawdown_1pct_worst_mean_short"]
+            if self._maximum_drawdown_1pct_worst_mean_short < self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_SHORT_MIN:
+                self._maximum_drawdown_1pct_worst_mean_short = self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_SHORT_MIN
+            if self._maximum_drawdown_1pct_worst_mean_short > self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_SHORT_MAX:
+                self._maximum_drawdown_1pct_worst_mean_short = self.MAXIMUM_DRAWDOWN_1PCT_WORST_MEAN_SHORT_MAX
         if "maximum_pa_distance_std_long" in new_config:
             self.maximum_pa_distance_std_long = new_config["maximum_pa_distance_std_long"]
+            if self._maximum_pa_distance_std_long < self.MAXIMUM_PA_DISTANCE_STD_LONG_MIN:
+                self._maximum_pa_distance_std_long = self.MAXIMUM_PA_DISTANCE_STD_LONG_MIN
+            if self._maximum_pa_distance_std_long > self.MAXIMUM_PA_DISTANCE_STD_LONG_MAX:
+                self._maximum_pa_distance_std_long = self.MAXIMUM_PA_DISTANCE_STD_LONG_MAX
         if "maximum_pa_distance_std_short" in new_config:
             self.maximum_pa_distance_std_short = new_config["maximum_pa_distance_std_short"]
+            if self._maximum_pa_distance_std_short < self.MAXIMUM_PA_DISTANCE_STD_SHORT_MIN:
+                self._maximum_pa_distance_std_short = self.MAXIMUM_PA_DISTANCE_STD_SHORT_MIN
+            if self._maximum_pa_distance_std_short > self.MAXIMUM_PA_DISTANCE_STD_SHORT_MAX:
+                self._maximum_pa_distance_std_short = self.MAXIMUM_PA_DISTANCE_STD_SHORT_MAX
         if "maximum_pa_distance_mean_long" in new_config:
             self.maximum_pa_distance_mean_long = new_config["maximum_pa_distance_mean_long"]
+            if self._maximum_pa_distance_mean_long < self.MAXIMUM_PA_DISTANCE_MEAN_LONG_MIN:
+                self._maximum_pa_distance_mean_long = self.MAXIMUM_PA_DISTANCE_MEAN_LONG_MIN
+            if self._maximum_pa_distance_mean_long > self.MAXIMUM_PA_DISTANCE_MEAN_LONG_MAX:
+                self._maximum_pa_distance_mean_long = self.MAXIMUM_PA_DISTANCE_MEAN_LONG_MAX
         if "maximum_pa_distance_mean_short" in new_config:
             self.maximum_pa_distance_mean_short = new_config["maximum_pa_distance_mean_short"]
+            if self._maximum_pa_distance_mean_short < self.MAXIMUM_PA_DISTANCE_MEAN_SHORT_MIN:
+                self._maximum_pa_distance_mean_short = self.MAXIMUM_PA_DISTANCE_MEAN_SHORT_MIN
+            if self._maximum_pa_distance_mean_short > self.MAXIMUM_PA_DISTANCE_MEAN_SHORT_MAX:
+                self._maximum_pa_distance_mean_short = self.MAXIMUM_PA_DISTANCE_MEAN_SHORT_MAX
         if "maximum_pa_distance_1pct_worst_mean_long" in new_config:
             self.maximum_pa_distance_1pct_worst_mean_long = new_config["maximum_pa_distance_1pct_worst_mean_long"]
+            if self._maximum_pa_distance_1pct_worst_mean_long < self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_MIN:
+                self._maximum_pa_distance_1pct_worst_mean_long = self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_MIN
+            if self._maximum_pa_distance_1pct_worst_mean_long > self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_MAX:
+                self._maximum_pa_distance_1pct_worst_mean_long = self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_LONG_MAX
         if "maximum_pa_distance_1pct_worst_mean_short" in new_config:
             self.maximum_pa_distance_1pct_worst_mean_short = new_config["maximum_pa_distance_1pct_worst_mean_short"]
+            if self._maximum_pa_distance_1pct_worst_mean_short < self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_MIN:
+                self._maximum_pa_distance_1pct_worst_mean_short = self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_MIN
+            if self._maximum_pa_distance_1pct_worst_mean_short > self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_MAX:
+                self._maximum_pa_distance_1pct_worst_mean_short = self.MAXIMUM_PA_DISTANCE_1PCT_WORST_MEAN_SHORT_MAX
         if "maximum_loss_profit_ratio_long" in new_config:
             self.maximum_loss_profit_ratio_long = new_config["maximum_loss_profit_ratio_long"]
+            if self._maximum_loss_profit_ratio_long < self.MAXIMUM_LOSS_PROFIT_RATIO_LONG_MIN:
+                self._maximum_loss_profit_ratio_long = self.MAXIMUM_LOSS_PROFIT_RATIO_LONG_MIN
+            if self._maximum_loss_profit_ratio_long > self.MAXIMUM_LOSS_PROFIT_RATIO_LONG_MAX:
+                self._maximum_loss_profit_ratio_long = self.MAXIMUM_LOSS_PROFIT_RATIO_LONG_MAX
         if "maximum_loss_profit_ratio_short" in new_config:
             self.maximum_loss_profit_ratio_short = new_config["maximum_loss_profit_ratio_short"]
+            if self._maximum_loss_profit_ratio_short < self.MAXIMUM_LOSS_PROFIT_RATIO_SHORT_MIN:
+                self._maximum_loss_profit_ratio_short = self.MAXIMUM_LOSS_PROFIT_RATIO_SHORT_MIN
+            if self._maximum_loss_profit_ratio_short > self.MAXIMUM_LOSS_PROFIT_RATIO_SHORT_MAX:
+                self._maximum_loss_profit_ratio_short = self.MAXIMUM_LOSS_PROFIT_RATIO_SHORT_MAX
         if "maximum_hrs_stuck_max_long" in new_config:
             self.maximum_hrs_stuck_max_long = new_config["maximum_hrs_stuck_max_long"]
+            if self._maximum_hrs_stuck_max_long < self.MAXIMUM_HRS_STUCK_MAX_LONG_MIN:
+                self._maximum_hrs_stuck_max_long = self.MAXIMUM_HRS_STUCK_MAX_LONG_MIN
+            if self._maximum_hrs_stuck_max_long > self.MAXIMUM_HRS_STUCK_MAX_LONG_MAX:
+                self._maximum_hrs_stuck_max_long = self.MAXIMUM_HRS_STUCK_MAX_LONG_MAX
         if "maximum_hrs_stuck_max_short" in new_config:
             self.maximum_hrs_stuck_max_short = new_config["maximum_hrs_stuck_max_short"]
+            if self._maximum_hrs_stuck_max_short < self.MAXIMUM_HRS_STUCK_MAX_SHORT_MIN:
+                self._maximum_hrs_stuck_max_short = self.MAXIMUM_HRS_STUCK_MAX_SHORT_MIN
+            if self._maximum_hrs_stuck_max_short > self.MAXIMUM_HRS_STUCK_MAX_SHORT_MAX:
+                self._maximum_hrs_stuck_max_short = self.MAXIMUM_HRS_STUCK_MAX_SHORT_MAX
         if "maximum_exposure_ratios_mean_long" in new_config:
             self.maximum_exposure_ratios_mean_long = new_config["maximum_exposure_ratios_mean_long"]
+            if self._maximum_exposure_ratios_mean_long < self.MAXIMUM_EXPOSURE_RATIOS_MEAN_LONG_MIN:
+                self._maximum_exposure_ratios_mean_long = self.MAXIMUM_EXPOSURE_RATIOS_MEAN_LONG_MIN
+            if self._maximum_exposure_ratios_mean_long > self.MAXIMUM_EXPOSURE_RATIOS_MEAN_LONG_MAX:
+                self._maximum_exposure_ratios_mean_long = self.MAXIMUM_EXPOSURE_RATIOS_MEAN_LONG_MAX
         if "maximum_exposure_ratios_mean_short" in new_config:
             self.maximum_exposure_ratios_mean_short = new_config["maximum_exposure_ratios_mean_short"]
+            if self._maximum_exposure_ratios_mean_short < self.MAXIMUM_EXPOSURE_RATIOS_MEAN_SHORT_MIN:
+                self._maximum_exposure_ratios_mean_short = self.MAXIMUM_EXPOSURE_RATIOS_MEAN_SHORT_MIN
+            if self._maximum_exposure_ratios_mean_short > self.MAXIMUM_EXPOSURE_RATIOS_MEAN_SHORT_MAX:
+                self._maximum_exposure_ratios_mean_short = self.MAXIMUM_EXPOSURE_RATIOS_MEAN_SHORT_MAX
         if "maximum_time_at_max_exposure_long" in new_config:
             self.maximum_time_at_max_exposure_long = new_config["maximum_time_at_max_exposure_long"]
+            if self._maximum_time_at_max_exposure_long < self.MAXIMUM_TIME_AT_MAX_EXPOSURE_LONG_MIN:
+                self._maximum_time_at_max_exposure_long = self.MAXIMUM_TIME_AT_MAX_EXPOSURE_LONG_MIN
+            if self._maximum_time_at_max_exposure_long > self.MAXIMUM_TIME_AT_MAX_EXPOSURE_LONG_MAX:
+                self._maximum_time_at_max_exposure_long = self.MAXIMUM_TIME_AT_MAX_EXPOSURE_LONG_MAX
         if "maximum_time_at_max_exposure_short" in new_config:
             self.maximum_time_at_max_exposure_short = new_config["maximum_time_at_max_exposure_short"]
+            if self._maximum_time_at_max_exposure_short < self.MAXIMUM_TIME_AT_MAX_EXPOSURE_SHORT_MIN:
+                self._maximum_time_at_max_exposure_short = self.MAXIMUM_TIME_AT_MAX_EXPOSURE_SHORT_MIN
+            if self._maximum_time_at_max_exposure_short > self.MAXIMUM_TIME_AT_MAX_EXPOSURE_SHORT_MAX:
+                self._maximum_time_at_max_exposure_short = self.MAXIMUM_TIME_AT_MAX_EXPOSURE_SHORT_MAX
         self._config = new_config
 
     @property

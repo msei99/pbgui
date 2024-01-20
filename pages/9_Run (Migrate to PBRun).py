@@ -54,6 +54,8 @@ def save_yaml(instance):
 
 # Display all bots
 def display_bots():
+    if not "pb_instances" in st.session_state:
+        return
     col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,3])
     with col1:
         st.write("#### **User**")
@@ -65,8 +67,6 @@ def display_bots():
         st.write("#### **Edit**")
     with col5:
         st.write("#### **Configuration file**")
-    if not "pb_instances" in st.session_state:
-        return
     for instance in st.session_state.pb_instances:
         col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,3])
         with col1:
@@ -378,7 +378,7 @@ if 'pb_manager' not in st.session_state:
         st.session_state.pb_manager = Manager()
         st.session_state.pb_instances = st.session_state.pb_manager.get_instances()
     except Exception as e:
-        print(f'No Instances: {e}')
+        st.write("### No Instances configured in passivbot instance manager.")
 if 'go_backtest' in st.session_state:
     if st.session_state.go_backtest:
         st.session_state.go_backtest = False

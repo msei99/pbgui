@@ -16,6 +16,7 @@ from bokeh.plotting import figure
 import numpy as np
 from shutil import rmtree
 import sys
+import traceback
 
 class Instance(Base):
     def __init__(self):
@@ -115,14 +116,16 @@ class Instance(Base):
     @property
     def upnl(self):
         if not self.load_status(): return 0
-        if self.market_type == "spot": return 0
         try: 
-            if self._status["position"]:
+            if self.market_type == "spot":
+                upnl = self._status["spot_balance"] * self._status["price"]["last"]
+            elif self.market_type == "futures":
                 upnl = self._status["position"]["unrealizedPnl"]
-                if not upnl: return 0
-                return upnl
             else:
-                return 0
+                upnl = 0
+            if not upnl:
+                upnl = 0
+            return upnl
         except Exception as e:
             print(f'Error calculating upnl: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
@@ -130,17 +133,15 @@ class Instance(Base):
     def psize(self):
         if not self.load_status(): return 0
         try:
-            if not "position" in self._status:
-                return 0
-            if self._status["position"]:
-                if self.market_type == "futures":
-                    psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
-                else:
+            if self.market_type == "spot":
+                if "spot_balance" in self._status:
                     psize = self._status["spot_balance"]
-                if not psize: return 0
-                return psize
+            elif self.market_type == "futures":
+                if "position" in self._status:
+                    psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
             else:
-                return 0
+                psize = 0
+            return psize
         except Exception as e:
             print(f'Error calculating psize: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
@@ -209,50 +210,36 @@ class Instance(Base):
 
     @enabled.setter
     def enabled(self, new_enabled):
-        if self._enabled != new_enabled:
-            self._enabled = new_enabled
-            self.save()
-            PBRun().update(self._instance_path, self._enabled)
-            if PBRemote().is_running():
-                PBRemote().stop()
-                PBRemote().run()
-            st.experimental_rerun()
+        self._enabled = new_enabled
+        self.save()
+        PBRun().update(self._instance_path, self._enabled)
+        if PBRemote().is_running():
+            PBRemote().stop()
+            PBRemote().run()
 
     @co.setter
     def co(self, new_co):
-        if self._co != new_co:
-            self._co = new_co
-            st.experimental_rerun()
+        self._co = new_co
 
     @leverage.setter
     def leverage(self, new_leverage):
-        if self._leverage != new_leverage:
-            self._leverage = new_leverage
-            st.experimental_rerun()
+        self._leverage = new_leverage
 
     @assigned_balance.setter
     def assigned_balance(self, new_assigned_balance):
-        if self._assigned_balance != new_assigned_balance:
-            self._assigned_balance = new_assigned_balance
-            st.experimental_rerun()
+        self._assigned_balance = new_assigned_balance
 
     @price_distance_threshold.setter
     def price_distance_threshold(self, new_price_distance_threshold):
-        if self._price_distance_threshold != new_price_distance_threshold:
-            self._price_distance_threshold = new_price_distance_threshold
-            st.experimental_rerun()
+        self._price_distance_threshold = new_price_distance_threshold
 
     @price_precision.setter
     def price_precision(self, new_price_precision):
-        if self._price_precision != new_price_precision:
-            self._price_precision = new_price_precision
-            st.experimental_rerun()
+        self._price_precision = new_price_precision
 
     @price_step.setter
     def price_step(self, new_price_step):
-        if self._price_step != new_price_step:
-            self._price_step = new_price_step
-            st.experimental_rerun()
+        self._price_step = new_price_step
 
     @long_mode.setter
     def long_mode(self, new_long_mode):
@@ -331,13 +318,19 @@ class Instance(Base):
         ffile = Path(f'{self._instance_path}/fundings.json')
         fundings = []
         if ffile.exists():
-            with open(ffile, "r", encoding='utf-8') as f:
-                fundings = json.load(f)
+            try:
+                with open(ffile, "r", encoding='utf-8') as f:
+                    fundings = json.load(f)
+            except Exception as e:
+                print(f'{str(ffile)} is corrupted {e}')
         file = Path(f'{self._instance_path}/trades.json')
         if not file.exists():
             return
-        with open(file, "r", encoding='utf-8') as f:
-            trades = json.load(f)
+        try:
+            with open(file, "r", encoding='utf-8') as f:
+                trades = json.load(f)
+        except Exception as e:
+            print(f'{str(file)} is corrupted {e}')
         if not trades:
             return
         data = {'timestamp': [],
@@ -571,7 +564,10 @@ class Instance(Base):
                 if len(fundings) > 0:
                     for funding in fundings:
                         my_balance = my_balance + funding["amount"]
-            df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance)
+            if self.exchange.id == "kucoinfutures":
+                df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance - self.upnl)
+            else:
+                df["balance"] = df["balance"].apply(lambda x: x + my_balance - balance)
 #        print(df)
         return df
 
@@ -607,14 +603,21 @@ class Instance(Base):
         ltrades = 0
         since = 1577840461000
         if file_lft.exists():
-            with open(file_lft, "r", encoding='utf-8') as f:
-                since = json.load(f)
+            try:
+                with open(file_lft, "r", encoding='utf-8') as f:
+                    since = json.load(f)
+            except Exception as e:
+                print(f'{str(file_lft)} is corrupted {e}')
+                file_lft.unlink()
         if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                trades = json.load(f)
-                ltrades = len(trades)
-            if type(trades[-1]["timestamp"]) == int:
-                since = trades[-1]["timestamp"]
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    trades = json.load(f)
+                    ltrades = len(trades)
+                if type(trades[-1]["timestamp"]) == int:
+                    since = trades[-1]["timestamp"]
+            except Exception as e:
+                print(f'{str(file)} is corrupted {e}')
         now = self.fetch_timestamp()
         new_trades = self._exchange.fetch_trades(self.symbol_ccxt, self._market_type, since)
         if new_trades:
@@ -640,14 +643,21 @@ class Instance(Base):
         lfundings = 0
         since = 1577840461000
         if file_lff.exists():
-            with open(file_lff, "r", encoding='utf-8') as f:
-                since = json.load(f)
+            try:
+                with open(file_lff, "r", encoding='utf-8') as f:
+                    since = json.load(f)
+            except Exception as e:
+                print(f'{str(file_lff)} is corrupted {e}')
+                file_lff.unlink()
         if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                fundings = json.load(f)
-                lfundings = len(fundings)
-            if type(fundings[-1]["timestamp"]) == int:
-                since = fundings[-1]["timestamp"]
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    fundings = json.load(f)
+                    lfundings = len(fundings)
+                if type(fundings[-1]["timestamp"]) == int:
+                    since = fundings[-1]["timestamp"]
+            except Exception as e:
+                print(f'{str(file)} is corrupted {e}')
         now = self.fetch_timestamp()
         new_fundings = self._exchange.fetch_fundings(self.symbol_ccxt, self._market_type, since)
         if new_fundings:
@@ -729,6 +739,9 @@ class Instance(Base):
             self.fetch_trades()
             self.fetch_fundings()
             self._trades = self.trades_to_df()
+        if self._trades is None:
+            st.write("### No Trades available.")
+            return
         self.sb = self._trades["balance"][0]
         self.sd = datetime.fromtimestamp(self._trades["timestamp"][0]/1000).strftime("%Y-%m-%d")
         self.ed = datetime.fromtimestamp(self._trades.iloc[-1]["timestamp"]/1000).strftime("%Y-%m-%d")
@@ -760,7 +773,7 @@ class Instance(Base):
             elif self._bt.is_finish():
                 self._bt.remove()
                 self._btresults = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
-                self._btresults.match_config(self.symbol, self._config.config)
+                self._btresults.match_config(self.symbol, self._config.config, self.market_type)
                 st.experimental_rerun()
             else:
                 if st.button("Run"):
@@ -770,7 +783,11 @@ class Instance(Base):
                     st.experimental_rerun()
         if not self._btresults:
             self._btresults = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
-            self._btresults.match_config(self.symbol, self._config.config)
+            self._btresults.match_config(self.symbol, self._config.config, self.market_type)
+        if self.symbol in self._btresults.symbols:
+            self._btresults.symbols_selected = self.symbol
+        self._btresults.side_selected = self._btresults.SIDES
+        self._btresults.mode_selected = self._btresults.MODES
         self._btresults.view(trades = self._trades)
         if self._bt.is_running():
             st_autorefresh(interval=10000, limit=None, key="refresh_backtest_running")
@@ -798,20 +815,25 @@ class Instance(Base):
     def load(self, path: Path):
         file = Path(f'{path}/instance.cfg')
         if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                state = json.load(f)
-            self.__dict__.update(state)
-            self._instance_path = path
-            self.user = state["_user"]
-            if not self._symbol_ccxt:
-                self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
-                state["_symbol_ccxt"] = self._symbol_ccxt
-                with open(file, "w", encoding='utf-8') as f:
-                    json.dump(state, f, indent=4)
-            self._config = Config(f'{self._instance_path}/config.json')
-            self._config.load_config()
-        else:
-            print(f'{file} not found')
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    state = json.load(f)
+                self.__dict__.update(state)
+                self._instance_path = path
+                self.user = state["_user"]
+                if not self._symbol_ccxt:
+                    self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+                    state["_symbol_ccxt"] = self._symbol_ccxt
+                    with open(file, "w", encoding='utf-8') as f:
+                        json.dump(state, f, indent=4)
+                self._config = Config(f'{self._instance_path}/config.json')
+                self._config.load_config()
+                return True
+            except Exception as e:
+                print(f'Something went wrong, but continue {e}')
+                traceback.print_exc()
+        print(f'Error load Instance: {str(file)}')
+        False
 
     def load_status(self):
         file = Path(f'{self._instance_path}/status.json')
@@ -904,15 +926,39 @@ class Instances:
     def __init__(self, ipath: str = None):
         self.instances = []
         self.index = 0
-        self.pbrun_log = False
-        self.pbremote_log = False
-        self.pbstat_log = False
+        self._pbrun_log = False
+        self._pbremote_log = False
+        self._pbstat_log = False
         pbgdir = Path.cwd()
         if not ipath:
             self.instances_path = f'{pbgdir}/data/instances'
         else:
             self.instances_path = f'{pbgdir}/data/remote/instances_{ipath}'
         self.load()
+
+    @property
+    def pbrun_log(self): return self._pbrun_log
+    @pbrun_log.setter
+    def pbrun_log(self, new_pbrun_log):
+        if self.pbrun_log != new_pbrun_log:
+            self._pbrun_log = new_pbrun_log
+            st.experimental_rerun()
+
+    @property
+    def pbremote_log(self): return self._pbremote_log
+    @pbremote_log.setter
+    def pbremote_log(self, new_pbremote_log):
+        if self.pbremote_log != new_pbremote_log:
+            self._pbremote_log = new_pbremote_log
+            st.experimental_rerun()
+
+    @property
+    def pbstat_log(self): return self._pbstat_log
+    @pbstat_log.setter
+    def pbstat_log(self, new_pbstat_log):
+        if self.pbstat_log != new_pbstat_log:
+            self._pbstat_log = new_pbstat_log
+            st.experimental_rerun()
 
     def __iter__(self):
         return iter(self.instances)
@@ -974,8 +1020,8 @@ class Instances:
         instances = glob.glob(p)
         for instance in instances:
             inst = Instance()
-            inst.load(instance)
-            self.instances.append(inst)
+            if inst.load(instance):
+                self.instances.append(inst)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
 
     def view_log(self, log_filename: str):
@@ -987,7 +1033,7 @@ class Instances:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
-        col_log, col_del, col_empty = st.columns([3,1,20])
+        col_log, col_del, col_empty = st.columns([5,1,18])
         with col_log:
             st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
         with col_del:
@@ -1004,10 +1050,14 @@ class Instances:
             return
         sys.path.insert(0,st.session_state.pbdir)
         sys.path.insert(0,f'{st.session_state.pbdir}/manager')
-        manager = __import__("manager")
-        Manager = getattr(manager,"Manager")
-        pb_manager = Manager()
-        pb_instances = pb_manager.get_instances()
+        try:
+            manager = __import__("manager")
+            Manager = getattr(manager,"Manager")
+            pb_manager = Manager()
+            pb_instances = pb_manager.get_instances()
+        except Exception as e:
+            st.write("### No Instances configured in passivbot instance manager. We have nothing to import.")
+            return
         d = []
         select_all = st.checkbox('Select All',value=False, key="select_all")
         column_config = {

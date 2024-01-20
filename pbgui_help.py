@@ -102,6 +102,31 @@ opt_reruns = """
     you have a higher chance of finding good configurations that are not overfitted.
     ```"""
 
+backtest_best = """
+    ```
+    automatic backtest n best results
+    ```"""
+
+backtest_sharp = """
+    ```
+    automatic backtest n sharpest results
+    ```"""
+
+backtest_adg = """
+    ```
+    automatic backtest n highest average daily gains results
+    ```"""
+
+backtest_drawdown = """
+    ```
+    automatic backtest n lowest drawdown results
+    ```"""
+
+backtest_stuck = """
+    ```
+    automatic backtest n lowest hours stuck results
+    ```"""
+
 pbrun = """
     ```
     This is the Instance Manager from PBGUI.

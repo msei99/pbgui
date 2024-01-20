@@ -20,34 +20,54 @@ def bgcolor_positive_or_negative(value):
 def list_remote():
     # Init
     instances = st.session_state.pbgui_instances
+    # Init PBremote
     if 'remote' not in st.session_state:
         st.session_state.remote = PBRemote()
     remote = st.session_state.remote
+    # Init PBRemote Toggle
+    if "key_pbremote" in st.session_state:
+        pbremote_status = remote.is_running()
+        if st.session_state.key_pbremote != pbremote_status:
+            if st.session_state.key_pbremote:
+                remote.run()
+            else:
+                remote.stop()
+    pbremote_status = remote.is_running()
+    if not remote.bucket:
+        with st.sidebar:
+            if st.button(":back:"):
+                del st.session_state.list_remote
+                del st.session_state.remote
+                st.experimental_rerun()
+        st.error(remote.error)
+        return
     if not "ed_key" in st.session_state:
         st.session_state.ed_key = 0
     ed_key = st.session_state.ed_key
     # Navigation
     with st.sidebar:
+        if st.button(":recycle:"):
+            st.experimental_rerun()
         if st.button(":back:"):
             del st.session_state.list_remote
             st.experimental_rerun()
-        if st.toggle("PBRemote", value=PBRemote().is_running(), key="pbremote", help=pbgui_help.pbremote):
-            if not PBRemote().is_running():
-                PBRemote().run()
-                st.experimental_rerun()
-        else:
-            if PBRemote().is_running():
-                PBRemote().stop()
-                st.experimental_rerun()
+        st.toggle("PBRemote", value=pbremote_status, key="key_pbremote", help=pbgui_help.pbremote)
         instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
+        api_sync = []
         for rserver in remote.remote_servers:
             if rserver.is_online():
                 color = "green"
+                if not rserver.is_api_md5_same(remote.api_md5):
+                    api_sync.append(rserver)
             else: color = "red"
             if st.button(f':{color}[{rserver.name}]'):
                 if "run_rserver" in st.session_state:
                     del st.session_state.run_rserver
                 st.session_state.server = rserver
+        if len(api_sync) > 0:
+            if st.button(f'Sync API to all'):
+                for s in api_sync:
+                    s.send_to("sync_api")
         if st.button(f'Start/Stop Instances'):
             if "server" in st.session_state:
                 del st.session_state.server
@@ -104,7 +124,7 @@ def list_remote():
                 'Sync to remote': server.instances.is_same(instance),
                 'Remove': remove,
             })
-        st.data_editor(data=sid, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key=f'select_instance_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Running'])
+        st.data_editor(data=sid, width=None, height=36+(len(sid))*35, use_container_width=True, key=f'select_instance_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Running'])
     # Start / Stop Instances
     if f'select_run_{ed_key}' in st.session_state:
         ed = st.session_state[f'select_run_{ed_key}']
@@ -174,12 +194,33 @@ def list_remote():
                     f'{rserver.name} Start/Stop': rrun,
                 })
             rlist.append(rid)
-        st.data_editor(data=rlist, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key=f'select_run_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
+        st.data_editor(data=rlist, width=None, height=36+(len(rlist))*35, use_container_width=True, key=f'select_run_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
     if instances.pbremote_log:
         instances.view_log("PBRemote")
 
 def select_instance():
+    # Init Instances
+    if "pbgui_instances" not in st.session_state:
+        return
     instances = st.session_state.pbgui_instances
+    # Init PBRun Toggle
+    if "pbrun" in st.session_state:
+        pbrun_status = PBRun().is_running()
+        if st.session_state.pbrun != pbrun_status:
+            if st.session_state.pbrun:
+                PBRun().run()
+            else:
+                PBRun().stop()
+    pbrun_status = PBRun().is_running()
+    # Init PBStat Toggle
+    if "pbstat" in st.session_state:
+        pbstat_status = PBStat().is_running()
+        if st.session_state.pbstat != pbstat_status:
+            if st.session_state.pbstat:
+                PBStat().run()
+            else:
+                PBStat().stop()
+    pbstat_status = PBStat().is_running()
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
@@ -189,26 +230,15 @@ def select_instance():
     with st.sidebar:
         if st.button(":recycle:"):
             st.experimental_rerun()
-        if st.toggle("PBRun", value=PBRun().is_running(), key="pbrun", help=pbgui_help.pbrun):
-            if not PBRun().is_running():
-                PBRun().run()
-                st.experimental_rerun()
-        else:
-            if PBRun().is_running():
-                PBRun().stop()
-                st.experimental_rerun()
+        st.toggle("PBRun", value=pbrun_status, key="pbrun", help=pbgui_help.pbrun)
         instances.pbrun_log = st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="view_pbrun_log")
-        if st.toggle("PBStat", value=PBStat().is_running(), key="pbstat", help=pbgui_help.pbstat):
-            if not PBStat().is_running():
-                PBStat().run()
-                st.experimental_rerun()
-        else:
-            if PBStat().is_running():
-                PBStat().stop()
-                st.experimental_rerun()
+        st.toggle("PBStat", value=pbstat_status, key="pbstat", help=pbgui_help.pbstat)
         instances.pbstat_log = st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="view_pbstat_log")
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
+            st.experimental_rerun()
+        if st.button("Refresh from Disk"):
+            del st.session_state.pbgui_instances
             st.experimental_rerun()
         if st.button("Remote"):
             st.session_state.list_remote = True
@@ -222,6 +252,13 @@ def select_instance():
         for row in ed["edited_rows"]:
             if "View" in ed["edited_rows"][row]:
                 st.session_state.view_instance = instances.instances[row]
+                if "confirm" in st.session_state:
+                    del st.session_state.confirm
+                    del st.session_state.confirm_text
+                st.experimental_rerun()
+            if "History" in ed["edited_rows"][row]:
+                st.session_state.view_instance = instances.instances[row]
+                st.session_state.view_history = True
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
                     del st.session_state.confirm_text
@@ -240,9 +277,9 @@ def select_instance():
                 elif "confirm" in st.session_state:
                     if st.session_state.confirm:
                         instances.remove(instances.instances[row])
-                        if PBStat().is_running():
-                            PBStat().stop()
-                            PBStat().run()
+                        PBStat().restart()
+                        PBRun().restart_pbrun()
+                        PBRemote().restart()
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.experimental_rerun()
@@ -261,6 +298,7 @@ def select_instance():
         d.append({
             'id': id,
             'View': False,
+            'History': False,
             'Edit': False,
             'Running': instance.is_running(),
             'User': instance.user,
@@ -292,7 +330,7 @@ def select_instance():
             "id": None}
         df = pd.DataFrame(d)
         sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
-        st.data_editor(data=sdf, width=None, height=(len(instances.instances)+1)*36, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+        st.data_editor(data=sdf, width=None, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
     if instances.pbrun_log:
         instances.view_log("PBRun")
     if instances.pbstat_log:
@@ -330,7 +368,11 @@ def view_history():
     instance = st.session_state.view_instance
     # Navigation
     with st.sidebar:
-        if st.button(":back:"):
+        if st.button(":top:"):
+            del st.session_state.view_history
+            del st.session_state.view_instance
+            st.experimental_rerun()
+        if st.button("View"):
             del st.session_state.view_history
             st.experimental_rerun()
     instance.compare_history()
@@ -341,6 +383,28 @@ def edit_instance():
         st.error(st.session_state.error, icon="🚨")
     # Init instance
     instance = st.session_state.edit_instance
+    # Init session_state for keys
+    if "live_enable" in st.session_state:
+        if st.session_state.live_enable != instance.enabled:
+            instance.enabled = st.session_state.live_enable
+    if "live_co" in st.session_state:
+        if st.session_state.live_co != instance.co:
+            instance.co = st.session_state.live_co
+    if "live_leverage" in st.session_state:
+        if st.session_state.live_leverage != instance.leverage:
+            instance.leverage = st.session_state.live_leverage
+    if "live_assigned_balance" in st.session_state:
+        if st.session_state.live_assigned_balance != instance.assigned_balance:
+            instance.assigned_balance = st.session_state.live_assigned_balance
+    if "live_price_distance_threshold" in st.session_state:
+        if round(st.session_state.live_price_distance_threshold,2) != instance.price_distance_threshold:
+            instance.price_distance_threshold = round(st.session_state.live_price_distance_threshold,2)
+    if "live_price_precision" in st.session_state:
+        if round(st.session_state.live_price_precision,4) != instance.price_precision:
+            instance.price_precision = round(st.session_state.live_price_precision,4)
+    if "live_price_step" in st.session_state:
+        if round(st.session_state.live_price_step,3) != instance.price_step:
+            instance.price_step = round(st.session_state.live_price_step,3)
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
@@ -351,20 +415,19 @@ def edit_instance():
             st.session_state.edit_instance.save()
             if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
                 st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
-                if PBStat().is_running():
-                    PBStat().stop()
-                    PBStat().run()
-#            del st.session_state.edit_instance
-            st.experimental_rerun()
+                PBStat().restart()
+                PBRun().restart_pbrun()
+                PBRemote().restart()
+#            st.experimental_rerun()
         if st.button("Backtest"):
             st.session_state.my_bt = BacktestItem(instance._config.config)
             st.session_state.my_bt.user = instance.user
             st.session_state.my_bt.symbol = instance.symbol
             st.session_state.my_bt.market_type = instance.market_type
             switch_page("Backtest")
-        instance.enabled = st.toggle("enable", value=instance.enabled, key="live_enabled", help=pbgui_help.instance_enable)
+        st.toggle("enable", value=instance.enabled, key="live_enable", help=pbgui_help.instance_enable)
         if instance.enabled:
-            if st.button("restart", help=pbgui_help.instance_restart):
+            if st.button("restart", key="live_restart", help=pbgui_help.instance_restart):
                 st.session_state.edit_instance.save()
                 PBRun().restart(instance.user, instance.symbol)
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
@@ -376,12 +439,12 @@ def edit_instance():
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:
         with st.session_state.placeholder.expander("Advanced configurations", expanded=False):
-            instance.co = st.number_input("COUNTDOWN_OFFSET", min_value=-1, max_value=59, value=instance.co, step=1, format="%d", key="live_co", help=pbgui_help.co)
-            instance.leverage = st.number_input("LEVERAGE", min_value=2, max_value=20, value=instance.leverage, step=1, format="%d", key="live_lev", help=pbgui_help.lev)
-            instance.assigned_balance = st.number_input("ASSIGNED_BALANCE", key="live_assigned_balance", min_value=0, step=500, value=instance.assigned_balance, help=pbgui_help.assigned_balance)
-            instance.price_distance_threshold = round(st.number_input("PRICE_DISTANCE_THRESHOLD", key="live_price_distance_threshold", min_value=0.00, step=0.05, value=instance.price_distance_threshold, help=pbgui_help.price_distance_threshold),2)
-            instance.price_precision = round(st.number_input("PRICE_PRECISION_MULTIPLIER", key="live_price_precision", format="%.4f", min_value=0.0000, step=0.0001, value=instance.price_precision, help=pbgui_help.price_precision),4)
-            instance.price_step = round(st.number_input("PRICE_STEP_CUSTOM", key="live_price_step", format="%.3f", min_value=0.000, step=0.001, value=instance.price_step, help=pbgui_help.price_step),3)
+            st.number_input("COUNTDOWN_OFFSET", min_value=-1, max_value=59, value=instance.co, step=1, format="%d", key="live_co", help=pbgui_help.co)
+            st.number_input("LEVERAGE", min_value=2, max_value=20, value=instance.leverage, step=1, format="%d", key="live_leverage", help=pbgui_help.lev)
+            st.number_input("ASSIGNED_BALANCE", key="live_assigned_balance", min_value=0, step=500, value=instance.assigned_balance, help=pbgui_help.assigned_balance)
+            st.number_input("PRICE_DISTANCE_THRESHOLD", key="live_price_distance_threshold", min_value=0.00, step=0.05, value=instance.price_distance_threshold, help=pbgui_help.price_distance_threshold)
+            st.number_input("PRICE_PRECISION_MULTIPLIER", key="live_price_precision", format="%.4f", min_value=0.0000, step=0.0001, value=instance.price_precision, help=pbgui_help.price_precision)
+            st.number_input("PRICE_STEP_CUSTOM", key="live_price_step", format="%.3f", min_value=0.000, step=0.001, value=instance.price_step, help=pbgui_help.price_step)
     instance.edit_config()
     instance.view_log()
 
@@ -401,10 +464,8 @@ set_page_config()
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
-
 if 'pbgui_instances' not in st.session_state:
     st.session_state.pbgui_instances = Instances()
-#instances = st.session_state.pbgui_instances
 
 if 'view_history' in st.session_state:
     view_history()
