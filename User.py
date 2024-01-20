@@ -87,8 +87,12 @@ class Users:
                 return user.exchange
 
     def load(self):
-        with Path(self.api_path).open(encoding="UTF-8") as f:
-            users = json.load(f)
+        try:
+            with Path(self.api_path).open(encoding="UTF-8") as f:
+                users = json.load(f)
+        except Exception as e:
+            print(f'{self.api_path} is corrupted {e}')
+            return
         for user in users:
             if "exchange" in users[user]:
                 my_user = User()

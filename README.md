@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.90
+v0.92
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -33,7 +33,8 @@ pip install -r requirements.txt
 ```
 ## Running
 ```
-streamlit run pbgui.py &
+streamlit run pbgui.py
+
 ```
 Open http://localhost:8501 with Browser\
 Password = PBGui$Bot!\
@@ -100,6 +101,47 @@ rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=e
 ```
 Finally, enable PBRemote on your servers and home PC, and you're all set.
 On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
+
+## Running on Windows
+Copy the start.bat.example to start.bat
+Edit pbguipath in the start.bat to your pbgui installation path
+Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v0.92 (20-01-2024)
+- Live: You can now direct go to History, no need to go to View first
+- Backtest: New Results Browser
+- Backtest: Setup Columns for Results Browser
+
+## v0.91 (16-01-2024)
+- Live: Spot now display SpotBalance as Position and uPnL as (Position * lasPrice)
+- Optimize: When copy from optimize to backtest, now backtester keeps your settings
+- PBRun: Added check for already running instances
+- PBRemote: Sync to a running instance is now correct
+- PBRun and PBRemote: Bugfix some path on windows
+- History: Bugfix when no trade available
+- Backtester: Bugfix not finding backtest from queue (spot)
+- PBRun and PBRemote can now be running on Windows
+- PBRun, PBStat and PBRemote added pidfile for check that it's not started more than one time
+- PBRemote: Now runs on Windows. Added errorhandling for missing rclone and bucket
+- Optimizer: Bugfix automatic backtest results not working
+- Optimizer: Automatic backtest options. n_best, n_sharp, n_stuck, n_adg, n_drawdown
+- Optimizer: Bugfix for wrong queue informations
+- Optimizer: Added error handling for load hjson files with strange numbers
+- Optimizer: Bugfix for number of cpu lower as in pbgui.ini
+- Optimizer: Added new Symbol View to the Optimizer Results Browser
+- Live: Bugfix History for kucoin
+- Errorhandling: Added try: except to all json.load()
+- PBRemote: Error handling for corrupted .json files added
+- Live: passivbot.log in instances directory max. size = 10MB (cycle to .old)
+- Logfiles: Max size for all logfiles in /data/logs (cycle to .old)
+- Live: Bugfix for enable / disable logfiles
+- PBRemote: Added Refresh Button and Sync API to all Servers
+- PBRemote: Bugfix sync_api to multiple server at the same time
+- Live: Bugfix when press Import and no instances in passivbot manager configured
+- Live: Bugfix for errors in load instances. Try: except: for load instances
+- Live: Bugfix Reload Button not reload instances from disk
+- Optimizer: Only display long/short results if they are not 0
+- Optimizer: Display all available results from all passivbot versions
 
 ## v0.90 (02-01-2024)
 . Live: Bugfix Restart PBRun, PBStat and PBRemote after adding or removing instances

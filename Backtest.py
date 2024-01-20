@@ -5,6 +5,7 @@ from bokeh.models import NumeralTickFormatter, HoverTool
 import json
 import psutil
 import sys
+import platform
 import subprocess
 import shlex
 import glob
@@ -35,6 +36,9 @@ class BacktestItem(Base):
 
     @property
     def config(self): return self._config.config
+    @config.setter
+    def config(self, new_config):
+        self._config.config = new_config
 
     def initialize(self):
         self.sd = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
@@ -59,6 +63,7 @@ class BacktestItem(Base):
             "net_pnl_plus_fees", 
             "quality_score", 
             "balance_needed",
+            "source_name",
             "source",
             "hash"]]
         column_config = {
@@ -93,7 +98,7 @@ class BacktestItem(Base):
                 df_min = df_min[df_min['strategy'].isin(strategy)]
             df_min = df_min[df_min['quality_score'].ge(quality_score)]
         df_min = df_min.reset_index(drop=True)
-        selected = st.data_editor(data=df_min, width=None, height=None, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
+        selected = st.data_editor(data=df_min, width=None, height=1200, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
         col_image, col_config = st.columns([1,1])
         view = selected[selected['View']==True]
         view = view.reset_index()
@@ -154,17 +159,20 @@ class BacktestItem(Base):
         self._config = Config(f'{self.file}.cfg')
         self._config.load_config()
         self.log = Path(f'{self.file}.log')
-        with open(self.file, "r", encoding='utf-8') as f:
-            t = json.load(f)
-            if t["market_type"] == "futures":
-                self._market_type = "swap"
-            else:
-                self._market_type = "spot"
-            self.user = t["user"]
-            self.symbol = t["symbol"]
-            self.sd = t["sd"]
-            self.ed = t["ed"]
-            self.sb = t["sb"]
+        try:
+            with open(self.file, "r", encoding='utf-8') as f:
+                t = json.load(f)
+                if t["market_type"] == "futures":
+                    self._market_type = "swap"
+                else:
+                    self._market_type = "spot"
+                self.user = t["user"]
+                self.symbol = t["symbol"]
+                self.sd = t["sd"]
+                self.ed = t["ed"]
+                self.sb = t["sb"]
+        except Exception as e:
+            print(f'{str(file)} is corrupted {e}')
 
     def save(self):
         pbgdir = Path.cwd()
@@ -263,7 +271,12 @@ class BacktestItem(Base):
                 cmd.extend(shlex.split(cmd_end))
                 cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self._config.config_file)}')])
                 log = open(self.log,"w")
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True)
+                if platform.system() == "Windows":
+                    creationflags = subprocess.DETACHED_PROCESS
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
 
 class BacktestQueue:
     def __init__(self):
@@ -272,8 +285,12 @@ class BacktestQueue:
         self.pb_config.read('pbgui.ini')
         if not self.pb_config.has_section("backtest"):
             self.pb_config.add_section("backtest")
+        if not self.pb_config.has_option("backtest", "cpu"):
             self.pb_config.set("backtest", "autostart", "False")
-            self.pb_config.set("backtest", "cpu", str(multiprocessing.cpu_count()-1))
+            my_cpu = multiprocessing.cpu_count()
+            if my_cpu > 1:
+                my_cpu -= 1
+            self.pb_config.set("backtest", "cpu", str(my_cpu))
         self._autostart = eval(self.pb_config.get("backtest", "autostart"))
         self._cpu = int(self.pb_config.get("backtest", "cpu"))
         if self._autostart:
@@ -283,6 +300,8 @@ class BacktestQueue:
     def cpu(self):
         self.pb_config.read('pbgui.ini')
         self._cpu = int(self.pb_config.get("backtest", "cpu"))
+        if self._cpu > multiprocessing.cpu_count():
+            self._cpu = multiprocessing.cpu_count()
         return self._cpu
 
     @cpu.setter
@@ -350,8 +369,17 @@ class BacktestQueue:
             dest = Path(f'{pbgdir}/data/logs')
             if not dest.exists():
                 dest.mkdir(parents=True)
-            log = open(Path(f'{dest}/Backtest.log'),"a")
-            subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            logfile = Path(f'{dest}/Backtest.log')
+            if logfile.exists():
+                if logfile.stat().st_size >= 1048576:
+                    logfile.replace(f'{str(logfile)}.old')
+            log = open(logfile,"a")
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, start_new_session=True)
 
     def stop(self):
         if self.is_running():
@@ -377,19 +405,30 @@ class BacktestResult:
         self.config = self.load_config()
         self.result = self.load_result()
         self.result_txt = self.load_result_txt()
+        self.market_type = self.result["market_type"]
+        self.sb = self.result["starting_balance"]
+        self.sd = self.result["start_date"]
+        self.ed = self.result["end_date"]
+        self.exchange = self.result["exchange"]
+        self.symbol = self.result["symbol"]
+        self.passivbot_mode = self.result["passivbot_mode"]
+        self.n_days = self.result["n_days"]
+        # config infos
         self.long = self.result["long"]
         self.short = self.result["short"]
         self.long_enabled = self.result["long"]["enabled"]
         self.short_enabled = self.result["short"]["enabled"]
-        self.symbol = self.result["symbol"]
-        self.sd = self.result["start_date"]
-        self.ed = self.result["end_date"]
-        self.sb = self.result["starting_balance"]
-        self.exchange = self.result["exchange"]
-        self.market_type = self.result["market_type"]
         self.stats = None
-        self.selected = False
+        self._selected = False
         self.name = None
+
+    @property
+    def selected(self): return self._selected
+    @selected.setter
+    def selected(self, new_selected):
+        self._selected = new_selected
+        if self._selected and self.stats is None:
+            self.load_stats()
 
     def load_config(self):
         r = Path(f'{self.backtest_path}/live_config.json')
@@ -397,8 +436,12 @@ class BacktestResult:
             return f.read()
     def load_result(self):
         r = Path(f'{self.backtest_path}/result.json')
-        with open(r, "r", encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(r, "r", encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f'{str(r)} is corrupted {e}')
+
     def load_result_txt(self):
         r = Path(f'{self.backtest_path}/backtest_result.txt')
         with open(r, "r", encoding='utf-8') as f:
@@ -408,56 +451,203 @@ class BacktestResult:
         self.stats = pd.read_csv(stats)
 
 class BacktestResults:
+    SIDES = ['long','short']
+    MODES = ['recursive_grid', 'neat_grid', 'clock']
+    
     def __init__(self, backtest_path: str = None):
+        self.pb_config = configparser.ConfigParser()
+        self.view_col = self.load_view_col()
         self.backtest_path = backtest_path
         self.backtests = []
         self.symbols = []
+        self.symbols_selected = []
+        self.side_selected = self.SIDES
+        self.mode_selected = self.MODES
         self.exchanges = []
+        self.results_d = []
 
     def remove(self, bt_result: BacktestResult):
+        print(bt_result.backtest_path)
         rmtree(bt_result.backtest_path, ignore_errors=True)
         self.backtests.remove(bt_result)
 
-    def view(self, symbols: list = [], exchanges: list = [], trades: pd.DataFrame = None, only : str = False):
-        if (self.backtests or isinstance(trades, pd.DataFrame)) and not only:
-            d = []
-            column_config = {
-                "Show": st.column_config.CheckboxColumn('Show', default=False),
-                "Delete": st.column_config.CheckboxColumn('Delete', default=False),
-                }
-            for bt in self.backtests:
-                if (bt.symbol in symbols or not symbols) and (bt.exchange in exchanges or not exchanges):
-                    if bt.market_type == "spot":
-                        filename = str(bt.backtest_path).partition(f'{bt.exchange}_spot/')[-1]
-                    else:
-                        filename = str(bt.backtest_path).partition(f'{bt.exchange}/')[-1]
-                    d.append({
-                            'id': self.backtests.index(bt),
-                            'Show': bt.selected,
-                            'Symbol': bt.symbol,
-                            'Exchange': bt.exchange,
-                            'Start':  bt.sd,
-                            'End': bt.ed,
-                            'Balance': bt.sb,
-                            'Market': bt.market_type,
-                            'LE': bt.long_enabled,
-                            'SE': bt.short_enabled,
-                            'Name': filename,
-                            'Delete': False,
-                        }
-                    )
-            new_bt = st.data_editor(data=d, width=None, height=None, use_container_width=True, hide_index=None, column_order=None, column_config=column_config, disabled=['Symbol','Exchange','Start','End','Balance','Market','LE','SE','Name'])
-            if new_bt != d:
-                for line in new_bt:
-                    if line["Delete"] == True:
-                        self.remove(self.backtests[line["id"]])
+    def load_view_col(self):
+        self.pb_config.read('pbgui.ini')
+        if self.pb_config.has_option("backtest", "view_col"):
+            return eval(self.pb_config.get("backtest", "view_col"))
+        return []
+
+    def save_view_col(self):
+        self.pb_config.read('pbgui.ini')
+        if not self.pb_config.has_section("backtest"):
+            self.pb_config.add_section("backtest")
+        self.pb_config.set("backtest", "view_col", f'{self.view_col}')
+        with open('pbgui.ini', 'w') as f:
+            self.pb_config.write(f)
+
+    def setup_table(self):
+        # Remove or add keys after selecting them
+        if "setup_backtest_col" in st.session_state:
+            if sorted(st.session_state.setup_backtest_col) != sorted(self.view_col):
+                # Display save button if keys have changed
+                with st.sidebar:
+                    if st.button(":floppy_disk:"):
+                        # Save keys to pbgui.ini and go back to compare results
+                        self.view_col = st.session_state.setup_backtest_col
+                        self.save_view_col()
+                        del st.session_state[f'setup_table_bt_{self}']
+                        del st.session_state.backtest_view_keys
+                        del st.session_state.setup_backtest_col
                         st.experimental_rerun()
-                    elif line["Show"] == True:
-                        self.backtests[line["id"]].load_stats()
+            # Remove or add keys for correct display the table
+            for col in set().union(*(d.keys() for d in self.results_d)):
+                if col not in ['id', 'show', 'delete']:
+                    if col not in st.session_state.setup_backtest_col:
+                        st.session_state.setup_column_config.update({col: None})
+                    else:
+                        st.session_state.setup_column_config.update({col: col})
+        # Init backtest_view_keys on first run
+        if not "backtest_view_keys" in st.session_state:
+            # Add all keys from results_d
+            st.session_state.backtest_view_keys = set().union(*(d.keys() for d in self.results_d))
+            # Remove keys that can not be deleted
+            st.session_state.backtest_view_keys.remove("id")
+            st.session_state.backtest_view_keys.remove("show")
+            st.session_state.backtest_view_keys.remove("delete")
+            # Init self.view_col if not in backtst/view_col pbgui.ini
+            if not self.view_col:
+                self.view_col = st.session_state.backtest_view_keys
+            st.session_state.setup_column_config = {}
+            # Don't show rows that are not in backtst/view_col pbgui.ini
+            for col in st.session_state.backtest_view_keys:
+                if col not in self.view_col:
+                    st.session_state.setup_column_config.update({col: None})
+            # Make sure there is no key in self.view_col, that is not in backtest_view_keys
+            cleanup_col = self.view_col.copy()
+            for col in cleanup_col:
+                if col not in st.session_state.backtest_view_keys:
+                    self.view_col.remove(col)
+        st.multiselect("Setup Table (remove all and save for reset to default)", st.session_state.backtest_view_keys, default=self.view_col, key="setup_backtest_col", on_change=None, args=None)
+        st.dataframe(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, hide_index=None, column_order=None, column_config=st.session_state.setup_column_config)
+
+    def view(self, trades: pd.DataFrame = None, only : bool = False):
+        if f'setup_table_bt_{self}' in st.session_state and st.session_state.page == "Backtest":
+            self.setup_table()
+            return
+        if (self.backtests or trades is not None) and not only:
+            if st.session_state.page == "Backtest":
+                st.markdown('### Filter and select backtests for view')
+                col1, col2, col3 = st.columns([1,1,1])
+                with col1:
+                    if f"symbol_backtest_view_{self}" in st.session_state:
+                        if st.session_state[f'symbol_backtest_view_{self}'] != self.symbols_selected:
+                            if not st.session_state.symbols_selected_all:
+                                self.symbols_selected = st.session_state[f'symbol_backtest_view_{self}']
+                                self.results_d = []
+                    else:
+                        st.session_state[f'symbol_backtest_view_{self}'] = self.symbols_selected
+                    self.symbols_selected = st.multiselect("Symbols", ["ALL"] + self.symbols, default=None, key=f'symbol_backtest_view_{self}')
+                    if "ALL" in self.symbols_selected:
+                        self.symbols_selected = self.symbols
+                        st.session_state.symbols_selected_all = True
+                    else:
+                        if "symbols_selected_all" in st.session_state:
+                            if st.session_state.symbols_selected_all:
+                                self.results_d = []
+                        st.session_state.symbols_selected_all = False
+                with col2:
+                    if f'side_backtest_view_{self}' in st.session_state:
+                        if st.session_state[f'side_backtest_view_{self}'] != self.side_selected:
+                            self.side_selected = st.session_state[f'side_backtest_view_{self}']
+                            self.results_d = []
+                    else:
+                        st.session_state[f'side_backtest_view_{self}'] = self.side_selected
+                    self.side_selected = st.multiselect("Side", options = self.SIDES, key=f'side_backtest_view_{self}')
+                with col3:
+                    if f'mode_backtest_view_{self}' in st.session_state:
+                        if st.session_state[f'mode_backtest_view_{self}'] != self.mode_selected:
+                            self.mode_selected = st.session_state[f'mode_backtest_view_{self}']
+                            self.results_d = []
+                    else:
+                        st.session_state[f'mode_backtest_view_{self}'] = self.mode_selected
+                    self.mode_selected = st.multiselect("Strategy", options = self.MODES, key=f'mode_backtest_view_{self}')
+            column_config = {
+                "show": st.column_config.CheckboxColumn('show', default=False),
+                "delete": st.column_config.CheckboxColumn('delete', default=False),
+                }
+            if not self.results_d:
+                for bt in self.backtests:
+                    side = []
+                    if bt.long_enabled and "long" in self.side_selected or bt.short_enabled and "short" in self.side_selected:
+                        side = True
+                    else:
+                        side = False
+                    if (
+                        bt.symbol in self.symbols_selected and
+                        side and
+                        bt.passivbot_mode in self.mode_selected
+                        ):
+                        if bt.market_type == "spot":
+                            filename = str(bt.backtest_path).partition(f'{bt.exchange}_spot/')[-1]
+                        else:
+                            filename = str(bt.backtest_path).partition(f'{bt.exchange}/')[-1]
+                        r_dict = {
+                                'id': self.backtests.index(bt),
+                                'show': bt.selected,
+                                'delete': False,
+                                'symbol': bt.symbol,
+                                'exchange': bt.exchange,
+                                'start_date':  bt.sd,
+                                'end_date': bt.ed,
+                                'starting_balance': bt.sb,
+                                'market_type': bt.market_type,
+                                'passivbot_mode': bt.passivbot_mode,
+                                'n_days': bt.n_days,
+                                'LE': bt.long_enabled,
+                                'SE': bt.short_enabled,
+                                'filename': filename,
+                        }
+                        for r in bt.result["result"]:
+                            r_dict[r] = bt.result["result"][r]
+                        self.results_d.append(r_dict)
+                    else:
+                        bt.selected = False
+            if self.results_d:
+                if st.session_state.page == "Backtest":
+                    with st.sidebar:
+                        if st.button("Setup"):
+                            st.session_state[f'setup_table_bt_{self}'] = True
+                            st.experimental_rerun()
+                        if st.button("Delete all"):
+                            for result in sorted(self.results_d, key=lambda x: x['id'], reverse=True):
+                                self.remove(self.backtests[result["id"]])
+                            self.results_d = []
+                            st.experimental_rerun()
+                all_col = set().union(*(d.keys() for d in self.results_d))
+                if not self.view_col:
+                    self.view_col = all_col
+                cleanup_col = self.view_col.copy()
+                for col in cleanup_col:
+                    if col not in all_col:
+                        self.view_col.remove(col)
+                for item in all_col:
+                    if item not in self.view_col and item not in ['id', 'show', 'delete']:
+                        column_config[item] = None
+                    if item.split("_")[-1] in ["short", "long"] and item.split("_")[-1] not in self.side_selected:
+                        column_config[item] = None
+                results_d = st.data_editor(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view_{self}", hide_index=None, column_order=None, column_config=column_config, disabled="id")
+                for line in results_d:
+                    if line["show"]:
                         self.backtests[line["id"]].selected = True
                     else:
                         self.backtests[line["id"]].selected = False
-                st.experimental_rerun()
+                    if line["delete"] == True:
+                        self.remove(self.backtests[line["id"]])
+                        self.results_d = []
+                        st.experimental_rerun()
+                for backtest in self.backtests:
+                    if backtest.symbol not in self.symbols_selected:
+                        backtest.selected = False
         else:
             if not only: return
         hover_be = HoverTool(
@@ -570,7 +760,7 @@ class BacktestResults:
 
 
     def find_all(self):
-        p = str(Path(f'{self.backtest_path}/*/*/plots/*/result.json'))
+        p = str(Path(f'{self.backtest_path}/**/result.json'))
         found_bt = glob.glob(p, recursive=True)
         if found_bt:
             for p in found_bt:
@@ -580,6 +770,7 @@ class BacktestResults:
                     self.symbols.append(bt.symbol)
                 if bt.exchange not in self.exchanges:
                     self.exchanges.append(bt.exchange)
+            self.symbols = sorted(self.symbols)
 
     def has_backtest(self, symbol, config: json):
         long = json.loads(config)["long"]
@@ -591,24 +782,9 @@ class BacktestResults:
                 bt = BacktestResult(PurePath(p).parent)
                 if (
                     symbol == bt.symbol
-                    and long["ema_span_0"] == bt.long["ema_span_0"]
-                    and long["ema_span_1"] == bt.long["ema_span_1"]
-                    and long["enabled"] == bt.long["enabled"]
-                    and long["min_markup"] == bt.long["min_markup"]
-                    and long["markup_range"] == bt.long["markup_range"]
-                    and long["n_close_orders"] == bt.long["n_close_orders"]
-                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
-                    and long["backwards_tp"] == bt.long["backwards_tp"]
-                    and short["ema_span_0"] == bt.short["ema_span_0"]
-                    and short["ema_span_1"] == bt.short["ema_span_1"]
-                    and short["enabled"] == bt.short["enabled"]
-                    and short["min_markup"] == bt.short["min_markup"]
-                    and short["markup_range"] == bt.short["markup_range"]
-                    and short["n_close_orders"] == bt.short["n_close_orders"]
-                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
-                    and short["backwards_tp"] == bt.short["backwards_tp"]
                 ):
-                    return True
+                    if self.compare_config(bt, long, short, "spot"):
+                        return True
             return False
 
     def match_item(self, item: BacktestItem = None):
@@ -626,22 +802,9 @@ class BacktestResults:
                     and item.sb == bt.sb
                     and item.market_type == bt.market_type
                     and item.exchange.name == bt.exchange
-                    and long["ema_span_0"] == bt.long["ema_span_0"]
-                    and long["ema_span_1"] == bt.long["ema_span_1"]
-                    and long["enabled"] == bt.long["enabled"]
-                    and long["min_markup"] == bt.long["min_markup"]
-                    and long["markup_range"] == bt.long["markup_range"]
-                    and long["n_close_orders"] == bt.long["n_close_orders"]
-                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
-                    and short["ema_span_0"] == bt.short["ema_span_0"]
-                    and short["ema_span_1"] == bt.short["ema_span_1"]
-                    and short["enabled"] == bt.short["enabled"]
-                    and short["min_markup"] == bt.short["min_markup"]
-                    and short["markup_range"] == bt.short["markup_range"]
-                    and short["n_close_orders"] == bt.short["n_close_orders"]
-                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
                 ):
-                    self.backtests.append(bt)
+                    if self.compare_config(bt, long, short, item.market_type):
+                        self.backtests.append(bt)
             if not self.backtests:
                 st.write("Backtest result not found. Please Run it again")
                 item.remove_log()
@@ -649,8 +812,7 @@ class BacktestResults:
             st.write("Backtest result not found. Please Run it again")
             item.remove_log()
 
-
-    def match_config(self, symbol, config: json = None):
+    def match_config(self, symbol, config: json = None, market_type : str = "spot"):
         long = json.loads(config)["long"]
         short = json.loads(config)["short"]
         p = str(Path(f'{self.backtest_path}/*/{symbol}/plots/*/result.json'))
@@ -660,28 +822,60 @@ class BacktestResults:
                 bt = BacktestResult(PurePath(p).parent)
                 if (
                     symbol == bt.symbol
-                    and long["ema_span_0"] == bt.long["ema_span_0"]
-                    and long["ema_span_1"] == bt.long["ema_span_1"]
-                    and long["enabled"] == bt.long["enabled"]
-                    and long["min_markup"] == bt.long["min_markup"]
-                    and long["markup_range"] == bt.long["markup_range"]
-                    and long["n_close_orders"] == bt.long["n_close_orders"]
-                    and long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
-                    and long["backwards_tp"] == bt.long["backwards_tp"]
-                    and short["ema_span_0"] == bt.short["ema_span_0"]
-                    and short["ema_span_1"] == bt.short["ema_span_1"]
-                    and short["enabled"] == bt.short["enabled"]
-                    and short["min_markup"] == bt.short["min_markup"]
-                    and short["markup_range"] == bt.short["markup_range"]
-                    and short["n_close_orders"] == bt.short["n_close_orders"]
-                    and short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
-                    and short["backwards_tp"] == bt.short["backwards_tp"]
                 ):
-                    self.backtests.append(bt)
-                    if bt.symbol not in self.symbols:
-                        self.symbols.append(bt.symbol)
-                    if bt.exchange not in self.exchanges:
-                        self.exchanges.append(bt.exchange)
+                    if self.compare_config(bt, long, short, market_type):
+                        self.backtests.append(bt)
+                        if bt.symbol not in self.symbols:
+                            self.symbols.append(bt.symbol)
+                        if bt.exchange not in self.exchanges:
+                            self.exchanges.append(bt.exchange)
+
+    def compare_config(self,bt : BacktestResult, long : json, short : json, market_type : str):
+        compare_long = False
+        compare_short = False
+        compare_long_we = False
+        compare_short_we = False
+        if (
+            long["ema_span_0"] == bt.long["ema_span_0"]
+            and long["ema_span_1"] == bt.long["ema_span_1"]
+            and long["enabled"] == bt.long["enabled"]
+            and long["min_markup"] == bt.long["min_markup"]
+            and long["markup_range"] == bt.long["markup_range"]
+            and long["n_close_orders"] == bt.long["n_close_orders"]
+        ): compare_long = True
+        if (
+            long["wallet_exposure_limit"] == bt.long["wallet_exposure_limit"]
+        ): compare_long_we = True
+        if (
+            short["ema_span_0"] == bt.short["ema_span_0"]
+            and short["ema_span_1"] == bt.short["ema_span_1"]
+            and short["enabled"] == bt.short["enabled"]
+            and short["min_markup"] == bt.short["min_markup"]
+            and short["markup_range"] == bt.short["markup_range"]
+            and short["n_close_orders"] == bt.short["n_close_orders"]
+        ): compare_short = True
+        if (
+            short["wallet_exposure_limit"] == bt.short["wallet_exposure_limit"]
+        ): compare_short_we = True
+        if long["enabled"] and short["enabled"] and market_type == "spot":
+            if all([compare_long, compare_short]):
+                return True
+        if long["enabled"] and short["enabled"] and market_type == "futures":
+            if all([compare_long, compare_short, compare_long_we, compare_short_we]):
+                return True
+        if long["enabled"] and market_type == "spot":
+            if all([compare_long]):
+                return True
+        if short["enabled"] and market_type == "spot":
+            if all([compare_short]):
+                return True
+        if long["enabled"] and market_type == "futures":
+            if all([compare_long, compare_long_we]):
+                return True
+        if short["enabled"] and market_type == "futures":
+            if all([compare_short, compare_short_we]):
+                return True
+
 
 def main():
     bt = BacktestQueue()

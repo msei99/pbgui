@@ -10,6 +10,8 @@ import json
 from io import TextIOWrapper
 from datetime import datetime
 import platform
+from shutil import copy
+import os
 
 class RunInstance():
     def __init__(self):
@@ -76,13 +78,29 @@ class RunInstance():
             pb_config.read('pbgui.ini')
             if pb_config.has_option("main", "pbdir"):
                 pbdir = pb_config.get("main", "pbdir")
+                config = PurePath(f'{self.path}/config.json')
                 cmd = [sys.executable, '-u', PurePath(f'{pbdir}/passivbot.py')]
-                cmd_end = f'{self.parameter} {self.user} {self.symbol} {self.path}/config.json '.lstrip(' ')
+                cmd_end = f'{self.parameter} {self.user} {self.symbol} '.lstrip(' ')
                 cmd.extend(shlex.split(cmd_end))
+                cmd.extend([config])
                 logfile = Path(f'{self.path}/passivbot.log')
-                log = open(logfile,"w")
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
+                log = open(logfile,"ab")
+                if platform.system() == "Windows":
+                    creationflags = subprocess.DETACHED_PROCESS
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd_end}')
+
+    def clean_log(self):
+        logfile = Path(f'{self.path}/passivbot.log')
+        if logfile.exists():
+            if logfile.stat().st_size >= 10485760:
+                logfile_old = Path(f'{str(logfile)}.old')
+                copy(logfile,logfile_old)
+                with open(logfile,'r+') as file:
+                    file.truncate()
 
     def load(self):
         file = Path(f'{self.path}/instance.cfg')
@@ -130,6 +148,11 @@ class PBRun():
         self.cmd_path = f'{pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
+        self.piddir = Path(f'{pbgdir}/data/pid')
+        if not self.piddir.exists():
+            self.piddir.mkdir(parents=True)
+        self.pidfile = Path(f'{self.piddir}/pbrun.pid')
+        self.my_pid = None
 
     def __iter__(self):
         return iter(self.run_instances)
@@ -142,7 +165,11 @@ class PBRun():
 
     def add(self, run_instance: RunInstance):
         if run_instance:
-            self.run_instances.append(run_instance)
+            if run_instance.path:
+                for instance in self.run_instances:
+                    if instance.path == run_instance.path:
+                        return
+                self.run_instances.append(run_instance)
 
     def remove(self, run_instance: RunInstance):
         if run_instance:
@@ -158,11 +185,25 @@ class PBRun():
         ipath = f'{self.instances_path}/{instance}'
         self.update(ipath, False)
 
+    def restart_instance(self, instance):
+        user = "_".join(instance.split("_")[0:-2])
+        symbol = instance.split("_")[-2]
+        self.restart(user, symbol)
+
     def disable_instance(self, instance):
         self.change_enabled(instance, False)
 
     def enable_instance(self, instance):
         self.change_enabled(instance, True)
+
+    def is_enabled_instance(self, instance):
+        ipath = f'{self.instances_path}/{instance}'
+        ifile = Path(f'{ipath}/instance.cfg')
+        with open(ifile, "r", encoding='utf-8') as f:
+            inst = json.load(f)
+        if inst["_enabled"]:
+            return True
+        else: False
 
     def change_enabled(self, instance : str, enabled : bool):
         ipath = f'{self.instances_path}/{instance}'
@@ -197,7 +238,7 @@ class PBRun():
     def update(self, instance_path : str, enabled : bool):
         cfile = Path(f'{self.cmd_path}/update.cmd')
         cfg = ({
-            "path": instance_path,
+            "path": str(PurePath(instance_path)),
             "enabled": enabled})
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
@@ -239,12 +280,25 @@ class PBRun():
         if not self.is_running():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/PBRun.py')]
-            subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
+            count = 0
+            while True:
+                if count > 5:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRun')
+                sleep(1)
+                if self.is_running():
+                    break
+                count += 1
 
     def stop(self):
         if self.is_running():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBRun')
-            self.pid().kill()
+            psutil.Process(self.my_pid).kill()
 
     def restart_pbrun(self):
         if self.is_running():
@@ -252,41 +306,60 @@ class PBRun():
             self.run()
 
     def is_running(self):
-        if self.pid():
-            return True
+        self.load_pid()
+        try:
+            if self.my_pid and psutil.pid_exists(self.my_pid) and any(sub.lower().endswith("pbrun.py") for sub in psutil.Process(self.my_pid).cmdline()):
+                return True
+        except psutil.NoSuchProcess:
+            pass
         return False
+    
+    def load_pid(self):
+        if self.pidfile.exists():
+            with open(self.pidfile) as f:
+                pid = f.read()
+                self.my_pid = int(pid) if pid.isnumeric() else None
 
-    def pid(self):
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except psutil.AccessDenied:
-                continue
-            if any("PBRun.py" in sub for sub in cmdline):
-                return process
+    def save_pid(self):
+        self.my_pid = os.getpid()
+        with open(self.pidfile, 'w') as f:
+            f.write(str(self.my_pid))
 
 
 def main():
-    # Not supported on windows
-    if platform.system() == "Windows":
-        print("PBRun Module is not supported on Windows")
-        exit()
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
         dest.mkdir(parents=True)
-    sys.stdout = TextIOWrapper(open(Path(f'{dest}/PBRun.log'),"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(Path(f'{dest}/PBRun.log'),"ab",0), write_through=True)
+    logfile = Path(f'{str(dest)}/PBRun.log')
+    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRun')
     run = PBRun()
+    if run.is_running():
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
+        exit(1)
+    run.save_pid()
     run.load_all()
+    count = 0
     while True:
         try:
+            if logfile.exists():
+                if logfile.stat().st_size >= 1048576:
+                    logfile.replace(f'{str(logfile)}.old')
+                    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+                    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.has_restart()
             run.has_update()
             for run_instance in run:
                 run_instance.watch()
+            if count%2 == 0:
+                for run_instance in run:
+                    run_instance.clean_log()
             sleep(5)
+            count += 1
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 

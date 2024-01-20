@@ -12,10 +12,17 @@ def opt_edit_config():
     with st.sidebar:
         if st.button(":back:"):
             del st.session_state.opt_edit_config
+            del st.session_state.my_opt_config
             st.experimental_rerun()
-        my_opt.oc.name = st.text_input('Filename:', value=my_opt.oc.name, max_chars=20, key="opt_config_file_name_input")
+        my_opt.oc.name = st.text_input('Filename:', value=my_opt.oc.name, max_chars=32, key="opt_config_file_name_input")
         if st.button(":floppy_disk:"):
             my_opt.oc.save()
+        if st.button(":wastebasket:"):
+            my_opt.oc.remove()
+            my_opt.oc.name = OptimizeConfigs().default()
+            del st.session_state.opt_edit_config
+            del st.session_state.my_opt_config
+            st.experimental_rerun()
     # Edit Config
     my_opt.oc.edit()
 
@@ -33,10 +40,10 @@ def opt_edit():
             st.experimental_rerun()
         if my_opt_config.list():
             config = st.selectbox('Optimize Config',my_opt_config.list(), index = my_opt_config.list().index(my_opt.oc.name))    
-            my_opt.oc = my_opt_config.find_config(config)
-            my_opt.mode = my_opt.oc.passivbot_mode
-            my_opt.algo = my_opt.oc.algorithm
-            my_opt.iters = my_opt.oc.iters
+            if config != my_opt.oc.name:
+                my_opt.oc = my_opt_config.find_config(config)
+                my_opt.oc.load()
+                st.experimental_rerun()
         if st.button(f"Edit {my_opt.oc.name}"):
             st.session_state.opt_edit_config = True
             st.experimental_rerun()
@@ -79,15 +86,28 @@ def opt_results():
     # Navigation
     with st.sidebar:
         if st.button(":recycle:"):
+            if my_opt_results.results_d:
+                my_opt_results.results_d = []
             st.experimental_rerun()
+        if my_opt_results.layer > 1:
+            if st.button(":top:"):
+                del st.session_state.opt_results
+                del st.session_state.my_opt_results
+                st.experimental_rerun()    
         if st.button(":back:"):
             if my_opt_results.layer == 1:
                 del st.session_state.opt_results
+                del st.session_state.my_opt_results
             elif my_opt_results.layer == 2:
                 my_opt_results.layer = 1
             elif my_opt_results.layer == 3:
-                my_opt_results.layer = 2
-                my_opt_results.results_d = []
+                if my_opt_results.almo > 5:
+                    my_opt_results.layer = 1
+                    my_opt_results.results = []
+                    my_opt_results.results_d = []
+                else:
+                    my_opt_results.layer = 2
+                    my_opt_results.results_d = []
             st.experimental_rerun()
     if my_opt_results.layer == 1:
         my_opt_results.view_results_l1()
@@ -102,19 +122,19 @@ set_page_config()
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     switch_page("pbgui")
 
-# Init Optimizer
-if 'my_opt' in st.session_state:
-    my_opt = st.session_state.my_opt
-else:
-    my_opt = OptimizeItem()
-    st.session_state.my_opt = my_opt
-
 # Init OptimizeConfigs
 if 'my_opt_config' in st.session_state:
     my_opt_config = st.session_state.my_opt_config
 else:
     my_opt_config = OptimizeConfigs()
     st.session_state.my_opt_config = my_opt_config
+
+# Init Optimizer
+if 'my_opt' in st.session_state:
+    my_opt = st.session_state.my_opt
+else:
+    my_opt = OptimizeItem()
+    st.session_state.my_opt = my_opt
 
 # Init Optimizer Queue
 if 'my_opt_queue' in st.session_state:

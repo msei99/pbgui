@@ -1,0 +1,11 @@
+@echo off
+
+set pbguipath=C:\Users\user\pbgui			& REM path to pbgui installation
+
+title PBRemoteStart
+
+start /B /D %pbguipath% pythonw.exe PBRemote.py
+start /B /D %pbguipath% pythonw.exe PBRun.py
+start /B /D %pbguipath% pythonw.exe PBStat.py
+
+taskkill /FI "WINDOWTITLE eq PBRemoteStart"
