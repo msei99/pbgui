@@ -22,6 +22,8 @@ from time import sleep
 import traceback
 
 class OptimizeItem(Base):
+    BOOLS = ['n', 'y']
+
     def __init__(self):
         super().__init__()
         self.file = None
@@ -86,8 +88,23 @@ class OptimizeItem(Base):
                     pass
                 except psutil.AccessDenied:
                     pass
-                if any(str(self.symbol) in sub for sub in cmdline) and any(str(self.oc.passivbot_mode) in sub for sub in cmdline) and any(str(self.oc.algorithm) in sub for sub in cmdline) and any("optimize.py" in sub for sub in cmdline):
-                    return process
+                if any("optimize.py" in sub for sub in cmdline):
+                    if (
+                        cmdline[4] == self.user and
+                        cmdline[6] == self.symbol and
+                        cmdline[8] == str(self.oc.iters) and
+                        cmdline[10] == self.oc.passivbot_mode and
+                        cmdline[12] == self.oc.algorithm and
+                        cmdline[14] == self.sd and
+                        cmdline[16] == self.ed and
+                        cmdline[18] == str(self.sb) and
+                        cmdline[20] == self.market_type and
+                        cmdline[22] == str(self.ohlcv) and
+                        cmdline[26] == str(self.BOOLS[self.oc.do_long]) and
+                        cmdline[28] == str(self.BOOLS[self.oc.do_short]) and
+                        cmdline[30] == str(PurePath(self.oc.config_file))
+                    ):
+                        return process
 
     def start(self, cpu: int):
         if not self.is_running():
@@ -95,17 +112,8 @@ class OptimizeItem(Base):
             pb_config.read('pbgui.ini')
             if self.pbdir:
                 cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/optimize.py')]
-                cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.oc.do_long} -se {self.oc.do_short} -oc {self.oc.config_file}'
+                cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.BOOLS[self.oc.do_long]} -se {self.BOOLS[self.oc.do_short]} -oc {str(PurePath(self.oc.config_file))}'
                 cmd.extend(shlex.split(cmd_end))
-                if self.oc.do_long and not self.oc.do_short:
-                    cmd_end = f'-le y -se n'
-                    cmd.extend(shlex.split(cmd_end))
-                if self.oc.do_short and not self.oc.do_long:
-                    cmd_end = f'-le n -se y'
-                    cmd.extend(shlex.split(cmd_end))
-                if self.oc.do_short and self.oc.do_long:
-                    cmd_end = f'-le y -se y'
-                    cmd.extend(shlex.split(cmd_end))
                 cmd.extend(['-bd', str(PurePath(f'{self.pbdir}/backtests/pbgui'))])
                 log = open(self.log,"w")
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
