@@ -120,7 +120,11 @@ class Exchange:
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
-            if market_type == 'swap': return float(balance["total"]["USDT"])
+            if market_type == 'swap':
+                if "USDT" in balance["total"]:
+                    return float(balance["total"]["USDT"])
+                else:
+                    return float(0)
             else:
                 if symbol:
                     if symbol.endswith('USDT'):
@@ -186,10 +190,13 @@ class Exchange:
                     else:
                         since = end_time
             elif self.id == "bybit":
-                week = 7 * 24 * 60 * 60 * 1000
+                day = 24 * 60 * 60 * 1000
+                week = 7 * day
+                year = 365 * day
                 now = self.instance.milliseconds()
                 all_trades = []
                 if since == 1577840461000:
+                    since = now - 2 * year + day
                     end_time = since + week
                     first_trade = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, "paginate": True, 'endTime': end_time })
                     if first_trade:
