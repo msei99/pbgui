@@ -48,6 +48,11 @@ def bt_queue():
     else:
         st.session_state.my_btq = BacktestQueue() 
         my_btq = st.session_state.my_btq
+    # Init session state for keys
+    if "backtest_cpu" in st.session_state:
+        if st.session_state.backtest_cpu != my_btq.cpu:
+            my_btq.cpu = st.session_state.backtest_cpu
+    # Load Queue
     my_btq.load()
     # Navigation
     with st.sidebar:
@@ -66,7 +71,7 @@ def bt_queue():
         if st.button(":wastebasket:"):
             my_btq.remove_finish()
     with col_cpu:
-        my_btq.cpu = st.number_input(f'Max running Backtests CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1)
+        st.number_input(f'Max running Backtests CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1, key = "backtest_cpu")
     # Backtest Queue
     d = []
     if not "ed_bt_key" in st.session_state:
