@@ -257,8 +257,17 @@ class BacktestItem(Base):
                     pass
                 except psutil.AccessDenied:
                     pass
-                if any(str(self.file) in sub for sub in cmdline) and any("backtest.py" in sub for sub in cmdline):
-                    return process
+                if any("backtest.py" in sub for sub in cmdline):
+                    if (
+                        cmdline[5] == self.user and
+                        cmdline[7] == self.symbol and
+                        cmdline[9] == self.sd and
+                        cmdline[11] == self.ed and
+                        cmdline[13] == str(self.sb) and
+                        cmdline[15] == self.market_type and
+                        cmdline[18] == str(PurePath(self._config.config_file))
+                    ):
+                        return process
 
     def run(self):
         if not self.is_finish() and not self.is_running():
@@ -269,7 +278,7 @@ class BacktestItem(Base):
                 cmd = [sys.executable, '-u', PurePath(f'{pbdir}/backtest.py')]
                 cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
                 cmd.extend(shlex.split(cmd_end))
-                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self._config.config_file)}')])
+                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
                 log = open(self.log,"w")
                 if platform.system() == "Windows":
                     creationflags = subprocess.DETACHED_PROCESS
