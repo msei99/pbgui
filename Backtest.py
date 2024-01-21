@@ -314,16 +314,14 @@ class BacktestQueue:
 
     @autostart.setter
     def autostart(self, new_autostart):
-        if new_autostart != self._autostart:
-            self._autostart = new_autostart
-            self.pb_config.set("backtest", "autostart", str(self._autostart))
-            with open('pbgui.ini', 'w') as f:
-                self.pb_config.write(f)
-            if self._autostart:
-                self.run()
-            else:
-                self.stop()
-            st.experimental_rerun()
+        self._autostart = new_autostart
+        self.pb_config.set("backtest", "autostart", str(self._autostart))
+        with open('pbgui.ini', 'w') as f:
+            self.pb_config.write(f)
+        if self._autostart:
+            self.run()
+        else:
+            self.stop()
 
     def add(self, item: BacktestItem = None):
         if item:

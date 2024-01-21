@@ -52,6 +52,9 @@ def bt_queue():
     if "backtest_cpu" in st.session_state:
         if st.session_state.backtest_cpu != my_btq.cpu:
             my_btq.cpu = st.session_state.backtest_cpu
+    if "backtest_autostart" in st.session_state:
+        if st.session_state.backtest_autostart != my_btq.autostart:
+            my_btq.autostart = st.session_state.backtest_autostart
     # Load Queue
     my_btq.load()
     # Navigation
@@ -67,7 +70,7 @@ def bt_queue():
     # Options
     col_run, col_cpu, col_empty = st.columns([1,2,7]) 
     with col_run:
-        my_btq.autostart = st.toggle("Autostart", value=my_btq.autostart, key="autostart", help=None)
+        st.toggle("Autostart", value=my_btq.autostart, key="backtest_autostart", help=None)
         if st.button(":wastebasket:"):
             my_btq.remove_finish()
     with col_cpu:
