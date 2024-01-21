@@ -287,10 +287,7 @@ class BacktestQueue:
             self.pb_config.add_section("backtest")
         if not self.pb_config.has_option("backtest", "cpu"):
             self.pb_config.set("backtest", "autostart", "False")
-            my_cpu = multiprocessing.cpu_count()
-            if my_cpu > 1:
-                my_cpu -= 1
-            self.pb_config.set("backtest", "cpu", str(my_cpu))
+            self.pb_config.set("backtest", "cpu", "1")
         self._autostart = eval(self.pb_config.get("backtest", "autostart"))
         self._cpu = int(self.pb_config.get("backtest", "cpu"))
         if self._autostart:
@@ -306,12 +303,10 @@ class BacktestQueue:
 
     @cpu.setter
     def cpu(self, new_cpu):
-        if new_cpu != self._cpu:
-            self._cpu = new_cpu
-            self.pb_config.set("backtest", "cpu", str(self._cpu))
-            with open('pbgui.ini', 'w') as f:
-                self.pb_config.write(f)
-            st.experimental_rerun()
+        self._cpu = new_cpu
+        self.pb_config.set("backtest", "cpu", str(self._cpu))
+        with open('pbgui.ini', 'w') as f:
+            self.pb_config.write(f)
 
     @property
     def autostart(self):
