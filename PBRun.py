@@ -199,7 +199,7 @@ class PBRun():
     def is_enabled_instance(self, instance):
         ipath = f'{self.instances_path}/{instance}'
         ifile = Path(f'{ipath}/instance.cfg')
-        if ifile.exist:
+        if ifile.exist():
             with open(ifile, "r", encoding='utf-8') as f:
                 inst = json.load(f)
             if inst["_enabled"]:
