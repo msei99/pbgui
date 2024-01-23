@@ -80,6 +80,19 @@ def list_remote():
         if f'select_instance_{ed_key}' in st.session_state:
             ed = st.session_state[f'select_instance_{ed_key}']
             for row in ed["edited_rows"]:
+                if row > len(instances.instances)-1:
+                    rpos = st.session_state.instances_not_local[row - len(instances.instances)]
+                    user = server.instances.instances[rpos].user
+                    symbol = server.instances.instances[rpos].symbol
+                    market_type = server.instances.instances[rpos].market_type
+                    if "Sync to local" in ed["edited_rows"][row]:
+                        server.send_to("copy", user, symbol, market_type)
+                        instances.add_wait(f'{user}_{symbol}_{market_type}')
+                    elif "Remove" in ed["edited_rows"][row]:        
+                        if not server.is_running(user, symbol):
+                            server.send_to("remove", user, symbol, market_type)
+                    st.session_state.ed_key += 1
+                    st.experimental_rerun()
                 if "Sync to local" in ed["edited_rows"][row]:
                     status = instances.is_same(server.instances.find_instance(instances.instances[row].user,instances.instances[row].symbol,instances.instances[row].market_type))
                     if (status == False):
@@ -117,6 +130,7 @@ def list_remote():
                 remove = False
             sid.append({
                 'id': id,
+                'where': "local",
                 'User': instance.user,
                 'Symbol': instance.symbol,
                 'Running': server.is_running(instance.user, instance.symbol),
@@ -124,6 +138,21 @@ def list_remote():
                 'Sync to remote': server.instances.is_same(instance),
                 'Remove': remove,
             })
+        st.session_state.instances_not_local = []
+        for id, rinstance in enumerate(server.instances):
+            finstance = instances.find_instance(rinstance.user, rinstance.symbol, rinstance.market_type)
+            if not finstance:
+                st.session_state.instances_not_local.append(id)
+                sid.append({
+                    'id': id,
+                    'where': server.name,
+                    'User': rinstance.user,
+                    'Symbol': rinstance.symbol,
+                    'Running': server.is_running(rinstance.user, rinstance.symbol),
+                    'Sync to local': False,
+                    'Sync to remote': None,
+                    'Remove': remove,
+                })
         st.data_editor(data=sid, width=None, height=36+(len(sid))*35, use_container_width=True, key=f'select_instance_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Running'])
     # Start / Stop Instances
     if f'select_run_{ed_key}' in st.session_state:
