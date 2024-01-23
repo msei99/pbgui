@@ -20,7 +20,7 @@ class RemoteServer():
     def __init__(self, path: str):
         self._name = None
         self._ts = None
-        self._startts = None
+        self._startts = 0
         self._rtd = None
         self._run = None
         self._edit = False
