@@ -111,11 +111,15 @@ class Base:
                 self.ohlcv = st.session_state.base_ohlcv
         col_1, col_2, col_3 = st.columns([1,1,1])
         with col_1:
-            st.selectbox('User',self._users.list(), index = self._users.list().index(st.session_state.base_user), key="base_user")
+            st.selectbox('User',self._users.list(), key="base_user")
+#            st.selectbox('User',self._users.list(), index = self._users.list().index(st.session_state.base_user), key="base_user")
             st.session_state.placeholder = st.empty()
         with col_2:
-            st.selectbox('SYMBOL', self.symbols, index=self.symbols.index(st.session_state.base_symbol), key="base_symbol")
+            st.selectbox('SYMBOL', self.symbols, key="base_symbol")
+#            st.selectbox('SYMBOL', self.symbols, index=self.symbols.index(st.session_state.base_symbol), key="base_symbol")
             st.button("Update Symbols from Exchange", key="base_update_symbols")
         with col_3:
-            st.radio("MARKET_TYPE", self.market_types, index=self.market_types.index(st.session_state.base_market_type), key="base_market_type")
-            st.checkbox("OHLCV", value=st.session_state.base_ohlcv, help=pbgui_help.ohlcv, key="base_ohlcv")
+            st.radio("MARKET_TYPE", self.market_types, key="base_market_type")
+#            st.radio("MARKET_TYPE", self.market_types, index=self.market_types.index(st.session_state.base_market_type), key="base_market_type")
+            st.checkbox("OHLCV", help=pbgui_help.ohlcv, key="base_ohlcv")
+#            st.checkbox("OHLCV", value=st.session_state.base_ohlcv, help=pbgui_help.ohlcv, key="base_ohlcv")

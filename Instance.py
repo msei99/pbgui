@@ -12,6 +12,7 @@ import json
 import glob
 import pandas as pd
 from datetime import datetime
+from time import sleep
 from bokeh.plotting import figure
 import numpy as np
 from shutil import rmtree
@@ -48,6 +49,8 @@ class Instance(Base):
         self._status = {} # not saved
         self._statusll = 0 # not saved
 
+    @property
+    def instance_path(self): return self._instance_path
     @property
     def config(self): return self._config.config
     @property
@@ -1006,6 +1009,19 @@ class Instances:
                 and instance.market_type == market_type
             ):
                 return instance
+
+    def add_wait(self, instance_name : str):
+        p = Path(f'{self.instances_path}/{instance_name}')
+        file = Path(f'{p}/instance.cfg')
+        for i in range(15):
+            if file.exists():
+                inst = Instance()
+                if inst.load(p):
+                    print(f'{str(p)} loaded')
+                    self.instances.append(inst)
+                    self.instances = sorted(self.instances, key=lambda d: d.user)
+                    return
+            sleep(1)
 
     def remove(self, instance: Instance):
         instance.remove()
