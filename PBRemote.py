@@ -20,6 +20,7 @@ class RemoteServer():
     def __init__(self, path: str):
         self._name = None
         self._ts = None
+        self._startts = 0
         self._rtd = None
         self._run = None
         self._edit = False
@@ -34,6 +35,8 @@ class RemoteServer():
     def name(self): return self._name
     @property
     def ts(self): return self._ts
+    @property
+    def startts(self): return self._startts
     @property
     def rtd(self): return self._rtd
     @property
@@ -59,6 +62,10 @@ class RemoteServer():
     def ts(self, new_ts):
         if self._ts != new_ts:
             self._ts = new_ts
+    @startts.setter
+    def startts(self, new_startts):
+        if self._startts != new_startts:
+            self._startts = new_startts
     @edit.setter
     def edit(self, new_edit):
         if self._edit != new_edit:
@@ -132,6 +139,8 @@ class RemoteServer():
                         if "name" in cfg and "timestamp" in cfg:
                             self._name = cfg["name"]
                             self._ts = cfg["timestamp"]
+                        if "startts" in cfg:
+                            self._startts = cfg["startts"]
                         if "api_md5" in cfg:
                             self._api_md5 = cfg["api_md5"]
                         if "run" in cfg:
@@ -302,6 +311,8 @@ class PBRemote():
         self.local_run = PBRun()
         self.index = 0
         self.api_md5 = None
+        self.startts = None
+        self.sync_downts = None
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -371,6 +382,7 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            self.sync_downts = round(datetime.now().timestamp())
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
             if logfile.stat().st_size >= 10485760:
@@ -428,6 +440,7 @@ class PBRemote():
             run.append(inst)
         cfg = ({
             "timestamp": timestamp,
+            "startts": self.startts,
             "name": self.name,
             "api_md5": self.api_md5,
             "run": run
@@ -557,6 +570,7 @@ def main():
         print(remote.error)
         exit(1)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
+    remote.startts = round(datetime.now().timestamp())
     remote.sync('up', 'instances')
     remote.sync('down', 'instances')
     while True:
@@ -574,7 +588,8 @@ def main():
                 if server.sync_from(remote.name):
                     remote.sync("up", 'instances')
                     remote.load_local()
-                if server.ack_from(remote.name):
+                # Sync from Cloud Storage when we get an .ack from remote Server or when remote server was restarted
+                if server.ack_from(remote.name) or server.startts > remote.sync_downts:
                     remote.sync("down", 'instances')
         except Exception as e:
             print(f'Something went wrong, but continue {e}')

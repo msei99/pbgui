@@ -257,8 +257,17 @@ class BacktestItem(Base):
                     pass
                 except psutil.AccessDenied:
                     pass
-                if any(str(self.file) in sub for sub in cmdline) and any("backtest.py" in sub for sub in cmdline):
-                    return process
+                if any("backtest.py" in sub for sub in cmdline):
+                    if (
+                        cmdline[5] == self.user and
+                        cmdline[7] == self.symbol and
+                        cmdline[9] == self.sd and
+                        cmdline[11] == self.ed and
+                        cmdline[13] == str(self.sb) and
+                        cmdline[15] == self.market_type and
+                        cmdline[18] == str(PurePath(self._config.config_file))
+                    ):
+                        return process
 
     def run(self):
         if not self.is_finish() and not self.is_running():
@@ -269,7 +278,7 @@ class BacktestItem(Base):
                 cmd = [sys.executable, '-u', PurePath(f'{pbdir}/backtest.py')]
                 cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
                 cmd.extend(shlex.split(cmd_end))
-                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), PurePath(f'{str(self._config.config_file)}')])
+                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
                 log = open(self.log,"w")
                 if platform.system() == "Windows":
                     creationflags = subprocess.DETACHED_PROCESS
@@ -287,10 +296,7 @@ class BacktestQueue:
             self.pb_config.add_section("backtest")
         if not self.pb_config.has_option("backtest", "cpu"):
             self.pb_config.set("backtest", "autostart", "False")
-            my_cpu = multiprocessing.cpu_count()
-            if my_cpu > 1:
-                my_cpu -= 1
-            self.pb_config.set("backtest", "cpu", str(my_cpu))
+            self.pb_config.set("backtest", "cpu", "1")
         self._autostart = eval(self.pb_config.get("backtest", "autostart"))
         self._cpu = int(self.pb_config.get("backtest", "cpu"))
         if self._autostart:
@@ -306,12 +312,10 @@ class BacktestQueue:
 
     @cpu.setter
     def cpu(self, new_cpu):
-        if new_cpu != self._cpu:
-            self._cpu = new_cpu
-            self.pb_config.set("backtest", "cpu", str(self._cpu))
-            with open('pbgui.ini', 'w') as f:
-                self.pb_config.write(f)
-            st.experimental_rerun()
+        self._cpu = new_cpu
+        self.pb_config.set("backtest", "cpu", str(self._cpu))
+        with open('pbgui.ini', 'w') as f:
+            self.pb_config.write(f)
 
     @property
     def autostart(self):
@@ -319,16 +323,14 @@ class BacktestQueue:
 
     @autostart.setter
     def autostart(self, new_autostart):
-        if new_autostart != self._autostart:
-            self._autostart = new_autostart
-            self.pb_config.set("backtest", "autostart", str(self._autostart))
-            with open('pbgui.ini', 'w') as f:
-                self.pb_config.write(f)
-            if self._autostart:
-                self.run()
-            else:
-                self.stop()
-            st.experimental_rerun()
+        self._autostart = new_autostart
+        self.pb_config.set("backtest", "autostart", str(self._autostart))
+        with open('pbgui.ini', 'w') as f:
+            self.pb_config.write(f)
+        if self._autostart:
+            self.run()
+        else:
+            self.stop()
 
     def add(self, item: BacktestItem = None):
         if item:
