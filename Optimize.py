@@ -1058,7 +1058,6 @@ def main():
                         break
                 else:
                     time.sleep(1)
-        print("sleep 60")
         time.sleep(60)
 
 if __name__ == '__main__':

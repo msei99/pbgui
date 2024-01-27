@@ -336,10 +336,30 @@ class BacktestQueue:
         if item:
             self.items.append(item)
 
-    def remove_finish(self):
+    def cleanup(self):
+        pbgdir = Path.cwd()
+        dest = Path(f'{pbgdir}/data/bt_queue')
+        p = str(Path(f'{dest}/*'))
+        items = glob.glob(p)
+        for item in items:
+            if not item.endswith('.json'):
+                cfg = Path(item.split('.')[0] + '.json')
+                if not cfg.exists():
+                    Path(item).unlink(missing_ok=True)
+
+    def remove_finish(self, all : bool = False):
+        self.stop()
         for item in self.items:
             if item.is_finish():
                 item.remove()
+            else:
+                if all:
+                    item.stop()
+                    item.remove()
+        # Remove dead files
+        self.cleanup()
+        if self._autostart:
+            self.run()
         st.experimental_rerun()
 
     def running(self):
