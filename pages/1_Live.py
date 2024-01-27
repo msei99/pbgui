@@ -143,6 +143,10 @@ def list_remote():
             finstance = instances.find_instance(rinstance.user, rinstance.symbol, rinstance.market_type)
             if not finstance:
                 st.session_state.instances_not_local.append(id)
+                if server.is_running(rinstance.user, rinstance.symbol):
+                    remove = None
+                else:
+                    remove = False
                 sid.append({
                     'id': id,
                     'where': server.name,
