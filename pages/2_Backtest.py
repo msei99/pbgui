@@ -59,22 +59,22 @@ def bt_queue():
     my_btq.load()
     # Navigation
     with st.sidebar:
+        st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1, key = "backtest_cpu")
+        st.toggle("Autostart", value=my_btq.autostart, key="backtest_autostart", help=None)
         st.button(":recycle:")
-        if st.button("Compare"):
+        if st.button(":wastebasket: finished"):
+            my_btq.remove_finish()
+            st.experimental_rerun()
+        if st.button(":wastebasket: all"):
+            my_btq.remove_finish(all=True)
+            st.experimental_rerun()
+        if st.button("Results"):
             st.session_state.bt_compare = True
             del st.session_state.bt_queue
             st.experimental_rerun()
         if st.button(":back:"):
             del st.session_state.bt_queue
             st.experimental_rerun()
-    # Options
-    col_run, col_cpu, col_empty = st.columns([1,2,7]) 
-    with col_run:
-        st.toggle("Autostart", value=my_btq.autostart, key="backtest_autostart", help=None)
-        if st.button(":wastebasket:"):
-            my_btq.remove_finish()
-    with col_cpu:
-        st.number_input(f'Max running Backtests CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1, key = "backtest_cpu")
     # Backtest Queue
     d = []
     if not "ed_bt_key" in st.session_state:
