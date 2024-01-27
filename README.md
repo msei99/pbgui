@@ -107,7 +107,9 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.93 (23-01-2024)
+## v0.93 (26-01-2024)
+- Optimizer: No longer count killed runs as finished
+- Optimizer: No longer create duplicate backtests
 - PBRemote: You can now sync instances from remote to local, even they local not exist
 - PBRemote: Bugfix not syncing new instances
 - API-Edtor: Bugfix for bybit API without swap and spot rights
