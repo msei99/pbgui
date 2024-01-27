@@ -229,6 +229,16 @@ class OptimizeItem(Base):
             bt.save()
 
     def find_best(self):
+        self.best_long = []
+        self.best_short = []
+        self.sharp_long = []
+        self.sharp_short = []
+        self.adg_long = []
+        self.adg_short = []
+        self.drawdown_long = []
+        self.drawdown_short = []
+        self.stuck_long = []
+        self.stuck_short = []
         results = sorted(self.results, key=lambda d: d['path'])
         if results:
             while len(results) > 0:
