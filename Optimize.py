@@ -1054,12 +1054,13 @@ def main():
                 if not item.is_running():
                     print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.file} started')
                     item.start(opt.cpu)
+                    opt.load_options()
                     if opt.mode == "circular":
                         break
                 else:
                     time.sleep(1)
-        print("sleep 60")
         time.sleep(60)
+        opt.load()
 
 if __name__ == '__main__':
     main()

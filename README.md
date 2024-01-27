@@ -107,7 +107,10 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.93 (26-01-2024)
+## v0.93 (27-01-2024)
+- Backtest: Fixed import from pbconfigdb (New filters for exchange and market added)
+- Optimizer: Now find new added items and start them if autostart is enabled.
+- Backtest: Cleanup directory. Remove all Backtests from queue.
 - Optimizer: No longer count killed runs as finished
 - Optimizer: No longer create duplicate backtests
 - PBRemote: You can now sync instances from remote to local, even they local not exist

@@ -53,6 +53,8 @@ class BacktestItem(Base):
             "symbol", 
             "side", 
             "strategy", 
+            "exchange", 
+            "market", 
             "adg_per_exposure", 
             "adg_weighted_per_exposure", 
             "eqbal_ratio_mean_of_10_worst", 
@@ -65,7 +67,7 @@ class BacktestItem(Base):
             "balance_needed",
             "source_name",
             "source",
-            "hash"]]
+            "idhash"]]
         column_config = {
             "_index": 'Id',
             "View": st.column_config.CheckboxColumn('View', default=False),
@@ -75,10 +77,10 @@ class BacktestItem(Base):
             "balance_needed": 'min_balance',
             "quality_score": 'score',
             "source": st.column_config.LinkColumn('source', width=None, disabled=True),
-            "hash": None
+            "idhash": None
             }
         df_min.insert(0 ,column="View", value=False)
-        col_symbol, col_side, col_strategy = st.columns([1,1,1])
+        col_symbol, col_side, col_strategy, col_exchange = st.columns([1,1,1,1])
         with col_symbol:
             symbols = st.multiselect("Symbols", df["symbol"].unique(), default=None, key=None, on_change=None, args=None)
             adg_per_exposure = st.number_input("adg_per_exposure =>", min_value=0.0, max_value=1.0, value=0.0, step=0.05, format="%.2f")
@@ -97,6 +99,13 @@ class BacktestItem(Base):
             if strategy:
                 df_min = df_min[df_min['strategy'].isin(strategy)]
             df_min = df_min[df_min['quality_score'].ge(quality_score)]
+        with col_exchange:
+            exchange = st.multiselect("Exchange", df["exchange"].unique(), default=None, key=None, on_change=None, args=None)
+            if exchange:
+                df_min = df_min[df_min['exchange'].isin(exchange)]
+            market = st.multiselect("Market", df["market"].unique(), default=None, key=None, on_change=None, args=None)
+            if market:
+                df_min = df_min[df_min['market'].isin(market)]
         df_min = df_min.reset_index(drop=True)
         selected = st.data_editor(data=df_min, width=None, height=1200, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
         col_image, col_config = st.columns([1,1])
@@ -105,17 +114,17 @@ class BacktestItem(Base):
         for index, row in view.iterrows():
             col_image, col_config = st.columns([1,1])
             with col_image:
-                hash = row['hash']
+                idhash = row['idhash']
                 source = row['source']
                 id = row["index"]
                 config = self.fetch_config(source)
                 if not config.endswith("found"):
-                    if st.checkbox(f'{id}: Backtest', key=hash):
+                    if st.checkbox(f'{id}: Backtest', key=idhash):
                         self._config.config = config
                         self.symbol = row['symbol']
                         del st.session_state.bt_import
                         st.experimental_rerun()
-                st.image(f'https://pbconfigdb.scud.dedyn.io/plots/{hash}.webp')
+                st.image(f'https://pbconfigdb.scud.dedyn.io/plots/{idhash}.webp')
             with col_config:
                 st.code(config)
 
@@ -336,10 +345,30 @@ class BacktestQueue:
         if item:
             self.items.append(item)
 
-    def remove_finish(self):
+    def cleanup(self):
+        pbgdir = Path.cwd()
+        dest = Path(f'{pbgdir}/data/bt_queue')
+        p = str(Path(f'{dest}/*'))
+        items = glob.glob(p)
+        for item in items:
+            if not item.endswith('.json'):
+                cfg = Path(item.split('.')[0] + '.json')
+                if not cfg.exists():
+                    Path(item).unlink(missing_ok=True)
+
+    def remove_finish(self, all : bool = False):
+        self.stop()
         for item in self.items:
             if item.is_finish():
                 item.remove()
+            else:
+                if all:
+                    item.stop()
+                    item.remove()
+        # Remove dead files
+        self.cleanup()
+        if self._autostart:
+            self.run()
         st.experimental_rerun()
 
     def running(self):
