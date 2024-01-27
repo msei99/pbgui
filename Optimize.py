@@ -205,8 +205,6 @@ class OptimizeItem(Base):
                     for result in self.stuck_short:
                         if not result["id"] in [sub["id"] for sub in backtests]:
                             backtests.append(result)
-        # Remove duplicates
-        backtests = list(dict.fromkeys(backtests))
         for backtest in backtests:
             dir = PurePath(backtest["path"]).parent
             name = PurePath(backtest["path"]).name
@@ -631,6 +629,8 @@ class OptimizeQueue:
                 if "run" in ed["edited_rows"][row]:
                     if self.items[row].is_running():
                         self.items[row].stop()
+                    else:
+                        self.items[row].start(self.cpu)
                     st.session_state.ed_key += 1
                     st.experimental_rerun()
                 if "edit" in ed["edited_rows"][row]:
