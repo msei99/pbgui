@@ -119,12 +119,13 @@ class OptimizeItem(Base):
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
                 if platform.system() == "Windows":
                     creationflags = subprocess.CREATE_NO_WINDOW
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+                    result = subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
                 else:
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True)
+                    result = subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True)
+                if result.returncode == 0:
+                    self.finish +=1
+                    self.save(self.position)
                 self.generate_backtest()
-                self.finish +=1
-                self.save(self.position)
 
     def remove(self):
         self.file.unlink(missing_ok=True)
@@ -204,6 +205,8 @@ class OptimizeItem(Base):
                     for result in self.stuck_short:
                         if not result["id"] in [sub["id"] for sub in backtests]:
                             backtests.append(result)
+        # Remove duplicates
+        backtests = list(dict.fromkeys(backtests))
         for backtest in backtests:
             dir = PurePath(backtest["path"]).parent
             name = PurePath(backtest["path"]).name
