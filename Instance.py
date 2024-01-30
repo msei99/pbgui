@@ -246,15 +246,11 @@ class Instance(Base):
 
     @long_mode.setter
     def long_mode(self, new_long_mode):
-        if self._long_mode != new_long_mode:
-            self._long_mode = new_long_mode
-            st.experimental_rerun()
+        self._long_mode = new_long_mode
 
     @short_mode.setter
     def short_mode(self, new_short_mode):
-        if self._short_mode != new_short_mode:
-            self._short_mode = new_short_mode
-            st.experimental_rerun()
+        self._short_mode = new_short_mode
 
     @sb.setter
     def sb(self, new_sb):
@@ -264,7 +260,6 @@ class Instance(Base):
                 self._bt.sb = self.sb
             if self.sb != self._trades["balance"][0]:
                 self._trades = self.trades_to_df()
-            st.experimental_rerun()
 
     @sd.setter
     def sd(self, new_sd):
@@ -274,7 +269,6 @@ class Instance(Base):
                 self._bt.sd = self.sd
             if self.sd != datetime.fromtimestamp(self._trades["timestamp"][0]/1000).strftime("%Y-%m-%d"):
                 self._trades = self.trades_to_df()
-            st.experimental_rerun()
 
     @ed.setter
     def ed(self, new_ed):
@@ -284,7 +278,6 @@ class Instance(Base):
                 self._bt.ed = self.ed
             if self.ed != datetime.fromtimestamp(self._trades.iloc[-1]["timestamp"]/1000).strftime("%Y-%m-%d"):
                 self._trades = self.trades_to_df()
-            st.experimental_rerun()
 
     @sb_change.setter
     def sb_change(self, new_sb_change):
@@ -292,7 +285,6 @@ class Instance(Base):
             self._sb_change = new_sb_change
             if not self._sb_change:
                 self._trades = self.trades_to_df()
-            st.experimental_rerun()
 
     @sd_change.setter
     def sd_change(self, new_sd_change):
@@ -300,7 +292,6 @@ class Instance(Base):
             self._sd_change = new_sd_change
             if not self._sd_change:
                 self._trades = self.trades_to_df()
-            st.experimental_rerun()
 
     @ed_change.setter
     def ed_change(self, new_ed_change):
@@ -308,14 +299,12 @@ class Instance(Base):
             self._ed_change = new_ed_change
             if not self._ed_change:
                 self._trades = self.trades_to_df()
-            st.experimental_rerun()
 
     @tf.setter
     def tf(self, new_tf):
         if self._tf != new_tf:
             self._tf = new_tf
             self.save()
-            st.experimental_rerun()
 
     def trades_to_df(self):
         ffile = Path(f'{self._instance_path}/fundings.json')
@@ -636,6 +625,16 @@ class Instance(Base):
                 json.dump(trades, f, indent=4)
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(trades) - ltrades} trades')
 
+    def save_trades(self, trades : json):
+        if trades:
+            data = []
+            for trade in trades:
+                t = {
+                    'time': trade["timestamp"],
+                    'symbol': trade["symbol"]
+                }
+
+
     def fetch_fundings(self):
         if self.market_type == "spot" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
             return
@@ -739,8 +738,8 @@ class Instance(Base):
 
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):
-            self.fetch_trades()
-            self.fetch_fundings()
+            # self.fetch_trades()
+            # self.fetch_fundings()
             self._trades = self.trades_to_df()
         if self._trades is None:
             st.write("### No Trades available.")
@@ -759,31 +758,43 @@ class Instance(Base):
         st.markdown(f'### Symbol: {self.symbol} {self.balance} USDT')
         col_1, col_2, col_3, col_4, col_end = st.columns([1,1,1,1,5])
         with col_1:
-            self.sb_change = st.checkbox("Change", value=self.sb_change, key="sb_change", help=None, on_change=None)
-            self.sb = st.number_input('STARTING_BALANCE',value=self.sb,step=500.0, disabled=not self.sb_change)
+            if "key_instance_sb_change" in st.session_state:
+                self.sb_change = st.session_state.key_instance_sb_change
+            st.checkbox("Change", value=self.sb_change, help=None, on_change=None, key="key_instance_sb_change")
+            if "key_instance_sb" in st.session_state:
+                self.sb = st.session_state.key_instance_sb
+            st.number_input('STARTING_BALANCE',value=self.sb,step=500.0, disabled=not self.sb_change, key="key_instance_sb")
         with col_2:
-            self.sd_change = st.checkbox("Change", value=self.sd_change, key="sd_change", help=None, on_change=None)
-            self.sd = st.date_input("START_DATE", datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD", disabled=not self.sd_change).strftime("%Y-%m-%d")
+            if "key_instance_sd_change" in st.session_state:
+                self.sd_change = st.session_state.key_instance_sd_change
+            st.checkbox("Change", value=self.sd_change, help=None, on_change=None, key="key_instance_sd_change")
+            if "key_instance_sd" in st.session_state:
+                self.sd = st.session_state.key_instance_sd.strftime("%Y-%m-%d")
+            st.date_input("START_DATE", datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD", disabled=not self.sd_change, key="key_instance_sd")
         with col_3:
-            self.ed_change = st.checkbox("Change", value=self.ed_change, key="ed_change", help=None, on_change=None)
-            self.ed = st.date_input("END_DATE", datetime.strptime(self.ed, '%Y-%m-%d'), format="YYYY-MM-DD", disabled=not self.ed_change).strftime("%Y-%m-%d")
+            if "key_instance_ed_change" in st.session_state:
+                self.ed_change = st.session_state.key_instance_ed_change
+            st.checkbox("Change", value=self.ed_change, help=None, on_change=None, key="key_instance_ed_change")
+            if "key_instance_ed" in st.session_state:
+                self.ed = st.session_state.key_instance_ed.strftime("%Y-%m-%d")
+            st.date_input("END_DATE", datetime.strptime(self.ed, '%Y-%m-%d'), format="YYYY-MM-DD", disabled=not self.ed_change, key="key_instance_ed")
         with col_4:
             st.write("## ")
             if self._bt.is_running():
                 if st.button("Stop"):
                     self._bt.stop()
-                    st.experimental_rerun()
+                    st.rerun()
             elif self._bt.is_finish():
                 self._bt.remove()
                 self._btresults = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
                 self._btresults.match_config(self.symbol, self._config.config, self.market_type)
-                st.experimental_rerun()
+                st.rerun()
             else:
                 if st.button("Run"):
                     self._bt.save()
                     self._bt.log = Path(f'{self._bt.file}.log')
                     self._bt.run()
-                    st.experimental_rerun()
+                    st.rerun()
         if not self._btresults:
             self._btresults = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
             self._btresults.match_config(self.symbol, self._config.config, self.market_type)
@@ -799,16 +810,20 @@ class Instance(Base):
         self._config.edit_config()
 
     def edit_mode(self):
-        if not self.long_mode:
-            self.long_mode = "normal"
-        if not self.short_mode:
-            self.short_mode = "normal"
+        # if not self.long_mode:
+        #     self.long_mode = "normal"
+        # if not self.short_mode:
+        #     self.short_mode = "normal"
         modes = ['normal', 'graceful_stop', 'panic', 'tp_only']
         col_lm, col_sm, col_empty = st.columns([1,1,1])
         with col_lm:
-            self.long_mode = st.radio("LONG_MODE",(modes), key="long_mode", index=modes.index(self.long_mode), help=pbgui_help.mode)
+            if "edit_long_mode" in st.session_state:
+                self.long_mode = st.session_state.edit_long_mode
+            st.radio("LONG_MODE",(modes), key="edit_long_mode", index=modes.index(self.long_mode), help=pbgui_help.mode)
         with col_sm:
-            self.short_mode = st.radio("SHORT_MODE",(modes), key="short_mode", index=modes.index(self.short_mode), help=pbgui_help.mode)
+            if "edit_short_mode" in st.session_state:
+                self.short_mode = st.session_state.edit_short_mode
+            st.radio("SHORT_MODE",(modes), key="edit_short_mode", index=modes.index(self.short_mode), help=pbgui_help.mode)
 
     def refresh(self):
         path = self._instance_path
@@ -943,25 +958,19 @@ class Instances:
     def pbrun_log(self): return self._pbrun_log
     @pbrun_log.setter
     def pbrun_log(self, new_pbrun_log):
-        if self.pbrun_log != new_pbrun_log:
-            self._pbrun_log = new_pbrun_log
-            st.experimental_rerun()
+        self._pbrun_log = new_pbrun_log
 
     @property
     def pbremote_log(self): return self._pbremote_log
     @pbremote_log.setter
     def pbremote_log(self, new_pbremote_log):
-        if self.pbremote_log != new_pbremote_log:
-            self._pbremote_log = new_pbremote_log
-            st.experimental_rerun()
+        self._pbremote_log = new_pbremote_log
 
     @property
     def pbstat_log(self): return self._pbstat_log
     @pbstat_log.setter
     def pbstat_log(self, new_pbstat_log):
-        if self.pbstat_log != new_pbstat_log:
-            self._pbstat_log = new_pbstat_log
-            st.experimental_rerun()
+        self._pbstat_log = new_pbstat_log
 
     def __iter__(self):
         return iter(self.instances)
@@ -1043,12 +1052,6 @@ class Instances:
     def view_log(self, log_filename: str):
         pbgdir = Path.cwd()
         logfile = Path(f'{pbgdir}/data/logs/{log_filename}.log')
-        logr = ""
-        if logfile.exists():
-            with open(logfile, 'r', encoding='utf-8') as f:
-                log = f.readlines()
-                for line in reversed(log):
-                    logr = logr+line
         col_log, col_del, col_empty = st.columns([5,1,18])
         with col_log:
             st.button(f':recycle: **{log_filename} logfile**', key=f'button_{log_filename}')
@@ -1056,7 +1059,12 @@ class Instances:
             if st.button(f':wastebasket:', key=f'button__del_{log_filename}'):
                 with open(logfile,'r+') as file:
                     file.truncate()
-                st.experimental_rerun()
+        logr = ""
+        if logfile.exists():
+            with open(logfile, 'r', encoding='utf-8') as f:
+                log = f.readlines()
+                for line in reversed(log):
+                    logr = logr+line
         stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
 
     def import_manager(self):

@@ -320,361 +320,307 @@ class OptimizeScore:
 
     @maximum_drawdown_max_long.setter
     def maximum_drawdown_max_long(self, new_maximum_drawdown_max_long):
-        if self._maximum_drawdown_max_long != new_maximum_drawdown_max_long:
-            if new_maximum_drawdown_max_long <= 0:
-                self._maximum_drawdown_max_long_enable = False
-                self._maximum_drawdown_max_long = -1
-            else:
-                self._maximum_drawdown_max_long_enable = True
-                self._maximum_drawdown_max_long = new_maximum_drawdown_max_long
-            if self._config:
-                self._config["maximum_drawdown_max_long"] = self._maximum_drawdown_max_long
-                st.experimental_rerun()
+        if new_maximum_drawdown_max_long <= 0:
+            self._maximum_drawdown_max_long_enable = False
+            self._maximum_drawdown_max_long = -1
+        else:
+            self._maximum_drawdown_max_long_enable = True
+            self._maximum_drawdown_max_long = new_maximum_drawdown_max_long
+        if self._config:
+            self._config["maximum_drawdown_max_long"] = self._maximum_drawdown_max_long
     @maximum_drawdown_max_long_enable.setter
     def maximum_drawdown_max_long_enable(self, new_maximum_drawdown_max_long_enable):
-        if self._maximum_drawdown_max_long_enable != new_maximum_drawdown_max_long_enable:
-            self._maximum_drawdown_max_long_enable = new_maximum_drawdown_max_long_enable
-            if self._maximum_drawdown_max_long_enable:
-                self.maximum_drawdown_max_long = 0.25
-            else:
-                self.maximum_drawdown_max_long = -1
+        self._maximum_drawdown_max_long_enable = new_maximum_drawdown_max_long_enable
+        if self._maximum_drawdown_max_long_enable:
+            self.maximum_drawdown_max_long = 0.25
+        else:
+            self.maximum_drawdown_max_long = -1
     @maximum_drawdown_max_short.setter
     def maximum_drawdown_max_short(self, new_maximum_drawdown_max_short):
-        if self._maximum_drawdown_max_short != new_maximum_drawdown_max_short:
-            if new_maximum_drawdown_max_short <= 0:
-                self._maximum_drawdown_max_short_enable = False
-                self._maximum_drawdown_max_short = -1
-            else:
-                self._maximum_drawdown_max_short_enable = True
-                self._maximum_drawdown_max_short = new_maximum_drawdown_max_short
-            if self._config:
-                self._config["maximum_drawdown_max_short"] = self._maximum_drawdown_max_short
-                st.experimental_rerun()
+        if new_maximum_drawdown_max_short <= 0:
+            self._maximum_drawdown_max_short_enable = False
+            self._maximum_drawdown_max_short = -1
+        else:
+            self._maximum_drawdown_max_short_enable = True
+            self._maximum_drawdown_max_short = new_maximum_drawdown_max_short
+        if self._config:
+            self._config["maximum_drawdown_max_short"] = self._maximum_drawdown_max_short
     @maximum_drawdown_max_short_enable.setter
     def maximum_drawdown_max_short_enable(self, new_maximum_drawdown_max_short_enable):
-        if self._maximum_drawdown_max_short_enable != new_maximum_drawdown_max_short_enable:
-            self._maximum_drawdown_max_short_enable = new_maximum_drawdown_max_short_enable
-            if self._maximum_drawdown_max_short_enable:
-                self.maximum_drawdown_max_short = 0.25
-            else:
-                self.maximum_drawdown_max_short = -1
+        self._maximum_drawdown_max_short_enable = new_maximum_drawdown_max_short_enable
+        if self._maximum_drawdown_max_short_enable:
+            self.maximum_drawdown_max_short = 0.25
+        else:
+            self.maximum_drawdown_max_short = -1
     @maximum_drawdown_1pct_worst_mean_long.setter
     def maximum_drawdown_1pct_worst_mean_long(self, new_maximum_drawdown_1pct_worst_mean_long):
-        if self._maximum_drawdown_1pct_worst_mean_long != new_maximum_drawdown_1pct_worst_mean_long:
-            if new_maximum_drawdown_1pct_worst_mean_long <= 0:
-                self._maximum_drawdown_1pct_worst_mean_long_enable = False
-                self._maximum_drawdown_1pct_worst_mean_long = -1
-            else:
-                self._maximum_drawdown_1pct_worst_mean_long_enable = True
-                self._maximum_drawdown_1pct_worst_mean_long = new_maximum_drawdown_1pct_worst_mean_long
-            if self._config:
-                self._config["maximum_drawdown_1pct_worst_mean_long"] = self._maximum_drawdown_1pct_worst_mean_long
-                st.experimental_rerun()
+        if new_maximum_drawdown_1pct_worst_mean_long <= 0:
+            self._maximum_drawdown_1pct_worst_mean_long_enable = False
+            self._maximum_drawdown_1pct_worst_mean_long = -1
+        else:
+            self._maximum_drawdown_1pct_worst_mean_long_enable = True
+            self._maximum_drawdown_1pct_worst_mean_long = new_maximum_drawdown_1pct_worst_mean_long
+        if self._config:
+            self._config["maximum_drawdown_1pct_worst_mean_long"] = self._maximum_drawdown_1pct_worst_mean_long
     @maximum_drawdown_1pct_worst_mean_long_enable.setter
     def maximum_drawdown_1pct_worst_mean_long_enable(self, new_maximum_drawdown_1pct_worst_mean_long_enable):
-        if self._maximum_drawdown_1pct_worst_mean_long_enable != new_maximum_drawdown_1pct_worst_mean_long_enable:
-            self._maximum_drawdown_1pct_worst_mean_long_enable = new_maximum_drawdown_1pct_worst_mean_long_enable
-            if self._maximum_drawdown_1pct_worst_mean_long_enable:
-                self.maximum_drawdown_1pct_worst_mean_long = 0.1
-            else:
-                self.maximum_drawdown_1pct_worst_mean_long = -1
+        self._maximum_drawdown_1pct_worst_mean_long_enable = new_maximum_drawdown_1pct_worst_mean_long_enable
+        if self._maximum_drawdown_1pct_worst_mean_long_enable:
+            self.maximum_drawdown_1pct_worst_mean_long = 0.1
+        else:
+            self.maximum_drawdown_1pct_worst_mean_long = -1
     @maximum_drawdown_1pct_worst_mean_short.setter
     def maximum_drawdown_1pct_worst_mean_short(self, new_maximum_drawdown_1pct_worst_mean_short):
-        if self._maximum_drawdown_1pct_worst_mean_short != new_maximum_drawdown_1pct_worst_mean_short:
-            if new_maximum_drawdown_1pct_worst_mean_short <= 0:
-                self._maximum_drawdown_1pct_worst_mean_short_enable = False
-                self._maximum_drawdown_1pct_worst_mean_short = -1
-            else:
-                self._maximum_drawdown_1pct_worst_mean_short_enable = True
-                self._maximum_drawdown_1pct_worst_mean_short = new_maximum_drawdown_1pct_worst_mean_short
-            if self._config:
-                self._config["maximum_drawdown_1pct_worst_mean_short"] = self._maximum_drawdown_1pct_worst_mean_short
-                st.experimental_rerun()
+        if new_maximum_drawdown_1pct_worst_mean_short <= 0:
+            self._maximum_drawdown_1pct_worst_mean_short_enable = False
+            self._maximum_drawdown_1pct_worst_mean_short = -1
+        else:
+            self._maximum_drawdown_1pct_worst_mean_short_enable = True
+            self._maximum_drawdown_1pct_worst_mean_short = new_maximum_drawdown_1pct_worst_mean_short
+        if self._config:
+            self._config["maximum_drawdown_1pct_worst_mean_short"] = self._maximum_drawdown_1pct_worst_mean_short
     @maximum_drawdown_1pct_worst_mean_short_enable.setter
     def maximum_drawdown_1pct_worst_mean_short_enable(self, new_maximum_drawdown_1pct_worst_mean_short_enable):
-        if self._maximum_drawdown_1pct_worst_mean_short_enable != new_maximum_drawdown_1pct_worst_mean_short_enable:
-            self._maximum_drawdown_1pct_worst_mean_short_enable = new_maximum_drawdown_1pct_worst_mean_short_enable
-            if self._maximum_drawdown_1pct_worst_mean_short_enable:
-                self.maximum_drawdown_1pct_worst_mean_short = 0.1
-            else:
-                self.maximum_drawdown_1pct_worst_mean_short = -1
+        self._maximum_drawdown_1pct_worst_mean_short_enable = new_maximum_drawdown_1pct_worst_mean_short_enable
+        if self._maximum_drawdown_1pct_worst_mean_short_enable:
+            self.maximum_drawdown_1pct_worst_mean_short = 0.1
+        else:
+            self.maximum_drawdown_1pct_worst_mean_short = -1
     @maximum_pa_distance_std_long.setter
     def maximum_pa_distance_std_long(self, new_maximum_pa_distance_std_long):
-        if self._maximum_pa_distance_std_long != new_maximum_pa_distance_std_long:
-            if new_maximum_pa_distance_std_long <= 0:
-                self._maximum_pa_distance_std_long_enable = False
-                self._maximum_pa_distance_std_long = -1
-            else:
-                self._maximum_pa_distance_std_long_enable = True
-                self._maximum_pa_distance_std_long = new_maximum_pa_distance_std_long
-            if self._config:
-                self._config["maximum_pa_distance_std_long"] = self._maximum_pa_distance_std_long
-                st.experimental_rerun()
+        if new_maximum_pa_distance_std_long <= 0:
+            self._maximum_pa_distance_std_long_enable = False
+            self._maximum_pa_distance_std_long = -1
+        else:
+            self._maximum_pa_distance_std_long_enable = True
+            self._maximum_pa_distance_std_long = new_maximum_pa_distance_std_long
+        if self._config:
+            self._config["maximum_pa_distance_std_long"] = self._maximum_pa_distance_std_long
     @maximum_pa_distance_std_long_enable.setter
     def maximum_pa_distance_std_long_enable(self, new_maximum_pa_distance_std_long_enable):
-        if self._maximum_pa_distance_std_long_enable != new_maximum_pa_distance_std_long_enable:
-            self._maximum_pa_distance_std_long_enable = new_maximum_pa_distance_std_long_enable
-            if self._maximum_pa_distance_std_long_enable:
-                self.maximum_pa_distance_std_long = 0.1
-            else:
-                self.maximum_pa_distance_std_long = -1
+        self._maximum_pa_distance_std_long_enable = new_maximum_pa_distance_std_long_enable
+        if self._maximum_pa_distance_std_long_enable:
+            self.maximum_pa_distance_std_long = 0.1
+        else:
+            self.maximum_pa_distance_std_long = -1
     @maximum_pa_distance_std_short.setter
     def maximum_pa_distance_std_short(self, new_maximum_pa_distance_std_short):
-        if self._maximum_pa_distance_std_short != new_maximum_pa_distance_std_short:
-            if new_maximum_pa_distance_std_short <= 0:
-                self._maximum_pa_distance_std_short_enable = False
-                self._maximum_pa_distance_std_short = -1
-            else:
-                self._maximum_pa_distance_std_short_enable = True
-                self._maximum_pa_distance_std_short = new_maximum_pa_distance_std_short
-            if self._config:
-                self._config["maximum_pa_distance_std_short"] = self._maximum_pa_distance_std_short
-                st.experimental_rerun()
+        if new_maximum_pa_distance_std_short <= 0:
+            self._maximum_pa_distance_std_short_enable = False
+            self._maximum_pa_distance_std_short = -1
+        else:
+            self._maximum_pa_distance_std_short_enable = True
+            self._maximum_pa_distance_std_short = new_maximum_pa_distance_std_short
+        if self._config:
+            self._config["maximum_pa_distance_std_short"] = self._maximum_pa_distance_std_short
     @maximum_pa_distance_std_short_enable.setter
     def maximum_pa_distance_std_short_enable(self, new_maximum_pa_distance_std_short_enable):
-        if self._maximum_pa_distance_std_short_enable != new_maximum_pa_distance_std_short_enable:
-            self._maximum_pa_distance_std_short_enable = new_maximum_pa_distance_std_short_enable
-            if self._maximum_pa_distance_std_short_enable:
-                self.maximum_pa_distance_std_short = 0.1
-            else:
-                self.maximum_pa_distance_std_short = -1
+        self._maximum_pa_distance_std_short_enable = new_maximum_pa_distance_std_short_enable
+        if self._maximum_pa_distance_std_short_enable:
+            self.maximum_pa_distance_std_short = 0.1
+        else:
+            self.maximum_pa_distance_std_short = -1
     @maximum_pa_distance_mean_long.setter
     def maximum_pa_distance_mean_long(self, new_maximum_pa_distance_mean_long):
-        if self._maximum_pa_distance_mean_long != new_maximum_pa_distance_mean_long:
-            if new_maximum_pa_distance_mean_long <= 0:
-                self._maximum_pa_distance_mean_long_enable = False
-                self._maximum_pa_distance_mean_long = -1
-            else:
-                self._maximum_pa_distance_mean_long_enable = True
-                self._maximum_pa_distance_mean_long = new_maximum_pa_distance_mean_long
-            if self._config:
-                self._config["maximum_pa_distance_mean_long"] = self._maximum_pa_distance_mean_long
-                st.experimental_rerun()
+        if new_maximum_pa_distance_mean_long <= 0:
+            self._maximum_pa_distance_mean_long_enable = False
+            self._maximum_pa_distance_mean_long = -1
+        else:
+            self._maximum_pa_distance_mean_long_enable = True
+            self._maximum_pa_distance_mean_long = new_maximum_pa_distance_mean_long
+        if self._config:
+            self._config["maximum_pa_distance_mean_long"] = self._maximum_pa_distance_mean_long
     @maximum_pa_distance_mean_long_enable.setter
     def maximum_pa_distance_mean_long_enable(self, new_maximum_pa_distance_mean_long_enable):
-        if self._maximum_pa_distance_mean_long_enable != new_maximum_pa_distance_mean_long_enable:
-            self._maximum_pa_distance_mean_long_enable = new_maximum_pa_distance_mean_long_enable
-            if self._maximum_pa_distance_mean_long_enable:
-                self.maximum_pa_distance_mean_long = 0.1
-            else:
-                self.maximum_pa_distance_mean_long = -1
+        self._maximum_pa_distance_mean_long_enable = new_maximum_pa_distance_mean_long_enable
+        if self._maximum_pa_distance_mean_long_enable:
+            self.maximum_pa_distance_mean_long = 0.1
+        else:
+            self.maximum_pa_distance_mean_long = -1
     @maximum_pa_distance_mean_short.setter
     def maximum_pa_distance_mean_short(self, new_maximum_pa_distance_mean_short):
-        if self._maximum_pa_distance_mean_short != new_maximum_pa_distance_mean_short:
-            if new_maximum_pa_distance_mean_short <= 0:
-                self._maximum_pa_distance_mean_short_enable = False
-                self._maximum_pa_distance_mean_short = -1
-            else:
-                self._maximum_pa_distance_mean_short_enable = True
-                self._maximum_pa_distance_mean_short = new_maximum_pa_distance_mean_short
-            if self._config:
-                self._config["maximum_pa_distance_mean_short"] = self._maximum_pa_distance_mean_short
-                st.experimental_rerun()
+        if new_maximum_pa_distance_mean_short <= 0:
+            self._maximum_pa_distance_mean_short_enable = False
+            self._maximum_pa_distance_mean_short = -1
+        else:
+            self._maximum_pa_distance_mean_short_enable = True
+            self._maximum_pa_distance_mean_short = new_maximum_pa_distance_mean_short
+        if self._config:
+            self._config["maximum_pa_distance_mean_short"] = self._maximum_pa_distance_mean_short
     @maximum_pa_distance_mean_short_enable.setter
     def maximum_pa_distance_mean_short_enable(self, new_maximum_pa_distance_mean_short_enable):
-        if self._maximum_pa_distance_mean_short_enable != new_maximum_pa_distance_mean_short_enable:
-            self._maximum_pa_distance_mean_short_enable = new_maximum_pa_distance_mean_short_enable
-            if self._maximum_pa_distance_mean_short_enable:
-                self.maximum_pa_distance_mean_short = 0.1
-            else:
-                self.maximum_pa_distance_mean_short = -1
+        self._maximum_pa_distance_mean_short_enable = new_maximum_pa_distance_mean_short_enable
+        if self._maximum_pa_distance_mean_short_enable:
+            self.maximum_pa_distance_mean_short = 0.1
+        else:
+            self.maximum_pa_distance_mean_short = -1
     @maximum_pa_distance_1pct_worst_mean_long.setter
     def maximum_pa_distance_1pct_worst_mean_long(self, new_maximum_pa_distance_1pct_worst_mean_long):
-        if self._maximum_pa_distance_1pct_worst_mean_long != new_maximum_pa_distance_1pct_worst_mean_long:
-            if new_maximum_pa_distance_1pct_worst_mean_long <= 0:
-                self._maximum_pa_distance_1pct_worst_mean_long_enable = False
-                self._maximum_pa_distance_1pct_worst_mean_long = -1
-            else:
-                self._maximum_pa_distance_1pct_worst_mean_long_enable = True
-                self._maximum_pa_distance_1pct_worst_mean_long = new_maximum_pa_distance_1pct_worst_mean_long
-            if self._config:
-                self._config["maximum_pa_distance_1pct_worst_mean_long"] = self._maximum_pa_distance_1pct_worst_mean_long
-                st.experimental_rerun()
+        if new_maximum_pa_distance_1pct_worst_mean_long <= 0:
+            self._maximum_pa_distance_1pct_worst_mean_long_enable = False
+            self._maximum_pa_distance_1pct_worst_mean_long = -1
+        else:
+            self._maximum_pa_distance_1pct_worst_mean_long_enable = True
+            self._maximum_pa_distance_1pct_worst_mean_long = new_maximum_pa_distance_1pct_worst_mean_long
+        if self._config:
+            self._config["maximum_pa_distance_1pct_worst_mean_long"] = self._maximum_pa_distance_1pct_worst_mean_long
     @maximum_pa_distance_1pct_worst_mean_long_enable.setter
     def maximum_pa_distance_1pct_worst_mean_long_enable(self, new_maximum_pa_distance_1pct_worst_mean_long_enable):
-        if self._maximum_pa_distance_1pct_worst_mean_long_enable != new_maximum_pa_distance_1pct_worst_mean_long_enable:
-            self._maximum_pa_distance_1pct_worst_mean_long_enable = new_maximum_pa_distance_1pct_worst_mean_long_enable
-            if self._maximum_pa_distance_1pct_worst_mean_long_enable:
-                self.maximum_pa_distance_1pct_worst_mean_long = 0.1
-            else:
-                self.maximum_pa_distance_1pct_worst_mean_long = -1
+        self._maximum_pa_distance_1pct_worst_mean_long_enable = new_maximum_pa_distance_1pct_worst_mean_long_enable
+        if self._maximum_pa_distance_1pct_worst_mean_long_enable:
+            self.maximum_pa_distance_1pct_worst_mean_long = 0.1
+        else:
+            self.maximum_pa_distance_1pct_worst_mean_long = -1
     @maximum_pa_distance_1pct_worst_mean_short.setter
     def maximum_pa_distance_1pct_worst_mean_short(self, new_maximum_pa_distance_1pct_worst_mean_short):
-        if self._maximum_pa_distance_1pct_worst_mean_short != new_maximum_pa_distance_1pct_worst_mean_short:
-            if new_maximum_pa_distance_1pct_worst_mean_short <= 0:
-                self._maximum_pa_distance_1pct_worst_mean_short_enable = False
-                self._maximum_pa_distance_1pct_worst_mean_short = -1
-            else:
-                self._maximum_pa_distance_1pct_worst_mean_short_enable = True
-                self._maximum_pa_distance_1pct_worst_mean_short = new_maximum_pa_distance_1pct_worst_mean_short
-            if self._config:
-                self._config["maximum_pa_distance_1pct_worst_mean_short"] = self._maximum_pa_distance_1pct_worst_mean_short
-                st.experimental_rerun()
+        if new_maximum_pa_distance_1pct_worst_mean_short <= 0:
+            self._maximum_pa_distance_1pct_worst_mean_short_enable = False
+            self._maximum_pa_distance_1pct_worst_mean_short = -1
+        else:
+            self._maximum_pa_distance_1pct_worst_mean_short_enable = True
+            self._maximum_pa_distance_1pct_worst_mean_short = new_maximum_pa_distance_1pct_worst_mean_short
+        if self._config:
+            self._config["maximum_pa_distance_1pct_worst_mean_short"] = self._maximum_pa_distance_1pct_worst_mean_short
     @maximum_pa_distance_1pct_worst_mean_short_enable.setter
     def maximum_pa_distance_1pct_worst_mean_short_enable(self, new_maximum_pa_distance_1pct_worst_mean_short_enable):
-        if self._maximum_pa_distance_1pct_worst_mean_short_enable != new_maximum_pa_distance_1pct_worst_mean_short_enable:
-            self._maximum_pa_distance_1pct_worst_mean_short_enable = new_maximum_pa_distance_1pct_worst_mean_short_enable
-            if self._maximum_pa_distance_1pct_worst_mean_short_enable:
-                self.maximum_pa_distance_1pct_worst_mean_short = 0.1
-            else:
-                self.maximum_pa_distance_1pct_worst_mean_short = -1
+        self._maximum_pa_distance_1pct_worst_mean_short_enable = new_maximum_pa_distance_1pct_worst_mean_short_enable
+        if self._maximum_pa_distance_1pct_worst_mean_short_enable:
+            self.maximum_pa_distance_1pct_worst_mean_short = 0.1
+        else:
+            self.maximum_pa_distance_1pct_worst_mean_short = -1
     @maximum_loss_profit_ratio_long.setter
     def maximum_loss_profit_ratio_long(self, new_maximum_loss_profit_ratio_long):
-        if self._maximum_loss_profit_ratio_long != new_maximum_loss_profit_ratio_long:
-            if new_maximum_loss_profit_ratio_long <= 0:
-                self._maximum_loss_profit_ratio_long_enable = False
-                self._maximum_loss_profit_ratio_long = -1
-            else:
-                self._maximum_loss_profit_ratio_long_enable = True
-                self._maximum_loss_profit_ratio_long = new_maximum_loss_profit_ratio_long
-            if self._config:
-                self._config["maximum_loss_profit_ratio_long"] = self._maximum_loss_profit_ratio_long
-                st.experimental_rerun()
+        if new_maximum_loss_profit_ratio_long <= 0:
+            self._maximum_loss_profit_ratio_long_enable = False
+            self._maximum_loss_profit_ratio_long = -1
+        else:
+            self._maximum_loss_profit_ratio_long_enable = True
+            self._maximum_loss_profit_ratio_long = new_maximum_loss_profit_ratio_long
+        if self._config:
+            self._config["maximum_loss_profit_ratio_long"] = self._maximum_loss_profit_ratio_long
     @maximum_loss_profit_ratio_long_enable.setter
     def maximum_loss_profit_ratio_long_enable(self, new_maximum_loss_profit_ratio_long_enable):
-        if self._maximum_loss_profit_ratio_long_enable != new_maximum_loss_profit_ratio_long_enable:
-            self._maximum_loss_profit_ratio_long_enable = new_maximum_loss_profit_ratio_long_enable
-            if self._maximum_loss_profit_ratio_long_enable:
-                self.maximum_loss_profit_ratio_long = 0.1
-            else:
-                self.maximum_loss_profit_ratio_long = -1
+        self._maximum_loss_profit_ratio_long_enable = new_maximum_loss_profit_ratio_long_enable
+        if self._maximum_loss_profit_ratio_long_enable:
+            self.maximum_loss_profit_ratio_long = 0.1
+        else:
+            self.maximum_loss_profit_ratio_long = -1
     @maximum_loss_profit_ratio_short.setter
     def maximum_loss_profit_ratio_short(self, new_maximum_loss_profit_ratio_short):
-        if self._maximum_loss_profit_ratio_short != new_maximum_loss_profit_ratio_short:
-            if new_maximum_loss_profit_ratio_short <= 0:
-                self._maximum_loss_profit_ratio_short_enable = False
-                self._maximum_loss_profit_ratio_short = -1
-            else:
-                self._maximum_loss_profit_ratio_short_enable = True
-                self._maximum_loss_profit_ratio_short = new_maximum_loss_profit_ratio_short
-            if self._config:
-                self._config["maximum_loss_profit_ratio_short"] = self._maximum_loss_profit_ratio_short
-                st.experimental_rerun()
+        if new_maximum_loss_profit_ratio_short <= 0:
+            self._maximum_loss_profit_ratio_short_enable = False
+            self._maximum_loss_profit_ratio_short = -1
+        else:
+            self._maximum_loss_profit_ratio_short_enable = True
+            self._maximum_loss_profit_ratio_short = new_maximum_loss_profit_ratio_short
+        if self._config:
+            self._config["maximum_loss_profit_ratio_short"] = self._maximum_loss_profit_ratio_short
     @maximum_loss_profit_ratio_short_enable.setter
     def maximum_loss_profit_ratio_short_enable(self, new_maximum_loss_profit_ratio_short_enable):
-        if self._maximum_loss_profit_ratio_short_enable != new_maximum_loss_profit_ratio_short_enable:
-            self._maximum_loss_profit_ratio_short_enable = new_maximum_loss_profit_ratio_short_enable
-            if self._maximum_loss_profit_ratio_short_enable:
-                self.maximum_loss_profit_ratio_short = 0.1
-            else:
-                self.maximum_loss_profit_ratio_short = -1
+        self._maximum_loss_profit_ratio_short_enable = new_maximum_loss_profit_ratio_short_enable
+        if self._maximum_loss_profit_ratio_short_enable:
+            self.maximum_loss_profit_ratio_short = 0.1
+        else:
+            self.maximum_loss_profit_ratio_short = -1
     @maximum_hrs_stuck_max_long.setter
     def maximum_hrs_stuck_max_long(self, new_maximum_hrs_stuck_max_long):
-        if self._maximum_hrs_stuck_max_long != new_maximum_hrs_stuck_max_long:
-            if new_maximum_hrs_stuck_max_long <= 0:
-                self._maximum_hrs_stuck_max_long_enable = False
-                self._maximum_hrs_stuck_max_long = -1
-            else:
-                self._maximum_hrs_stuck_max_long_enable = True
-                self._maximum_hrs_stuck_max_long = new_maximum_hrs_stuck_max_long
-            if self._config:
-                self._config["maximum_hrs_stuck_max_long"] = self._maximum_hrs_stuck_max_long
-                st.experimental_rerun()
+        if new_maximum_hrs_stuck_max_long <= 0:
+            self._maximum_hrs_stuck_max_long_enable = False
+            self._maximum_hrs_stuck_max_long = -1
+        else:
+            self._maximum_hrs_stuck_max_long_enable = True
+            self._maximum_hrs_stuck_max_long = new_maximum_hrs_stuck_max_long
+        if self._config:
+            self._config["maximum_hrs_stuck_max_long"] = self._maximum_hrs_stuck_max_long
     @maximum_hrs_stuck_max_long_enable.setter
     def maximum_hrs_stuck_max_long_enable(self, new_maximum_hrs_stuck_max_long_enable):
-        if self._maximum_hrs_stuck_max_long_enable != new_maximum_hrs_stuck_max_long_enable:
-            self._maximum_hrs_stuck_max_long_enable = new_maximum_hrs_stuck_max_long_enable
-            if self._maximum_hrs_stuck_max_long_enable:
-                self.maximum_hrs_stuck_max_long = 168.0
-            else:
-                self.maximum_hrs_stuck_max_long = -1
+        self._maximum_hrs_stuck_max_long_enable = new_maximum_hrs_stuck_max_long_enable
+        if self._maximum_hrs_stuck_max_long_enable:
+            self.maximum_hrs_stuck_max_long = 168.0
+        else:
+            self.maximum_hrs_stuck_max_long = -1
     @maximum_hrs_stuck_max_short.setter
     def maximum_hrs_stuck_max_short(self, new_maximum_hrs_stuck_max_short):
-        if self._maximum_hrs_stuck_max_short != new_maximum_hrs_stuck_max_short:
-            if new_maximum_hrs_stuck_max_short <= 0:
-                self._maximum_hrs_stuck_max_short_enable = False
-                self._maximum_hrs_stuck_max_short = -1
-            else:
-                self._maximum_hrs_stuck_max_short_enable = True
-                self._maximum_hrs_stuck_max_short = new_maximum_hrs_stuck_max_short
-            if self._config:
-                self._config["maximum_hrs_stuck_max_short"] = self._maximum_hrs_stuck_max_short
-                st.experimental_rerun()
+        if new_maximum_hrs_stuck_max_short <= 0:
+            self._maximum_hrs_stuck_max_short_enable = False
+            self._maximum_hrs_stuck_max_short = -1
+        else:
+            self._maximum_hrs_stuck_max_short_enable = True
+            self._maximum_hrs_stuck_max_short = new_maximum_hrs_stuck_max_short
+        if self._config:
+            self._config["maximum_hrs_stuck_max_short"] = self._maximum_hrs_stuck_max_short
     @maximum_hrs_stuck_max_short_enable.setter
     def maximum_hrs_stuck_max_short_enable(self, new_maximum_hrs_stuck_max_short_enable):
-        if self._maximum_hrs_stuck_max_short_enable != new_maximum_hrs_stuck_max_short_enable:
-            self._maximum_hrs_stuck_max_short_enable = new_maximum_hrs_stuck_max_short_enable
-            if self._maximum_hrs_stuck_max_short_enable:
-                self.maximum_hrs_stuck_max_short = 168.0
-            else:
-                self.maximum_hrs_stuck_max_short = -1
+        self._maximum_hrs_stuck_max_short_enable = new_maximum_hrs_stuck_max_short_enable
+        if self._maximum_hrs_stuck_max_short_enable:
+            self.maximum_hrs_stuck_max_short = 168.0
+        else:
+            self.maximum_hrs_stuck_max_short = -1
     @maximum_exposure_ratios_mean_long.setter
     def maximum_exposure_ratios_mean_long(self, new_maximum_exposure_ratios_mean_long):
-        if self._maximum_exposure_ratios_mean_long != new_maximum_exposure_ratios_mean_long:
-            if new_maximum_exposure_ratios_mean_long <= 0:
-                self._maximum_exposure_ratios_mean_long_enable = False
-                self._maximum_exposure_ratios_mean_long = -1
-            else:
-                self._maximum_exposure_ratios_mean_long_enable = True
-                self._maximum_exposure_ratios_mean_long = new_maximum_exposure_ratios_mean_long
-            if self._config:
-                self._config["maximum_exposure_ratios_mean_long"] = self._maximum_exposure_ratios_mean_long
-                st.experimental_rerun()
+        if new_maximum_exposure_ratios_mean_long <= 0:
+            self._maximum_exposure_ratios_mean_long_enable = False
+            self._maximum_exposure_ratios_mean_long = -1
+        else:
+            self._maximum_exposure_ratios_mean_long_enable = True
+            self._maximum_exposure_ratios_mean_long = new_maximum_exposure_ratios_mean_long
+        if self._config:
+            self._config["maximum_exposure_ratios_mean_long"] = self._maximum_exposure_ratios_mean_long
     @maximum_exposure_ratios_mean_long_enable.setter
     def maximum_exposure_ratios_mean_long_enable(self, new_maximum_exposure_ratios_mean_long_enable):
-        if self._maximum_exposure_ratios_mean_long_enable != new_maximum_exposure_ratios_mean_long_enable:
-            self._maximum_exposure_ratios_mean_long_enable = new_maximum_exposure_ratios_mean_long_enable
-            if self._maximum_exposure_ratios_mean_long_enable:
-                self.maximum_exposure_ratios_mean_long = 0.1
-            else:
-                self.maximum_exposure_ratios_mean_long = -1
+        self._maximum_exposure_ratios_mean_long_enable = new_maximum_exposure_ratios_mean_long_enable
+        if self._maximum_exposure_ratios_mean_long_enable:
+            self.maximum_exposure_ratios_mean_long = 0.1
+        else:
+            self.maximum_exposure_ratios_mean_long = -1
     @maximum_exposure_ratios_mean_short.setter
     def maximum_exposure_ratios_mean_short(self, new_maximum_exposure_ratios_mean_short):
-        if self._maximum_exposure_ratios_mean_short != new_maximum_exposure_ratios_mean_short:
-            if new_maximum_exposure_ratios_mean_short <= 0:
-                self._maximum_exposure_ratios_mean_short_enable = False
-                self._maximum_exposure_ratios_mean_short = -1
-            else:
-                self._maximum_exposure_ratios_mean_short_enable = True
-                self._maximum_exposure_ratios_mean_short = new_maximum_exposure_ratios_mean_short
-            if self._config:
-                self._config["maximum_exposure_ratios_mean_short"] = self._maximum_exposure_ratios_mean_short
-                st.experimental_rerun()
+        if new_maximum_exposure_ratios_mean_short <= 0:
+            self._maximum_exposure_ratios_mean_short_enable = False
+            self._maximum_exposure_ratios_mean_short = -1
+        else:
+            self._maximum_exposure_ratios_mean_short_enable = True
+            self._maximum_exposure_ratios_mean_short = new_maximum_exposure_ratios_mean_short
+        if self._config:
+            self._config["maximum_exposure_ratios_mean_short"] = self._maximum_exposure_ratios_mean_short
     @maximum_exposure_ratios_mean_short_enable.setter
     def maximum_exposure_ratios_mean_short_enable(self, new_maximum_exposure_ratios_mean_short_enable):
-        if self._maximum_exposure_ratios_mean_short_enable != new_maximum_exposure_ratios_mean_short_enable:
-            self._maximum_exposure_ratios_mean_short_enable = new_maximum_exposure_ratios_mean_short_enable
-            if self._maximum_exposure_ratios_mean_short_enable:
-                self.maximum_exposure_ratios_mean_short = 0.1
-            else:
-                self.maximum_exposure_ratios_mean_short = -1
+        self._maximum_exposure_ratios_mean_short_enable = new_maximum_exposure_ratios_mean_short_enable
+        if self._maximum_exposure_ratios_mean_short_enable:
+            self.maximum_exposure_ratios_mean_short = 0.1
+        else:
+            self.maximum_exposure_ratios_mean_short = -1
     @maximum_time_at_max_exposure_long.setter
     def maximum_time_at_max_exposure_long(self, new_maximum_time_at_max_exposure_long):
-        if self._maximum_time_at_max_exposure_long != new_maximum_time_at_max_exposure_long:
-            if new_maximum_time_at_max_exposure_long <= 0:
-                self._maximum_time_at_max_exposure_long_enable = False
-                self._maximum_time_at_max_exposure_long = -1
-            else:
-                self._maximum_time_at_max_exposure_long_enable = True
-                self._maximum_time_at_max_exposure_long = new_maximum_time_at_max_exposure_long
-            if self._config:
-                self._config["maximum_time_at_max_exposure_long"] = self._maximum_time_at_max_exposure_long
-                st.experimental_rerun()
+        if new_maximum_time_at_max_exposure_long <= 0:
+            self._maximum_time_at_max_exposure_long_enable = False
+            self._maximum_time_at_max_exposure_long = -1
+        else:
+            self._maximum_time_at_max_exposure_long_enable = True
+            self._maximum_time_at_max_exposure_long = new_maximum_time_at_max_exposure_long
+        if self._config:
+            self._config["maximum_time_at_max_exposure_long"] = self._maximum_time_at_max_exposure_long
     @maximum_time_at_max_exposure_long_enable.setter
     def maximum_time_at_max_exposure_long_enable(self, new_maximum_time_at_max_exposure_long_enable):
-        if self._maximum_time_at_max_exposure_long_enable != new_maximum_time_at_max_exposure_long_enable:
-            self._maximum_time_at_max_exposure_long_enable = new_maximum_time_at_max_exposure_long_enable
-            if self._maximum_time_at_max_exposure_long_enable:
-                self.maximum_time_at_max_exposure_long = 0.1
-            else:
-                self.maximum_time_at_max_exposure_long = -1
+        self._maximum_time_at_max_exposure_long_enable = new_maximum_time_at_max_exposure_long_enable
+        if self._maximum_time_at_max_exposure_long_enable:
+            self.maximum_time_at_max_exposure_long = 0.1
+        else:
+            self.maximum_time_at_max_exposure_long = -1
     @maximum_time_at_max_exposure_short.setter
     def maximum_time_at_max_exposure_short(self, new_maximum_time_at_max_exposure_short):
-        if self._maximum_time_at_max_exposure_short != new_maximum_time_at_max_exposure_short:
-            if new_maximum_time_at_max_exposure_short <= 0:
-                self._maximum_time_at_max_exposure_short_enable = False
-                self._maximum_time_at_max_exposure_short = -1
-            else:
-                self._maximum_time_at_max_exposure_short_enable = True
-                self._maximum_time_at_max_exposure_short = new_maximum_time_at_max_exposure_short
-            if self._config:
-                self._config["maximum_time_at_max_exposure_short"] = self._maximum_time_at_max_exposure_short
-                st.experimental_rerun()
+        if new_maximum_time_at_max_exposure_short <= 0:
+            self._maximum_time_at_max_exposure_short_enable = False
+            self._maximum_time_at_max_exposure_short = -1
+        else:
+            self._maximum_time_at_max_exposure_short_enable = True
+            self._maximum_time_at_max_exposure_short = new_maximum_time_at_max_exposure_short
+        if self._config:
+            self._config["maximum_time_at_max_exposure_short"] = self._maximum_time_at_max_exposure_short
     @maximum_time_at_max_exposure_short_enable.setter
     def maximum_time_at_max_exposure_short_enable(self, new_maximum_time_at_max_exposure_short_enable):
-        if self._maximum_time_at_max_exposure_short_enable != new_maximum_time_at_max_exposure_short_enable:
-            self._maximum_time_at_max_exposure_short_enable = new_maximum_time_at_max_exposure_short_enable
-            if self._maximum_time_at_max_exposure_short_enable:
-                self.maximum_time_at_max_exposure_short = 0.1
-            else:
-                self.maximum_time_at_max_exposure_short = -1
+        self._maximum_time_at_max_exposure_short_enable = new_maximum_time_at_max_exposure_short_enable
+        if self._maximum_time_at_max_exposure_short_enable:
+            self.maximum_time_at_max_exposure_short = 0.1
+        else:
+            self.maximum_time_at_max_exposure_short = -1

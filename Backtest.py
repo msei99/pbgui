@@ -123,7 +123,7 @@ class BacktestItem(Base):
                         self._config.config = config
                         self.symbol = row['symbol']
                         del st.session_state.bt_import
-                        st.experimental_rerun()
+                        st.rerun()
                 st.image(f'https://pbconfigdb.scud.dedyn.io/plots/{idhash}.webp')
             with col_config:
                 st.code(config)
@@ -369,7 +369,6 @@ class BacktestQueue:
         self.cleanup()
         if self._autostart:
             self.run()
-        st.experimental_rerun()
 
     def running(self):
         r = 0
@@ -529,7 +528,7 @@ class BacktestResults:
                         del st.session_state[f'setup_table_bt_{self}']
                         del st.session_state.backtest_view_keys
                         del st.session_state.setup_backtest_col
-                        st.experimental_rerun()
+                        st.rerun()
             # Remove or add keys for correct display the table
             for col in set().union(*(d.keys() for d in self.results_d)):
                 if col not in ['id', 'show', 'delete']:
@@ -648,12 +647,12 @@ class BacktestResults:
                     with st.sidebar:
                         if st.button("Setup"):
                             st.session_state[f'setup_table_bt_{self}'] = True
-                            st.experimental_rerun()
+                            st.rerun()
                         if st.button("Delete all"):
                             for result in sorted(self.results_d, key=lambda x: x['id'], reverse=True):
                                 self.remove(self.backtests[result["id"]])
                             self.results_d = []
-                            st.experimental_rerun()
+                            st.rerun()
                 all_col = set().union(*(d.keys() for d in self.results_d))
                 if not self.view_col:
                     self.view_col = all_col
@@ -675,7 +674,7 @@ class BacktestResults:
                     if line["delete"] == True:
                         self.remove(self.backtests[line["id"]])
                         self.results_d = []
-                        st.experimental_rerun()
+                        st.rerun()
                 for backtest in self.backtests:
                     if backtest.symbol not in self.symbols_selected:
                         backtest.selected = False

@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.93
+v0.94
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -106,6 +106,13 @@ On your servers, you only need to run Streamlit once to configure the passivbot 
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v0.94 (30-01-2024)
+- Bugfix: Some widgets did not keep the correct state and switches back
+- GUI: Removed some unnessesary reruns for better performace
+- GUI: Enabled Dark mode from streamlit. You can change it in the file ".streamlit/config.toml"
+- Optimizer: Bugfix some issues with the queue
+- Upgrade streamlit to v1.30.0 (you have to run "pip install -r requirements.txt")
 
 ## v0.93 (27-01-2024)
 - Backtest: Fixed import from pbconfigdb (New filters for exchange and market added)

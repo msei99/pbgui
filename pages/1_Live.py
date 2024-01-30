@@ -38,7 +38,7 @@ def list_remote():
             if st.button(":back:"):
                 del st.session_state.list_remote
                 del st.session_state.remote
-                st.experimental_rerun()
+                st.rerun()
         st.error(remote.error)
         return
     if not "ed_key" in st.session_state:
@@ -47,12 +47,14 @@ def list_remote():
     # Navigation
     with st.sidebar:
         if st.button(":recycle:"):
-            st.experimental_rerun()
+            st.rerun()
         if st.button(":back:"):
             del st.session_state.list_remote
-            st.experimental_rerun()
+            st.rerun()
         st.toggle("PBRemote", value=pbremote_status, key="key_pbremote", help=pbgui_help.pbremote)
-        instances.pbremote_log = st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="view_pbremote_log")
+        if "key_live_pbremote_log" in st.session_state:
+            instances.pbremote_log = st.session_state.key_live_pbremote_log
+        st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="key_live_pbremote_log")
         api_sync = []
         for rserver in remote.remote_servers:
             if rserver.is_online():
@@ -92,25 +94,25 @@ def list_remote():
                         if not server.is_running(user, symbol):
                             server.send_to("remove", user, symbol, market_type)
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "Sync to local" in ed["edited_rows"][row]:
                     status = instances.is_same(server.instances.find_instance(instances.instances[row].user,instances.instances[row].symbol,instances.instances[row].market_type))
                     if (status == False):
                         server.send_to("copy", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                         st.session_state.ed_key += 1
-                        st.experimental_rerun()
+                        st.rerun()
                 if "Sync to remote" in ed["edited_rows"][row]:
                     status = server.instances.is_same(instances.instances[row])
                     if (status == False):
                         server.send_to("sync", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                         st.session_state.ed_key += 1
-                        st.experimental_rerun()
+                        st.rerun()
                 if "Remove" in ed["edited_rows"][row]:
                     status = server.is_running(instances.instances[row].user, instances.instances[row].symbol) or not server.has_instance(instances.instances[row].user, instances.instances[row].symbol)
                     if not status:
                         server.send_to("remove", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                         st.session_state.ed_key += 1
-                        st.experimental_rerun()
+                        st.rerun()
         server.instances = Instances(server.name)
         instances.refresh()
         color = "red"
@@ -122,7 +124,7 @@ def list_remote():
             if st.checkbox(f'Sync API-Keys to {server.name} (Local md5: {remote.api_md5} remote md5: {server.api_md5})',value=False, key=f'sync_api_{ed_key}'):
                 server.send_to("sync_api")
                 st.session_state.ed_key += 1
-                st.experimental_rerun()
+                st.rerun()
         for id, instance in enumerate(instances):
             if server.is_running(instance.user, instance.symbol) or not server.has_instance(instance.user, instance.symbol):
                 remove = None
@@ -177,7 +179,7 @@ def list_remote():
                         while not instances.instances[row].is_running():
                             sleep(1)
                 st.session_state.ed_key += 1
-                st.experimental_rerun()
+                st.rerun()
             for rserver in remote.remote_servers:
                 if f'{rserver.name} Start/Stop' in ed["edited_rows"][row]:
                     if rserver.is_running(instances.instances[row].user, instances.instances[row].symbol):
@@ -194,7 +196,7 @@ def list_remote():
                         if rrun:
                             rserver.send_to("start", instances.instances[row].user, instances.instances[row].symbol, instances.instances[row].market_type)
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
     if "run_rserver" in st.session_state:
         rlist = []
         instances.refresh()
@@ -231,6 +233,7 @@ def list_remote():
     if instances.pbremote_log:
         instances.view_log("PBRemote")
 
+#@st.cache_data(experimental_allow_widgets=True)
 def select_instance():
     # Init Instances
     if "pbgui_instances" not in st.session_state:
@@ -262,24 +265,28 @@ def select_instance():
     # Navigation
     with st.sidebar:
         if st.button(":recycle:"):
-            st.experimental_rerun()
+            st.rerun()
         st.toggle("PBRun", value=pbrun_status, key="pbrun", help=pbgui_help.pbrun)
-        instances.pbrun_log = st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="view_pbrun_log")
+        if "key_live_pbrun_log" in st.session_state:
+            instances.pbrun_log = st.session_state.key_live_pbrun_log
+        st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="key_live_pbrun_log")
         st.toggle("PBStat", value=pbstat_status, key="pbstat", help=pbgui_help.pbstat)
-        instances.pbstat_log = st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="view_pbstat_log")
+        if "key_live_pbstat_log" in st.session_state:
+            instances.pbstat_log = st.session_state.key_live_pbstat_log
+        st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="key_live_pbstat_log")
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
-            st.experimental_rerun()
+            st.rerun()
         if st.button("Refresh from Disk"):
             del st.session_state.pbgui_instances
-            st.experimental_rerun()
+            st.rerun()
         if st.button("Remote"):
             st.session_state.list_remote = True
-            st.experimental_rerun()
+            st.rerun()
         if not platform.system() == "Windows":
             if st.button("Import"):
                 st.session_state.import_instance = True
-                st.experimental_rerun()
+                st.rerun()
     if "editor_select_instance" in st.session_state:
         ed = st.session_state["editor_select_instance"]
         for row in ed["edited_rows"]:
@@ -288,25 +295,25 @@ def select_instance():
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
                     del st.session_state.confirm_text
-                st.experimental_rerun()
+                st.rerun()
             if "History" in ed["edited_rows"][row]:
                 st.session_state.view_instance = instances.instances[row]
                 st.session_state.view_history = True
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
                     del st.session_state.confirm_text
-                st.experimental_rerun()
+                st.rerun()
             if "Edit" in ed["edited_rows"][row]:
                 st.session_state.edit_instance = instances.instances[row]
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
                     del st.session_state.confirm_text
-                st.experimental_rerun()
+                st.rerun()
             if "Delete" in ed["edited_rows"][row]:
                 if not "confirm" in st.session_state:
                     st.session_state.confirm_text = f':red[Delete selected instance ({instances.instances[row].user} {instances.instances[row].symbol} {instances.instances[row].market_type})?]'
                     st.session_state.confirm = False
-                    st.experimental_rerun()
+                    st.rerun()
                 elif "confirm" in st.session_state:
                     if st.session_state.confirm:
                         instances.remove(instances.instances[row])
@@ -315,7 +322,7 @@ def select_instance():
                         PBRemote().restart()
                         del st.session_state.confirm
                         del st.session_state.confirm_text
-                        st.experimental_rerun()
+                        st.rerun()
     d = []
     wb = 0
     we = 0
@@ -376,14 +383,14 @@ def view_instance():
     with st.sidebar:
         if st.button(":back:"):
             del st.session_state.view_instance
-            st.experimental_rerun()
+            st.rerun()
         if st.button("Edit"):
             st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
-            st.experimental_rerun()
+            st.rerun()
         if st.button("History"):
             st.session_state.view_history = True
-            st.experimental_rerun()
+            st.rerun()
     col_tf, col_auto, col_rec, col_empty = st.columns([3,3,2,10])
     with col_rec:
         st.write("## ")
@@ -393,7 +400,9 @@ def view_instance():
         if refresh != "off":
             st_autorefresh(interval=int(refresh)*1000, limit=None, key="refresh_counter")
     with col_tf:
-        instance.tf = st.selectbox('Timeframe',instance.exchange.tf,index=instance.exchange.tf.index(instance.tf))
+        if "key_live_tf" in st.session_state:
+            instance.tf = st.session_state.key_live_tf
+        st.selectbox('Timeframe',instance.exchange.tf,index=instance.exchange.tf.index(instance.tf), key="key_live_tf")
     instance.view_ohlcv()
 
 def view_history():
@@ -404,10 +413,10 @@ def view_history():
         if st.button(":top:"):
             del st.session_state.view_history
             del st.session_state.view_instance
-            st.experimental_rerun()
+            st.rerun()
         if st.button("View"):
             del st.session_state.view_history
-            st.experimental_rerun()
+            st.rerun()
     instance.compare_history()
 
 def edit_instance():
@@ -443,7 +452,7 @@ def edit_instance():
         if st.button(":back:"):
             st.session_state.edit_instance.refresh()
             del st.session_state.edit_instance
-            st.experimental_rerun()
+            st.rerun()
         if st.button(":floppy_disk:", help=pbgui_help.instance_save):
             st.session_state.edit_instance.save()
             if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
@@ -451,7 +460,7 @@ def edit_instance():
                 PBStat().restart()
                 PBRun().restart_pbrun()
                 PBRemote().restart()
-#            st.experimental_rerun()
+#            st.rerun()
         if st.button("Backtest"):
             st.session_state.my_bt = BacktestItem(instance._config.config)
             st.session_state.my_bt.user = instance.user
@@ -489,7 +498,7 @@ def import_instance():
         if st.button(":back:"):
             del st.session_state.import_instance
             del st.session_state.pbgui_instances
-            st.experimental_rerun()
+            st.rerun()
     instances.import_manager()
 
 set_page_config()
