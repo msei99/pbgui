@@ -736,9 +736,8 @@ class OptimizeQueue:
         st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, key=f'editor_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=column_disabled)
         if "key_optimize_close_view_log" in st.session_state:
             if st.session_state.key_optimize_close_view_log:
-                del st.session_state.view_opt_log
-            # del st.session_state.view_opt_log
-            # st.rerun()
+                if "view_opt_log" in st.session_state:
+                    del st.session_state.view_opt_log
         if "view_opt_log" in st.session_state:
             st.button(f':negative_squared_cross_mark: {st.session_state.view_opt_log.position}', key="key_optimize_close_view_log")
             self.view_log(st.session_state.view_opt_log)
