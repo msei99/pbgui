@@ -1,7 +1,6 @@
 import streamlit as st
 from pbgui_func import set_page_config
 from Backtest import BacktestItem, BacktestQueue, BacktestResults
-from streamlit_extras.switch_page_button import switch_page
 import datetime
 import multiprocessing
 
@@ -191,7 +190,7 @@ set_page_config("Backtest")
 
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    switch_page("pbgui")
+    st.switch_page("pbgui.py")
 if 'my_bt' in st.session_state:
     my_bt = st.session_state.my_bt
 else:

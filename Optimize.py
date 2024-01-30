@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_extras.switch_page_button import switch_page
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from OptimizeConfig import OptimizeConfigs, OptimizeConfig
@@ -1016,7 +1015,7 @@ class OptimizeResults:
                                 del st.session_state.bt_compare
                             if "bt_import" in st.session_state:
                                 del st.session_state.bt_import
-                            switch_page("Backtest")
+                            st.switch_page("pages/2_Backtest.py")
         column_config = {
             "View": st.column_config.CheckboxColumn('View', default=False),
             "path": None,

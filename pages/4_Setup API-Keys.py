@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_extras.switch_page_button import switch_page
 from pbgui_func import set_page_config
 import pbgui_help
 from User import Users, User
@@ -143,7 +142,7 @@ set_page_config()
 
 # Init Session State
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    switch_page("pbgui")
+    st.switch_page("pbgui.py")
 
 if 'users' not in st.session_state:
     st.session_state.users = Users()
