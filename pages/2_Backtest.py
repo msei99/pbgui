@@ -64,21 +64,21 @@ def bt_queue():
     my_btq.load()
     # Navigation
     with st.sidebar:
-        st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1, key = "backtest_cpu")
-        st.toggle("Autostart", value=my_btq.autostart, key="backtest_autostart", help=None)
         st.button(":recycle:")
-        if st.button(":wastebasket: finished"):
-            my_btq.remove_finish()
-            st.rerun()
-        if st.button(":wastebasket: all"):
-            my_btq.remove_finish(all=True)
+        if st.button(":back:"):
+            del st.session_state.bt_queue
             st.rerun()
         if st.button("Results"):
             st.session_state.bt_compare = True
             del st.session_state.bt_queue
             st.rerun()
-        if st.button(":back:"):
-            del st.session_state.bt_queue
+        st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1, key = "backtest_cpu")
+        st.toggle("Autostart", value=my_btq.autostart, key="backtest_autostart", help=None)
+        if st.button(":wastebasket: finished"):
+            my_btq.remove_finish()
+            st.rerun()
+        if st.button(":wastebasket: all"):
+            my_btq.remove_finish(all=True)
             st.rerun()
     # Backtest Queue
     d = []
@@ -138,7 +138,8 @@ def bt_queue():
             st.rerun()
         view = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
         view.match_item(st.session_state.bt_view["view"])
-        view.backtests[0].selected = True
+        if len(view.backtests) > 0:
+            view.backtests[0].selected = True
         view.view(only=True)
     if "bt_config" in st.session_state:
         if st.button(f':negative_squared_cross_mark: {st.session_state.bt_config["id"]}', key="view_bt_config"):

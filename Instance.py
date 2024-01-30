@@ -810,20 +810,20 @@ class Instance(Base):
         self._config.edit_config()
 
     def edit_mode(self):
-        # if not self.long_mode:
-        #     self.long_mode = "normal"
-        # if not self.short_mode:
-        #     self.short_mode = "normal"
+        if not self.long_mode:
+            self.long_mode = "normal"
+        if not self.short_mode:
+            self.short_mode = "normal"
         modes = ['normal', 'graceful_stop', 'panic', 'tp_only']
         col_lm, col_sm, col_empty = st.columns([1,1,1])
         with col_lm:
             if "edit_long_mode" in st.session_state:
                 self.long_mode = st.session_state.edit_long_mode
-            st.radio("LONG_MODE",(modes), key="edit_long_mode", index=modes.index(self.long_mode), help=pbgui_help.mode)
+            st.radio("LONG_MODE",modes, key="edit_long_mode", index=modes.index(self.long_mode), help=pbgui_help.mode)
         with col_sm:
             if "edit_short_mode" in st.session_state:
                 self.short_mode = st.session_state.edit_short_mode
-            st.radio("SHORT_MODE",(modes), key="edit_short_mode", index=modes.index(self.short_mode), help=pbgui_help.mode)
+            st.radio("SHORT_MODE",modes, key="edit_short_mode", index=modes.index(self.short_mode), help=pbgui_help.mode)
 
     def refresh(self):
         path = self._instance_path
