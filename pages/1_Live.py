@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_extras.switch_page_button import switch_page
 from streamlit_autorefresh import st_autorefresh
 from pbgui_func import set_page_config, upload_pbconfigdb
 from Instance import Instances, Instance
@@ -466,7 +465,7 @@ def edit_instance():
             st.session_state.my_bt.user = instance.user
             st.session_state.my_bt.symbol = instance.symbol
             st.session_state.my_bt.market_type = instance.market_type
-            switch_page("Backtest")
+            st.switch_page("pages/2_Backtest.py")
         st.toggle("enable", value=instance.enabled, key="live_enable", help=pbgui_help.instance_enable)
         if instance.enabled:
             if st.button("restart", key="live_restart", help=pbgui_help.instance_restart):
@@ -505,7 +504,7 @@ set_page_config()
 
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    switch_page("pbgui")
+    st.switch_page("pbgui.py")
 if 'pbgui_instances' not in st.session_state:
     st.session_state.pbgui_instances = Instances()
 

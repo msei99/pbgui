@@ -2,7 +2,6 @@ import streamlit as st
 from pbgui_func import set_page_config
 from Backtest import BacktestItem, BacktestResults
 from Instance import Instances, Instance
-from streamlit_extras.switch_page_button import switch_page
 import streamlit_scrollable_textbox as stx
 import pbgui_help
 from datetime import datetime
@@ -364,7 +363,7 @@ if platform.system() == "Windows":
 
 # Init Session State
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    switch_page("pbgui")
+    st.switch_page("pbgui.py")
 else:
     if not os.path.isfile(f'{st.session_state.pbdir}/manager/config.yaml'):
         shutil.copy(f'{st.session_state.pbdir}/manager/config.example.yaml', f'{st.session_state.pbdir}/manager/config.yaml')
@@ -382,7 +381,7 @@ if 'pb_manager' not in st.session_state:
 if 'go_backtest' in st.session_state:
     if st.session_state.go_backtest:
         st.session_state.go_backtest = False
-        switch_page("Backtest")
+        st.switch_page("pages/2_Backtest.py")
 if 'editpb_instance' in st.session_state:
     editpb_instance(st.session_state.editpb_instance)
 else:
