@@ -868,8 +868,6 @@ class Instance(Base):
                 print(f'Error load_status: {self.user} {self.symbol} {self.market_type} {e}')
                 return False
 
-            return True
-
     def save_status(self):
         file = Path(f'{self._instance_path}/status.json')
         status = {}

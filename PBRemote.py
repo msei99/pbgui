@@ -30,6 +30,7 @@ class RemoteServer():
         self._api_md5 = None
         self._pbdir = None
         self._bucket = None
+        self._instances = []
     
     @property
     def name(self): return self._name
@@ -99,18 +100,12 @@ class RemoteServer():
             return None
 
     def has_instance(self, user : str, symbol : str):
-        p = str(Path(f'{self._path}/../instances_{self.name}/*'))
-        instances = glob.glob(p)
-        for instance in instances:
-            file = Path(f'{instance}/instance.cfg')
-            if file.exists():
-                try:
-                    with open(file, "r", encoding='utf-8') as f:
-                        config = json.load(f)
-                        if config["_user"] == user and config["_symbol"] == symbol:
-                            return True
-                except Exception as e:
-                    print(f'{str(file)} is corrupted {e}')
+        inst = {
+            "user": user,
+            "symbol": symbol
+        }
+        if inst in self._instances:
+            return True
         return False
 
     def is_api_md5_same(self, api_md5 : str):
@@ -125,6 +120,24 @@ class RemoteServer():
         if self._rtd < 60:
             return True
         return False
+
+    def load_instances(self):
+        self._instances = []
+        p = str(Path(f'{self._path}/../instances_{self.name}/*'))
+        instances = glob.glob(p)
+        for instance in instances:
+            file = Path(f'{instance}/instance.cfg')
+            if file.exists():
+                try:
+                    with open(file, "r", encoding='utf-8') as f:
+                        config = json.load(f)
+                        inst = {
+                            "user": config["_user"],
+                            "symbol": config["_symbol"]
+                        }
+                        self._instances.append(inst)
+                except Exception as e:
+                    print(f'{str(file)} is corrupted {e}')
 
     def load(self):
         p = str(Path(f'{self._path}/alive_*.cmd'))
@@ -491,6 +504,7 @@ class PBRemote():
             rserver.pbdir = self.pbdir
             rserver.bucket = self.bucket
             rserver.load()
+            rserver.load_instances()
             self.add(rserver)
 
     def load_local(self):
@@ -591,6 +605,7 @@ def main():
                 # Sync from Cloud Storage when we get an .ack from remote Server or when remote server was restarted
                 if server.ack_from(remote.name) or server.startts > remote.sync_downts:
                     remote.sync("down", 'instances')
+                    server.load_instances()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 

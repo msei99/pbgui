@@ -6,6 +6,7 @@ from Backtest import BacktestItem
 from PBRun import PBRun
 from PBStat import PBStat
 from PBRemote import PBRemote
+from datetime import datetime
 import pbgui_help
 import pandas as pd
 import platform
@@ -204,7 +205,8 @@ def list_remote():
             for rserver in remote.remote_servers:
                 if rserver.is_running(instance.user, instance.symbol):
                     lrun = None
-            if instance.is_running():
+#            if instance.is_running():
+            if instance.enabled:
                 lrun = True
             rid = {
                 'id': id,
@@ -228,6 +230,10 @@ def list_remote():
                     f'{rserver.name} Start/Stop': rrun,
                 })
             rlist.append(rid)
+        for rserver in remote.remote_servers:
+            column_config.update({
+                f'{rserver.name} Start/Stop': st.column_config.CheckboxColumn(f'{rserver.name} Start/Stop', default=None),
+            })
         st.data_editor(data=rlist, width=None, height=36+(len(rlist))*35, use_container_width=True, key=f'select_run_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
     if instances.pbremote_log:
         instances.view_log("PBRemote")
