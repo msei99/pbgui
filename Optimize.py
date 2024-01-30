@@ -239,6 +239,8 @@ class OptimizeItem(Base):
         self.drawdown_short = []
         self.stuck_long = []
         self.stuck_short = []
+        if len(self.results) == 0:
+            return        
         results = sorted(self.results, key=lambda d: d['path'])
         if results:
             while len(results) > 0:
@@ -249,62 +251,66 @@ class OptimizeItem(Base):
                 elif result["path"].endswith('_result_short.json'):
                     if len(self.best_short) < self.backtest_best:
                         self.best_short.append(result)
-        results = sorted(self.results, key=lambda d: d['sharpe_ratio_long'])
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_long.json'):
-                    if len(self.sharp_long) < self.backtest_sharp:
-                        self.sharp_long.append(result)
-        results = sorted(self.results, key=lambda d: d['sharpe_ratio_short'])
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_short.json'):
-                    if len(self.sharp_short) < self.backtest_sharp:
-                        self.sharp_short.append(result)
-        results = sorted(self.results, key=lambda d: d['adg_per_exposure_long'])
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_long.json'):
-                    if len(self.adg_long) < self.backtest_adg:
-                        self.adg_long.append(result)
-        results = sorted(self.results, key=lambda d: d['adg_per_exposure_short'])
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_short.json'):
-                    if len(self.adg_short) < self.backtest_adg:
-                        self.adg_short.append(result)
-        results = sorted(self.results, key=lambda d: d['drawdown_max_long'], reverse=True)
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_long.json'):
-                    if len(self.drawdown_long) < self.backtest_drawdown:
-                        self.drawdown_long.append(result)
-        results = sorted(self.results, key=lambda d: d['drawdown_max_short'], reverse=True)
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_short.json'):
-                    if len(self.drawdown_short) < self.backtest_drawdown:
-                        self.drawdown_short.append(result)
-        results = sorted(self.results, key=lambda d: d['hrs_stuck_max_long'], reverse=True)
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_long.json'):
-                    if len(self.stuck_long) < self.backtest_stuck:
-                        self.stuck_long.append(result)
-        results = sorted(self.results, key=lambda d: d['hrs_stuck_max_short'], reverse=True)
-        if results:
-            while len(results) > 0:
-                result = results.pop()
-                if result["path"].endswith('_result_short.json'):
-                    if len(self.stuck_short) < self.backtest_stuck:
-                        self.stuck_short.append(result)
+        if "sharpe_ratio_long" in self.results[0]:
+            results = sorted(self.results, key=lambda d: d['sharpe_ratio_long'])
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_long.json'):
+                        if len(self.sharp_long) < self.backtest_sharp:
+                            self.sharp_long.append(result)
+            results = sorted(self.results, key=lambda d: d['sharpe_ratio_short'])
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_short.json'):
+                        if len(self.sharp_short) < self.backtest_sharp:
+                            self.sharp_short.append(result)
+        if "adg_per_exposure_long" in self.results[0]:
+            results = sorted(self.results, key=lambda d: d['adg_per_exposure_long'])
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_long.json'):
+                        if len(self.adg_long) < self.backtest_adg:
+                            self.adg_long.append(result)
+            results = sorted(self.results, key=lambda d: d['adg_per_exposure_short'])
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_short.json'):
+                        if len(self.adg_short) < self.backtest_adg:
+                            self.adg_short.append(result)
+        if "drawdown_max_long" in self.results[0]:
+            results = sorted(self.results, key=lambda d: d['drawdown_max_long'], reverse=True)
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_long.json'):
+                        if len(self.drawdown_long) < self.backtest_drawdown:
+                            self.drawdown_long.append(result)
+            results = sorted(self.results, key=lambda d: d['drawdown_max_short'], reverse=True)
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_short.json'):
+                        if len(self.drawdown_short) < self.backtest_drawdown:
+                            self.drawdown_short.append(result)
+        if "hrs_stuck_max_long" in self.results[0]:
+            results = sorted(self.results, key=lambda d: d['hrs_stuck_max_long'], reverse=True)
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_long.json'):
+                        if len(self.stuck_long) < self.backtest_stuck:
+                            self.stuck_long.append(result)
+            results = sorted(self.results, key=lambda d: d['hrs_stuck_max_short'], reverse=True)
+            if results:
+                while len(results) > 0:
+                    result = results.pop()
+                    if result["path"].endswith('_result_short.json'):
+                        if len(self.stuck_short) < self.backtest_stuck:
+                            self.stuck_short.append(result)
 
     def load_results(self):
         fpath = self.fetch_results_fpath()
@@ -341,17 +347,35 @@ class OptimizeItem(Base):
     def edit_item(self):
         col_1, col_2, col_3 = st.columns([1,1,1])
         with col_1:
-            self.sb = st.number_input('STARTING_BALANCE',value=self.sb,step=500)
-            self.oc.do_long = st.toggle("Long enabled", value=self.oc.do_long, key="opt_long_enabled", help=None)
-            self.oc.passivbot_mode = st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'), index=self.oc.passivbot_mode_index)
+            if "key_optimize_sb" in st.session_state:
+                self.sb = st.session_state.key_optimize_sb
+            st.number_input('STARTING_BALANCE',value=self.sb,step=500, key="key_optimize_sb")
+            if "key_optimize_long_enabled" in st.session_state:
+                self.oc.do_long = st.session_state.key_optimize_long_enabled
+            st.toggle("Long enabled", value=self.oc.do_long, key="key_optimize_long_enabled", help=None)
+            if "key_optimize_passivbot_mode" in st.session_state:
+                self.oc.passivbot_mode = st.session_state.key_optimize_passivbot_mode
+            st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'), index=self.oc.passivbot_mode_index, key="key_optimize_passivbot_mode")
         with col_2:
-            self.sd = st.date_input("START_DATE", datetime.datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
-            self.oc.do_short = st.toggle("Short enabled", value=self.oc.do_short, key="opt_short_enabled", help=None)
-            self.oc.algorithm = st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'),index=self.oc.algorithm_index)
+            if "key_optimize_sd" in st.session_state:
+                self.sd = st.session_state.key_optimize_sd.strftime("%Y-%m-%d")
+            st.date_input("START_DATE", datetime.datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD", key="key_optimize_sd")
+            if "key_optimize_short_enabled" in st.session_state:
+                self.oc.do_short = st.session_state.key_optimize_short_enabled
+            st.toggle("Short enabled", value=self.oc.do_short, key="key_optimize_short_enabled", help=None)
+            if "key_optimize_algorithm" in st.session_state:
+                self.oc.algorithm = st.session_state.key_optimize_algorithm
+            st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'),index=self.oc.algorithm_index, key="key_optimize_algorithm")
         with col_3:
-            self.ed = st.date_input("END_DATE", datetime.datetime.strptime(self.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
-            self.oc.iters = st.number_input('ITERS',value=self.oc.iters,step=1000, help=pbgui_help.opt_iters)
-            self.reruns = st.number_input('Reruns',value=self.reruns,step=5, help=pbgui_help.opt_reruns)
+            if "key_optimize_ed" in st.session_state:
+                self.ed = st.session_state.key_optimize_ed.strftime("%Y-%m-%d")
+            st.date_input("END_DATE", datetime.datetime.strptime(self.ed, '%Y-%m-%d'), format="YYYY-MM-DD", key="key_optimize_ed")
+            if "key_optimize_iters" in st.session_state:
+                self.oc.iters = st.session_state.key_optimize_iters
+            st.number_input('ITERS',value=self.oc.iters,step=1000, help=pbgui_help.opt_iters, key="key_optimize_iters")
+            if "key_optimize_reruns" in st.session_state:
+                self.reruns = st.session_state.key_optimize_reruns
+            st.number_input('Reruns',value=self.reruns,step=5, help=pbgui_help.opt_reruns, key="key_optimize_reruns")
 
     def load(self, file: str):
         self.file = Path(file)
@@ -453,43 +477,36 @@ class OptimizeQueue:
         if self._backtest_best != new_backtest_best:
             self._backtest_best = new_backtest_best
             self.save_options()
-            st.experimental_rerun()
     @backtest_sharp.setter
     def backtest_sharp(self, new_backtest_sharp):
         if self._backtest_sharp != new_backtest_sharp:
             self._backtest_sharp = new_backtest_sharp
             self.save_options()
-            st.experimental_rerun()
     @backtest_adg.setter
     def backtest_adg(self, new_backtest_adg):
         if self._backtest_adg != new_backtest_adg:
             self._backtest_adg = new_backtest_adg
             self.save_options()
-            st.experimental_rerun()
     @backtest_drawdown.setter
     def backtest_drawdown(self, new_backtest_drawdown):
         if self._backtest_drawdown != new_backtest_drawdown:
             self._backtest_drawdown = new_backtest_drawdown
             self.save_options()
-            st.experimental_rerun()
     @backtest_stuck.setter
     def backtest_stuck(self, new_backtest_stuck):
         if self._backtest_stuck != new_backtest_stuck:
             self._backtest_stuck = new_backtest_stuck
             self.save_options()
-            st.experimental_rerun()
     @cpu.setter
     def cpu(self, new_cpu):
         if new_cpu != self._cpu:
             self._cpu = new_cpu
             self.save_options()
-            st.experimental_rerun()
     @mode.setter
     def mode(self, new_mode):
         if new_mode != self._mode:
             self._mode = new_mode
             self.save_options()
-            st.experimental_rerun()
 
     def load_options(self):
         self._cpu = int(self.pb_config.get("optimize", "cpu"))
@@ -588,38 +605,53 @@ class OptimizeQueue:
     def remove_item(self, item: OptimizeItem):
         item.remove()
         self.load()
+        self.save()
+        self.load()
 
     def options(self):
         # Options
         col_run, col_mode, col_cpu, col_best = st.columns([1,1,1,1])
         with col_run:
-            if st.toggle("Run Optimizer", value=self.is_running(), key="opt_run", help=None):
-                if not self.is_running():
+            if "key_optimize_run" in st.session_state:
+                if st.session_state.key_optimize_run:
                     self.start()
-                    st.experimental_rerun()
-            else:
-                if self.is_running():
+                else:
                     self.stop()
-                    st.experimental_rerun()
+            st.session_state.key_optimize_run = self.is_running()
+            st.toggle("Run Optimizer", key="key_optimize_run", help=None)
         with col_mode:
+            if "key_optimize_queue_mode" in st.session_state:
+                self.mode = st.session_state.key_optimize_queue_mode
             if self.mode == 'linear':
                 queue_mode = 0
             else:
                 queue_mode = 1
-            self.mode = st.radio("Queue Mode", ('linear', 'circular'), index=queue_mode, key="opt_mode", help=None, horizontal=False)
+            st.radio("Queue Mode", ('linear', 'circular'), index=queue_mode, help=None, horizontal=False, key="key_optimize_queue_mode")
         with col_cpu:
-            self.cpu = st.number_input(f'CPU used for Optimizer(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=self.cpu, step=1)
+            if "key_optimize_cpu" in st.session_state:
+                self.cpu = st.session_state.key_optimize_cpu
+            st.number_input(f'CPU used for Optimizer(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=self.cpu, step=1, key="key_optimize_cpu")
         with col_best:
-            self.backtest_best = st.number_input("backtest_best", min_value=0, max_value=1000, value=self.backtest_best, step=1, format='%d', key="opt_backtest_best", help=pbgui_help.backtest_best)
+            if "key_optimize_backtest_best" in st.session_state:
+                self.backtest_best = st.session_state.key_optimize_backtest_best
+            st.number_input("backtest_best", min_value=0, max_value=1000, value=self.backtest_best, step=1, format='%d', key="key_optimize_backtest_best", help=pbgui_help.backtest_best)
         col_sharp, col_adg, col_drawdown, col_stuck = st.columns([1,1,1,1])
         with col_sharp:
-            self.backtest_sharp = st.number_input("backtest_sharp", min_value=0, max_value=1000, value=self.backtest_sharp, step=1, format='%d', key="opt_backtest_sharp", help=pbgui_help.backtest_sharp)
+            if "key_optimize_backtest_sharp" in st.session_state:
+                self.backtest_sharp = st.session_state.key_optimize_backtest_sharp
+            st.number_input("backtest_sharp", min_value=0, max_value=1000, value=self.backtest_sharp, step=1, format='%d', key="key_optimize_backtest_sharp", help=pbgui_help.backtest_sharp)
         with col_adg:
-            self.backtest_adg = st.number_input("backtest_adg", min_value=0, max_value=1000, value=self.backtest_adg, step=1, format='%d', key="opt_backtest_adg", help=pbgui_help.backtest_adg)
+            if "key_optimize_backtest_adg" in st.session_state:
+                self.backtest_adg = st.session_state.key_optimize_backtest_adg
+            st.number_input("backtest_adg", min_value=0, max_value=1000, value=self.backtest_adg, step=1, format='%d', key="key_optimize_backtest_adg", help=pbgui_help.backtest_adg)
         with col_drawdown:
-            self.backtest_drawdown = st.number_input("backtest_drawdown", min_value=0, max_value=1000, value=self.backtest_drawdown, step=1, format='%d', key="opt_backtest_drawdown", help=pbgui_help.backtest_drawdown)
+            if "key_optimize_backtest_drawdown" in st.session_state:
+                self.backtest_drawdown = st.session_state.key_optimize_backtest_drawdown
+            st.number_input("backtest_drawdown", min_value=0, max_value=1000, value=self.backtest_drawdown, step=1, format='%d', key="key_optimize_backtest_drawdown", help=pbgui_help.backtest_drawdown)
         with col_stuck:
-            self.backtest_stuck = st.number_input("backtest_stuck", min_value=0, max_value=1000, value=self.backtest_stuck, step=1, format='%d', key="opt_backtest_stuck", help=pbgui_help.backtest_stuck)
+            if "key_optimize_backtest_stuck" in st.session_state:
+                self.backtest_stuck = st.session_state.key_optimize_backtest_stuck
+            st.number_input("backtest_stuck", min_value=0, max_value=1000, value=self.backtest_stuck, step=1, format='%d', key="key_optimize_backtest_stuck", help=pbgui_help.backtest_stuck)
 
     def view_log(self, item: OptimizeItem):
         if item.log.exists():
@@ -637,44 +669,46 @@ class OptimizeQueue:
             ed = st.session_state[f'editor_opt_queue_{ed_key}']
             for row in ed["edited_rows"]:
                 if "run" in ed["edited_rows"][row]:
-                    if self.items[row].is_running():
+                    if not ed["edited_rows"][row]["run"]:
                         self.items[row].stop()
-                    else:
-                        self.items[row].start(self.cpu)
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "edit" in ed["edited_rows"][row]:
                     st.session_state.my_opt = self.items[row]
                     del st.session_state.opt_queue
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "log" in ed["edited_rows"][row]:
                     st.session_state.view_opt_log = self.items[row]
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "up" in ed["edited_rows"][row]:
                     self.move(row, "up")
+                    st.session_state.key_optimize_close_view_log = True
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "down" in ed["edited_rows"][row]:
                     self.move(row, "down")
+                    st.session_state.key_optimize_close_view_log = True
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "remove" in ed["edited_rows"][row]:
                     if self.items[row].is_running():
                         self.items[row].stop()
                     self.remove_item(self.items[row])
+                    st.session_state.key_optimize_close_view_log = True
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
         d = []
         column_config = {
-            "Stop": st.column_config.CheckboxColumn('Stop', default=False),
-            "Edit": st.column_config.CheckboxColumn('Stop', default=False),
-            "log": st.column_config.CheckboxColumn('Log', default=False),
             "up": st.column_config.CheckboxColumn('🔼', default=False),
             "down": st.column_config.CheckboxColumn('🔽', default=False),
+            "edit": st.column_config.CheckboxColumn('Edit', default=False),
+            "log": st.column_config.CheckboxColumn('Log', default=False),
+            "run": st.column_config.CheckboxColumn('Stop', default=False),
             "remove": st.column_config.CheckboxColumn('Remove', default=False),
             }
+        column_disabled = ['pos','user','symbol','config','sd','ed','sb','market_type','ohlcv','mode','algo','iters','long','short','reruns','finish']
         for item in self.items:
             d.append({
                 'pos': item.position,
@@ -700,11 +734,14 @@ class OptimizeQueue:
                 'finish': item.finish,
                 'remove': False,
             })
-        st.data_editor(data=d, width=None, height=36+(len(d))*35, use_container_width=True, key=f'editor_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['user','symbol'])
-        if "view_opt_log" in st.session_state:
-            if st.button(f':negative_squared_cross_mark:', key="close_view_opt_log"):
+        st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, key=f'editor_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=column_disabled)
+        if "key_optimize_close_view_log" in st.session_state:
+            if st.session_state.key_optimize_close_view_log:
                 del st.session_state.view_opt_log
-                st.experimental_rerun()
+            # del st.session_state.view_opt_log
+            # st.rerun()
+        if "view_opt_log" in st.session_state:
+            st.button(f':negative_squared_cross_mark: {st.session_state.view_opt_log.position}', key="key_optimize_close_view_log")
             self.view_log(st.session_state.view_opt_log)
 
 class OptimizeResults:
@@ -844,11 +881,11 @@ class OptimizeResults:
                         self.layer = 3
                         self.results = self.symbols[list(self.symbols.keys())[row-6]]
                         st.session_state.ed_key += 1
-                        st.experimental_rerun()
+                        st.rerun()
                     self.layer = 2
                     self.almo = row
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "Remove" in ed["edited_rows"][row]:
                     if row == 0:
                         self.remove_results(f'{self.pbdir}/results_harmony_search_recursive_grid')
@@ -866,7 +903,7 @@ class OptimizeResults:
                         for result in self.symbols[list(self.symbols.keys())[row-6]]:
                             self.remove_results(str(PurePath(result).parent))
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
         d = []
         column_config = {
             "View": st.column_config.CheckboxColumn('View', default=False),
@@ -930,11 +967,11 @@ class OptimizeResults:
                     self.l3_path = self.l2_paths[row]
                     self.results = []
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
                 if "Remove" in ed["edited_rows"][row]:
                     self.remove_results(self.l2_paths[row])
                     st.session_state.ed_key += 1
-                    st.experimental_rerun()
+                    st.rerun()
         d = []
         column_config = {
             "View": st.column_config.CheckboxColumn('View', default=False),
@@ -1013,7 +1050,7 @@ class OptimizeResults:
                             r_dict[r] = results[r]
                 self.results_d.append(r_dict)
             st.session_state.ed_key += 1
-            st.experimental_rerun()
+            st.rerun()
         symbol_names = ''
         for symbol_name in self.symbol_names:
             symbol_names += "- " + symbol_name + "\n"
@@ -1059,7 +1096,7 @@ def main():
                         break
                 else:
                     time.sleep(1)
-        time.sleep(60)
+        time.sleep(15)
         opt.load()
 
 if __name__ == '__main__':
