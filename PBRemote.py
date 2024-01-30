@@ -31,6 +31,9 @@ class RemoteServer():
         self._pbdir = None
         self._bucket = None
         self._instances = []
+        self._mem = []
+        self._swap = []
+        self._disk = []
     
     @property
     def name(self): return self._name
@@ -54,6 +57,12 @@ class RemoteServer():
     def pbdir(self): return self._pbdir
     @property
     def bucket(self): return self._bucket
+    @property
+    def mem(self): return self._mem
+    @property
+    def swap(self): return self._swap
+    @property
+    def disk(self): return self._disk
 
     @name.setter
     def name(self, new_name):
@@ -158,6 +167,12 @@ class RemoteServer():
                             self._api_md5 = cfg["api_md5"]
                         if "run" in cfg:
                             self._run = cfg["run"]
+                        if "mem" in cfg:
+                            self._mem = cfg["mem"]
+                        if "swap" in cfg:
+                            self._swap = cfg["swap"]
+                        if "disk" in cfg:
+                            self._disk = cfg["disk"]
                         return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
@@ -451,12 +466,18 @@ class PBRemote():
                 "symbol": instance.symbol
             })
             run.append(inst)
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        disk = psutil.disk_usage('/')
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
             "name": self.name,
             "api_md5": self.api_md5,
-            "run": run
+            "run": run,
+            "mem": mem,
+            "swap": swap,
+            "disk": disk
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
