@@ -135,7 +135,7 @@ def list_remote():
             swap_total = int(server.swap[0] / 1024 / 1024)
             swap_used = int(server.swap[1] / 1024 / 1024)
             swap_free = int(server.swap[2] / 1024 / 1024)
-            swap_usage = int(server.swap[3])
+            swap_usage = min(int(server.swap[3]),100)
             st.progress(swap_usage, text=f'### Swap Free: :green[{swap_free}] MB  |  Used: :red[{swap_used}] MB  |  Total: :blue[{swap_total}] MB')
             boot = datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S")
             if server.cpu > 90:
