@@ -144,7 +144,7 @@ def list_remote():
                 cpu_color = "green"
             else:
                 cpu_color = "yellow"
-            st.markdown(f"#### CPU utilization: :{cpu_color}[{server.cpu}] %  |  System boot: :blue[{boot}]")
+            st.markdown(f"##### CPU utilization: :{cpu_color}[{server.cpu}] %  |  System boot: :blue[{boot}]")
         sid = []
         if not server.is_api_md5_same(remote.api_md5):
             if st.checkbox(f'Sync API-Keys to {server.name} (Local md5: {remote.api_md5} remote md5: {server.api_md5})',value=False, key=f'sync_api_{ed_key}'):
