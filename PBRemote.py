@@ -34,6 +34,8 @@ class RemoteServer():
         self._mem = []
         self._swap = []
         self._disk = []
+        self._cpu = None
+        self._boot = None
     
     @property
     def name(self): return self._name
@@ -63,6 +65,10 @@ class RemoteServer():
     def swap(self): return self._swap
     @property
     def disk(self): return self._disk
+    @property
+    def cpu(self): return self._cpu
+    @property
+    def boot(self): return self._boot
 
     @name.setter
     def name(self, new_name):
@@ -173,6 +179,10 @@ class RemoteServer():
                             self._swap = cfg["swap"]
                         if "disk" in cfg:
                             self._disk = cfg["disk"]
+                        if "cpu" in cfg:
+                            self._cpu = cfg["cpu"]
+                        if "boot" in cfg:
+                            self._boot = cfg["boot"]
                         return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
@@ -469,6 +479,8 @@ class PBRemote():
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_usage('/')
+        cpu = psutil.cpu_percen()
+        boot = psutil.boot_time()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
@@ -477,7 +489,9 @@ class PBRemote():
             "run": run,
             "mem": mem,
             "swap": swap,
-            "disk": disk
+            "disk": disk,
+            "cpu": cpu,
+            "boot": boot
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
