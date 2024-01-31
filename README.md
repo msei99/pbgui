@@ -108,6 +108,7 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v0.94 (30-01-2024)
+- Added System Information to PBRemote (memory, swap, disk, cpu and boottime)
 - PBRemote: Displaying Table Start/stop Instances is now 10x faster.
 - Optimizer: Bugfix when removing items from queue.
 - Removed no longer needet requirements (streamlit-extras and streamlit-super-slider)
