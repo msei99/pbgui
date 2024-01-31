@@ -119,6 +119,16 @@ def list_remote():
         if server.is_online():
             color = "green"
         st.markdown(f'### Remote Server: :{color}[{server.name}] ({server.rtd}s)')
+        # mem = round(server.mem[0] / 1024 / 1024,2)
+        # free = round(server.mem[1] / 1024 / 1024,2)
+        # usage = int(server.mem[2])
+        # st.progress(usage, text=f'### Memory Total: {mem} MB Free: {free} MB')
+        # swap = round(server.swap[0] / 1024 / 1024,2)
+        # usage = int(server.swap[3])
+        # st.progress(usage, text=f'### Swap Total: {swap} MB')
+        # disk = round(server.disk[0] / 1024 / 1024,2)
+        # usage = int(server.disk[3])
+        # st.progress(usage, text=f'### Disk Total: {disk} MB')
         sid = []
         if not server.is_api_md5_same(remote.api_md5):
             if st.checkbox(f'Sync API-Keys to {server.name} (Local md5: {remote.api_md5} remote md5: {server.api_md5})',value=False, key=f'sync_api_{ed_key}'):
