@@ -479,7 +479,7 @@ class PBRemote():
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_usage('/')
-        cpu = psutil.cpu_percen()
+        cpu = psutil.cpu_percent()
         boot = psutil.boot_time()
         cfg = ({
             "timestamp": timestamp,
