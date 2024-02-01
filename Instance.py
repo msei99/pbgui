@@ -994,12 +994,16 @@ class Instances:
             if local_instance:
                 if (
                     instance.config == local_instance.config
+                    and instance._market_type == local_instance._market_type
                     and instance._ohlcv == local_instance._ohlcv
                     and instance._assigned_balance == local_instance._assigned_balance
+                    and instance._co == local_instance._co
                     and instance._leverage == local_instance._leverage
                     and instance._price_distance_threshold == local_instance._price_distance_threshold
                     and instance._price_precision == local_instance._price_precision
                     and instance._price_step == local_instance._price_step
+                    and instance._long_mode == local_instance._long_mode
+                    and instance._short_mode == local_instance._short_mode
                 ):
                     return True
                 else:
