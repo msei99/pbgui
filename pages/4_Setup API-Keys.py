@@ -46,6 +46,8 @@ def edit_user():
                 if "remote" in st.session_state:
                     del st.session_state.remote
                 PBRemote().restart()
+                if "pbgui_instances" in st.session_state:
+                    del st.session_state.pbgui_instances
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:
         new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)
