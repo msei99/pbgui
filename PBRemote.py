@@ -35,7 +35,8 @@ class RemoteServer():
         self._disk = []
         self._cpu = None
         self._boot = None
-    
+        self.status_ts = 0
+
     @property
     def name(self): return self._name
     @property
@@ -335,6 +336,23 @@ class RemoteServer():
         else:
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
+    def sync_multi_down(self):
+        status_file = Path(f'{self._path}/status.json')
+        if status_file.exists():
+            status_ts = status_file.stat().st_mtime
+            if self.status_ts < status_ts:
+                pbgdir = Path.cwd()
+                cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', f'{self.bucket}/multi_{self.name}', PurePath(f'{pbgdir}/data/remote/multi_{self.name}')]
+                logfile = Path(f'{pbgdir}/data/logs/sync.log')
+                log = open(logfile,"ab")
+                if platform.system() == "Windows":
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+                self.status_ts = status_ts
+
+
 class PBRemote():
     def __init__(self):
         self.error = None          
@@ -342,6 +360,7 @@ class PBRemote():
         self.local_run = PBRun()
         self.index = 0
         self.api_md5 = None
+        self.status_ts = 0
         self.startts = None
         self.sync_downts = None
         pbgdir = Path.cwd()
@@ -409,6 +428,8 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+        elif direction == 'up' and spath == 'multi':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'instances':
@@ -458,6 +479,14 @@ class PBRemote():
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
                 except Exception as e:
                     print(f'{str(cfile)} is corrupted {e}')
+
+    def sync_multi_up(self):
+        status_file = Path(f'{self.cmd_path}/status.json')
+        if status_file.exists():
+            status_ts = status_file.stat().st_mtime
+            if self.status_ts < status_ts:
+                self.sync('up', 'multi')
+                self.status_ts = status_ts
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
@@ -596,8 +625,8 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBRemote.log')
-    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+#    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+#    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
     if remote.is_running():
@@ -622,6 +651,9 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: sync_multi_up')
+            remote.sync_multi_up()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End: sync_multi_up')
             remote.alive()
             remote.sync_to()
             remote.sync('down', 'cmd')
