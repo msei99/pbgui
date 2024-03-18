@@ -360,7 +360,7 @@ class RemoteServer():
             with open(status_file, "r", encoding='utf-8') as f:
                 status = json.load(f)
                 for instance in status:
-                    if instance["enabled_on"] == self.pbname and instance["multi"]:
+                    if status[instance]["enabled_on"] == self.pbname and status[instance]["multi"]:
                         pbgdir = Path.cwd()
                         running_version = PBRun().find_running_version(f'{pbgdir}/data/multi/{instance}')
                         print(running_version)
@@ -684,6 +684,7 @@ def main():
                     server.load_instances()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
+            traceback.print_exc()
 
 if __name__ == '__main__':
     main()
