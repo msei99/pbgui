@@ -24,7 +24,6 @@ class RemoteServer():
         self._rtd = None
         self._run = None
         self._edit = False
-#        self._instances = False
         self._path = path
         self._unique = []
         self._api_md5 = None
@@ -49,8 +48,6 @@ class RemoteServer():
     def run(self): return self._run
     @property
     def edit(self): return self._edit
-    # @property
-    # def instances(self): return self._instances
     @property
     def path(self): return self._path
     @property
@@ -86,10 +83,6 @@ class RemoteServer():
     def edit(self, new_edit):
         if self._edit != new_edit:
             self._edit = new_edit
-    # @instances.setter
-    # def instances(self, new_instances):
-    #     if self._instances != new_instances:
-    #         self._instances = new_instances
     @path.setter
     def path(self, new_path):
         if self._path != new_path:
@@ -413,7 +406,7 @@ class PBRemote():
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
