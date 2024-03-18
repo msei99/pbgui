@@ -45,7 +45,8 @@ class MultiInstance():
             self.initialize()
             # Load Multi config if available
             pbgdir = Path.cwd()
-            self.load(Path(f'{pbgdir}/data/multi/{self._user}'))
+            self.instance_path = Path(f'{pbgdir}/data/multi/{self._user}')
+            self.load(self.instance_path)
     # enabled_on
     @property
     def enabled_on(self): return self._enabled_on
@@ -221,7 +222,6 @@ class MultiInstance():
                 with open(file, "r", encoding='utf-8') as f:
                     multi_config = f.read()
                 self._multi_config = hjson.loads(multi_config)
-                self.instance_path = path
                 self.initialize()
                 return True
             except Exception as e:
