@@ -217,6 +217,12 @@ class RunMulti():
                     file.truncate()
 
     def create_multi_hjson(self):
+        # Write running Version to file
+        version = str(self._multi_config["version"])
+        version_file = Path(f'{self.path}/running_version.json')
+        with open(version_file, "w", encoding='utf-8') as f:
+            f.write(version)
+        # Generate clean multi_run.hjson file
         del self._multi_config["enabled_on"]
         del self._multi_config["version"]
         self._multi_config["live_configs_dir"] = self.path
@@ -307,6 +313,7 @@ class PBRun():
         if run_multi:
             for multi in self.run_multi:
                 if multi.path == run_multi.path:
+                    multi.version = run_multi.version
                     return
             self.run_multi.append(run_multi)
 
@@ -318,13 +325,20 @@ class PBRun():
                     return
 
     def update_status(self, status: InstanceStatus):
-        print(status.__dict__)
         if status:
             for index, instance in enumerate(self.all_status):
                 if instance.name == status.name:
                     self.all_status[index] = status
                     return
             self.all_status.append(status)
+
+    def find_running_version(self, path: str):
+        version = 0
+        version_file = Path(f'{path}/running_version.json')
+        if version_file.exists():
+            with open(version_file, "r", encoding='utf-8') as f:
+                version = f.read()
+        return int(version)
 
     def start_instance(self, instance):
         self.change_enabled(instance, True)
@@ -461,7 +475,6 @@ class PBRun():
                     "multi": instance.multi,
                     "running": instance.running
                 })
-#                status.append(inst)
             json.dump(status, f, indent=4)
 
     def watch_multi(self, multi_instances : list = None):
@@ -483,11 +496,18 @@ class PBRun():
                 run_multi.pbdir = self.pbdir
                 run_multi.pbgdir = self.pbgdir
                 if run_multi.load():
-                    self.add_multi(run_multi)
-                    status.running = True
-                    if not run_multi.is_running():
+                    if run_multi.is_running():
+                        print("is running")
+                        running_version = self.find_running_version(multi_instance)
+                        if running_version < run_multi.version:
+                            run_multi.stop()
+                            run_multi.create_multi_hjson()
+                            run_multi.start()
+                    else:
                         run_multi.create_multi_hjson()
                         run_multi.start()
+                    self.add_multi(run_multi)
+                    status.running = True
                 else:
                     self.remove_multi(run_multi)
                     status.running = False
