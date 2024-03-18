@@ -45,8 +45,7 @@ class MultiInstance():
             self.initialize()
             # Load Multi config if available
             pbgdir = Path.cwd()
-            self.instance_path = Path(f'{pbgdir}/data/multi/{self._user}')
-            self.load(self.instance_path)
+            self.load(Path(f'{pbgdir}/data/multi/{self._user}'))
     # enabled_on
     @property
     def enabled_on(self): return self._enabled_on
@@ -216,6 +215,7 @@ class MultiInstance():
         stx.scrollableTextbox(logr,height="300")
 
     def load(self, path: Path):
+        self.instance_path = path
         file = Path(f'{path}/multi.hjson')
         if file.exists():
             try:
