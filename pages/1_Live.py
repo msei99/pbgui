@@ -497,7 +497,7 @@ def edit_instance():
             st.session_state.my_bt.user = instance.user
             st.session_state.my_bt.symbol = instance.symbol
             st.session_state.my_bt.market_type = instance.market_type
-            st.switch_page("pages/2_Backtest.py")
+            st.switch_page("pages/3_Backtest.py")
         st.toggle("enable", value=instance.enabled, key="live_enable", help=pbgui_help.instance_enable)
         if instance.enabled:
             if st.button("restart", key="live_restart", help=pbgui_help.instance_restart):
