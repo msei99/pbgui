@@ -36,6 +36,7 @@ class RemoteServer():
         self._cpu = None
         self._boot = None
         self.status_ts = 0
+        self.pbname = None
 
     @property
     def name(self): return self._name
@@ -351,7 +352,18 @@ class RemoteServer():
                 else:
                     subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
                 self.status_ts = status_ts
+                self.update_multi()
 
+    def update_multi(self):
+        status_file = Path(f'{self._path}/status.json')
+        if status_file.exists():
+            with open(status_file, "r", encoding='utf-8') as f:
+                status = json.load(f)
+                for instance in status:
+                    if instance["enabled_on"] == self.pbname and instance["multi"]:
+                        pbgdir = Path.cwd()
+                        running_version = PBRun().find_running_version(f'{pbgdir}/data/multi/{instance}')
+                        print(running_version)
 
 class PBRemote():
     def __init__(self):
@@ -431,9 +443,9 @@ class PBRemote():
         elif direction == 'up' and spath == 'multi':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**,multi_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
             self.sync_downts = round(datetime.now().timestamp())
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
@@ -560,6 +572,7 @@ class PBRemote():
             rserver = RemoteServer(remote)
             rserver.pbdir = self.pbdir
             rserver.bucket = self.bucket
+            rserver.pbname = self.name
             rserver.load()
             rserver.load_instances()
             self.add(rserver)
@@ -659,6 +672,9 @@ def main():
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: sync_multi_down')
+                server.sync_multi_down()
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End: sync_multi_down')
                 if server.sync_from(remote.name):
                     remote.sync("up", 'instances')
                     remote.load_local()
