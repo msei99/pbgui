@@ -170,22 +170,26 @@ class MultiInstance():
         for instance in st.session_state.pbgui_instances:
             if instance.user == self.user and instance.market_type == "futures":
                 if instance.multi:
+                    if instance._config.long_enabled:
+                        lm = f'-lm n'
+                    else:
+                        lm = f'-lm m'
                     if instance.long_mode == "graceful_stop":
                         lm = f'-lm gs'
                     elif instance.long_mode == "panic":
                         lm = f'-lm p'
                     elif instance.long_mode == "tp_only":
                         lm = f'-lm t'
+                    if instance._config.short_enabled:
+                        sm = f'-sm n'
                     else:
-                        lm = f'-lm n'
+                        sm = f'-sm m'
                     if instance.short_mode == "graceful_stop":
                         sm = f'-sm gs'
                     elif instance.short_mode == "panic":
                         sm = f'-sm p'
                     elif instance.short_mode == "tp_only":
                         sm = f'-sm t'
-                    else:
-                        sm = f'-sm n'
                     if instance.price_precision != 0.0:
                         pp = f' -pp {instance.price_precision} '
                     else:
