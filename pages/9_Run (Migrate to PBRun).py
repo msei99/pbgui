@@ -381,7 +381,7 @@ if 'pb_manager' not in st.session_state:
 if 'go_backtest' in st.session_state:
     if st.session_state.go_backtest:
         st.session_state.go_backtest = False
-        st.switch_page("pages/2_Backtest.py")
+        st.switch_page("pages/3_Backtest.py")
 if 'editpb_instance' in st.session_state:
     editpb_instance(st.session_state.editpb_instance)
 else:

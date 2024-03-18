@@ -24,6 +24,7 @@ class Instance(Base):
         super().__init__()
         self._instance_path = None
         self._enabled = False
+        self._multi = False
         self._error = None # not saved
         self._symbol_ccxt = None
         self._config = Config() # not saved
@@ -55,6 +56,8 @@ class Instance(Base):
     def config(self): return self._config.config
     @property
     def enabled(self): return self._enabled
+    @property
+    def multi(self): return self._multi
     @property
     def symbol_ccxt(self): return self._symbol_ccxt
     @property
@@ -103,6 +106,8 @@ class Instance(Base):
         if self.market_type == "spot": return 0
         try:
             if self._status["position"]:
+                if not self._status["position"]["entryPrice"]:
+                    return 0
                 entry = self._status["position"]["entryPrice"]
                 qty = self._status["position"]["contracts"]*self._status["position"]["contractSize"]
                 if self.balance == 0 or not qty:
@@ -141,6 +146,8 @@ class Instance(Base):
                     psize = self._status["spot_balance"]
             elif self.market_type == "futures":
                 if "position" in self._status:
+                    if not self._status["position"]["contracts"]:
+                        return 0
                     psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
             else:
                 psize = 0
@@ -219,6 +226,11 @@ class Instance(Base):
         if PBRemote().is_running():
             PBRemote().stop()
             PBRemote().run()
+
+    @multi.setter
+    def multi(self, new_multi):
+        self._multi = new_multi
+        self.save()
 
     @co.setter
     def co(self, new_co):
@@ -634,7 +646,6 @@ class Instance(Base):
                     'symbol': trade["symbol"]
                 }
 
-
     def fetch_fundings(self):
         if self.market_type == "spot" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
             return
@@ -851,7 +862,7 @@ class Instance(Base):
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
         print(f'Error load Instance: {str(file)}')
-        False
+        return False
 
     def load_status(self):
         file = Path(f'{self._instance_path}/status.json')

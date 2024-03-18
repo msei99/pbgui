@@ -403,7 +403,8 @@ auto_unstuck_ema_dist = """
     Bot uses three emas of spans: [span0, (span0 * span1)**0.5, span1], given in minutes.
     Close price distance from EMA band.
     Lower auto unstuck EMA band is min(ema0, ema1, ema2) * (1 - auto_unstuck_ema_dist).
-    Upper auto unstuck EMA band is max(ema0, ema1, ema2) * (1 + auto_unstuck_ema_dist).    How much of max pos size to close.
+    Upper auto unstuck EMA band is max(ema0, ema1, ema2) * (1 + auto_unstuck_ema_dist).
+    How much of max pos size to close.
     ```"""
 
 auto_unstuck_delay_minutes = """
@@ -426,4 +427,60 @@ particle_swarm = """
     unterstand how particle swarm work.
     Chaning them will not get you better configs. But it can speed up or slow down
     the algorithm.
+    ```"""
+
+loss_allowance_pct = """
+    ```
+    multisym auto unstuck: will use profits from other positions to offset
+    losses realized on stuck positions
+    how much below past peak balance to allow losses (default 1% == 0.01).
+    Set to 0.0 to disable multisym auto unstuck.
+    ```"""
+
+pnls_max_lookback_days = """
+    ```
+    how far into the past to fetch pnl history
+    ```"""
+
+stuck_threshold = """
+    ```
+    if wallet_exposure / wallet_exposure_limit > stuck_threshold
+    consider position as stuck
+    ```"""
+
+unstuck_close_pct = """
+    ```
+    percentage of balance * wallet_exposure_limit to close for each unstucking order
+    (default 1% == 0.01)
+    ```"""
+
+execution_delay_seconds = """
+    ```
+    delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
+    ```"""
+
+auto_gs = """
+    ```
+    set all non-specified symbols on graceful stop
+    ```"""
+
+TWE_long_short = """
+    ```
+    total wallet exposure limits long and short.
+    Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
+    ```"""
+
+multi_long_short_enabled = """
+    ```
+    if true, mode defaults to 'normal'.
+    If false, mode defaults to 'graceful_stop' if auto_gs=true, else 'manual'.
+    ```"""
+
+config_version = """
+    ```
+    The Version number of the configuration. This number is needet for
+    synchronisation to your VPS. If the bot that runs this configuration
+    see a new higher version number, it will switch to the new config.
+    No need to manual change this number. It will automatical increased
+    if you hit save.
     ```"""
