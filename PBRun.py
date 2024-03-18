@@ -219,7 +219,7 @@ class RunMulti():
     def create_multi_hjson(self):
         # Write running Version to file
         version = str(self._multi_config["version"])
-        version_file = Path(f'{self.path}/running_version.json')
+        version_file = Path(f'{self.path}/running_version.txt')
         with open(version_file, "w", encoding='utf-8') as f:
             f.write(version)
         # Generate clean multi_run.hjson file
@@ -334,7 +334,7 @@ class PBRun():
 
     def find_running_version(self, path: str):
         version = 0
-        version_file = Path(f'{path}/running_version.json')
+        version_file = Path(f'{path}/running_version.txt')
         if version_file.exists():
             with open(version_file, "r", encoding='utf-8') as f:
                 version = f.read()
@@ -478,8 +478,6 @@ class PBRun():
             json.dump(status, f, indent=4)
 
     def watch_multi(self, multi_instances : list = None):
-#        self.run_multi = []
-#        self.all_status = []
         if not multi_instances:
             p = str(Path(f'{self.multi_path}/*'))
             multi_instances = glob.glob(p)
@@ -497,7 +495,6 @@ class PBRun():
                 run_multi.pbgdir = self.pbgdir
                 if run_multi.load():
                     if run_multi.is_running():
-                        print("is running")
                         running_version = self.find_running_version(multi_instance)
                         if running_version < run_multi.version:
                             run_multi.stop()
@@ -583,10 +580,8 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Info: Start load_all')
     run.load_all()
     run.watch_multi()
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Info: End load_all')
     count = 0
     while True:
         try:
