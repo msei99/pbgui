@@ -424,10 +424,11 @@ class PBRun():
                             self.remove(instance)
             cfile.unlink(missing_ok=True)
 
-    def update_status(self, status_file : str):
+    def update_status(self, status_file : str, rserver : str):
         unique = str(uuid.uuid4())
         cfile = Path(f'{self.cmd_path}/update_status_{unique}.cmd')
         cfg = ({
+            "rserver": rserver,
             "status_file": str(status_file)})
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
@@ -440,8 +441,9 @@ class PBRun():
             if cfile.exists():
                 with open(cfile, "r", encoding='utf-8') as f:
                     cfg = json.load(f)
+                    rserver = cfg["reserver"]
                     status_file = cfg["status_file"]
-                    self.update_from_status(status_file)
+                    self.update_from_status(status_file, rserver)
                 cfile.unlink(missing_ok=True)
 
     def update_from_status(self, status_file : str, rserver : str):
