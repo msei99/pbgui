@@ -331,7 +331,7 @@ class PBRun():
                     self.all_status[index] = status
                     return
             self.all_status.append(status)
-
+    
     def find_running_version(self, path: str):
         version = 0
         version_file = Path(f'{path}/running_version.txt')
@@ -422,6 +422,51 @@ class PBRun():
                             instance.stop()
                             self.remove(instance)
             cfile.unlink(missing_ok=True)
+
+    def update_status(self, status_file : str):
+        unique = str(uuid.uuid4())
+        cfile = Path(f'{self.cmd_path}/update_status_{unique}.cmd')
+        cfg = ({
+            "status_file": status_file})
+        with open(cfile, "w", encoding='utf-8') as f:
+            json.dump(cfg, f)
+
+    def has_update_status(self):
+        p = str(Path(f'{self.cmd_path}/update_status_*.cmd'))
+        status_files = glob.glob(p)
+        for cfile in status_files:
+            cfile = Path(cfile)
+            if cfile.exists():
+                with open(cfile, "r", encoding='utf-8') as f:
+                    cfg = json.load(f)
+                    status_file = cfg["status_file"]
+                    self.update_from_status(status_file)
+                cfile.unlink(missing_ok=True)
+
+    def update_from_status(self, status_file : str):
+        status_file = Path(status_file)
+        if status_file.exists():
+            with open(status_file, "r", encoding='utf-8') as f:
+                new_status = json.load(f)
+                for instance in new_status:
+                    if instance not in self.all_status:
+                        print("new instance: {instance}")
+                    else:
+                        for status in self.all_status:
+                            if status not in new_status:
+                                print("remove instance: {status}")
+                        #     if status == instance:
+                        #         # if info for me
+                        #         if instance["enabled_on"] == self.name:
+                        #             # if new version
+                        #             if instance["version"] > status.version:
+                        #                 print(f"new version for {instance} new:{instance["version"]} my:{status.version}")
+                        #             else:
+                        #                 print(f"nothing to do for {instance}")
+
+                        # if new_status[instance]["enabled_on"] == self.name and new_status[instance]["multi"]:
+                        #     for multi in self.
+
 
     def activate(self, instance : str, multi : bool):
         unique = str(uuid.uuid4())

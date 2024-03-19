@@ -10,7 +10,7 @@ import json
 from io import TextIOWrapper
 from datetime import datetime
 import platform
-from PBRun import PBRun, RunInstance
+from PBRun import PBRun, RunMulti, RunInstance
 import uuid
 import shutil
 import hashlib
@@ -352,18 +352,25 @@ class RemoteServer():
                 else:
                     subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
                 self.status_ts = status_ts
-                self.update_multi()
+                PBRun().update_status(status_file)
+    #             self.update_multi()
 
-    def update_multi(self):
-        status_file = Path(f'{self._path}/status.json')
-        if status_file.exists():
-            with open(status_file, "r", encoding='utf-8') as f:
-                status = json.load(f)
-                for instance in status:
-                    if status[instance]["enabled_on"] == self.pbname and status[instance]["multi"]:
-                        pbgdir = Path.cwd()
-                        running_version = PBRun().find_running_version(f'{pbgdir}/data/multi/{instance}')
-                        print(running_version)
+    # def update_multi(self):
+    #     status_file = Path(f'{self._path}/status.json')
+    #     if status_file.exists():
+    #         with open(status_file, "r", encoding='utf-8') as f:
+    #             status = json.load(f)
+    #             for instance in status:
+    #                 if status[instance]["enabled_on"] == self.pbname and status[instance]["multi"]:
+    #                     pbgdir = Path.cwd()
+    #                     running_version = PBRun().find_running_version(f'{pbgdir}/data/multi/{instance}')
+    #                     if running_version < status[instance]["version"]:
+    #                         src = PurePath(f'{self._path}/../multi_{self.name}/{instance}')
+    #                         dest = PurePath(f'{self._path}/../../multi/{instance}')
+    #                         shutil.copytree(src, dest, dirs_exist_ok=True)
+    #                         PBRun().activate(instance, True)
+    #                 else:
+    #                     PBRun()
 
 class PBRemote():
     def __init__(self):
