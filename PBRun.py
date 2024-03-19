@@ -516,8 +516,7 @@ class PBRun():
                 src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                 dest = f'{self.multi_path}/{instance.name}'
                 shutil.copytree(src, dest, dirs_exist_ok=True)
-                if instance.name == self.name:
-                    self.watch_multi([f'{self.multi_path}/{instance.name}'])
+                self.watch_multi([f'{self.multi_path}/{instance.name}'])
             else:
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                 src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
