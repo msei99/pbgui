@@ -352,7 +352,7 @@ class RemoteServer():
                 else:
                     subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
                 self.status_ts = status_ts
-                PBRun().update_status(status_file)
+                PBRun().update_status(status_file, self.name)
     #             self.update_multi()
 
     # def update_multi(self):

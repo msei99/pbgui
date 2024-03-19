@@ -8,6 +8,7 @@ from time import sleep
 import glob
 import json
 import hjson
+import shutil
 from io import TextIOWrapper
 from datetime import datetime
 import platform
@@ -443,7 +444,7 @@ class PBRun():
                     self.update_from_status(status_file)
                 cfile.unlink(missing_ok=True)
 
-    def update_from_status(self, status_file : str):
+    def update_from_status(self, status_file : str, rserver : str):
         status_file = Path(status_file)
         if status_file.exists():
             with open(status_file, "r", encoding='utf-8') as f:
@@ -451,10 +452,23 @@ class PBRun():
                 for instance in new_status:
                     if instance not in self.all_status:
                         print(f"new instance: {instance} from {status_file}")
+                        src = PurePath.parent(f'{status_file}/../multi_{rserver}/{instance}')
+                        dest = self.multi_path
+                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        self.watch_multi([f'{self.multi_path}/{instance}'])
                     else:
                         for status in self.all_status:
                             if status not in new_status:
                                 print(f"remove instance: {status} from {status_file}")
+                                if status.running:
+                                    for multi in self.run_multi:
+                                        if multi.user == status.name:
+                                            multi.stop()
+                                            self.remove_multi(multi)
+                                dest = f'{self.multi_path}/{status}'
+                                print(dest)
+#                                shutil.rmtree(dest, ignore_errors=True)
+                                    
                         #     if status == instance:
                         #         # if info for me
                         #         if instance["enabled_on"] == self.name:
