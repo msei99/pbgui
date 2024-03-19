@@ -454,7 +454,7 @@ class PBRun():
                 for instance in new_status:
                     if instance not in self.all_status:
                         print(f"new instance: {instance} from {status_file}")
-                        src = PurePath.parent(f'{status_file}/../multi_{rserver}/{instance}')
+                        src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance}'
                         dest = self.multi_path
                         shutil.copytree(src, dest, dirs_exist_ok=True)
                         self.watch_multi([f'{self.multi_path}/{instance}'])
