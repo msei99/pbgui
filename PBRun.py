@@ -541,7 +541,7 @@ class PBRun():
                 shutil.copytree(src, dest, dirs_exist_ok=True)
                 self.watch_multi([f'{self.multi_path}/{instance.name}'])
         for instance in self.instances_status:
-            if not self.new_status.has_name(instance.name):
+            if not new_status.has_name(instance.name):
                 print(f"remove instance: {instance.name} because not in {status_file}")
                 if instance.running:
                     for multi in self.run_multi:
