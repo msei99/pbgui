@@ -325,7 +325,7 @@ class PBRun():
                     self.run_multi.remove(multi)
                     return
 
-    def update_status(self, status: InstanceStatus):
+    def update_all_status(self, status: InstanceStatus):
         if status:
             for index, instance in enumerate(self.all_status):
                 if instance.name == status.name:
@@ -573,7 +573,7 @@ class PBRun():
                     run_multi.stop()
                 status.version = run_multi.version
                 status.enabled_on = run_multi.name
-                self.update_status(status)
+                self.update_all_status(status)
         self.save_all_status()
 
     def run(self):
