@@ -668,7 +668,8 @@ def main():
             count += 1
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
-            exit()
+            traceback.print_exc()
+#            exit()
 
 if __name__ == '__main__':
     main()
