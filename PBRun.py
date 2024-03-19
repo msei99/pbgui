@@ -538,7 +538,7 @@ class PBRun():
                 destination = Path(f'{self.pbgdir}/backup/mult/{instance.name}/data')
                 if not destination.exists():
                     destination.mkdir(parents=True)
-                shutil.copy(source, destination)
+                shutil.copytree(source, destination)
                 shutil.rmtree(source, ignore_errors=True)
 
     def activate(self, instance : str, multi : bool):
