@@ -304,6 +304,8 @@ class InstancesStatus():
             with open(file, "r", encoding='utf-8') as f:
                 instances = json.load(f)
                 for instance in instances:
+                    print(instance)
+                    print(instance["version"])
                     status = InstanceStatus()
                     status.name = instance
                     status.version = instance["version"]
