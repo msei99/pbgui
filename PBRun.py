@@ -281,7 +281,9 @@ class InstancesStatus():
 
     def has_name(self, instance: InstanceStatus):
         for i in self.instances:
-            if self.instances[i].name == instance.name:
+            print(i)
+            print(i.name)
+            if i.name == instance.name:
                 return True
         return False
 
