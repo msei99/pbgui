@@ -279,15 +279,6 @@ class InstancesStatus():
     def list(self):
         return list(map(lambda c: c.name, self.instances))
 
-    def has_name(self, instance: InstanceStatus):
-        for i in self.instances:
-            print(i)
-            print(i.name)
-            print(instance.name)
-            if i.name == instance.name:
-                return True
-        return False
-
     def add(self, istatus : InstanceStatus):
         for index, instance in enumerate(self.instances):
             if instance.name == istatus.name:
@@ -544,7 +535,8 @@ class PBRun():
                 shutil.copytree(src, dest, dirs_exist_ok=True)
                 self.watch_multi([f'{self.multi_path}/{instance.name}'])
         for instance in self.instances_status:
-            if not new_status.has_name(instance.name):
+            status = new_status.find_name(instance.name)
+            if status is None:
                 print(f"remove instance: {instance.name} because not in {status_file}")
                 if instance.running:
                     for multi in self.run_multi:
