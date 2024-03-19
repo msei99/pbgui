@@ -455,7 +455,7 @@ class PBRun():
                     if instance not in self.all_status:
                         print(f"new instance: {instance} from {status_file}")
                         src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance}'
-                        dest = self.multi_path
+                        dest = f'{self.multi_path}/{instance}'
                         print(f'copy {src} {dest}')
                         shutil.copytree(src, dest, dirs_exist_ok=True)
                         self.watch_multi([f'{self.multi_path}/{instance}'])
