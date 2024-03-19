@@ -254,17 +254,83 @@ class RunMulti():
 
 class InstanceStatus():
     def __init__(self):
-        self.version = None
         self.name = None
+        self.version = None
         self.multi = None
-        self.running = None
         self.enabled_on = None
+        self.running = None
+
+class InstancesStatus():
+    def __init__(self):
+        self.instances = []
+        self.index = 0
+        pbgdir = Path.cwd()
+        self.status_file = f'{pbgdir}/data/cmd/status.json'
+
+    def __iter__(self):
+        return iter(self.instances)
+
+    def __next__(self):
+        if self.index > len(self.instances):
+            raise StopIteration
+        self.index += 1
+        return next(self)
+    
+    def list(self):
+        return list(map(lambda c: c.name, self.instances))
+
+    def has_name(self, instance: InstanceStatus):
+        for i in self.instances:
+            if i.name == instance.name:
+                return True
+        return False
+
+    def add(self, istatus : InstanceStatus):
+        for index, instance in enumerate(self.instances):
+            if instance.name == istatus.name:
+                self.instances[index] = istatus
+                return
+        self.instances.append(istatus)
+
+    def find_name(self, name: str):
+        for instance in self.instances:
+            if instance.name == name:
+                return instance
+        return None
+
+    def load(self):
+        file = Path(self.status_file)
+        if file.exists():
+            with open(file, "r", encoding='utf-8') as f:
+                instances = json.load(f)
+                for instance in instances:
+                    status = InstanceStatus()
+                    status.name = instance
+                    status.version = instance["version"]
+                    status.multi = instance["multi"]
+                    status.enabled_on = instance["enabled_on"]
+                    status.running = instance["running"]
+                    self.add(status)
+
+    def save(self):
+        status = {}
+        for instance in self.instances:
+            status[instance.name] = ({
+                "enabled_on" : instance.enabled_on,
+                "version": instance.version,
+                "multi": instance.multi,
+                "running": instance.running
+            })
+        file = Path(self.status_file)
+        with open(file, "w", encoding='utf-8') as f:
+            json.dump(status, f, indent=4)
 
 class PBRun():
     def __init__(self):
         self.run_instances = []
         self.run_multi = []
-        self.all_status = []
+#        self.all_status = []
+        self.instances_status = InstancesStatus()
         self.index = 0
         self.pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
@@ -325,13 +391,13 @@ class PBRun():
                     self.run_multi.remove(multi)
                     return
 
-    def update_all_status(self, status: InstanceStatus):
-        if status:
-            for index, instance in enumerate(self.all_status):
-                if instance.name == status.name:
-                    self.all_status[index] = status
-                    return
-            self.all_status.append(status)
+    # def update_all_status(self, status: InstanceStatus):
+    #     if status:
+    #         for index, instance in enumerate(self.all_status):
+    #             if instance.name == status.name:
+    #                 self.all_status[index] = status
+    #                 return
+    #         self.all_status.append(status)
     
     def find_running_version(self, path: str):
         version = 0
@@ -447,43 +513,44 @@ class PBRun():
                 cfile.unlink(missing_ok=True)
 
     def update_from_status(self, status_file : str, rserver : str):
-        status_file = Path(status_file)
-        if status_file.exists():
-            with open(status_file, "r", encoding='utf-8') as f:
-                new_status = json.load(f)
-                for instance in new_status:
-                    if instance not in self.all_status:
-                        print(f"new instance: {instance} from {status_file}")
-                        src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance}'
-                        dest = f'{self.multi_path}/{instance}'
-                        print(f'copy {src} {dest}')
-                        shutil.copytree(src, dest, dirs_exist_ok=True)
-                        self.watch_multi([f'{self.multi_path}/{instance}'])
-                    else:
-                        for status in self.all_status:
-                            if status not in new_status:
-                                print(f"remove instance: {status} from {status_file}")
-                                if status.running:
-                                    for multi in self.run_multi:
-                                        if multi.user == status.name:
-                                            multi.stop()
-                                            self.remove_multi(multi)
-                                dest = f'{self.multi_path}/{status}'
-                                print(dest)
-#                                shutil.rmtree(dest, ignore_errors=True)
-                                    
-                        #     if status == instance:
-                        #         # if info for me
-                        #         if instance["enabled_on"] == self.name:
-                        #             # if new version
-                        #             if instance["version"] > status.version:
-                        #                 print(f"new version for {instance} new:{instance["version"]} my:{status.version}")
-                        #             else:
-                        #                 print(f"nothing to do for {instance}")
-
-                        # if new_status[instance]["enabled_on"] == self.name and new_status[instance]["multi"]:
-                        #     for multi in self.
-
+        new_status = InstancesStatus()
+        new_status.status_file = status_file
+        new_status.load()
+        for instance in new_status:
+            status = self.instances_status.find_name(instance.name)
+            if status is not None:
+                print(f"This instance we have. {instance.name} from {status_file}")
+                print(f"Compare Version and running status")
+                if instance.version > status.version:
+                    print(f"never version {instance.version}")
+                    print("need copy")
+                    # Remove old *.json configs
+                    dest = f'{self.multi_path}/{instance.name}'
+                    p = str(Path(f'{dest}/*'))
+                    items = glob.glob(p)
+                    for item in items:
+                        if item.endswith('.json'):
+                            Path(item).unlink(missing_ok=True)
+                if instance.name == self.name:
+                    self.watch_multi([f'{self.multi_path}/{instance.name}'])
+            else:
+                print(f"new instance: {instance.name} from {status_file}")
+                src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
+                dest = f'{self.multi_path}/{instance.name}'
+                print(f'copy {src} {dest}')
+                shutil.copytree(src, dest, dirs_exist_ok=True)
+                self.watch_multi([f'{self.multi_path}/{instance.name}'])
+        for instance in self.instances_status:
+            if not self.new_status.has_name(instance.name):
+                print(f"remove instance: {instance.name} because not in {status_file}")
+                if instance.running:
+                    for multi in self.run_multi:
+                        if multi.user == instance.name:
+                            multi.stop()
+                            self.remove_multi(multi)
+                dest = f'{self.multi_path}/{instance.name}'
+                print(dest)
+#                shutil.rmtree(dest, ignore_errors=True)
 
     def activate(self, instance : str, multi : bool):
         unique = str(uuid.uuid4())
@@ -526,18 +593,18 @@ class PBRun():
         for instance in instances:
             self.load(instance)
 
-    def save_all_status(self):
-        file = str(Path(f'{self.cmd_path}/status.json'))
-        status = {}
-        with open(file, "w", encoding='utf-8') as f:
-            for instance in self.all_status:
-                status[instance.name] = ({
-                    "enabled_on" : instance.enabled_on,
-                    "version": instance.version,
-                    "multi": instance.multi,
-                    "running": instance.running
-                })
-            json.dump(status, f, indent=4)
+    # def save_all_status(self):
+    #     file = str(Path(f'{self.cmd_path}/status.json'))
+    #     status = {}
+    #     with open(file, "w", encoding='utf-8') as f:
+    #         for instance in self.all_status:
+    #             status[instance.name] = ({
+    #                 "enabled_on" : instance.enabled_on,
+    #                 "version": instance.version,
+    #                 "multi": instance.multi,
+    #                 "running": instance.running
+    #             })
+    #         json.dump(status, f, indent=4)
 
     def watch_multi(self, multi_instances : list = None):
         if not multi_instances:
@@ -573,8 +640,10 @@ class PBRun():
                     run_multi.stop()
                 status.version = run_multi.version
                 status.enabled_on = run_multi.name
-                self.update_all_status(status)
-        self.save_all_status()
+                self.instances_status.add(status)
+#                self.update_all_status(status)
+        self.instances_status.save()
+#        self.save_all_status()
 
     def run(self):
         if not self.is_running():
