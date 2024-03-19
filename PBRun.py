@@ -283,6 +283,7 @@ class InstancesStatus():
         for i in self.instances:
             print(i)
             print(i.name)
+            print(instance.name)
             if i.name == instance.name:
                 return True
         return False
