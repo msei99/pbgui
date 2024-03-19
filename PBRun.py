@@ -450,11 +450,11 @@ class PBRun():
                 new_status = json.load(f)
                 for instance in new_status:
                     if instance not in self.all_status:
-                        print("new instance: {instance}")
+                        print(f"new instance: {instance} from {status_file}")
                     else:
                         for status in self.all_status:
                             if status not in new_status:
-                                print("remove instance: {status}")
+                                print(f"remove instance: {status} from {status_file}")
                         #     if status == instance:
                         #         # if info for me
                         #         if instance["enabled_on"] == self.name:
