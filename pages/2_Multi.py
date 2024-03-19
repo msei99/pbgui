@@ -62,7 +62,6 @@ def select_instance():
                     if st.session_state.confirm:
                         multi_instances.remove(multi_instances.instances[row])
                         PBRun().restart_pbrun()
-                        PBRemote().restart()
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.rerun()

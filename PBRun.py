@@ -323,7 +323,6 @@ class PBRun():
     def __init__(self):
         self.run_instances = []
         self.run_multi = []
-#        self.all_status = []
         self.instances_status = InstancesStatus()
         self.index = 0
         self.pbgdir = Path.cwd()
@@ -385,14 +384,6 @@ class PBRun():
                     self.run_multi.remove(multi)
                     return
 
-    # def update_all_status(self, status: InstanceStatus):
-    #     if status:
-    #         for index, instance in enumerate(self.all_status):
-    #             if instance.name == status.name:
-    #                 self.all_status[index] = status
-    #                 return
-    #         self.all_status.append(status)
-    
     def find_running_version(self, path: str):
         version = 0
         version_file = Path(f'{path}/running_version.txt')
@@ -516,8 +507,7 @@ class PBRun():
                 print(f"This instance we have. {instance.name} from {status_file}")
                 print(f"Compare Version and running status")
                 if instance.version > status.version:
-                    print(f"never version {instance.version}")
-                    print("need copy")
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}')
                     # Remove old *.json configs
                     dest = f'{self.multi_path}/{instance.name}'
                     p = str(Path(f'{dest}/*'))
@@ -528,24 +518,28 @@ class PBRun():
                 if instance.name == self.name:
                     self.watch_multi([f'{self.multi_path}/{instance.name}'])
             else:
-                print(f"new instance: {instance.name} from {status_file}")
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                 src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                 dest = f'{self.multi_path}/{instance.name}'
-                print(f'copy {src} {dest}')
                 shutil.copytree(src, dest, dirs_exist_ok=True)
                 self.watch_multi([f'{self.multi_path}/{instance.name}'])
         for instance in self.instances_status:
             status = new_status.find_name(instance.name)
             if status is None:
-                print(f"remove instance: {instance.name} because not in {status_file}")
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: Multi Instance {instance.name}')
                 if instance.running:
                     for multi in self.run_multi:
                         if multi.user == instance.name:
                             multi.stop()
                             self.remove_multi(multi)
-                dest = f'{self.multi_path}/{instance.name}'
-                print(dest)
-#                shutil.rmtree(dest, ignore_errors=True)
+                source = f'{self.multi_path}/{instance.name}'
+                # Backup multi config
+                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                destination = Path(f'{self.pbgdir}/backup/mult/{instance.name}/data')
+                if not destination.exists():
+                    destination.mkdir(parents=True)
+                shutil.copy(source, destination)
+                shutil.rmtree(source, ignore_errors=True)
 
     def activate(self, instance : str, multi : bool):
         unique = str(uuid.uuid4())
@@ -588,19 +582,6 @@ class PBRun():
         for instance in instances:
             self.load(instance)
 
-    # def save_all_status(self):
-    #     file = str(Path(f'{self.cmd_path}/status.json'))
-    #     status = {}
-    #     with open(file, "w", encoding='utf-8') as f:
-    #         for instance in self.all_status:
-    #             status[instance.name] = ({
-    #                 "enabled_on" : instance.enabled_on,
-    #                 "version": instance.version,
-    #                 "multi": instance.multi,
-    #                 "running": instance.running
-    #             })
-    #         json.dump(status, f, indent=4)
-
     def watch_multi(self, multi_instances : list = None):
         if not multi_instances:
             p = str(Path(f'{self.multi_path}/*'))
@@ -636,9 +617,7 @@ class PBRun():
                 status.version = run_multi.version
                 status.enabled_on = run_multi.name
                 self.instances_status.add(status)
-#                self.update_all_status(status)
         self.instances_status.save()
-#        self.save_all_status()
 
     def run(self):
         if not self.is_running():
