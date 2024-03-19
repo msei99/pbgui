@@ -441,7 +441,7 @@ class PBRun():
             if cfile.exists():
                 with open(cfile, "r", encoding='utf-8') as f:
                     cfg = json.load(f)
-                    rserver = cfg["reserver"]
+                    rserver = cfg["rserver"]
                     status_file = cfg["status_file"]
                     self.update_from_status(status_file, rserver)
                 cfile.unlink(missing_ok=True)
