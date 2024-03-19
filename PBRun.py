@@ -513,6 +513,9 @@ class PBRun():
                     for item in items:
                         if item.endswith('.json'):
                             Path(item).unlink(missing_ok=True)
+                src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
+                dest = f'{self.multi_path}/{instance.name}'
+                shutil.copytree(src, dest, dirs_exist_ok=True)
                 if instance.name == self.name:
                     self.watch_multi([f'{self.multi_path}/{instance.name}'])
             else:
