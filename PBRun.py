@@ -304,14 +304,12 @@ class InstancesStatus():
             with open(file, "r", encoding='utf-8') as f:
                 instances = json.load(f)
                 for instance in instances:
-                    print(instance)
-                    print(instance["version"])
                     status = InstanceStatus()
                     status.name = instance
-                    status.version = instance["version"]
-                    status.multi = instance["multi"]
-                    status.enabled_on = instance["enabled_on"]
-                    status.running = instance["running"]
+                    status.version = instances[instance]["version"]
+                    status.multi = instances[instance]["multi"]
+                    status.enabled_on = instances[instance]["enabled_on"]
+                    status.running = instances[instance]["running"]
                     self.add(status)
 
     def save(self):
