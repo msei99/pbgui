@@ -504,8 +504,6 @@ class PBRun():
         for instance in new_status:
             status = self.instances_status.find_name(instance.name)
             if status is not None:
-                print(f"This instance we have. {instance.name} from {status_file}")
-                print(f"Compare Version and running status")
                 if instance.version > status.version:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}')
                     # Remove old *.json configs
