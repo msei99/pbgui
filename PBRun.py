@@ -638,6 +638,7 @@ def main():
             run.has_restart()
             run.has_update()
             run.has_activate()
+            run.has_update_status()
             for run_instance in run:
                 run_instance.watch()
             for run_multi in run.run_multi:
