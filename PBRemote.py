@@ -353,24 +353,7 @@ class RemoteServer():
                     subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
                 self.status_ts = status_ts
                 PBRun().update_status(status_file, self.name)
-    #             self.update_multi()
 
-    # def update_multi(self):
-    #     status_file = Path(f'{self._path}/status.json')
-    #     if status_file.exists():
-    #         with open(status_file, "r", encoding='utf-8') as f:
-    #             status = json.load(f)
-    #             for instance in status:
-    #                 if status[instance]["enabled_on"] == self.pbname and status[instance]["multi"]:
-    #                     pbgdir = Path.cwd()
-    #                     running_version = PBRun().find_running_version(f'{pbgdir}/data/multi/{instance}')
-    #                     if running_version < status[instance]["version"]:
-    #                         src = PurePath(f'{self._path}/../multi_{self.name}/{instance}')
-    #                         dest = PurePath(f'{self._path}/../../multi/{instance}')
-    #                         shutil.copytree(src, dest, dirs_exist_ok=True)
-    #                         PBRun().activate(instance, True)
-    #                 else:
-    #                     PBRun()
 
 class PBRemote():
     def __init__(self):
@@ -645,8 +628,8 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBRemote.log')
-#    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-#    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
     if remote.is_running():
