@@ -427,7 +427,7 @@ class PBRun():
         unique = str(uuid.uuid4())
         cfile = Path(f'{self.cmd_path}/update_status_{unique}.cmd')
         cfg = ({
-            "status_file": status_file})
+            "status_file": str(status_file)})
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
 
