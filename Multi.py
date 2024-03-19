@@ -412,65 +412,9 @@ class MultiInstances:
     def list(self):
         return list(map(lambda c: c.user, self.instances))
     
-    # def is_user_used(self, user: str):
-    #     for instance in self.instances:
-    #        if user == instance.user:
-    #            return True
-    #     return False
-
-    # def is_same(self, instance: MultiInstance):
-    #     if instance:
-    #         local_instance = self.find_instance(instance.user, instance.symbol, instance.market_type)
-    #         if local_instance:
-    #             if (
-    #                 instance.config == local_instance.config
-    #                 and instance._market_type == local_instance._market_type
-    #                 and instance._ohlcv == local_instance._ohlcv
-    #                 and instance._assigned_balance == local_instance._assigned_balance
-    #                 and instance._co == local_instance._co
-    #                 and instance._leverage == local_instance._leverage
-    #                 and instance._price_distance_threshold == local_instance._price_distance_threshold
-    #                 and instance._price_precision == local_instance._price_precision
-    #                 and instance._price_step == local_instance._price_step
-    #                 and instance._long_mode == local_instance._long_mode
-    #                 and instance._short_mode == local_instance._short_mode
-    #             ):
-    #                 return True
-    #             else:
-    #                 return False
-    #         else:
-    #             return False
-    #     return None
-
-    # def find_instance(self, user: str, symbol: str, market_type: str):
-    #     for instance in self.instances:
-    #         if (
-    #             instance.user == user
-    #             and instance.symbol == symbol
-    #             and instance.market_type == market_type
-    #         ):
-    #             return instance
-
-    # def add_wait(self, instance_name : str):
-    #     p = Path(f'{self.instances_path}/{instance_name}')
-    #     file = Path(f'{p}/instance.cfg')
-    #     for i in range(15):
-    #         if file.exists():
-    #             inst = Instance()
-    #             if inst.load(p):
-    #                 print(f'{str(p)} loaded')
-    #                 self.instances.append(inst)
-    #                 self.instances = sorted(self.instances, key=lambda d: d.user)
-    #                 return
-    #         sleep(1)
-
     def remove(self, instance: MultiInstance):
         instance.remove()
         self.instances.remove(instance)
-
-    # def refresh(self):
-    #     for instance in self.instances:
-    #         instance.load(instance._instance_path)
 
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))
