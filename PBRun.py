@@ -299,16 +299,17 @@ class InstancesStatus():
         if file.exists():
             with open(file, "r", encoding='utf-8') as f:
                 instances = json.load(f)
-                self.activate_ts = instances["activate_ts"]
-                self.activate_pbname = instances["activate_pbname"]
-                for instance in instances["instances"]:
-                    status = InstanceStatus()
-                    status.name = instance
-                    status.version = instances["instances"][instance]["version"]
-                    status.multi = instances["instances"][instance]["multi"]
-                    status.enabled_on = instances["instances"][instance]["enabled_on"]
-                    status.running = instances["instances"][instance]["running"]
-                    self.add(status)
+                if "activate_ts" in instances:
+                    self.activate_ts = instances["activate_ts"]
+                    self.activate_pbname = instances["activate_pbname"]
+                    for instance in instances["instances"]:
+                        status = InstanceStatus()
+                        status.name = instance
+                        status.version = instances["instances"][instance]["version"]
+                        status.multi = instances["instances"][instance]["multi"]
+                        status.enabled_on = instances["instances"][instance]["enabled_on"]
+                        status.running = instances["instances"][instance]["running"]
+                        self.add(status)
 
     def save(self):
         instances = {}
