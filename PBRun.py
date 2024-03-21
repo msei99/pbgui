@@ -518,7 +518,7 @@ class PBRun():
         new_status.status_file = status_file
         new_status.load()
         if new_status.activate_ts > self.activate_ts:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_pbname).isoformat(sep=" ", timespec="seconds")}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
                 status = self.instances_status.find_name(instance.name)
                 if status is not None:
