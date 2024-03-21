@@ -654,17 +654,13 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: sync_multi_up')
             remote.sync_multi_up()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End: sync_multi_up')
             remote.alive()
             remote.sync_to()
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: sync_multi_down')
                 server.sync_multi_down()
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End: sync_multi_down')
                 if server.sync_from(remote.name):
                     remote.sync("up", 'instances')
                     remote.load_local()
