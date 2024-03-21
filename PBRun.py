@@ -341,12 +341,13 @@ class PBRun():
             self.name = self.pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
-        self.instances_status = InstancesStatus()
-        self.instances_status.pbname = self.name
         if self.pb_config.has_option("main", "activate_ts"):
             self.activate_ts = self.pb_config.get("main", "activate_ts")
         else:
             self.activate_ts = 0
+        self.instances_status = InstancesStatus()
+        self.instances_status.pbname = self.name
+        self.instances_status.activate_ts = self.activate_ts
         if self.pb_config.has_option("main", "pbdir"):
             self.pbdir = self.pb_config.get("main", "pbdir")
         else:
@@ -583,7 +584,7 @@ class PBRun():
                 cfile.unlink(missing_ok=True)
     
     def update_activate(self):
-        self.activate_ts = datetime.now().timestamp()
+        self.activate_ts = int(datetime.now().timestamp())
         self.instances_status.activate_ts = self.activate_ts
         self.pb_config.set("main", "activate_ts", str(self.activate_ts))
         with open('pbgui.ini', 'w') as pbgui_configfile:
