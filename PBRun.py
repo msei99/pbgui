@@ -299,7 +299,7 @@ class InstancesStatus():
         if file.exists():
             with open(file, "r", encoding='utf-8') as f:
                 instances = json.load(f)
-                self.activate_ts = int(instances["activate_ts"])
+                self.activate_ts = instances["activate_ts"]
                 self.activate_pbname = instances["activate_pbname"]
                 for instance in instances["instances"]:
                     status = InstanceStatus()
