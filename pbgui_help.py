@@ -466,14 +466,14 @@ auto_gs = """
 
 TWE_long_short = """
     ```
-    total wallet exposure limits long and short.
-    Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
+    PBGui does automatic calculate this value from instance configs. You can not
+    change this value, this is just an information of your Total Wallet Exposure.
     ```"""
 
 multi_long_short_enabled = """
     ```
     if true, mode defaults to 'normal'.
-    If false, mode defaults to 'graceful_stop' if auto_gs=true, else 'manual'.
+    If false, mode defaults to 'manual'.
     ```"""
 
 config_version = """
