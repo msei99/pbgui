@@ -172,8 +172,10 @@ class MultiInstance():
                 if instance.multi:
                     if instance._config.long_enabled:
                         lm = f'-lm n'
+                        lw = f'-lw {instance._config.long_we}'
                     else:
                         lm = f'-lm m'
+                        lw = f'-lw 0.0'
                     if instance.long_mode == "graceful_stop":
                         lm = f'-lm gs'
                     elif instance.long_mode == "panic":
@@ -182,8 +184,10 @@ class MultiInstance():
                         lm = f'-lm t'
                     if instance._config.short_enabled:
                         sm = f'-sm n'
+                        sw = f'-sw {instance._config.short_we}'
                     else:
                         sm = f'-sm m'
+                        sw = f'-sw 0.0'
                     if instance.short_mode == "graceful_stop":
                         sm = f'-sm gs'
                     elif instance.short_mode == "panic":
@@ -198,7 +202,7 @@ class MultiInstance():
                         ps = f' -ps {instance.price_step} '
                     else:
                         ps = ""
-                    symbols[instance.symbol] = f'{lm} {sm}{pp}{ps}'
+                    symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}{pp}{ps}'
                     shutil.copy(f'{instance.instance_path}/config.json', f'{self.instance_path}/{instance.symbol}.json')
                 else:
                     Path(f'{self.instance_path}/{instance.symbol}.json').unlink(missing_ok=True)
@@ -308,6 +312,69 @@ class MultiInstance():
         if "edit_multi_short_enabled" in st.session_state:
             if st.session_state.edit_multi_loss_allowance_pct != self.short_enabled:
                 self.short_enabled = st.session_state.edit_multi_short_enabled
+        # Init symbols
+        if not "ed_key" in st.session_state:
+            st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
+        if f'select_symbol_{ed_key}' in st.session_state:
+            ed = st.session_state[f'select_symbol_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "enable" in ed["edited_rows"][row]:
+                    for instance in st.session_state.pbgui_instances:
+                        if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
+                            instance.multi = not instance.multi
+#                            st.rerun()
+                if "edit" in ed["edited_rows"][row]:
+                    for instance in st.session_state.pbgui_instances:
+                        if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
+                            st.session_state.edit_instance = instance
+                            st.switch_page("pages/1_Live.py")
+        slist = []
+        self.TWE_long = 0.0
+        self.TWE_short = 0.0
+        for id, symbol in enumerate(self._symbols):
+            for instance in st.session_state.pbgui_instances:
+                if instance.user == self.user and instance.symbol == symbol:
+                    enable_multi = instance.multi
+                    long_enabled = instance._config.long_enabled
+                    long_we = instance._config.long_we
+                    long_mode = instance.long_mode
+                    short_enabled = instance._config.short_enabled
+                    short_we = instance._config.short_we
+                    short_mode = instance.short_mode
+                    if long_enabled and enable_multi:
+                        self.TWE_long += long_we
+                    if not long_enabled: 
+                        long_we = 0.0
+                        if long_mode == "normal":
+                            long_mode = "manual"
+                    if short_enabled and enable_multi:
+                        self.TWE_short += short_we
+                    if not short_enabled: 
+                        short_we = 0.0
+                        if short_mode == "normal":
+                            short_mode = "manual"
+                    if not long_enabled and long_mode == "normal":
+                        short_mode = "manual"
+                    if not long_enabled and long_mode == "normal":
+                        short_mode = "manual"
+            slist.append({
+                'id': id,
+                'enable': enable_multi,
+                'edit': False,
+                'symbol': symbol,
+                'long' : long_enabled,
+                'long_mode' : long_mode,
+                'long_we' : long_we,
+                'short' : short_enabled,
+                'short_mode' : short_mode,
+                'short_we' : short_we
+            })
+        column_config = {
+            "id": None,
+            "inst": None
+            }
+        # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.selectbox('User',self._users.list(), index = self._users.list().index(self.user), key="edit_multi_user")
@@ -332,59 +399,16 @@ class MultiInstance():
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.checkbox("long_enabled", value=self.long_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_multi_long_enabled")
-            st.number_input("TWE_long", min_value=0.0, max_value=100.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_multi_TWE_long", help=pbgui_help.TWE_long_short)
+            st.number_input("TWE_long", min_value=0.0, max_value=100.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_multi_TWE_long", disabled= True, help=pbgui_help.TWE_long_short)
         with col2:
             st.checkbox("short_enabled", value=self.short_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_multi_short_enabled")
-            st.number_input("TWE_short", min_value=0.0, max_value=100.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_multi_TWE_short", help=pbgui_help.TWE_long_short)
+            st.number_input("TWE_short", min_value=0.0, max_value=100.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_multi_TWE_short", disabled= True, help=pbgui_help.TWE_long_short)
         with col3:
             st.empty()
         with col4:
             st.checkbox("auto_gs", value=self.auto_gs, help=pbgui_help.auto_gs, key="edit_multi_auto_gs")
             st.number_input("execution_delay_seconds", min_value=1, max_value=60, value=self.execution_delay_seconds, step=1, format="%.d", key="edit_multi_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
-        # Display symbols
-        if not "ed_key" in st.session_state:
-            st.session_state.ed_key = 0
-        ed_key = st.session_state.ed_key
-        if f'select_symbol_{ed_key}' in st.session_state:
-            ed = st.session_state[f'select_symbol_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "enable" in ed["edited_rows"][row]:
-                    for instance in st.session_state.pbgui_instances:
-                        if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
-                            instance.multi = not instance.multi
-#                            st.rerun()
-                if "edit" in ed["edited_rows"][row]:
-                    for instance in st.session_state.pbgui_instances:
-                        if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
-                            st.session_state.edit_instance = instance
-                            st.switch_page("pages/1_Live.py")
-        slist = []
-        for id, symbol in enumerate(self._symbols):
-            for instance in st.session_state.pbgui_instances:
-                if instance.user == self.user and instance.symbol == symbol:
-                    enable_multi = instance.multi
-                    long_enabled = instance._config.long_enabled
-                    long_we = instance._config.long_we
-                    long_mode = instance.long_mode
-                    short_enabled = instance._config.short_enabled
-                    short_we = instance._config.short_we
-                    short_mode = instance.short_mode
-            slist.append({
-                'id': id,
-                'enable': enable_multi,
-                'edit': False,
-                'symbol': symbol,
-                'long' : long_enabled,
-                'long_mode' : long_mode,
-                'long_we' : long_we,
-                'short' : short_enabled,
-                'short_mode' : short_mode,
-                'short_we' : short_we
-            })
-        column_config = {
-            "id": None,
-            "inst": None
-            }
+        # Display Symbols
         st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
         # display passivbot.log
         self.view_log()
