@@ -584,7 +584,7 @@ class PBRun():
     def update_activate(self):
         self.activate_ts = datetime.now().timestamp()
         self.instances_status.activate_ts = self.activate_ts
-        self.pb_config.set("main", "activate_ts", self.activate_ts)
+        self.pb_config.set("main", "activate_ts", str(self.activate_ts))
         with open('pbgui.ini', 'w') as pbgui_configfile:
             self.pb_config.write(pbgui_configfile)
 
