@@ -342,7 +342,7 @@ class PBRun():
         else:
             self.name = platform.node()
         if self.pb_config.has_option("main", "activate_ts"):
-            self.activate_ts = self.pb_config.get("main", "activate_ts")
+            self.activate_ts = int(self.pb_config.get("main", "activate_ts"))
         else:
             self.activate_ts = 0
         self.instances_status = InstancesStatus()
