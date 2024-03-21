@@ -264,6 +264,8 @@ class InstancesStatus():
     def __init__(self):
         self.instances = []
         self.index = 0
+        self.pbname = None
+        self.activate_ts = 0
         pbgdir = Path.cwd()
         self.status_file = f'{pbgdir}/data/cmd/status.json'
 
@@ -297,24 +299,31 @@ class InstancesStatus():
         if file.exists():
             with open(file, "r", encoding='utf-8') as f:
                 instances = json.load(f)
-                for instance in instances:
+                self.activate_ts = instances["activate_ts"]
+                self.activate_pbname = instances["activate_pbname"]
+                for instance in instances["instances"]:
                     status = InstanceStatus()
                     status.name = instance
-                    status.version = instances[instance]["version"]
-                    status.multi = instances[instance]["multi"]
-                    status.enabled_on = instances[instance]["enabled_on"]
-                    status.running = instances[instance]["running"]
+                    status.version = instances["instances"][instance]["version"]
+                    status.multi = instances["instances"][instance]["multi"]
+                    status.enabled_on = instances["instances"][instance]["enabled_on"]
+                    status.running = instances["instances"][instance]["running"]
                     self.add(status)
 
     def save(self):
-        status = {}
+        instances = {}
         for instance in self.instances:
-            status[instance.name] = ({
+            instances[instance.name] = ({
                 "enabled_on" : instance.enabled_on,
                 "version": instance.version,
                 "multi": instance.multi,
                 "running": instance.running
             })
+        status = {
+            "activate_ts" : self.activate_ts,
+            "activate_pbname" : self.pbname,
+            "instances" : instances
+        }
         file = Path(self.status_file)
         with open(file, "w", encoding='utf-8') as f:
             json.dump(status, f, indent=4)
@@ -323,7 +332,6 @@ class PBRun():
     def __init__(self):
         self.run_instances = []
         self.run_multi = []
-        self.instances_status = InstancesStatus()
         self.index = 0
         self.pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
@@ -332,6 +340,12 @@ class PBRun():
             self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
+        self.instances_status = InstancesStatus()
+        self.instances_status.pbname = self.name
+        if pb_config.has_option("main", "activate_ts"):
+            self.activate_ts = pb_config.get("main", "activate_ts")
+        else:
+            self.activate_ts = 0
         if pb_config.has_option("main", "pbdir"):
             self.pbdir = pb_config.get("main", "pbdir")
         else:
@@ -501,45 +515,47 @@ class PBRun():
         new_status = InstancesStatus()
         new_status.status_file = status_file
         new_status.load()
-        for instance in new_status:
-            status = self.instances_status.find_name(instance.name)
-            if status is not None:
-                if instance.version > status.version:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}')
-                    # Remove old *.json configs
-                    dest = f'{self.multi_path}/{instance.name}'
-                    p = str(Path(f'{dest}/*'))
-                    items = glob.glob(p)
-                    for item in items:
-                        if item.endswith('.json'):
-                            Path(item).unlink(missing_ok=True)
+        if new_status.activate_ts > self.activate_ts:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_pbname).isoformat(sep=" ", timespec="seconds")}')
+            for instance in new_status:
+                status = self.instances_status.find_name(instance.name)
+                if status is not None:
+                    if instance.version > status.version:
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}')
+                        # Remove old *.json configs
+                        dest = f'{self.multi_path}/{instance.name}'
+                        p = str(Path(f'{dest}/*'))
+                        items = glob.glob(p)
+                        for item in items:
+                            if item.endswith('.json'):
+                                Path(item).unlink(missing_ok=True)
+                        src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
+                        dest = f'{self.multi_path}/{instance.name}'
+                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        self.watch_multi([f'{self.multi_path}/{instance.name}'])
+                else:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                     src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                     dest = f'{self.multi_path}/{instance.name}'
                     shutil.copytree(src, dest, dirs_exist_ok=True)
                     self.watch_multi([f'{self.multi_path}/{instance.name}'])
-            else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
-                src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
-                dest = f'{self.multi_path}/{instance.name}'
-                shutil.copytree(src, dest, dirs_exist_ok=True)
-                self.watch_multi([f'{self.multi_path}/{instance.name}'])
-        for instance in self.instances_status:
-            status = new_status.find_name(instance.name)
-            if status is None:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: Multi Instance {instance.name}')
-                if instance.running:
-                    for multi in self.run_multi:
-                        if multi.user == instance.name:
-                            multi.stop()
-                            self.remove_multi(multi)
-                source = f'{self.multi_path}/{instance.name}'
-                # Backup multi config
-                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                destination = Path(f'{self.pbgdir}/data/backup/mult/{instance.name}/{date}')
-                if not destination.exists():
-                    destination.mkdir(parents=True)
-                shutil.copytree(source, destination, dirs_exist_ok=True)
-                shutil.rmtree(source, ignore_errors=True)
+            for instance in self.instances_status:
+                status = new_status.find_name(instance.name)
+                if status is None:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: Multi Instance {instance.name}')
+                    if instance.running:
+                        for multi in self.run_multi:
+                            if multi.user == instance.name:
+                                multi.stop()
+                                self.remove_multi(multi)
+                    source = f'{self.multi_path}/{instance.name}'
+                    # Backup multi config
+                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    destination = Path(f'{self.pbgdir}/data/backup/mult/{instance.name}/{date}')
+                    if not destination.exists():
+                        destination.mkdir(parents=True)
+                    shutil.copytree(source, destination, dirs_exist_ok=True)
+                    shutil.rmtree(source, ignore_errors=True)
 
     def activate(self, instance : str, multi : bool):
         unique = str(uuid.uuid4())
@@ -562,7 +578,15 @@ class PBRun():
                     multi = cfg["multi"]
                     if multi:
                         self.watch_multi([f'{self.multi_path}/{instance}'])
+                        self.update_activate()
                 cfile.unlink(missing_ok=True)
+    
+    def update_activate(self):
+        self.activate_ts = datetime.now().timestamp()
+        self.instances_status.activate_ts = self.activate_ts
+        self.pb_config.set("main", "activate_ts", self.activate_ts)
+        with open('pbgui.ini', 'w') as pbgui_configfile:
+            self.pb_config.write(pbgui_configfile)
 
     def load(self, instance: str):
         file = Path(f'{instance}/instance.cfg')
