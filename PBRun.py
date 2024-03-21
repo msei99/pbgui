@@ -334,20 +334,20 @@ class PBRun():
         self.run_multi = []
         self.index = 0
         self.pbgdir = Path.cwd()
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("main", "pbname"):
-            self.name = pb_config.get("main", "pbname")
+        self.pb_config = configparser.ConfigParser()
+        self.pb_config.read('pbgui.ini')
+        if self.pb_config.has_option("main", "pbname"):
+            self.name = self.pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
         self.instances_status = InstancesStatus()
         self.instances_status.pbname = self.name
-        if pb_config.has_option("main", "activate_ts"):
-            self.activate_ts = pb_config.get("main", "activate_ts")
+        if self.pb_config.has_option("main", "activate_ts"):
+            self.activate_ts = self.pb_config.get("main", "activate_ts")
         else:
             self.activate_ts = 0
-        if pb_config.has_option("main", "pbdir"):
-            self.pbdir = pb_config.get("main", "pbdir")
+        if self.pb_config.has_option("main", "pbdir"):
+            self.pbdir = self.pb_config.get("main", "pbdir")
         else:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
             exit(1)
