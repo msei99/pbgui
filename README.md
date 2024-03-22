@@ -298,6 +298,7 @@ First release with basic backtest and optimization functionality
 - ...
 
 ## Links:
+- Telegram https://t.me/+kwyeyrmjQ-lkYTJk
 - Passivbot https://www.passivbot.com/en/latest/
 - Streamlit https://streamlit.io/
 
