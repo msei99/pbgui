@@ -1,6 +1,6 @@
 # GUI for Passivbot
 
-v0.94
+v0.95
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -106,6 +106,9 @@ On your servers, you only need to run Streamlit once to configure the passivbot 
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v0.95 (22-03-2024)
+- First version that can run the new passivbot_multi
 
 ## v0.94 (30-01-2024)
 - Added System Information to PBRemote (memory, swap, disk, cpu and boottime)
