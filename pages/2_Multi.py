@@ -28,7 +28,7 @@ def edit_multi_instance():
         if st.button(":floppy_disk:"):
             multi_instance.save()
         if st.button("Activate"):
-            PBRun().activate(multi_instance.instance_path.split("/")[-1], True)
+            PBRun().activate(str(multi_instance.instance_path).split("/")[-1], True)
     multi_instance.edit()
 
 def select_instance():
