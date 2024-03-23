@@ -70,12 +70,17 @@ def select_instance():
                         st.rerun()
     d = []
     for id, instance in enumerate(multi_instances):
+        twe_str = (f"L:{'+' if instance.long_enabled else '-'}{round(instance.TWE_long,2)},"
+                       f"S:{'+' if instance.short_enabled else '-'}{round(instance.TWE_short,2)}")
+        
         d.append({
             'id': id,
             'Edit': False,
             # 'Running': instance.is_running(),
             'User': instance.user,
-            # 'Wallet Exposure': instance.we,
+            'Enabled On': instance.enabled_on,
+            'TWE': twe_str,
+            'AU': bool(instance.loss_allowance_pct > 0.0),
             'Delete': False,
         })
     column_config = {
