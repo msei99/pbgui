@@ -99,13 +99,13 @@ class MultiInstance():
     def TWE_long(self): return self._TWE_long
     @TWE_long.setter
     def TWE_long(self, new_TWE_long):
-        self._TWE_long = new_TWE_long
+        self._TWE_long = round(new_TWE_long,10)
     # TWE_long
     @property
     def TWE_short(self): return self._TWE_short
     @TWE_short.setter
     def TWE_short(self, new_TWE_short):
-        self._TWE_short = new_TWE_short
+        self._TWE_short = round(new_TWE_short,10)
     # long_enabled
     @property
     def long_enabled(self): return self._long_enabled
@@ -202,7 +202,7 @@ class MultiInstance():
                         ps = f' -ps {instance.price_step} '
                     else:
                         ps = ""
-                    symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}{pp}{ps}'
+                    symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}{pp}{ps}'.rstrip()
                     shutil.copy(f'{instance.instance_path}/config.json', f'{self.instance_path}/{instance.symbol}.json')
                 else:
                     Path(f'{self.instance_path}/{instance.symbol}.json').unlink(missing_ok=True)
