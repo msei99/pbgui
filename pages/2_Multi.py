@@ -29,6 +29,9 @@ def edit_multi_instance():
             multi_instance.save()
         if st.button("Activate"):
             PBRun().activate(str(multi_instance.instance_path).split("/")[-1], True)
+        if st.button("Refresh from Disk"):
+            del st.session_state.pbgui_instances
+            st.rerun()
     multi_instance.edit()
 
 def select_instance():
