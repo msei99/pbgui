@@ -70,8 +70,9 @@ def select_instance():
                         st.rerun()
     d = []
     for id, instance in enumerate(multi_instances):
-        twe_str = (f"L:{'+' if instance.long_enabled else '-'}{round(instance.TWE_long,2)},"
-                       f"S:{'+' if instance.short_enabled else '-'}{round(instance.TWE_short,2)}")
+        twe_str = (f"{ 'L=' + str( round(instance.TWE_long,2)) if instance.long_enabled else ''}"
+                        f"{' | ' if instance.long_enabled and instance.short_enabled else ''}"
+                        f"{ 'S=' + str( round(instance.TWE_short,2)) if instance.short_enabled else ''}")
         
         d.append({
             'id': id,
@@ -83,9 +84,8 @@ def select_instance():
             'AU': bool(instance.loss_allowance_pct > 0.0),
             'Delete': False,
         })
-    column_config = {
-        "id": None}
-    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key="editor_select_multi_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
+    column_config = {"id": None}
+    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key="editor_select_multi_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','AU'])
     
 
 set_page_config()

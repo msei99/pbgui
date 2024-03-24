@@ -377,9 +377,9 @@ class MultiInstance():
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            st.selectbox('User',self._users.list(), index = self._users.list().index(self.user), key="edit_multi_user")
+            st.selectbox('User',sorted(self._users.list()), index = self._users.list().index(self.user), key="edit_multi_user")
         with col2:
-            enabled_on = ["disabled",remote.name] + remote.list()
+            enabled_on = ["disabled",remote.name] + sorted(remote.list())
             enabled_on_index = enabled_on.index(self.enabled_on)
             st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_multi_enabled_on")
             st.empty()
