@@ -246,7 +246,8 @@ class MultiInstance():
         multi_config = Path(f'{str(multi_path)}/multi.hjson')
         self._multi_config["user"] = self.user
         self.version += 1
-        del st.session_state.edit_multi_version
+        if "edit_multi_version" in st.session_state:
+            del st.session_state.edit_multi_version
         self._multi_config["version"] = self.version
         self._multi_config["enabled_on"] = self.enabled_on
         self._multi_config["loss_allowance_pct"] = self.loss_allowance_pct
@@ -286,31 +287,31 @@ class MultiInstance():
             if st.session_state.edit_multi_loss_allowance_pct != self.loss_allowance_pct:
                 self.loss_allowance_pct = st.session_state.edit_multi_loss_allowance_pct
         if "edit_multi_pnls_max_lookback_days" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.pnls_max_lookback_days:
+            if st.session_state.edit_multi_pnls_max_lookback_days != self.pnls_max_lookback_days:
                 self.pnls_max_lookback_days = st.session_state.edit_multi_pnls_max_lookback_days
         if "edit_multi_stuck_threshold" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.stuck_threshold:
+            if st.session_state.edit_multi_stuck_threshold != self.stuck_threshold:
                 self.stuck_threshold = st.session_state.edit_multi_stuck_threshold
         if "edit_multi_unstuck_close_pct" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.unstuck_close_pct:
+            if st.session_state.edit_multi_unstuck_close_pct != self.unstuck_close_pct:
                 self.unstuck_close_pct = st.session_state.edit_multi_unstuck_close_pct
         if "edit_multi_execution_delay_seconds" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.execution_delay_seconds:
+            if st.session_state.edit_multi_execution_delay_seconds != self.execution_delay_seconds:
                 self.execution_delay_seconds = st.session_state.edit_multi_execution_delay_seconds
         if "edit_multi_auto_gs" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.auto_gs:
+            if st.session_state.edit_multi_auto_gs != self.auto_gs:
                 self.auto_gs = st.session_state.edit_multi_auto_gs
         if "edit_multi_TWE_long" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.TWE_long:
+            if st.session_state.edit_multi_TWE_long != self.TWE_long:
                 self.TWE_long = st.session_state.edit_multi_TWE_long
         if "edit_multi_TWE_short" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.TWE_short:
-                self.TWE_short = st.session_state.edit_multi_TWE_short
+            if st.session_state.edit_multi_TWE_long != self.TWE_short:
+                self.TWE_short = st.session_state.edit_multi_TWE_long
         if "edit_multi_long_enabled" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.long_enabled:
+            if st.session_state.edit_multi_long_enabled != self.long_enabled:
                 self.long_enabled = st.session_state.edit_multi_long_enabled
         if "edit_multi_short_enabled" in st.session_state:
-            if st.session_state.edit_multi_loss_allowance_pct != self.short_enabled:
+            if st.session_state.edit_multi_short_enabled != self.short_enabled:
                 self.short_enabled = st.session_state.edit_multi_short_enabled
         # Init symbols
         if not "ed_key" in st.session_state:
