@@ -11,6 +11,7 @@ from io import TextIOWrapper
 from datetime import datetime
 import platform
 from PBRun import PBRun, RunMulti, RunInstance
+from Status import InstanceStatus, InstancesStatus
 import uuid
 import shutil
 import hashlib
@@ -37,6 +38,8 @@ class RemoteServer():
         self._boot = None
         self.status_ts = 0
         self.pbname = None
+        self.instances_status = InstancesStatus(f'{self.path}/status.json')
+        self.instances_status.load()
 
     @property
     def name(self): return self._name
