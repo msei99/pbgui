@@ -16,6 +16,7 @@ from shutil import copy
 import os
 import traceback
 import uuid
+from Status import InstanceStatus, InstancesStatus
 
 class RunInstance():
     def __init__(self):
@@ -252,65 +253,6 @@ class RunMulti():
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
 
-class InstanceStatus():
-    def __init__(self):
-        self.name = None
-        self.version = None
-        self.multi = None
-        self.enabled_on = None
-        self.running = None
-
-class InstancesStatus():
-    def __init__(self):
-        self.instances = []
-        self.index = 0
-        self.pbname = None
-        self.activate_ts = 0
-        pbgdir = Path.cwd()
-        self.status_file = f'{pbgdir}/data/cmd/status.json'
-
-    def __iter__(self):
-        return iter(self.instances)
-
-    def __next__(self):
-        if self.index > len(self.instances):
-            raise StopIteration
-        self.index += 1
-        return next(self)
-    
-    def list(self):
-        return list(map(lambda c: c.name, self.instances))
-
-    def add(self, istatus : InstanceStatus):
-        for index, instance in enumerate(self.instances):
-            if instance.name == istatus.name:
-                self.instances[index] = istatus
-                return
-        self.instances.append(istatus)
-
-    def find_name(self, name: str):
-        for instance in self.instances:
-            if instance.name == name:
-                return instance
-        return None
-
-    def load(self):
-        file = Path(self.status_file)
-        if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                instances = json.load(f)
-                if "activate_ts" in instances:
-                    self.activate_ts = instances["activate_ts"]
-                    self.activate_pbname = instances["activate_pbname"]
-                    for instance in instances["instances"]:
-                        status = InstanceStatus()
-                        status.name = instance
-                        status.version = instances["instances"][instance]["version"]
-                        status.multi = instances["instances"][instance]["multi"]
-                        status.enabled_on = instances["instances"][instance]["enabled_on"]
-                        status.running = instances["instances"][instance]["running"]
-                        self.add(status)
-
     def save(self):
         instances = {}
         for instance in self.instances:
@@ -345,7 +287,7 @@ class PBRun():
             self.activate_ts = int(self.pb_config.get("main", "activate_ts"))
         else:
             self.activate_ts = 0
-        self.instances_status = InstancesStatus()
+        self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
         self.instances_status.pbname = self.name
         self.instances_status.activate_ts = self.activate_ts
         if self.pb_config.has_option("main", "pbdir"):
@@ -514,8 +456,8 @@ class PBRun():
                 cfile.unlink(missing_ok=True)
 
     def update_from_status(self, status_file : str, rserver : str):
-        new_status = InstancesStatus()
-        new_status.status_file = status_file
+        new_status = InstancesStatus(status_file)
+#        new_status.status_file = status_file
         new_status.load()
         if new_status.activate_ts > self.activate_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
