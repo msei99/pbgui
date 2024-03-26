@@ -35,6 +35,7 @@ class InstancesStatus():
 #        self.status_file = f'{pbgdir}/data/cmd/status.json'
         self.status_file = status_file
         self.status_ts = None
+        self.load()
 
     def __iter__(self):
         return iter(self.instances)
@@ -55,6 +56,13 @@ class InstancesStatus():
                 return
         self.instances.append(istatus)
 
+    def is_running(self, name: str):
+        if self.has_new_status():
+            self.load()
+        for instance in self.instances:
+            if instance.name == name:
+                return instance.running
+
     def find_name(self, name: str):
         for instance in self.instances:
             if instance.name == name:
@@ -62,11 +70,16 @@ class InstancesStatus():
         return None
 
     def has_new_status(self):
-        if self.status_file.exists():
-            status_ts = self.status_file.stat().st_mtime
+        if Path(self.status_file).exists():
+            status_ts = Path(self.status_file).stat().st_mtime
+            print(self.status_ts, status_ts)
             if self.status_ts < status_ts:
                 return True
         return False
+
+    def update_status(self):
+        if Path(self.status_file).exists():
+            self.status_ts = Path(self.status_file).stat().st_mtime
 
     def load(self):
         file = Path(self.status_file)

@@ -70,9 +70,21 @@ def select_instance():
                         st.rerun()
     d = []
     for id, instance in enumerate(multi_instances):
-        twe_str = (f"L:{'+' if instance.long_enabled else '-'}{round(instance.TWE_long,2)},"
-                       f"S:{'+' if instance.short_enabled else '-'}{round(instance.TWE_short,2)}")
+        twe_str: str = (f"{ 'L=' + str( round(instance.TWE_long,2)) if instance.long_enabled else ''}"
+                        f"{' | ' if instance.long_enabled and instance.short_enabled else ''}"
+                        f"{ 'S=' + str( round(instance.TWE_short,2)) if instance.short_enabled else ''}")
+        # twe_str = (f"L:{'+' if instance.long_enabled else '-'}{round(instance.TWE_long,2)},"
+        #                f"S:{'+' if instance.short_enabled else '-'}{round(instance.TWE_short,2)}")
         
+        instance.is_running()
+
+        # if instance.running and (instance.version == instance.running_version):
+        #     remote_str = '✅ Running'       
+        # if instance.running and (instance.version != instance.running_version):
+        #     remote_str = '🔄 Activation required ('+ str(instance.running_version) +')'
+        # if not instance.running:
+        #     remote_str = '❌'
+
         d.append({
             'id': id,
             'Edit': False,
@@ -81,6 +93,7 @@ def select_instance():
             'Enabled On': instance.enabled_on,
             'TWE': twe_str,
             'AU': bool(instance.loss_allowance_pct > 0.0),
+            'Version': instance.version,
             'Delete': False,
         })
     column_config = {
