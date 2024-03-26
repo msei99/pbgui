@@ -342,6 +342,8 @@ class RemoteServer():
 
     def sync_multi_down(self):
         if self.instances_status.has_new_status():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi from: {self.name}')
             pbgdir = Path.cwd()
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', f'{self.bucket}/multi_{self.name}', PurePath(f'{pbgdir}/data/remote/multi_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
@@ -352,7 +354,9 @@ class RemoteServer():
             else:
                 subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
             PBRun().update_status(self.instances_status.status_file, self.name)
+            status_ts = self.instances_status.status_ts
             self.instances_status.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
 
 
 class PBRemote():
@@ -489,9 +493,12 @@ class PBRemote():
 
     def sync_multi_up(self):
         if self.local_run.instances_status.has_new_status():
-            print("sync up")
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi up: {self.name}')
             self.sync('up', 'multi')
+            status_ts = self.instances_status.status_ts
             self.local_run.instances_status.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
@@ -631,8 +638,8 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBRemote.log')
-    # sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    # sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
     if remote.is_running():

@@ -288,7 +288,6 @@ class PBRun():
         else:
             self.activate_ts = 0
         self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
-#        self.instances_status.load()
         self.instances_status.pbname = self.name
         self.instances_status.activate_ts = self.activate_ts
         if self.pb_config.has_option("main", "pbdir"):
@@ -458,8 +457,6 @@ class PBRun():
 
     def update_from_status(self, status_file : str, rserver : str):
         new_status = InstancesStatus(status_file)
-#        new_status.status_file = status_file
-#        new_status.load()
         if new_status.activate_ts > self.activate_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:

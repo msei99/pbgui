@@ -72,7 +72,6 @@ class InstancesStatus():
     def has_new_status(self):
         if Path(self.status_file).exists():
             status_ts = Path(self.status_file).stat().st_mtime
-            print(self.status_ts, status_ts)
             if self.status_ts < status_ts:
                 return True
         return False
