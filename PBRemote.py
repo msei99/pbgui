@@ -440,7 +440,7 @@ class PBRemote():
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'status':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket}/cmd_{self.name}']
         elif direction == 'up' and spath == 'multi':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
