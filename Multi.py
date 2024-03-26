@@ -164,6 +164,17 @@ class MultiInstance():
         for instance in st.session_state.pbgui_instances:
             if instance.user == self.user and instance.market_type == "futures" :
                 self._symbols[instance.symbol] = True
+        # Init PBremote
+        if 'remote' not in st.session_state:
+            st.session_state.remote = PBRemote()
+        self.remote = st.session_state.remote
+
+    def is_running(self):
+        if self.enabled_on == self.remote.name:
+            self.remote.local_run.instances_status.is_running(self.user)
+        elif self.enabled_on in self.remote.list():
+            self.remote.find_server(self.enabled_on).instances_status.is_running(self.user)
+        return False
 
     def generate_active_symbols(self):
         symbols = {}
@@ -266,10 +277,6 @@ class MultiInstance():
             f.write(config)
 
     def edit(self):
-        # Init PBremote
-        if 'remote' not in st.session_state:
-            st.session_state.remote = PBRemote()
-        remote = st.session_state.remote
         # Init session_state for keys
         if "edit_multi_user" in st.session_state:
             if st.session_state.edit_multi_user != self.user:
@@ -380,7 +387,7 @@ class MultiInstance():
         with col1:
             st.selectbox('User',self._users.list(), index = self._users.list().index(self.user), key="edit_multi_user")
         with col2:
-            enabled_on = ["disabled",remote.name] + remote.list()
+            enabled_on = ["disabled",self.remote.name] + self.remote.list()
             enabled_on_index = enabled_on.index(self.enabled_on)
             st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_multi_enabled_on")
             st.empty()

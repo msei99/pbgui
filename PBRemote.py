@@ -36,7 +36,7 @@ class RemoteServer():
         self._disk = []
         self._cpu = None
         self._boot = None
-        self.status_ts = 0
+#        self.status_ts = 0
         self.pbname = None
         self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()
@@ -341,21 +341,18 @@ class RemoteServer():
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def sync_multi_down(self):
-        status_file = Path(f'{self._path}/status.json')
-        if status_file.exists():
-            status_ts = status_file.stat().st_mtime
-            if self.status_ts < status_ts:
-                pbgdir = Path.cwd()
-                cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', f'{self.bucket}/multi_{self.name}', PurePath(f'{pbgdir}/data/remote/multi_{self.name}')]
-                logfile = Path(f'{pbgdir}/data/logs/sync.log')
-                log = open(logfile,"ab")
-                if platform.system() == "Windows":
-                    creationflags = subprocess.CREATE_NO_WINDOW
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-                else:
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
-                self.status_ts = status_ts
-                PBRun().update_status(status_file, self.name)
+        if self.instances_status.has_new_status():
+            pbgdir = Path.cwd()
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', f'{self.bucket}/multi_{self.name}', PurePath(f'{pbgdir}/data/remote/multi_{self.name}')]
+            logfile = Path(f'{pbgdir}/data/logs/sync.log')
+            log = open(logfile,"ab")
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            PBRun().update_status(self.instances_status.status_file, self.name)
+            self.instances_status.update_status()
 
 
 class PBRemote():
@@ -365,7 +362,7 @@ class PBRemote():
         self.local_run = PBRun()
         self.index = 0
         self.api_md5 = None
-        self.status_ts = 0
+#        self.status_ts = 0
         self.startts = None
         self.sync_downts = None
         pbgdir = Path.cwd()
@@ -404,6 +401,11 @@ class PBRemote():
 
     def list(self):
         return list(map(lambda c: c.name, self.remote_servers))
+
+    def find_server(self, name: str):
+        for server in self.remote_servers:
+            if server.name == name:
+                return server
 
     def add(self, remote_servers: RemoteServer):
         if remote_servers:
@@ -486,12 +488,10 @@ class PBRemote():
                     print(f'{str(cfile)} is corrupted {e}')
 
     def sync_multi_up(self):
-        status_file = Path(f'{self.cmd_path}/status.json')
-        if status_file.exists():
-            status_ts = status_file.stat().st_mtime
-            if self.status_ts < status_ts:
-                self.sync('up', 'multi')
-                self.status_ts = status_ts
+        if self.local_run.instances_status.has_new_status():
+            print("sync up")
+            self.sync('up', 'multi')
+            self.local_run.instances_status.update_status()
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
@@ -631,8 +631,8 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBRemote.log')
-    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    # sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    # sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
     if remote.is_running():
@@ -648,10 +648,14 @@ def main():
         exit(1)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
     remote.startts = round(datetime.now().timestamp())
+    print("start up")
     remote.sync('up', 'instances')
+    print("start down")
     remote.sync('down', 'instances')
+    print("start up")
     while True:
         try:
+            print("TEST")
             if logfile.exists():
                 if logfile.stat().st_size >= 10485760:
                     logfile.replace(f'{str(logfile)}.old')
