@@ -118,6 +118,16 @@ class MultiInstance():
     @short_enabled.setter
     def short_enabled(self, new_short_enabled):
         self._short_enabled = new_short_enabled
+    # running_version
+    @property
+    def running_version(self):
+        if self.enabled_on == self.remote.name:
+            version = self.remote.local_run.instances_status.find_version(self.user)
+        elif self.enabled_on in self.remote.list():
+            version = self.remote.find_server(self.enabled_on).instances_status.find_version(self.user)
+        else:
+            version = 0
+        return version
 
     def initialize(self):
         # Init defaults
@@ -171,10 +181,19 @@ class MultiInstance():
 
     def is_running(self):
         if self.enabled_on == self.remote.name:
-            self.remote.local_run.instances_status.is_running(self.user)
+            return self.remote.local_run.instances_status.is_running(self.user)
         elif self.enabled_on in self.remote.list():
-            self.remote.find_server(self.enabled_on).instances_status.is_running(self.user)
+            return self.remote.find_server(self.enabled_on).instances_status.is_running(self.user)
         return False
+
+    def is_running_on(self):
+        running_on = []
+        if self.remote.local_run.instances_status.is_running(self.user):
+            running_on.append(self.remote.name)
+        for server in self.remote.list():
+            if self.remote.find_server(server).instances_status.is_running(self.user):
+                running_on.append(server)
+        return running_on
 
     def generate_active_symbols(self):
         symbols = {}
@@ -230,8 +249,9 @@ class MultiInstance():
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
+        log = logr
         st.button(':recycle: **passivbot logfile**')
-        stx.scrollableTextbox(logr,height="300")
+        stx.scrollableTextbox(log,height="500")
 
     def load(self, path: Path):
         self.instance_path = path
@@ -421,6 +441,9 @@ class MultiInstance():
         # display passivbot.log
         self.view_log()
 
+    def activate(self):
+        self.remote.local_run.activate(self.user, True)
+
 class MultiInstances:
     def __init__(self, ipath: str = None):
         self.instances = []
@@ -447,6 +470,16 @@ class MultiInstances:
     def remove(self, instance: MultiInstance):
         instance.remove()
         self.instances.remove(instance)
+    
+    def activate_all(self):
+        for instance in self.instances:
+            running_on = instance.is_running_on()
+            if instance.enabled_on == 'disabled' and running_on:
+                instance.remote.local_run.activate(instance.user, True)
+            elif instance.enabled_on not in running_on:
+                instance.remote.local_run.activate(instance.user, True)
+            elif instance.is_running() and (instance.version != instance.running_version):
+                instance.remote.local_run.activate(instance.user, True)
 
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))
