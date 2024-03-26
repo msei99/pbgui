@@ -655,14 +655,12 @@ def main():
         exit(1)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
     remote.startts = round(datetime.now().timestamp())
-    print("start up")
+    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances up: {remote.name}')
     remote.sync('up', 'instances')
-    print("start down")
+    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances down: {remote.name}')
     remote.sync('down', 'instances')
-    print("start up")
     while True:
         try:
-            print("TEST")
             if logfile.exists():
                 if logfile.stat().st_size >= 10485760:
                     logfile.replace(f'{str(logfile)}.old')
