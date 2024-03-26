@@ -496,9 +496,9 @@ class PBRemote():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi up: {self.name}')
             self.sync('up', 'multi')
-            status_ts = self.instances_status.status_ts
+            status_ts = self.local_run.instances_status.status_ts
             self.local_run.instances_status.update_status()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.local_run.instances_status.status_ts}')
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
