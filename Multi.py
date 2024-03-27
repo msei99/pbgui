@@ -197,6 +197,8 @@ class MultiInstance():
 
     def generate_active_symbols(self):
         symbols = {}
+        self.TWE_long = 0.0
+        self.TWE_short = 0.0
         for instance in st.session_state.pbgui_instances:
             if instance.user == self.user and instance.market_type == "futures":
                 if instance.multi:
@@ -232,6 +234,8 @@ class MultiInstance():
                         ps = f' -ps {instance.price_step} '
                     else:
                         ps = ""
+                    self.TWE_long += lw
+                    self.TWE_short += sw
                     symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}{pp}{ps}'.rstrip()
                     shutil.copy(f'{instance.instance_path}/config.json', f'{self.instance_path}/{instance.symbol}.json')
                 else:
@@ -287,11 +291,11 @@ class MultiInstance():
         self._multi_config["unstuck_close_pct"] = self.unstuck_close_pct
         self._multi_config["execution_delay_seconds"] = self.execution_delay_seconds
         self._multi_config["auto_gs"] = self.auto_gs
+        self._multi_config["symbols"] = self.generate_active_symbols()
         self._multi_config["TWE_long"] = self.TWE_long
         self._multi_config["TWE_short"] = self.TWE_short
         self._multi_config["long_enabled"] = self.long_enabled
         self._multi_config["short_enabled"] = self.short_enabled
-        self._multi_config["symbols"] = self.generate_active_symbols()
         config = hjson.dumps(self._multi_config)
         with open(multi_config, "w", encoding='utf-8') as f:
             f.write(config)
