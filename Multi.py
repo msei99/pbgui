@@ -205,6 +205,7 @@ class MultiInstance():
                     if instance._config.long_enabled:
                         lm = f'-lm n'
                         lw = f'-lw {instance._config.long_we}'
+                        self.TWE_long += {instance._config.long_we}
                     else:
                         lm = f'-lm m'
                         lw = f'-lw 0.0'
@@ -217,6 +218,7 @@ class MultiInstance():
                     if instance._config.short_enabled:
                         sm = f'-sm n'
                         sw = f'-sw {instance._config.short_we}'
+                        self.TWE_short += {instance._config.short_we}
                     else:
                         sm = f'-sm m'
                         sw = f'-sw 0.0'
@@ -234,8 +236,6 @@ class MultiInstance():
                         ps = f' -ps {instance.price_step} '
                     else:
                         ps = ""
-                    self.TWE_long += lw
-                    self.TWE_short += sw
                     symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}{pp}{ps}'.rstrip()
                     shutil.copy(f'{instance.instance_path}/config.json', f'{self.instance_path}/{instance.symbol}.json')
                 else:
