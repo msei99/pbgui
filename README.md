@@ -1,14 +1,14 @@
 # GUI for Passivbot
 
-## Contact/Supprt on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
+## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
 v0.95
 
 ## Migration to v0.95 Multi
 
-Watch the video here: https://studio.youtube.com/video/MCQ7E5n-Dro/edit
-Make sure to stop single instances before starting them in a passivbot_multo configuration
-Stop PBRun and PBRemote on any installation, and then start the new version of it
+Watch the video here: https://studio.youtube.com/video/MCQ7E5n-Dro/edit  
+Make sure to stop single instances before starting them in a passivbot_multo configuration  
+Stop PBRun and PBRemote on any installation, and then start the new version of it  
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
