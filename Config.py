@@ -7,11 +7,14 @@ import pbgui_help
 class Config:
     def __init__(self, file_name = None, config = None):
         self._config_file = file_name
-        self._config = config
         self._long_we = 1.0
         self._short_we = 1.0
         self._long_enabled = True
         self._short_enabled = False
+        if config:
+            self.config = config
+        else:
+            self._config = None
 
     @property
     def config_file(self): return self._config_file

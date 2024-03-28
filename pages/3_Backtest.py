@@ -1,7 +1,6 @@
 import streamlit as st
 from pbgui_func import set_page_config
 from Backtest import BacktestItem, BacktestQueue, BacktestResults
-from streamlit_extras.switch_page_button import switch_page
 import datetime
 import multiprocessing
 
@@ -14,22 +13,28 @@ def bt_add():
     with st.sidebar:
         if st.button("Results"):
             st.session_state.bt_compare = True
-            st.experimental_rerun()
+            st.rerun()
         if st.button("Queue"):
             st.session_state.bt_queue = True
-            st.experimental_rerun()
+            st.rerun()
         if st.button("Import"):
             st.session_state.bt_import = True
-            st.experimental_rerun()
+            st.rerun()
     # Create Backtest GUI
     my_bt.edit_base()
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:
-        my_bt.sb = st.number_input('STARTING_BALANCE',value=my_bt.sb,step=500)
+        if "config_bt_sb" in st.session_state:
+            my_bt.sb = st.session_state.config_bt_sb
+        st.number_input('STARTING_BALANCE',value=my_bt.sb,step=500, key="config_bt_sb")
     with col_2:
-        my_bt.sd = st.date_input("START_DATE", datetime.datetime.strptime(my_bt.sd, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
+        if "config_bt_sd" in st.session_state:
+            my_bt.sd = st.session_state.config_bt_sd.strftime("%Y-%m-%d")
+        st.date_input("START_DATE", datetime.datetime.strptime(my_bt.sd, '%Y-%m-%d'), format="YYYY-MM-DD", key="config_bt_sd")
     with col_3:
-        my_bt.ed = st.date_input("END_DATE", datetime.datetime.strptime(my_bt.ed, '%Y-%m-%d'), format="YYYY-MM-DD").strftime("%Y-%m-%d")
+        if "config_bt_ed" in st.session_state:
+            my_bt.ed = st.session_state.config_bt_ed.strftime("%Y-%m-%d")
+        st.date_input("END_DATE", datetime.datetime.strptime(my_bt.ed, '%Y-%m-%d'), format="YYYY-MM-DD", key="config_bt_ed")
     my_bt.edit_config()
     if st.button("Add to Backtest Queue"):
         if not my_bt.config:
@@ -38,7 +43,7 @@ def bt_add():
             my_bt.save()
             my_bt.file = None
             st.session_state.bt_queue = True
-        st.experimental_rerun()
+        st.rerun()
  
 
 def bt_queue():
@@ -59,22 +64,22 @@ def bt_queue():
     my_btq.load()
     # Navigation
     with st.sidebar:
-        st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1, key = "backtest_cpu")
-        st.toggle("Autostart", value=my_btq.autostart, key="backtest_autostart", help=None)
         st.button(":recycle:")
-        if st.button(":wastebasket: finished"):
-            my_btq.remove_finish()
-            st.experimental_rerun()
-        if st.button(":wastebasket: all"):
-            my_btq.remove_finish(all=True)
-            st.experimental_rerun()
+        if st.button(":back:"):
+            del st.session_state.bt_queue
+            st.rerun()
         if st.button("Results"):
             st.session_state.bt_compare = True
             del st.session_state.bt_queue
-            st.experimental_rerun()
-        if st.button(":back:"):
-            del st.session_state.bt_queue
-            st.experimental_rerun()
+            st.rerun()
+        st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=my_btq.cpu, step=1, key = "backtest_cpu")
+        st.toggle("Autostart", value=my_btq.autostart, key="backtest_autostart", help=None)
+        if st.button(":wastebasket: finished"):
+            my_btq.remove_finish()
+            st.rerun()
+        if st.button(":wastebasket: all"):
+            my_btq.remove_finish(all=True)
+            st.rerun()
     # Backtest Queue
     d = []
     if not "ed_bt_key" in st.session_state:
@@ -111,39 +116,40 @@ def bt_queue():
                     'id': line["id"],
                     'view': my_btq.items[line["id"]]})
                 st.session_state.ed_bt_key += 1
-            st.experimental_rerun()
+            st.rerun()
         if line["Log"]:
             st.session_state.bt_log = ({
                 'id': line["id"],
                 'log': my_btq.items[line["id"]].load_log()})
             st.session_state.ed_bt_key += 1
-            st.experimental_rerun()
+            st.rerun()
         if line["Config"]:
             st.session_state.bt_config = ({
                 'id': line["id"],
                 'config': my_btq.items[line["id"]].config})
             st.session_state.ed_bt_key += 1
-            st.experimental_rerun()
+            st.rerun()
         if line["Delete"]:
             my_btq.items[line["id"]].remove()
-            st.experimental_rerun()
+            st.rerun()
     if "bt_view" in st.session_state:
         if st.button(f':negative_squared_cross_mark: {st.session_state.bt_view["id"]}', key="view_bt_view"):
             del st.session_state.bt_view
-            st.experimental_rerun()
+            st.rerun()
         view = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
         view.match_item(st.session_state.bt_view["view"])
-        view.backtests[0].selected = True
+        if len(view.backtests) > 0:
+            view.backtests[0].selected = True
         view.view(only=True)
     if "bt_config" in st.session_state:
         if st.button(f':negative_squared_cross_mark: {st.session_state.bt_config["id"]}', key="view_bt_config"):
             del st.session_state.bt_config
-            st.experimental_rerun()
+            st.rerun()
         st.code(st.session_state.bt_config["config"])
     if "bt_log" in st.session_state:
         if st.button(f':negative_squared_cross_mark: {st.session_state.bt_log["id"]}', key="view_bt_log"):
             del st.session_state.bt_log
-            st.experimental_rerun()
+            st.rerun()
         st.code(st.session_state.bt_log["log"])
 
 def bt_compare():
@@ -160,17 +166,17 @@ def bt_compare():
             if f"setup_table_bt_{bt_results}" in st.session_state:
                 del st.session_state[f'setup_table_bt_{bt_results}']
                 del st.session_state.backtest_view_keys
-                st.experimental_rerun()
+                st.rerun()
             if "bt_results" in st.session_state:
                 del st.session_state.bt_results
             del st.session_state.bt_compare
-            st.experimental_rerun()
+            st.rerun()
         if st.button("Queue"):
             st.session_state.bt_queue = True
             del st.session_state.bt_compare
             if "bt_results" in st.session_state:
                 del st.session_state.bt_results
-            st.experimental_rerun()
+            st.rerun()
     bt_results.view()
 
 def bt_import():
@@ -178,14 +184,14 @@ def bt_import():
     with st.sidebar:
         if st.button(":back:"):
             del st.session_state.bt_import
-            st.experimental_rerun()
+            st.rerun()
     my_bt.import_pbconfigdb()
 
 set_page_config("Backtest")
 
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    switch_page("pbgui")
+    st.switch_page("pbgui.py")
 if 'my_bt' in st.session_state:
     my_bt = st.session_state.my_bt
 else:

@@ -72,7 +72,6 @@ class Base:
                 self._symbols = self._exchange.spot
             if self._symbol not in self._symbols:
                 self._symbol = self._symbols[0]
-#            st.experimental_rerun()
 
     @ohlcv.setter
     def ohlcv(self, new_ohlcv):

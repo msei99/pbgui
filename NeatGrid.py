@@ -300,193 +300,129 @@ class NeatGrid:
 
     @grid_span_0.setter
     def grid_span_0(self, new_grid_span_0):
-        if self._grid_span_0 != new_grid_span_0:
-            self._grid_span_0 = new_grid_span_0
-            self._config["grid_span"][0] = self._grid_span_0
-            st.experimental_rerun()
+        self._grid_span_0 = new_grid_span_0
+        self._config["grid_span"][0] = self._grid_span_0
     @grid_span_1.setter
     def grid_span_1(self, new_grid_span_1):
-        if self._grid_span_1 != new_grid_span_1:
-            self._grid_span_1 = new_grid_span_1
-            self._config["grid_span"][1] = self._grid_span_1
-            st.experimental_rerun()
+        self._grid_span_1 = new_grid_span_1
+        self._config["grid_span"][1] = self._grid_span_1
     @ema_span_0_0.setter
     def ema_span_0_0(self, new_ema_span_0_0):
-        if self._ema_span_0_0 != new_ema_span_0_0:
-            self._ema_span_0_0 = new_ema_span_0_0
-            self._config["ema_span_0"][0] = self._ema_span_0_0
-            st.experimental_rerun()
+        self._ema_span_0_0 = new_ema_span_0_0
+        self._config["ema_span_0"][0] = self._ema_span_0_0
     @ema_span_0_1.setter
     def ema_span_0_1(self, new_ema_span_0_1):
-        if self._ema_span_0_1 != new_ema_span_0_1:
-            self._ema_span_0_1 = new_ema_span_0_1
-            self._config["ema_span_0"][1] = self._ema_span_0_1
-            st.experimental_rerun()
+        self._ema_span_0_1 = new_ema_span_0_1
+        self._config["ema_span_0"][1] = self._ema_span_0_1
     @ema_span_1_0.setter
     def ema_span_1_0(self, new_ema_span_1_0):
-        if self._ema_span_1_0 != new_ema_span_1_0:
-            self._ema_span_1_0 = new_ema_span_1_0
-            self._config["ema_span_1"][0] = self._ema_span_1_0
-            st.experimental_rerun()
+        self._ema_span_1_0 = new_ema_span_1_0
+        self._config["ema_span_1"][0] = self._ema_span_1_0
     @ema_span_1_1.setter
     def ema_span_1_1(self, new_ema_span_1_1):
-        if self._ema_span_1_1 != new_ema_span_1_1:
-            self._ema_span_1_1 = new_ema_span_1_1
-            self._config["ema_span_1"][1] = self._ema_span_1_1
-            st.experimental_rerun()
+        self._ema_span_1_1 = new_ema_span_1_1
+        self._config["ema_span_1"][1] = self._ema_span_1_1
     @wallet_exposure_limit_0.setter
     def wallet_exposure_limit_0(self, new_wallet_exposure_limit_0):
-        if self._wallet_exposure_limit_0 != new_wallet_exposure_limit_0:
-            self._wallet_exposure_limit_0 = new_wallet_exposure_limit_0
-            self._config["wallet_exposure_limit"][0] = self._wallet_exposure_limit_0
-            st.experimental_rerun()
+        self._wallet_exposure_limit_0 = new_wallet_exposure_limit_0
+        self._config["wallet_exposure_limit"][0] = self._wallet_exposure_limit_0
     @wallet_exposure_limit_1.setter
     def wallet_exposure_limit_1(self, new_wallet_exposure_limit_1):
-        if self._wallet_exposure_limit_1 != new_wallet_exposure_limit_1:
-            self._wallet_exposure_limit_1 = new_wallet_exposure_limit_1
-            self._config["wallet_exposure_limit"][1] = self._wallet_exposure_limit_1
-            st.experimental_rerun()
+        self._wallet_exposure_limit_1 = new_wallet_exposure_limit_1
+        self._config["wallet_exposure_limit"][1] = self._wallet_exposure_limit_1
     @max_n_entry_orders_0.setter
     def max_n_entry_orders_0(self, new_max_n_entry_orders_0):
-        if self._max_n_entry_orders_0 != new_max_n_entry_orders_0:
-            self._max_n_entry_orders_0 = new_max_n_entry_orders_0
-            self._config["max_n_entry_orders"][0] = self._max_n_entry_orders_0
-            st.experimental_rerun()
+        self._max_n_entry_orders_0 = new_max_n_entry_orders_0
+        self._config["max_n_entry_orders"][0] = self._max_n_entry_orders_0
     @max_n_entry_orders_1.setter
     def max_n_entry_orders_1(self, new_max_n_entry_orders_1):
-        if self._max_n_entry_orders_1 != new_max_n_entry_orders_1:
-            self._max_n_entry_orders_1 = new_max_n_entry_orders_1
-            self._config["max_n_entry_orders"][1] = self._max_n_entry_orders_1
-            st.experimental_rerun()
+        self._max_n_entry_orders_1 = new_max_n_entry_orders_1
+        self._config["max_n_entry_orders"][1] = self._max_n_entry_orders_1
     @initial_qty_pct_0.setter
     def initial_qty_pct_0(self, new_initial_qty_pct_0):
-        if self._initial_qty_pct_0 != new_initial_qty_pct_0:
-            self._initial_qty_pct_0 = new_initial_qty_pct_0
-            self._config["initial_qty_pct"][0] = self._initial_qty_pct_0
-            st.experimental_rerun()
+        self._initial_qty_pct_0 = new_initial_qty_pct_0
+        self._config["initial_qty_pct"][0] = self._initial_qty_pct_0
     @initial_qty_pct_1.setter
     def initial_qty_pct_1(self, new_initial_qty_pct_1):
-        if self._initial_qty_pct_1 != new_initial_qty_pct_1:
-            self._initial_qty_pct_1 = new_initial_qty_pct_1
-            self._config["initial_qty_pct"][1] = self._initial_qty_pct_1
-            st.experimental_rerun()
+        self._initial_qty_pct_1 = new_initial_qty_pct_1
+        self._config["initial_qty_pct"][1] = self._initial_qty_pct_1
     @initial_eprice_ema_dist_0.setter
     def initial_eprice_ema_dist_0(self, new_initial_eprice_ema_dist_0):
-        if self._initial_eprice_ema_dist_0 != new_initial_eprice_ema_dist_0:
-            self._initial_eprice_ema_dist_0 = new_initial_eprice_ema_dist_0
-            self._config["initial_eprice_ema_dist"][0] = self._initial_eprice_ema_dist_0
-            st.experimental_rerun()
+        self._initial_eprice_ema_dist_0 = new_initial_eprice_ema_dist_0
+        self._config["initial_eprice_ema_dist"][0] = self._initial_eprice_ema_dist_0
     @initial_eprice_ema_dist_1.setter
     def initial_eprice_ema_dist_1(self, new_initial_eprice_ema_dist_1):
-        if self._initial_eprice_ema_dist_1 != new_initial_eprice_ema_dist_1:
-            self._initial_eprice_ema_dist_1 = new_initial_eprice_ema_dist_1
-            self._config["initial_eprice_ema_dist"][1] = self._initial_eprice_ema_dist_1
-            st.experimental_rerun()
+        self._initial_eprice_ema_dist_1 = new_initial_eprice_ema_dist_1
+        self._config["initial_eprice_ema_dist"][1] = self._initial_eprice_ema_dist_1
     @eqty_exp_base_0.setter
     def eqty_exp_base_0(self, new_eqty_exp_base_0):
-        if self._eqty_exp_base_0 != new_eqty_exp_base_0:
-            self._eqty_exp_base_0 = new_eqty_exp_base_0
-            self._config["eqty_exp_base"][0] = self._eqty_exp_base_0
-            st.experimental_rerun()
+        self._eqty_exp_base_0 = new_eqty_exp_base_0
+        self._config["eqty_exp_base"][0] = self._eqty_exp_base_0
     @eqty_exp_base_1.setter
     def eqty_exp_base_1(self, new_eqty_exp_base_1):
-        if self._eqty_exp_base_1 != new_eqty_exp_base_1:
-            self._eqty_exp_base_1 = new_eqty_exp_base_1
-            self._config["eqty_exp_base"][1] = self._eqty_exp_base_1
-            st.experimental_rerun()
+        self._eqty_exp_base_1 = new_eqty_exp_base_1
+        self._config["eqty_exp_base"][1] = self._eqty_exp_base_1
     @eprice_exp_base_0.setter
     def eprice_exp_base_0(self, new_eprice_exp_base_0):
-        if self._eprice_exp_base_0 != new_eprice_exp_base_0:
-            self._eprice_exp_base_0 = new_eprice_exp_base_0
-            self._config["eprice_exp_base"][0] = self._eprice_exp_base_0
-            st.experimental_rerun()
+        self._eprice_exp_base_0 = new_eprice_exp_base_0
+        self._config["eprice_exp_base"][0] = self._eprice_exp_base_0
     @eprice_exp_base_1.setter
     def eprice_exp_base_1(self, new_eprice_exp_base_1):
-        if self._eprice_exp_base_1 != new_eprice_exp_base_1:
-            self._eprice_exp_base_1 = new_eprice_exp_base_1
-            self._config["eprice_exp_base"][1] = self._eprice_exp_base_1
-            st.experimental_rerun()
+        self._eprice_exp_base_1 = new_eprice_exp_base_1
+        self._config["eprice_exp_base"][1] = self._eprice_exp_base_1
     @min_markup_0.setter
     def min_markup_0(self, new_min_markup_0):
-        if self._min_markup_0 != new_min_markup_0:
-            self._min_markup_0 = new_min_markup_0
-            self._config["min_markup"][0] = self._min_markup_0
-            st.experimental_rerun()
+        self._min_markup_0 = new_min_markup_0
+        self._config["min_markup"][0] = self._min_markup_0
     @min_markup_1.setter
     def min_markup_1(self, new_min_markup_1):
-        if self._min_markup_1 != new_min_markup_1:
-            self._min_markup_1 = new_min_markup_1
-            self._config["min_markup"][1] = self._min_markup_1
-            st.experimental_rerun()
+        self._min_markup_1 = new_min_markup_1
+        self._config["min_markup"][1] = self._min_markup_1
     @markup_range_0.setter
     def markup_range_0(self, new_markup_range_0):
-        if self._markup_range_0 != new_markup_range_0:
-            self._markup_range_0 = new_markup_range_0
-            self._config["markup_range"][0] = self._markup_range_0
-            st.experimental_rerun()
+        self._markup_range_0 = new_markup_range_0
+        self._config["markup_range"][0] = self._markup_range_0
     @markup_range_1.setter
     def markup_range_1(self, new_markup_range_1):
-        if self._markup_range_1 != new_markup_range_1:
-            self._markup_range_1 = new_markup_range_1
-            self._config["markup_range"][1] = self._markup_range_1
-            st.experimental_rerun()
+        self._markup_range_1 = new_markup_range_1
+        self._config["markup_range"][1] = self._markup_range_1
     @n_close_orders_0.setter
     def n_close_orders_0(self, new_n_close_orders_0):
-        if self._n_close_orders_0 != new_n_close_orders_0:
-            self._n_close_orders_0 = new_n_close_orders_0
-            self._config["n_close_orders"][0] = self._n_close_orders_0
-            st.experimental_rerun()
+        self._n_close_orders_0 = new_n_close_orders_0
+        self._config["n_close_orders"][0] = self._n_close_orders_0
     @n_close_orders_1.setter
     def n_close_orders_1(self, new_n_close_orders_1):
-        if self._n_close_orders_1 != new_n_close_orders_1:
-            self._n_close_orders_1 = new_n_close_orders_1
-            self._config["n_close_orders"][1] = self._n_close_orders_1
-            st.experimental_rerun()
+        self._n_close_orders_1 = new_n_close_orders_1
+        self._config["n_close_orders"][1] = self._n_close_orders_1
     @auto_unstuck_wallet_exposure_threshold_0.setter
     def auto_unstuck_wallet_exposure_threshold_0(self, new_auto_unstuck_wallet_exposure_threshold_0):
-        if self._auto_unstuck_wallet_exposure_threshold_0 != new_auto_unstuck_wallet_exposure_threshold_0:
-            self._auto_unstuck_wallet_exposure_threshold_0 = new_auto_unstuck_wallet_exposure_threshold_0
-            self._config["auto_unstuck_wallet_exposure_threshold"][0] = self._auto_unstuck_wallet_exposure_threshold_0
-            st.experimental_rerun()
+        self._auto_unstuck_wallet_exposure_threshold_0 = new_auto_unstuck_wallet_exposure_threshold_0
+        self._config["auto_unstuck_wallet_exposure_threshold"][0] = self._auto_unstuck_wallet_exposure_threshold_0
     @auto_unstuck_wallet_exposure_threshold_1.setter
     def auto_unstuck_wallet_exposure_threshold_1(self, new_auto_unstuck_wallet_exposure_threshold_1):
-        if self._auto_unstuck_wallet_exposure_threshold_1 != new_auto_unstuck_wallet_exposure_threshold_1:
-            self._auto_unstuck_wallet_exposure_threshold_1 = new_auto_unstuck_wallet_exposure_threshold_1
-            self._config["auto_unstuck_wallet_exposure_threshold"][1] = self._auto_unstuck_wallet_exposure_threshold_1
-            st.experimental_rerun()
+        self._auto_unstuck_wallet_exposure_threshold_1 = new_auto_unstuck_wallet_exposure_threshold_1
+        self._config["auto_unstuck_wallet_exposure_threshold"][1] = self._auto_unstuck_wallet_exposure_threshold_1
     @auto_unstuck_ema_dist_0.setter
     def auto_unstuck_ema_dist_0(self, new_auto_unstuck_ema_dist_0):
-        if self._auto_unstuck_ema_dist_0 != new_auto_unstuck_ema_dist_0:
-            self._auto_unstuck_ema_dist_0 = new_auto_unstuck_ema_dist_0
-            self._config["auto_unstuck_ema_dist"][0] = self._auto_unstuck_ema_dist_0
-            st.experimental_rerun()
+        self._auto_unstuck_ema_dist_0 = new_auto_unstuck_ema_dist_0
+        self._config["auto_unstuck_ema_dist"][0] = self._auto_unstuck_ema_dist_0
     @auto_unstuck_ema_dist_1.setter
     def auto_unstuck_ema_dist_1(self, new_auto_unstuck_ema_dist_1):
-        if self._auto_unstuck_ema_dist_1 != new_auto_unstuck_ema_dist_1:
-            self._auto_unstuck_ema_dist_1 = new_auto_unstuck_ema_dist_1
-            self._config["auto_unstuck_ema_dist"][1] = self._auto_unstuck_ema_dist_1
-            st.experimental_rerun()
+        self._auto_unstuck_ema_dist_1 = new_auto_unstuck_ema_dist_1
+        self._config["auto_unstuck_ema_dist"][1] = self._auto_unstuck_ema_dist_1
     @auto_unstuck_delay_minutes_0.setter
     def auto_unstuck_delay_minutes_0(self, new_auto_unstuck_delay_minutes_0):
-        if self._auto_unstuck_delay_minutes_0 != new_auto_unstuck_delay_minutes_0:
-            self._auto_unstuck_delay_minutes_0 = new_auto_unstuck_delay_minutes_0
-            self._config["auto_unstuck_delay_minutes"][0] = self._auto_unstuck_delay_minutes_0
-            st.experimental_rerun()
+        self._auto_unstuck_delay_minutes_0 = new_auto_unstuck_delay_minutes_0
+        self._config["auto_unstuck_delay_minutes"][0] = self._auto_unstuck_delay_minutes_0
     @auto_unstuck_delay_minutes_1.setter
     def auto_unstuck_delay_minutes_1(self, new_auto_unstuck_delay_minutes_1):
-        if self._auto_unstuck_delay_minutes_1 != new_auto_unstuck_delay_minutes_1:
-            self._auto_unstuck_delay_minutes_1 = new_auto_unstuck_delay_minutes_1
-            self._config["auto_unstuck_delay_minutes"][1] = self._auto_unstuck_delay_minutes_1
-            st.experimental_rerun()
+        self._auto_unstuck_delay_minutes_1 = new_auto_unstuck_delay_minutes_1
+        self._config["auto_unstuck_delay_minutes"][1] = self._auto_unstuck_delay_minutes_1
     @auto_unstuck_qty_pct_0.setter
     def auto_unstuck_qty_pct_0(self, new_auto_unstuck_qty_pct_0):
-        if self._auto_unstuck_qty_pct_0 != new_auto_unstuck_qty_pct_0:
-            self._auto_unstuck_qty_pct_0 = new_auto_unstuck_qty_pct_0
-            self._config["auto_unstuck_qty_pct"][0] = self._auto_unstuck_qty_pct_0
-            st.experimental_rerun()
+        self._auto_unstuck_qty_pct_0 = new_auto_unstuck_qty_pct_0
+        self._config["auto_unstuck_qty_pct"][0] = self._auto_unstuck_qty_pct_0
     @auto_unstuck_qty_pct_1.setter
     def auto_unstuck_qty_pct_1(self, new_auto_unstuck_qty_pct_1):
-        if self._auto_unstuck_qty_pct_1 != new_auto_unstuck_qty_pct_1:
-            self._auto_unstuck_qty_pct_1 = new_auto_unstuck_qty_pct_1
-            self._config["auto_unstuck_qty_pct"][1] = self._auto_unstuck_qty_pct_1
-            st.experimental_rerun()
+        self._auto_unstuck_qty_pct_1 = new_auto_unstuck_qty_pct_1
+        self._config["auto_unstuck_qty_pct"][1] = self._auto_unstuck_qty_pct_1

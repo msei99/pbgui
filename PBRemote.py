@@ -10,7 +10,8 @@ import json
 from io import TextIOWrapper
 from datetime import datetime
 import platform
-from PBRun import PBRun, RunInstance
+from PBRun import PBRun, RunMulti, RunInstance
+from Status import InstanceStatus, InstancesStatus
 import uuid
 import shutil
 import hashlib
@@ -24,13 +25,22 @@ class RemoteServer():
         self._rtd = None
         self._run = None
         self._edit = False
-        self._instances = False
         self._path = path
         self._unique = []
         self._api_md5 = None
         self._pbdir = None
         self._bucket = None
-    
+        self._instances = []
+        self._mem = []
+        self._swap = []
+        self._disk = []
+        self._cpu = None
+        self._boot = None
+#        self.status_ts = 0
+        self.pbname = None
+        self.instances_status = InstancesStatus(f'{self.path}/status.json')
+        self.instances_status.load()
+
     @property
     def name(self): return self._name
     @property
@@ -44,8 +54,6 @@ class RemoteServer():
     @property
     def edit(self): return self._edit
     @property
-    def instances(self): return self._instances
-    @property
     def path(self): return self._path
     @property
     def api_md5(self): return self._api_md5
@@ -53,6 +61,16 @@ class RemoteServer():
     def pbdir(self): return self._pbdir
     @property
     def bucket(self): return self._bucket
+    @property
+    def mem(self): return self._mem
+    @property
+    def swap(self): return self._swap
+    @property
+    def disk(self): return self._disk
+    @property
+    def cpu(self): return self._cpu
+    @property
+    def boot(self): return self._boot
 
     @name.setter
     def name(self, new_name):
@@ -70,10 +88,6 @@ class RemoteServer():
     def edit(self, new_edit):
         if self._edit != new_edit:
             self._edit = new_edit
-    @instances.setter
-    def instances(self, new_instances):
-        if self._instances != new_instances:
-            self._instances = new_instances
     @path.setter
     def path(self, new_path):
         if self._path != new_path:
@@ -99,18 +113,12 @@ class RemoteServer():
             return None
 
     def has_instance(self, user : str, symbol : str):
-        p = str(Path(f'{self._path}/../instances_{self.name}/*'))
-        instances = glob.glob(p)
-        for instance in instances:
-            file = Path(f'{instance}/instance.cfg')
-            if file.exists():
-                try:
-                    with open(file, "r", encoding='utf-8') as f:
-                        config = json.load(f)
-                        if config["_user"] == user and config["_symbol"] == symbol:
-                            return True
-                except Exception as e:
-                    print(f'{str(file)} is corrupted {e}')
+        inst = {
+            "user": user,
+            "symbol": symbol
+        }
+        if inst in self._instances:
+            return True
         return False
 
     def is_api_md5_same(self, api_md5 : str):
@@ -125,6 +133,24 @@ class RemoteServer():
         if self._rtd < 60:
             return True
         return False
+
+    def load_instances(self):
+        self._instances = []
+        p = str(Path(f'{self._path}/../instances_{self.name}/*'))
+        instances = glob.glob(p)
+        for instance in instances:
+            file = Path(f'{instance}/instance.cfg')
+            if file.exists():
+                try:
+                    with open(file, "r", encoding='utf-8') as f:
+                        config = json.load(f)
+                        inst = {
+                            "user": config["_user"],
+                            "symbol": config["_symbol"]
+                        }
+                        self._instances.append(inst)
+                except Exception as e:
+                    print(f'{str(file)} is corrupted {e}')
 
     def load(self):
         p = str(Path(f'{self._path}/alive_*.cmd'))
@@ -145,6 +171,16 @@ class RemoteServer():
                             self._api_md5 = cfg["api_md5"]
                         if "run" in cfg:
                             self._run = cfg["run"]
+                        if "mem" in cfg:
+                            self._mem = cfg["mem"]
+                        if "swap" in cfg:
+                            self._swap = cfg["swap"]
+                        if "disk" in cfg:
+                            self._disk = cfg["disk"]
+                        if "cpu" in cfg:
+                            self._cpu = cfg["cpu"]
+                        if "boot" in cfg:
+                            self._boot = cfg["boot"]
                         return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
@@ -304,6 +340,25 @@ class RemoteServer():
         else:
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
+    def sync_multi_down(self):
+        if self.instances_status.has_new_status():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi from: {self.name}')
+            pbgdir = Path.cwd()
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', f'{self.bucket}/multi_{self.name}', PurePath(f'{pbgdir}/data/remote/multi_{self.name}')]
+            logfile = Path(f'{pbgdir}/data/logs/sync.log')
+            log = open(logfile,"ab")
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            PBRun().update_status(self.instances_status.status_file, self.name)
+            status_ts = self.instances_status.status_ts
+            self.instances_status.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
+
+
 class PBRemote():
     def __init__(self):
         self.error = None          
@@ -311,6 +366,7 @@ class PBRemote():
         self.local_run = PBRun()
         self.index = 0
         self.api_md5 = None
+#        self.status_ts = 0
         self.startts = None
         self.sync_downts = None
         pbgdir = Path.cwd()
@@ -350,6 +406,11 @@ class PBRemote():
     def list(self):
         return list(map(lambda c: c.name, self.remote_servers))
 
+    def find_server(self, name: str):
+        for server in self.remote_servers:
+            if server.name == name:
+                return server
+
     def add(self, remote_servers: RemoteServer):
         if remote_servers:
             self.remote_servers.append(remote_servers)
@@ -378,10 +439,14 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+        elif direction == 'up' and spath == 'status':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket}/cmd_{self.name}']
+        elif direction == 'up' and spath == 'multi':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**,multi_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
             self.sync_downts = round(datetime.now().timestamp())
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
@@ -428,6 +493,17 @@ class PBRemote():
                 except Exception as e:
                     print(f'{str(cfile)} is corrupted {e}')
 
+    def sync_multi_up(self):
+        if self.local_run.instances_status.has_new_status():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
+            status_ts = self.local_run.instances_status.status_ts
+            self.local_run.instances_status.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.local_run.instances_status.status_ts}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi up: {self.name}')
+            self.sync('up', 'multi')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status.json up: {self.name}')
+            self.sync('up', 'status')
+
     def alive(self):
         timestamp = round(datetime.now().timestamp())
         cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
@@ -438,12 +514,22 @@ class PBRemote():
                 "symbol": instance.symbol
             })
             run.append(inst)
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        disk = psutil.disk_usage('/')
+        cpu = psutil.cpu_percent()
+        boot = psutil.boot_time()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
             "name": self.name,
             "api_md5": self.api_md5,
-            "run": run
+            "run": run,
+            "mem": mem,
+            "swap": swap,
+            "disk": disk,
+            "cpu": cpu,
+            "boot": boot
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
@@ -490,7 +576,9 @@ class PBRemote():
             rserver = RemoteServer(remote)
             rserver.pbdir = self.pbdir
             rserver.bucket = self.bucket
+            rserver.pbname = self.name
             rserver.load()
+            rserver.load_instances()
             self.add(rserver)
 
     def load_local(self):
@@ -571,7 +659,9 @@ def main():
         exit(1)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
     remote.startts = round(datetime.now().timestamp())
+    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances up: {remote.name}')
     remote.sync('up', 'instances')
+    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances down: {remote.name}')
     remote.sync('down', 'instances')
     while True:
         try:
@@ -580,19 +670,23 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+            remote.sync_multi_up()
             remote.alive()
             remote.sync_to()
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
+                server.sync_multi_down()
                 if server.sync_from(remote.name):
                     remote.sync("up", 'instances')
                     remote.load_local()
                 # Sync from Cloud Storage when we get an .ack from remote Server or when remote server was restarted
                 if server.ack_from(remote.name) or server.startts > remote.sync_downts:
                     remote.sync("down", 'instances')
+                    server.load_instances()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
+            traceback.print_exc()
 
 if __name__ == '__main__':
     main()
