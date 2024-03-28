@@ -6,7 +6,7 @@ v0.95
 
 ## Migration to v0.95 Multi
 
-Watch the video here: https://studio.youtube.com/video/MCQ7E5n-Dro/edit  
+Watch the video here: https://youtu.be/MCQ7E5n-Dro  
 Make sure to stop single instances before starting them in a passivbot_multo configuration  
 Stop PBRun and PBRemote on any installation, and then start the new version of it  
 
