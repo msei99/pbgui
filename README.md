@@ -1,10 +1,20 @@
 # GUI for Passivbot
 
+## Contact/Supprt on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
+
 v0.95
+
+## Migration to v0.95 Multi
+
+Watch the video here: https://studio.youtube.com/video/MCQ7E5n-Dro/edit
+Make sure to stop single instances before starting them in a passivbot_multo configuration
+Stop PBRun and PBRemote on any installation, and then start the new version of it
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
 
+![Alt text](docs/images/multi1.png)
+![Alt text](docs/images/multi2.png)
 ![Alt text](docs/images/live01.png)
 ![Alt text](docs/images/live02.png)
 ![Alt text](docs/images/live1.png)
@@ -107,7 +117,8 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.95 (22-03-2024)
+## v0.95 (28-03-2024)
+- Bugfixes and realeased to master
 - First version that can run the new passivbot_multi
 
 ## v0.94 (30-01-2024)
@@ -290,9 +301,11 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 First release with basic backtest and optimization functionality
 
 ## Roadmap
+- Sync: Use the same simple sync from multi on single instances
+- Backtest: Add support for passivbot multi
+- Live: Preview of the Gird on config editor
 - Dashboard: Full Dashbord for history and results
 - Backtest: Configure Default Values
-- Full support for Windows
 - PBRemote: update passivbot and pbgui
 - PBRemote: transfer logfiles
 - ...
