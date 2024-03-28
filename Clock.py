@@ -302,193 +302,129 @@ class Clock:
 
     @ema_span_0_0.setter
     def ema_span_0_0(self, new_ema_span_0_0):
-        if self._ema_span_0_0 != new_ema_span_0_0:
-            self._ema_span_0_0 = new_ema_span_0_0
-            self._config["ema_span_0"][0] = self._ema_span_0_0
-            st.experimental_rerun()
+        self._ema_span_0_0 = new_ema_span_0_0
+        self._config["ema_span_0"][0] = self._ema_span_0_0
     @ema_span_0_1.setter
     def ema_span_0_1(self, new_ema_span_0_1):
-        if self._ema_span_0_1 != new_ema_span_0_1:
-            self._ema_span_0_1 = new_ema_span_0_1
-            self._config["ema_span_0"][1] = self._ema_span_0_1
-            st.experimental_rerun()
+        self._ema_span_0_1 = new_ema_span_0_1
+        self._config["ema_span_0"][1] = self._ema_span_0_1
     @ema_span_1_0.setter
     def ema_span_1_0(self, new_ema_span_1_0):
-        if self._ema_span_1_0 != new_ema_span_1_0:
-            self._ema_span_1_0 = new_ema_span_1_0
-            self._config["ema_span_1"][0] = self._ema_span_1_0
-            st.experimental_rerun()
+        self._ema_span_1_0 = new_ema_span_1_0
+        self._config["ema_span_1"][0] = self._ema_span_1_0
     @ema_span_1_1.setter
     def ema_span_1_1(self, new_ema_span_1_1):
-        if self._ema_span_1_1 != new_ema_span_1_1:
-            self._ema_span_1_1 = new_ema_span_1_1
-            self._config["ema_span_1"][1] = self._ema_span_1_1
-            st.experimental_rerun()
+        self._ema_span_1_1 = new_ema_span_1_1
+        self._config["ema_span_1"][1] = self._ema_span_1_1
     @ema_dist_entry_0.setter
     def ema_dist_entry_0(self, new_ema_dist_entry_0):
-        if self._ema_dist_entry_0 != new_ema_dist_entry_0:
-            self._ema_dist_entry_0 = new_ema_dist_entry_0
-            self._config["ema_dist_entry"][0] = self._ema_dist_entry_0
-            st.experimental_rerun()
+        self._ema_dist_entry_0 = new_ema_dist_entry_0
+        self._config["ema_dist_entry"][0] = self._ema_dist_entry_0
     @ema_dist_entry_1.setter
     def ema_dist_entry_1(self, new_ema_dist_entry_1):
-        if self._ema_dist_entry_1 != new_ema_dist_entry_1:
-            self._ema_dist_entry_1 = new_ema_dist_entry_1
-            self._config["ema_dist_entry"][1] = self._ema_dist_entry_1
-            st.experimental_rerun()
+        self._ema_dist_entry_1 = new_ema_dist_entry_1
+        self._config["ema_dist_entry"][1] = self._ema_dist_entry_1
     @ema_dist_close_0.setter
     def ema_dist_close_0(self, new_ema_dist_close_0):
-        if self._ema_dist_close_0 != new_ema_dist_close_0:
-            self._ema_dist_close_0 = new_ema_dist_close_0
-            self._config["ema_dist_close"][0] = self._ema_dist_close_0
-            st.experimental_rerun()
+        self._ema_dist_close_0 = new_ema_dist_close_0
+        self._config["ema_dist_close"][0] = self._ema_dist_close_0
     @ema_dist_close_1.setter
     def ema_dist_close_1(self, new_ema_dist_close_1):
-        if self._ema_dist_close_1 != new_ema_dist_close_1:
-            self._ema_dist_close_1 = new_ema_dist_close_1
-            self._config["ema_dist_close"][1] = self._ema_dist_close_1
-            st.experimental_rerun()
+        self._ema_dist_close_1 = new_ema_dist_close_1
+        self._config["ema_dist_close"][1] = self._ema_dist_close_1
     @qty_pct_entry_0.setter
     def qty_pct_entry_0(self, new_qty_pct_entry_0):
-        if self._qty_pct_entry_0 != new_qty_pct_entry_0:
-            self._qty_pct_entry_0 = new_qty_pct_entry_0
-            self._config["qty_pct_entry"][0] = self._qty_pct_entry_0
-            st.experimental_rerun()
+        self._qty_pct_entry_0 = new_qty_pct_entry_0
+        self._config["qty_pct_entry"][0] = self._qty_pct_entry_0
     @qty_pct_entry_1.setter
     def qty_pct_entry_1(self, new_qty_pct_entry_1):
-        if self._qty_pct_entry_1 != new_qty_pct_entry_1:
-            self._qty_pct_entry_1 = new_qty_pct_entry_1
-            self._config["qty_pct_entry"][1] = self._qty_pct_entry_1
-            st.experimental_rerun()
+        self._qty_pct_entry_1 = new_qty_pct_entry_1
+        self._config["qty_pct_entry"][1] = self._qty_pct_entry_1
     @qty_pct_close_0.setter
     def qty_pct_close_0(self, new_qty_pct_close_0):
-        if self._qty_pct_close_0 != new_qty_pct_close_0:
-            self._qty_pct_close_0 = new_qty_pct_close_0
-            self._config["qty_pct_close"][0] = self._qty_pct_close_0
-            st.experimental_rerun()
+        self._qty_pct_close_0 = new_qty_pct_close_0
+        self._config["qty_pct_close"][0] = self._qty_pct_close_0
     @qty_pct_close_1.setter
     def qty_pct_close_1(self, new_qty_pct_close_1):
-        if self._qty_pct_close_1 != new_qty_pct_close_1:
-            self._qty_pct_close_1 = new_qty_pct_close_1
-            self._config["qty_pct_close"][1] = self._qty_pct_close_1
-            st.experimental_rerun()
+        self._qty_pct_close_1 = new_qty_pct_close_1
+        self._config["qty_pct_close"][1] = self._qty_pct_close_1
     @we_multiplier_entry_0.setter
     def we_multiplier_entry_0(self, new_we_multiplier_entry_0):
-        if self._we_multiplier_entry_0 != new_we_multiplier_entry_0:
-            self._we_multiplier_entry_0 = new_we_multiplier_entry_0
-            self._config["we_multiplier_entry"][0] = self._we_multiplier_entry_0
-            st.experimental_rerun()
+        self._we_multiplier_entry_0 = new_we_multiplier_entry_0
+        self._config["we_multiplier_entry"][0] = self._we_multiplier_entry_0
     @we_multiplier_entry_1.setter
     def we_multiplier_entry_1(self, new_we_multiplier_entry_1):
-        if self._we_multiplier_entry_1 != new_we_multiplier_entry_1:
-            self._we_multiplier_entry_1 = new_we_multiplier_entry_1
-            self._config["we_multiplier_entry"][1] = self._we_multiplier_entry_1
-            st.experimental_rerun()
+        self._we_multiplier_entry_1 = new_we_multiplier_entry_1
+        self._config["we_multiplier_entry"][1] = self._we_multiplier_entry_1
     @we_multiplier_close_0.setter
     def we_multiplier_close_0(self, new_we_multiplier_close_0):
-        if self._we_multiplier_close_0 != new_we_multiplier_close_0:
-            self._we_multiplier_close_0 = new_we_multiplier_close_0
-            self._config["we_multiplier_close"][0] = self._we_multiplier_close_0
-            st.experimental_rerun()
+        self._we_multiplier_close_0 = new_we_multiplier_close_0
+        self._config["we_multiplier_close"][0] = self._we_multiplier_close_0
     @we_multiplier_close_1.setter
     def we_multiplier_close_1(self, new_we_multiplier_close_1):
-        if self._we_multiplier_close_1 != new_we_multiplier_close_1:
-            self._we_multiplier_close_1 = new_we_multiplier_close_1
-            self._config["we_multiplier_close"][1] = self._we_multiplier_close_1
-            st.experimental_rerun()
+        self._we_multiplier_close_1 = new_we_multiplier_close_1
+        self._config["we_multiplier_close"][1] = self._we_multiplier_close_1
     @delay_weight_entry_0.setter
     def delay_weight_entry_0(self, new_delay_weight_entry_0):
-        if self._delay_weight_entry_0 != new_delay_weight_entry_0:
-            self._delay_weight_entry_0 = new_delay_weight_entry_0
-            self._config["delay_weight_entry"][0] = self._delay_weight_entry_0
-            st.experimental_rerun()
+        self._delay_weight_entry_0 = new_delay_weight_entry_0
+        self._config["delay_weight_entry"][0] = self._delay_weight_entry_0
     @delay_weight_entry_1.setter
     def delay_weight_entry_1(self, new_delay_weight_entry_1):
-        if self._delay_weight_entry_1 != new_delay_weight_entry_1:
-            self._delay_weight_entry_1 = new_delay_weight_entry_1
-            self._config["delay_weight_entry"][1] = self._delay_weight_entry_1
-            st.experimental_rerun()
+        self._delay_weight_entry_1 = new_delay_weight_entry_1
+        self._config["delay_weight_entry"][1] = self._delay_weight_entry_1
     @delay_weight_close_0.setter
     def delay_weight_close_0(self, new_delay_weight_close_0):
-        if self._delay_weight_close_0 != new_delay_weight_close_0:
-            self._delay_weight_close_0 = new_delay_weight_close_0
-            self._config["delay_weight_close"][0] = self._delay_weight_close_0
-            st.experimental_rerun()
+        self._delay_weight_close_0 = new_delay_weight_close_0
+        self._config["delay_weight_close"][0] = self._delay_weight_close_0
     @delay_weight_close_1.setter
     def delay_weight_close_1(self, new_delay_weight_close_1):
-        if self._delay_weight_close_1 != new_delay_weight_close_1:
-            self._delay_weight_close_1 = new_delay_weight_close_1
-            self._config["delay_weight_close"][1] = self._delay_weight_close_1
-            st.experimental_rerun()
+        self._delay_weight_close_1 = new_delay_weight_close_1
+        self._config["delay_weight_close"][1] = self._delay_weight_close_1
     @delay_between_fills_minutes_entry_0.setter
     def delay_between_fills_minutes_entry_0(self, new_delay_between_fills_minutes_entry_0):
-        if self._delay_between_fills_minutes_entry_0 != new_delay_between_fills_minutes_entry_0:
-            self._delay_between_fills_minutes_entry_0 = new_delay_between_fills_minutes_entry_0
-            self._config["delay_between_fills_minutes_entry"][0] = self._delay_between_fills_minutes_entry_0
-            st.experimental_rerun()
+        self._delay_between_fills_minutes_entry_0 = new_delay_between_fills_minutes_entry_0
+        self._config["delay_between_fills_minutes_entry"][0] = self._delay_between_fills_minutes_entry_0
     @delay_between_fills_minutes_entry_1.setter
     def delay_between_fills_minutes_entry_1(self, new_delay_between_fills_minutes_entry_1):
-        if self._delay_between_fills_minutes_entry_1 != new_delay_between_fills_minutes_entry_1:
-            self._delay_between_fills_minutes_entry_1 = new_delay_between_fills_minutes_entry_1
-            self._config["delay_between_fills_minutes_entry"][1] = self._delay_between_fills_minutes_entry_1
-            st.experimental_rerun()
+        self._delay_between_fills_minutes_entry_1 = new_delay_between_fills_minutes_entry_1
+        self._config["delay_between_fills_minutes_entry"][1] = self._delay_between_fills_minutes_entry_1
     @delay_between_fills_minutes_close_0.setter
     def delay_between_fills_minutes_close_0(self, new_delay_between_fills_minutes_close_0):
-        if self._delay_between_fills_minutes_close_0 != new_delay_between_fills_minutes_close_0:
-            self._delay_between_fills_minutes_close_0 = new_delay_between_fills_minutes_close_0
-            self._config["delay_between_fills_minutes_close"][0] = self._delay_between_fills_minutes_close_0
-            st.experimental_rerun()
+        self._delay_between_fills_minutes_close_0 = new_delay_between_fills_minutes_close_0
+        self._config["delay_between_fills_minutes_close"][0] = self._delay_between_fills_minutes_close_0
     @delay_between_fills_minutes_close_1.setter
     def delay_between_fills_minutes_close_1(self, new_delay_between_fills_minutes_close_1):
-        if self._delay_between_fills_minutes_close_1 != new_delay_between_fills_minutes_close_1:
-            self._delay_between_fills_minutes_close_1 = new_delay_between_fills_minutes_close_1
-            self._config["delay_between_fills_minutes_close"][1] = self._delay_between_fills_minutes_close_1
-            st.experimental_rerun()
+        self._delay_between_fills_minutes_close_1 = new_delay_between_fills_minutes_close_1
+        self._config["delay_between_fills_minutes_close"][1] = self._delay_between_fills_minutes_close_1
     @min_markup_0.setter
     def min_markup_0(self, new_min_markup_0):
-        if self._min_markup_0 != new_min_markup_0:
-            self._min_markup_0 = new_min_markup_0
-            self._config["min_markup"][0] = self._min_markup_0
-            st.experimental_rerun()
+        self._min_markup_0 = new_min_markup_0
+        self._config["min_markup"][0] = self._min_markup_0
     @min_markup_1.setter
     def min_markup_1(self, new_min_markup_1):
-        if self._min_markup_1 != new_min_markup_1:
-            self._min_markup_1 = new_min_markup_1
-            self._config["min_markup"][1] = self._min_markup_1
-            st.experimental_rerun()
+        self._min_markup_1 = new_min_markup_1
+        self._config["min_markup"][1] = self._min_markup_1
     @markup_range_0.setter
     def markup_range_0(self, new_markup_range_0):
-        if self._markup_range_0 != new_markup_range_0:
-            self._markup_range_0 = new_markup_range_0
-            self._config["markup_range"][0] = self._markup_range_0
-            st.experimental_rerun()
+        self._markup_range_0 = new_markup_range_0
+        self._config["markup_range"][0] = self._markup_range_0
     @markup_range_1.setter
     def markup_range_1(self, new_markup_range_1):
-        if self._markup_range_1 != new_markup_range_1:
-            self._markup_range_1 = new_markup_range_1
-            self._config["markup_range"][1] = self._markup_range_1
-            st.experimental_rerun()
+        self._markup_range_1 = new_markup_range_1
+        self._config["markup_range"][1] = self._markup_range_1
     @n_close_orders_0.setter
     def n_close_orders_0(self, new_n_close_orders_0):
-        if self._n_close_orders_0 != new_n_close_orders_0:
-            self._n_close_orders_0 = new_n_close_orders_0
-            self._config["n_close_orders"][0] = self._n_close_orders_0
-            st.experimental_rerun()
+        self._n_close_orders_0 = new_n_close_orders_0
+        self._config["n_close_orders"][0] = self._n_close_orders_0
     @n_close_orders_1.setter
     def n_close_orders_1(self, new_n_close_orders_1):
-        if self._n_close_orders_1 != new_n_close_orders_1:
-            self._n_close_orders_1 = new_n_close_orders_1
-            self._config["n_close_orders"][1] = self._n_close_orders_1
-            st.experimental_rerun()
+        self._n_close_orders_1 = new_n_close_orders_1
+        self._config["n_close_orders"][1] = self._n_close_orders_1
     @wallet_exposure_limit_0.setter
     def wallet_exposure_limit_0(self, new_wallet_exposure_limit_0):
-        if self._wallet_exposure_limit_0 != new_wallet_exposure_limit_0:
-            self._wallet_exposure_limit_0 = new_wallet_exposure_limit_0
-            self._config["wallet_exposure_limit"][0] = self._wallet_exposure_limit_0
-            st.experimental_rerun()
+        self._wallet_exposure_limit_0 = new_wallet_exposure_limit_0
+        self._config["wallet_exposure_limit"][0] = self._wallet_exposure_limit_0
     @wallet_exposure_limit_1.setter
     def wallet_exposure_limit_1(self, new_wallet_exposure_limit_1):
-        if self._wallet_exposure_limit_1 != new_wallet_exposure_limit_1:
-            self._wallet_exposure_limit_1 = new_wallet_exposure_limit_1
-            self._config["wallet_exposure_limit"][1] = self._wallet_exposure_limit_1
-            st.experimental_rerun()
+        self._wallet_exposure_limit_1 = new_wallet_exposure_limit_1
+        self._config["wallet_exposure_limit"][1] = self._wallet_exposure_limit_1

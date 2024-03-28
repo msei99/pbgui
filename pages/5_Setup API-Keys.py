@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_extras.switch_page_button import switch_page
 from pbgui_func import set_page_config
 import pbgui_help
 from User import Users, User
@@ -24,7 +23,7 @@ def edit_user():
                 del st.session_state.error
             del st.session_state.edit_user
             del st.session_state.users
-            st.experimental_rerun()
+            st.rerun()
         if not in_use and not "error" in st.session_state:
             if st.button(":wastebasket:"):
                 users.users.remove(user)
@@ -37,7 +36,7 @@ def edit_user():
                 if "remote" in st.session_state:
                     del st.session_state.remote
                 PBRemote().restart()
-                st.experimental_rerun()
+                st.rerun()
         if user.name and not "error" in st.session_state:
             if st.button(":floppy_disk:"):
                 if not users.has_user(user):
@@ -47,6 +46,8 @@ def edit_user():
                 if "remote" in st.session_state:
                     del st.session_state.remote
                 PBRemote().restart()
+                if "pbgui_instances" in st.session_state:
+                    del st.session_state.pbgui_instances
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:
         new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)
@@ -57,11 +58,11 @@ def edit_user():
             else:
                 if "error" in st.session_state:
                     del st.session_state.error
-            st.experimental_rerun()
+            st.rerun()
         new_key = st.text_input("API-Key", value=user.key, type="default", help=None)
         if new_key != user.key:
             user.key = new_key
-            st.experimental_rerun()
+            st.rerun()
     with col_2:
         if user.exchange:
             index_exc = Exchanges.list().index(user.exchange)
@@ -70,11 +71,11 @@ def edit_user():
         new_exchange = st.selectbox('Exchange', Exchanges.list(), index=index_exc, disabled=in_use)
         if new_exchange != user.exchange:
             user.exchange = new_exchange
-            st.experimental_rerun()
+            st.rerun()
         new_secret = st.text_input("API-Secret", value=user.secret, type="password", help=None)
         if new_secret != user.secret:
             user.secret = new_secret
-            st.experimental_rerun()
+            st.rerun()
     with col_3:
         st.write("## ")
         if st.button("Test"):
@@ -86,7 +87,7 @@ def edit_user():
             new_passphrase = st.text_input("Passphrase", value=user.passphrase, type="password", help=None)
             if new_passphrase != user.passphrase:
                 user.passphrase = new_passphrase
-                st.experimental_rerun()
+                st.rerun()
     with col_1:
         st.markdown(f'### <center>Futures Wallet Balance</center>', unsafe_allow_html=True)
         if type(balance_futures) == float:
@@ -110,19 +111,19 @@ def select_user():
     with st.sidebar:
         if st.button("Add"):
             st.session_state.edit_user = User()
-            st.experimental_rerun()
+            st.rerun()
     if f'editor_{st.session_state.ed_user_key}' in st.session_state:
         ed = st.session_state[f'editor_{st.session_state.ed_user_key}']
         for row in ed["edited_rows"]:
             if "Edit" in ed["edited_rows"][row]:
                 st.session_state.edit_user = users.users[row]
-                st.experimental_rerun()
+                st.rerun()
             if "Delete" in ed["edited_rows"][row]:
                 if not instances.is_user_used(users.users[row].name):
                     users.users.remove(users.users[row])
                     users.save()
                 st.session_state.ed_user_key += 1
-                st.experimental_rerun()
+                st.rerun()
     d = []
     for id, user in enumerate(users):
         in_use = False
@@ -143,7 +144,7 @@ set_page_config()
 
 # Init Session State
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    switch_page("pbgui")
+    st.switch_page("pbgui.py")
 
 if 'users' not in st.session_state:
     st.session_state.users = Users()
