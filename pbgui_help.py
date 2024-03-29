@@ -478,7 +478,7 @@ multi_long_short_enabled = """
 
 config_version = """
     ```
-    The Version number of the configuration. This number is needet for
+    The Version number of the configuration. This number is required for
     synchronisation to your VPS. If the bot that runs this configuration
     see a new higher version number, it will switch to the new config.
     No need to manual change this number. It will automatical increased

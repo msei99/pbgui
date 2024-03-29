@@ -129,16 +129,21 @@ class BacktestItem(Base):
                 st.code(config)
 
     def fetch_config(self, url: str):
-        response = requests.get(url)
-        if response.status_code == 200:
-            config = response.json()["payload"]["blob"]["rawLines"]
-            config = '\n'.join(config)
-            if validateJSON(config):
-                t = json.loads(config)
-                t["config_name"] = json.loads(config)["config_name"][:60]
-                return config_pretty_str(t)
-        return f'{response.status_code} config not found'
-
+        try:
+            url = url.replace('github.com', 'raw.githubusercontent.com').replace('/tree/', '/').replace('/blob/', '/')
+            response = requests.get(url)
+            response.raise_for_status()
+            config = response.json()
+            return config_pretty_str(config)
+        except requests.exceptions.HTTPError as e:
+            return f'HTTP Error: {e.response.status_code} {e.response.reason}'
+        except requests.exceptions.RequestException as e:
+            return f'Request Exception: {e}'
+        except (KeyError, json.decoder.JSONDecodeError) as e:
+            return f'Error parsing JSON: {e}'
+        except Exception as e:
+            return f'Error: {e}'
+    
     def update_pbconfigdb(self):
         day = 24*60*60
         url = "https://pbconfigdb.scud.dedyn.io/result/pbconfigdb.pbgui.json"
