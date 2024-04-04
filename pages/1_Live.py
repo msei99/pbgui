@@ -347,10 +347,13 @@ def select_instance():
                     st.rerun()
                 elif "confirm" in st.session_state:
                     if st.session_state.confirm:
+                        PBStat().stop()
+                        PBRun().stop()
+                        PBRemote().stop()
                         instances.remove(instances.instances[row])
-                        PBStat().restart()
-                        PBRun().restart_pbrun()
-                        PBRemote().restart()
+                        PBStat().start()
+                        PBRun().start()
+                        PBRemote().start()
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.rerun()
