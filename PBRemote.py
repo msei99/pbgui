@@ -382,17 +382,16 @@ class PBRemote():
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)  
-        self.bucket = self.find_bucket()
-        if not self.bucket:
-            return
-        self.load_remote()
-        self.load_local()
         self.piddir = Path(f'{pbgdir}/data/pid')
         if not self.piddir.exists():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbremote.pid')
         self.my_pid = None
-
+        self.bucket = self.find_bucket()
+        if not self.bucket:
+            return
+        self.load_remote()
+        self.load_local()
 
     def __iter__(self):
         return iter(self.remote_servers)
