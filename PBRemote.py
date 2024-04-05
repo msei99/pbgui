@@ -542,9 +542,11 @@ class PBRemote():
 
     def calculate_api_md5(self):
         file = Path(f'{self.pbdir}/api-keys.json')
-        with open(file, 'rb') as file_obj:
-            file_contents = file_obj.read()
-        return hashlib.md5(file_contents).hexdigest()
+        if file.exists():
+            with open(file, 'rb') as file_obj:
+                file_contents = file_obj.read()
+            return hashlib.md5(file_contents).hexdigest()
+        return None
 
     def find_bucket(self):
         cmd = ['rclone', 'listremotes']
