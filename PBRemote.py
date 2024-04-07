@@ -274,7 +274,8 @@ class RemoteServer():
                                         if not api_backup.exists():
                                             api_backup.mkdir(parents=True)
                                         backup_dest = Path(f'{api_backup}/api-keys_{date}.json')
-                                        shutil.copy(api_keys, backup_dest)
+                                        if Path(api_keys).exists():
+                                            shutil.copy(api_keys, backup_dest)
                                         # Copy new api-keys
                                         src = PurePath(f'{self._path}/{to}_api-keys.json')
                                         shutil.copy(src, api_keys)
