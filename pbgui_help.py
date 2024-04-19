@@ -93,6 +93,13 @@ opt_iters = """
     n optimize iters
     ```"""
 
+opt_today = """
+    ```
+    If selected, the optimizer will always take the current date as the
+    end date. This means that when the date changes, the next rerun is
+    executed up to the current day.
+    ```"""
+
 opt_reruns = """
     ```
     n optimizer reruns
@@ -483,4 +490,9 @@ config_version = """
     see a new higher version number, it will switch to the new config.
     No need to manual change this number. It will automatical increased
     if you hit save.
+    ```"""
+
+pbshare_grid = """
+    ```
+    enable for generate grid picture and share them on gphoto
     ```"""
