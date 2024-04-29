@@ -388,9 +388,20 @@ class PBRemote():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbremote.pid')
         self.my_pid = None
-        self.bucket = self.find_bucket()
-        if not self.bucket:
+        self.bucket = None
+        self.rclone_installed = self.is_rclone_installed()
+        if not self.rclone_installed:
+            self.error = "rclone not installed"
             return
+        self.buckets = self.fetch_buckets()
+        if not self.buckets:
+            self.error = "Rclone not configured. No buckets found."
+            return
+        self.load_config()
+        if not self.bucket:
+            self.error = "bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:"
+            return
+        self.bucket_dir = f'{self.bucket}{self.bucket.split(":")[0]}'
         self.load_remote()
         self.load_local()
 
@@ -430,23 +441,23 @@ class PBRemote():
                 cmdline = process.cmdline()
             except psutil.AccessDenied:
                 continue
-            if any("rclone" in sub for sub in cmdline) and any(f'{self.bucket}' in sub for sub in cmdline):
+            if any("rclone" in sub for sub in cmdline) and any(f'{self.bucket_dir}' in sub for sub in cmdline):
                 return process
 
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'status':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket}/cmd_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'multi':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**,multi_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**,multi_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
             self.sync_downts = round(datetime.now().timestamp())
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
@@ -549,25 +560,25 @@ class PBRemote():
             return hashlib.md5(file_contents).hexdigest()
         return None
 
-    def find_bucket(self):
-        cmd = ['rclone', 'listremotes']
-        try:
-            if platform.system() == "Windows":
-                creationflags = subprocess.CREATE_NO_WINDOW
-                result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
-            else:
-                result = subprocess.run(cmd, capture_output=True, text=True)
-        except Exception as e:
-            self.error = "rclone not installed"
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: {self.error} {e}')
-            return None
-        if result.returncode == 0:
-            if result.stdout:
-                bucket = result.stdout.strip().split(':')[0]
-                return f'{bucket}:{bucket}'
-        self.error = "Can not find bucket name"
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: {self.error}')
-        return None
+    # def find_bucket(self):
+    #     cmd = ['rclone', 'listremotes']
+    #     try:
+    #         if platform.system() == "Windows":
+    #             creationflags = subprocess.CREATE_NO_WINDOW
+    #             result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
+    #         else:
+    #             result = subprocess.run(cmd, capture_output=True, text=True)
+    #     except Exception as e:
+    #         self.error = "rclone not installed"
+    #         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: {self.error} {e}')
+    #         return None
+    #     if result.returncode == 0:
+    #         if result.stdout:
+    #             bucket = result.stdout.strip().split(':')[0]
+    #             return f'{bucket}:{bucket}'
+    #     self.error = "Can not find bucket name"
+    #     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: {self.error}')
+    #     return None
 
     def load_remote(self):
         pbgdir = Path.cwd()
@@ -577,7 +588,7 @@ class PBRemote():
         for remote in found_remote:
             rserver = RemoteServer(remote)
             rserver.pbdir = self.pbdir
-            rserver.bucket = self.bucket
+            rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
             rserver.load_instances()
@@ -601,7 +612,7 @@ class PBRemote():
             while True:
                 if count > 5:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRemote')
-                sleep(1)
+                sleep(2)
                 if self.is_running():
                     break
                 count += 1
@@ -636,9 +647,46 @@ class PBRemote():
         with open(self.pidfile, 'w') as f:
             f.write(str(self.my_pid))
 
+    def load_config(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_section("pbremote"):
+            if pb_config.has_option("pbremote", "bucket"):
+                self.bucket = pb_config.get("pbremote", "bucket")
+            else:
+                self.bucket = None
+
+    def save_config(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("pbremote"):
+            pb_config.add_section("pbremote")
+        pb_config.set("pbremote", "bucket", self.bucket)
+        with open('pbgui.ini', 'w') as configfile:
+            pb_config.write(configfile)
+
+    def is_rclone_installed(self):
+        cmd = ['rclone', 'version']
+        try:
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return True
+        except FileNotFoundError:
+            return False
+    
+    def fetch_buckets(self):
+        if self.is_rclone_installed():
+            cmd = ['rclone', 'listremotes']
+            try:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode == 0:
+                    return result.stdout.splitlines()
+            except FileNotFoundError:
+                pass
+        return []
+
 
 def main():
-    print("Start PBRemote")
+    # print("Start PBRemote")
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
@@ -657,7 +705,7 @@ def main():
     if not remote.bucket:
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
-        print(remote.error)
+        print(f'Error: {remote.error}')
         exit(1)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
     remote.startts = round(datetime.now().timestamp())

@@ -210,6 +210,32 @@ pbstat = """
     Run "crontab -e" and add the @reboot with your path
     ```"""
 
+pbshare = """
+    ```
+    This is the Data Sharing Manager from PBGUI.
+    Enable, to start generating live grid and other statistics to share.
+    To start the Data Sharing Manager after reboot your server, you have to
+    start PBShare.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    # python PBRun.py
+    # python PBRemote.py
+    # python PBStat.py
+    python PBShare.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
+    ```"""
+
 score_maximum = """
     ```
     score = adg per exposure weighted according to adg subdivisions
@@ -495,4 +521,27 @@ config_version = """
 pbshare_grid = """
     ```
     enable for generate grid picture and share them on gphoto
+    ```"""
+pbshare_bucket = """
+    ```
+    Select the rclone remote server where the grid pictures should be uploaded.
+    ```"""
+pbshare_interval = """
+    ```
+    Interval in seconds to generate grid pictures.
+    ```"""
+pbshare_upload_images = """
+    ``` 
+    Enable to upload grid pictures.
+    ```"""
+pbshare_download_index = """
+    ```
+    Download the index.html for preview.
+    You can open and view it in your browser.
+    You can upload it to your webserver to share your grid pictures.
+    A simple free way to share it, is using github pages.
+    ```"""
+pbremote_bucket = """
+    ```
+    Select the rclone bucket to use for sync.
     ```"""

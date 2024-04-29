@@ -1,6 +1,7 @@
 import streamlit as st
 from pbgui_func import set_page_config
 from Backtest import BacktestItem, BacktestQueue, BacktestResults
+from Instance import Instance
 import datetime
 import multiprocessing
 
@@ -36,6 +37,15 @@ def bt_add():
             my_bt.ed = st.session_state.config_bt_ed.strftime("%Y-%m-%d")
         st.date_input("END_DATE", datetime.datetime.strptime(my_bt.ed, '%Y-%m-%d'), format="YYYY-MM-DD", key="config_bt_ed")
     my_bt.edit_config()
+    if my_bt.preview_grid:
+        if "preview_grid_instance" not in st.session_state:
+            st.session_state.preview_grid_instance = Instance()
+        instance = st.session_state.preview_grid_instance
+        instance.config = my_bt.config
+        instance.user = my_bt.user
+        instance.symbol = my_bt.symbol 
+        instance.market_type = my_bt.market_type
+        instance.view_grid(my_bt.sb)
     if st.button("Add to Backtest Queue"):
         if not my_bt.config:
             st.session_state.error = 'Config is empty'

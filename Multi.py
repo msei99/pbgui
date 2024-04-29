@@ -202,6 +202,8 @@ class MultiInstance():
         for instance in st.session_state.pbgui_instances:
             if instance.user == self.user and instance.market_type == "futures":
                 if instance.multi:
+                    instance.enabled_on = self.enabled_on
+                    instance.save()
                     if instance._config.long_enabled:
                         lm = f'-lm n'
                         lw = f'-lw {instance._config.long_we}'
@@ -354,6 +356,10 @@ class MultiInstance():
                 if "enable" in ed["edited_rows"][row]:
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
+                            if instance.multi:
+                                instance.enabled_on = "disabled"
+                            else:
+                                instance.enabled_on = self.enabled_on
                             instance.multi = not instance.multi
 #                            st.rerun()
                 if "edit" in ed["edited_rows"][row]:
