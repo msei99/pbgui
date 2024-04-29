@@ -199,6 +199,7 @@ def main():
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             if timestamp + 86400 < round(datetime.now().timestamp()):
                 remove = True
+                timestamp = round(datetime.now().timestamp())
             else:
                 remove = False
             share.generate_grid_picture(remove)
