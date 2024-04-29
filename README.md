@@ -139,6 +139,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v0.96 (28-04-2024)
 - Services Status and Configure Page
+- PBRemote bucket must be configured in pbgui.ini
 - Recognize and display config type
 - Preview Grid on Instance
 - PBShare for generating Live Grid pictures
