@@ -24,15 +24,15 @@ def list_remote():
     if 'remote' not in st.session_state:
         st.session_state.remote = PBRemote()
     remote = st.session_state.remote
-    # Init PBRemote Toggle
-    if "key_pbremote" in st.session_state:
-        pbremote_status = remote.is_running()
-        if st.session_state.key_pbremote != pbremote_status:
-            if st.session_state.key_pbremote:
-                remote.run()
-            else:
-                remote.stop()
-    pbremote_status = remote.is_running()
+    # # Init PBRemote Toggle
+    # if "key_pbremote" in st.session_state:
+    #     pbremote_status = remote.is_running()
+    #     if st.session_state.key_pbremote != pbremote_status:
+    #         if st.session_state.key_pbremote:
+    #             remote.run()
+    #         else:
+    #             remote.stop()
+    # pbremote_status = remote.is_running()
     if not remote.bucket:
         with st.sidebar:
             if st.button(":back:"):
@@ -51,10 +51,10 @@ def list_remote():
         if st.button(":back:"):
             del st.session_state.list_remote
             st.rerun()
-        st.toggle("PBRemote", value=pbremote_status, key="key_pbremote", help=pbgui_help.pbremote)
-        if "key_live_pbremote_log" in st.session_state:
-            instances.pbremote_log = st.session_state.key_live_pbremote_log
-        st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="key_live_pbremote_log")
+        # st.toggle("PBRemote", value=pbremote_status, key="key_pbremote", help=pbgui_help.pbremote)
+        # if "key_live_pbremote_log" in st.session_state:
+        #     instances.pbremote_log = st.session_state.key_live_pbremote_log
+        # st.checkbox("PBRemote Logfile", value=instances.pbremote_log, key="key_live_pbremote_log")
         api_sync = []
         for rserver in remote.remote_servers:
             if rserver.is_online():
@@ -261,8 +261,8 @@ def list_remote():
                 f'{rserver.name} Start/Stop': st.column_config.CheckboxColumn(f'{rserver.name} Start/Stop', default=None),
             })
         st.data_editor(data=rlist, width=None, height=36+(len(rlist))*35, use_container_width=True, key=f'select_run_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','Server','Online','RTD','User','Symbol'])
-    if instances.pbremote_log:
-        instances.view_log("PBRemote")
+    # if instances.pbremote_log:
+    #     instances.view_log("PBRemote")
 
 #@st.cache_data(experimental_allow_widgets=True)
 def select_instance():
@@ -270,24 +270,24 @@ def select_instance():
     if "pbgui_instances" not in st.session_state:
         return
     instances = st.session_state.pbgui_instances
-    # Init PBRun Toggle
-    if "pbrun" in st.session_state:
-        pbrun_status = PBRun().is_running()
-        if st.session_state.pbrun != pbrun_status:
-            if st.session_state.pbrun:
-                PBRun().run()
-            else:
-                PBRun().stop()
-    pbrun_status = PBRun().is_running()
-    # Init PBStat Toggle
-    if "pbstat" in st.session_state:
-        pbstat_status = PBStat().is_running()
-        if st.session_state.pbstat != pbstat_status:
-            if st.session_state.pbstat:
-                PBStat().run()
-            else:
-                PBStat().stop()
-    pbstat_status = PBStat().is_running()
+    # # Init PBRun Toggle
+    # if "pbrun" in st.session_state:
+    #     pbrun_status = PBRun().is_running()
+    #     if st.session_state.pbrun != pbrun_status:
+    #         if st.session_state.pbrun:
+    #             PBRun().run()
+    #         else:
+    #             PBRun().stop()
+    # pbrun_status = PBRun().is_running()
+    # # Init PBStat Toggle
+    # if "pbstat" in st.session_state:
+    #     pbstat_status = PBStat().is_running()
+    #     if st.session_state.pbstat != pbstat_status:
+    #         if st.session_state.pbstat:
+    #             PBStat().run()
+    #         else:
+    #             PBStat().stop()
+    # pbstat_status = PBStat().is_running()
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
@@ -297,14 +297,14 @@ def select_instance():
     with st.sidebar:
         if st.button(":recycle:"):
             st.rerun()
-        st.toggle("PBRun", value=pbrun_status, key="pbrun", help=pbgui_help.pbrun)
-        if "key_live_pbrun_log" in st.session_state:
-            instances.pbrun_log = st.session_state.key_live_pbrun_log
-        st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="key_live_pbrun_log")
-        st.toggle("PBStat", value=pbstat_status, key="pbstat", help=pbgui_help.pbstat)
-        if "key_live_pbstat_log" in st.session_state:
-            instances.pbstat_log = st.session_state.key_live_pbstat_log
-        st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="key_live_pbstat_log")
+        # st.toggle("PBRun", value=pbrun_status, key="pbrun", help=pbgui_help.pbrun)
+        # if "key_live_pbrun_log" in st.session_state:
+        #     instances.pbrun_log = st.session_state.key_live_pbrun_log
+        # st.checkbox("PBRun Logfile", value=instances.pbrun_log, key="key_live_pbrun_log")
+        # st.toggle("PBStat", value=pbstat_status, key="pbstat", help=pbgui_help.pbstat)
+        # if "key_live_pbstat_log" in st.session_state:
+        #     instances.pbstat_log = st.session_state.key_live_pbstat_log
+        # st.checkbox("PBStat Logfile", value=instances.pbstat_log, key="key_live_pbstat_log")
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
             st.rerun()
@@ -347,13 +347,25 @@ def select_instance():
                     st.rerun()
                 elif "confirm" in st.session_state:
                     if st.session_state.confirm:
-                        PBStat().stop()
-                        PBRun().stop()
-                        PBRemote().stop()
+                        start_pbstat = False
+                        start_pbrun = False
+                        start_pbremote = False
+                        if PBStat().is_running():
+                            PBStat().stop()
+                            start_pbstat = True
+                        if PBRun().is_running():
+                            PBRun().stop()
+                            start_pbrun = True
+                        if PBRemote().is_running():
+                            PBRemote().stop()
+                            start_pbremote = True
                         instances.remove(instances.instances[row])
-                        PBStat().start()
-                        PBRun().start()
-                        PBRemote().start()
+                        if start_pbstat:
+                            PBStat().run()
+                        if start_pbrun:
+                            PBRun().run()
+                        if start_pbremote:
+                            PBRemote().run()
                         del st.session_state.confirm
                         del st.session_state.confirm_text
                         st.rerun()
@@ -405,10 +417,10 @@ def select_instance():
         df = pd.DataFrame(d)
         sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
         st.data_editor(data=sdf, width=None, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
-    if instances.pbrun_log:
-        instances.view_log("PBRun")
-    if instances.pbstat_log:
-        instances.view_log("PBStat")
+    # if instances.pbrun_log:
+    #     instances.view_log("PBRun")
+    # if instances.pbstat_log:
+    #     instances.view_log("PBStat")
 
 def view_instance():
     # Init instance
@@ -459,6 +471,10 @@ def edit_instance():
         st.error(st.session_state.error, icon="🚨")
     # Init instance
     instance = st.session_state.edit_instance
+    # Init PBremote
+    if 'remote' not in st.session_state:
+        st.session_state.remote = PBRemote()
+    remote = st.session_state.remote
     # Init session_state for keys
     if "live_enable" in st.session_state:
         if st.session_state.live_enable != instance.enabled:
@@ -481,6 +497,9 @@ def edit_instance():
     if "live_price_step" in st.session_state:
         if round(st.session_state.live_price_step,3) != instance.price_step:
             instance.price_step = round(st.session_state.live_price_step,3)
+    if "edit_instance_pbshare_grid" in st.session_state:
+        if st.session_state.edit_instance_pbshare_grid != instance.pbshare_grid:
+            instance.pbshare_grid = st.session_state.edit_instance_pbshare_grid
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
@@ -522,6 +541,19 @@ def edit_instance():
             st.number_input("PRICE_PRECISION_MULTIPLIER", key="live_price_precision", format="%.4f", min_value=0.0000, step=0.0001, value=instance.price_precision, help=pbgui_help.price_precision)
             st.number_input("PRICE_STEP_CUSTOM", key="live_price_step", format="%.3f", min_value=0.000, step=0.001, value=instance.price_step, help=pbgui_help.price_step)
     instance.edit_config()
+    if instance.preview_grid:
+        instance.view_grid()
+    col_1, col_2, col_3 = st.columns([1,1,1])
+    with col_1:
+        if instance.multi:
+            enabled_on = [instance.enabled_on]
+            st.selectbox('Enabled on multi',enabled_on, key="edit_instance_enabled_on", disabled=True)
+        else:
+            enabled_on = ["disabled",remote.name] + remote.list()
+            enabled_on_index = enabled_on.index(instance.enabled_on)
+            st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_instance_enabled_on")
+    with col_2:
+        st.toggle("PBShare Grid", value=instance.pbshare_grid, help=pbgui_help.pbshare_grid, key="edit_instance_pbshare_grid")
     instance.view_log()
 
 def import_instance():

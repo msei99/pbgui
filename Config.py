@@ -11,10 +11,15 @@ class Config:
         self._short_we = 1.0
         self._long_enabled = True
         self._short_enabled = False
+        self._type = None
+        self._preview_grid = False
         if config:
             self.config = config
         else:
             self._config = None
+
+    @property
+    def type(self): return self._type
 
     @property
     def config_file(self): return self._config_file
@@ -87,11 +92,24 @@ class Config:
             t["short"]["wallet_exposure_limit"] = self._short_we
             self._config = config_pretty_str(t)
 
+    @property
+    def preview_grid(self): return self._preview_grid
+    @preview_grid.setter
+    def preview_grid(self, new_preview_grid):
+        self._preview_grid = new_preview_grid
+
     def update_config(self):
         self.long_we = json.loads(self._config)["long"]["wallet_exposure_limit"]
         self.short_we = json.loads(self._config)["short"]["wallet_exposure_limit"]
         self.long_enabled = json.loads(self._config)["long"]["enabled"]
         self.short_enabled = json.loads(self._config)["short"]["enabled"]
+        long = json.loads(self._config)["long"]
+        if "ddown_factor" in long:
+            self._type = "recursive_grid"
+        elif "qty_pct_entry" in long:
+            self._type = "clock"
+        elif "grid_span" in long:
+            self._type = "neat_grid"
 
     def load_config(self):
         file =  Path(f'{self._config_file}')
@@ -128,6 +146,9 @@ class Config:
                 self.short_we = st.session_state.config_short_we
                 if self.config:
                     st.session_state.config_instance_config = self.config
+        if "config_preview_grid" in st.session_state:
+            if st.session_state.config_preview_grid != self.preview_grid:
+                self.preview_grid = st.session_state.config_preview_grid
         if "config_instance_config" in st.session_state:
             if st.session_state.config_instance_config != self.config:
                 self.config = st.session_state.config_instance_config
@@ -144,6 +165,9 @@ class Config:
         with col2:
             st.toggle("Short enabled", value=self.short_enabled, key="config_short_enabled", help=None)
             st.number_input("SHORT_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=float(round(self.short_we,2)), step=0.05, format="%.2f", key="config_short_we", help=pbgui_help.exposure)
+        with col3:
+            st.toggle("Preview Grid", value=self.preview_grid, key="config_preview_grid", help=None)
+            st.selectbox("Config Type", [self.type], index=0, key="config_type", help=None, disabled=True)
         # Display Error
         if "error_config" in st.session_state:
             st.error(st.session_state.error_config, icon="🚨")

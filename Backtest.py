@@ -35,6 +35,8 @@ class BacktestItem(Base):
         self.initialize()
 
     @property
+    def preview_grid(self): return self._config.preview_grid
+    @property
     def config(self): return self._config.config
     @config.setter
     def config(self, new_config):
