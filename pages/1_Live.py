@@ -551,7 +551,7 @@ def edit_instance():
         else:
             enabled_on = ["disabled",remote.name] + remote.list()
             enabled_on_index = enabled_on.index(instance.enabled_on)
-            st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_instance_enabled_on")
+            st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_instance_enabled_on", disabled=True)
     with col_2:
         st.toggle("PBShare Grid", value=instance.pbshare_grid, help=pbgui_help.pbshare_grid, key="edit_instance_pbshare_grid")
     instance.view_log()
