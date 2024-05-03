@@ -56,6 +56,12 @@ class InstancesStatus():
                 return
         self.instances.append(istatus)
 
+    def remove(self, istatus : InstanceStatus):
+        for index, instance in enumerate(self.instances):
+            if instance.name == istatus.name:
+                self.instances.pop(index)
+                return
+
     def is_running(self, name: str):
         if self.has_new_status():
             self.load()

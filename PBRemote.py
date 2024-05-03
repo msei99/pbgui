@@ -40,6 +40,8 @@ class RemoteServer():
         self.pbname = None
         self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()
+        self.instances_status_single = InstancesStatus(f'{self.path}/status_single.json')
+        self.instances_status_single.load()
 
     @property
     def name(self): return self._name
@@ -359,6 +361,23 @@ class RemoteServer():
             self.instances_status.update_status()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
 
+    def sync_single_down(self):
+        if self.instances_status_single.has_new_status():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync single from: {self.name}')
+            pbgdir = Path.cwd()
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', f'{self.bucket}/instances_{self.name}', PurePath(f'{pbgdir}/data/remote/instances_{self.name}')]
+            logfile = Path(f'{pbgdir}/data/logs/sync.log')
+            log = open(logfile,"ab")
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            PBRun().update_status(self.instances_status_single.status_file, self.name)
+            status_ts = self.instances_status_single.status_ts
+            self.instances_status_single.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_single ts: {self.name} old: {status_ts} new: {self.instances_status_single.status_ts}')
 
 class PBRemote():
     def __init__(self):
@@ -452,6 +471,8 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'status':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+        elif direction == 'up' and spath == 'status_single':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_single.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'multi':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
@@ -514,6 +535,17 @@ class PBRemote():
             self.sync('up', 'multi')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status.json up: {self.name}')
             self.sync('up', 'status')
+    
+    def sync_single_up(self):
+        if self.local_run.instances_status_single.has_new_status():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
+            status_ts = self.local_run.instances_status_single.status_ts
+            self.local_run.instances_status_single.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_single ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_single.status_ts}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync single up: {self.name}')
+            self.sync('up', 'instances')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status_single.json up: {self.name}')
+            self.sync('up', 'status_single')
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
@@ -721,12 +753,14 @@ def main():
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             remote.sync_multi_up()
+            remote.sync_single_up()
             remote.alive()
             remote.sync_to()
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
                 server.sync_multi_down()
+                server.sync_single_down()
                 if server.sync_from(remote.name):
                     remote.sync("up", 'instances')
                     remote.load_local()

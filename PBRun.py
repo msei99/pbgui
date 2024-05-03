@@ -160,6 +160,187 @@ class RunInstance():
             if instance_cfg["_price_step"] != 0.0:
                 self.parameter = (self.parameter + f' -ps {instance_cfg["_price_step"]}').lstrip(' ')
 
+class RunSingle():
+    def __init__(self):
+        self.user = None
+        self.path = None
+        self._single_config = {}
+        self._parameters = None
+        self.name = None
+        self.multi = False
+        self.version = None
+        self.pbdir = None
+        self.pbgdir = None
+    
+    def watch(self):
+        if not self.is_running():
+            self.start()
+
+    def is_running(self):
+        if self.pid():
+            return True
+        return False
+
+    def pid(self):
+        for process in psutil.process_iter():
+            try:
+                cmdline = process.cmdline()
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.AccessDenied:
+                pass
+            if self.user in cmdline and self.symbol in cmdline and any("passivbot.py" in sub for sub in cmdline):
+#            if any(self.user in sub for sub in cmdline) and any("passivbot.py" in sub for sub in cmdline):
+                return process
+
+    def stop(self):
+        if self.is_running():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: {self.user} {self.symbol}')
+            # print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: passivbot.py {self.path}/config.json')
+            self.pid().kill()
+
+    def start(self):
+        if not self.is_running():
+            config = PurePath(f'{self.path}/config.json')
+            cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/passivbot.py')]
+            cmd_end = f'{self.parameters} {self.user} {self.symbol} '.lstrip(' ')
+            cmd.extend(shlex.split(cmd_end))
+            cmd.extend([config])
+            logfile = Path(f'{self.path}/passivbot.log')
+            log = open(logfile,"ab")
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd_end}')
+
+    # def start(self):
+    #     if not self.is_running():
+    #         config = PurePath(f'{self.path}/config.json')
+    #         cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/passivbot.py'), PurePath(f'{self.path}/multi_run.hjson')]
+    #         logfile = Path(f'{self.path}/passivbot.log')
+    #         log = open(logfile,"ab")
+    #         if platform.system() == "Windows":
+    #             creationflags = subprocess.DETACHED_PROCESS
+    #             creationflags |= subprocess.CREATE_NO_WINDOW
+    #             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+    #         else:
+    #             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+    #         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_multi.py {self.path}/multi_run.hjson')
+
+    def clean_log(self):
+        logfile = Path(f'{self.path}/passivbot.log')
+        if logfile.exists():
+            if logfile.stat().st_size >= 10485760:
+                logfile_old = Path(f'{str(logfile)}.old')
+                copy(logfile,logfile_old)
+                with open(logfile,'r+') as file:
+                    file.truncate()
+
+    # def create_multi_hjson(self):
+    #     # Write running Version to file
+    #     version = str(self._multi_config["version"])
+    #     version_file = Path(f'{self.path}/running_version.txt')
+    #     with open(version_file, "w", encoding='utf-8') as f:
+    #         f.write(version)
+    #     # Generate clean multi_run.hjson file
+    #     del self._multi_config["enabled_on"]
+    #     del self._multi_config["version"]
+    #     self._multi_config["live_configs_dir"] = self.path
+    #     self._multi_config["default_config_path"] = f'{self.pbdir}/configs/live/recursive_grid_mode.example.json'
+    #     run_config = hjson.dumps(self._multi_config)
+    #     config_file = Path(f'{self.path}/multi_run.hjson')
+    #     with open(config_file, "w", encoding='utf-8') as f:
+    #         f.write(run_config)
+
+    def create_parameters(self):
+        # Write running Version to file
+        if "_version" in self._single_config:
+            version = str(self._single_config["_version"])
+        else:
+            version = 0
+        version_file = Path(f'{self.path}/running_version.txt')
+        with open(version_file, "w", encoding='utf-8') as f:
+            f.write(version)
+        # Generate parameters
+        self.parameters = ""
+        if "_long_mode" in self._single_config:
+            if self._single_config["_long_mode"] == "graceful_stop":
+                self.parameters = (self.parameters + f' -lm gs').lstrip(' ')
+            if self._single_config["_long_mode"] == "panic":
+                self.parameters = (self.parameters + f' -lm p').lstrip(' ')
+            if self._single_config["_long_mode"] == "tp_only":
+                self.parameters = (self.parameters + f' -lm t').lstrip(' ')
+        if "_short_mode" in self._single_config:
+            if self._single_config["_short_mode"] == "graceful_stop":
+                self.parameters = (self.parameters + f' -sm gs').lstrip(' ')
+            if self._single_config["_short_mode"] == "panic":
+                self.parameters = (self.parameters + f' -sm p').lstrip(' ')
+            if self._single_config["_short_mode"] == "tp_only":
+                self.parameters = (self.parameters + f' -sm t').lstrip(' ')
+        if "_market_type" in self._single_config:
+            if self._single_config["_market_type"] != "swap":
+                self.parameters = (self.parameters + f' -m spot').lstrip(' ')
+        if "_ohlcv" in self._single_config:
+            if not self._single_config["_ohlcv"]:
+                self.parameters = (self.parameters + f' -oh n').lstrip(' ')
+        if "_co" in self._single_config:
+            if self._single_config["_co"] != -1:
+                self.parameters = (self.parameters + f' -co {self._single_config["_co"]}').lstrip(' ')
+        if "_leverage" in self._single_config:
+            if self._single_config["_leverage"] != 7:
+                self.parameters = (self.parameters + f' -lev {self._single_config["_leverage"]}').lstrip(' ')
+        if "_assigned_balance" in self._single_config:
+            if self._single_config["_assigned_balance"] != 0:
+                self.parameters = (self.parameters + f' -ab {self._single_config["_assigned_balance"]}').lstrip(' ')
+        if "_price_distance_threshold" in self._single_config:
+            if self._single_config["_price_distance_threshold"] != 0.5:
+                self.parameters = (self.parameters + f' -pt {self._single_config["_price_distance_threshold"]}').lstrip(' ')
+        if "_price_precision" in self._single_config:
+            if self._single_config["_price_precision"] != 0.0:
+                self.parameters = (self.parameters + f' -pp {self._single_config["_price_precision"]}').lstrip(' ')
+        if "_price_step" in self._single_config:
+            if self._single_config["_price_step"] != 0.0:
+                self.parameters = (self.parameters + f' -ps {self._single_config["_price_step"]}').lstrip(' ')
+
+    def load(self):
+        file = Path(f'{self.path}/instance.cfg')
+        # file = Path(f'{self.path}/multi.hjson')
+        if file.exists():
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    single_config = f.read()
+                self._single_config = json.loads(single_config)
+                if "_version" in self._single_config:
+                    self.version = self._single_config["_version"]
+                else:
+                    self.version = 0
+                # Load user from config
+                if "_user" in self._single_config:
+                    self.user = self._single_config["_user"]
+                # Load symbol from config
+                if "_symbol" in self._single_config:
+                    self.symbol = self._single_config["_symbol"]
+                if "_multi" in self._single_config:
+                    self.multi = self._single_config["_multi"]
+                if "_enabled_on" in self._single_config:
+                    if self.name == self._single_config["_enabled_on"]:
+                        if self.multi:
+                            return False
+                        else:
+                            return True
+                    else:                        
+                        self.name = self._single_config["_enabled_on"]
+                else:
+                    self.name = "disabled"
+                return False
+            except Exception as e:
+                print(f'Something went wrong, but continue {e}')
+                traceback.print_exc()
+
+
 class RunMulti():
     def __init__(self):
         self.user = None
@@ -248,33 +429,36 @@ class RunMulti():
                         return True
                     else:                        
                         self.name = self._multi_config["enabled_on"]
+                else:
+                    self.name = "disabled"
                 return False
             except Exception as e:
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
 
-    def save(self):
-        instances = {}
-        for instance in self.instances:
-            instances[instance.name] = ({
-                "enabled_on" : instance.enabled_on,
-                "version": instance.version,
-                "multi": instance.multi,
-                "running": instance.running
-            })
-        status = {
-            "activate_ts" : self.activate_ts,
-            "activate_pbname" : self.pbname,
-            "instances" : instances
-        }
-        file = Path(self.status_file)
-        with open(file, "w", encoding='utf-8') as f:
-            json.dump(status, f, indent=4)
+    # def save(self):
+    #     instances = {}
+    #     for instance in self.instances:
+    #         instances[instance.name] = ({
+    #             "enabled_on" : instance.enabled_on,
+    #             "version": instance.version,
+    #             "multi": instance.multi,
+    #             "running": instance.running
+    #         })
+    #     status = {
+    #         "activate_ts" : self.activate_ts,
+    #         "activate_pbname" : self.pbname,
+    #         "instances" : instances
+    #     }
+    #     file = Path(self.status_file)
+    #     with open(file, "w", encoding='utf-8') as f:
+    #         json.dump(status, f, indent=4)
 
 class PBRun():
     def __init__(self):
         self.run_instances = []
         self.run_multi = []
+        self.run_single = []
         self.index = 0
         self.pbgdir = Path.cwd()
         self.pb_config = configparser.ConfigParser()
@@ -287,9 +471,16 @@ class PBRun():
             self.activate_ts = int(self.pb_config.get("main", "activate_ts"))
         else:
             self.activate_ts = 0
+        if self.pb_config.has_option("main", "activate_single_ts"):
+            self.activate_single_ts = int(self.pb_config.get("main", "activate_single_ts"))
+        else:
+            self.activate_single_ts = 0
         self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
         self.instances_status.pbname = self.name
         self.instances_status.activate_ts = self.activate_ts
+        self.instances_status_single = InstancesStatus(f'{self.pbgdir}/data/cmd/status_single.json')
+        self.instances_status_single.pbname = self.name
+        self.instances_status_single.activate_ts = self.activate_single_ts
         if self.pb_config.has_option("main", "pbdir"):
             self.pbdir = self.pb_config.get("main", "pbdir")
         else:
@@ -297,6 +488,7 @@ class PBRun():
             exit(1)
         self.instances_path = f'{self.pbgdir}/data/instances'
         self.multi_path = f'{self.pbgdir}/data/multi'
+        self.single_path = f'{self.pbgdir}/data/instances'
         self.cmd_path = f'{self.pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
@@ -340,6 +532,21 @@ class PBRun():
             for multi in self.run_multi:
                 if multi.path == run_multi.path:
                     self.run_multi.remove(multi)
+                    return
+
+    def add_single(self, run_single: RunSingle):
+        if run_single:
+            for single in self.run_single:
+                if single.path == run_single.path:
+                    single.version = run_single.version
+                    return
+            self.run_single.append(run_single)
+
+    def remove_single(self, run_single: RunSingle):
+        if run_single:
+            for single in self.run_single:
+                if single.path == run_single.path:
+                    self.run_single.remove(single)
                     return
 
     def find_running_version(self, path: str):
@@ -452,8 +659,59 @@ class PBRun():
                     cfg = json.load(f)
                     rserver = cfg["rserver"]
                     status_file = cfg["status_file"]
-                    self.update_from_status(status_file, rserver)
+                    if status_file.split('/')[-1] == 'status.json':
+                        self.update_from_status(status_file, rserver)
+                    elif status_file.split('/')[-1] == 'status_single.json':
+                        self.update_from_status_single(status_file, rserver)
                 cfile.unlink(missing_ok=True)
+
+    def update_from_status_single(self, status_file : str, rserver : str):
+        new_status = InstancesStatus(status_file)
+        if new_status.activate_ts > self.activate_single_ts:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            for instance in new_status:
+                status = self.instances_status_single.find_name(instance.name)
+                if status is not None:
+                    if instance.version > status.version:
+                        # Install new single version
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Version {instance.name} Old: {status.version} New: {instance.version}')
+                        # Remove old *.json configs
+                        dest = f'{self.single_path}/{instance.name}'
+                        p = str(Path(f'{dest}/*'))
+                        items = glob.glob(p)
+                        for item in items:
+                            if item.endswith('.json'):
+                                Path(item).unlink(missing_ok=True)
+                        src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
+                        dest = f'{self.single_path}/{instance.name}'
+                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        self.watch_single([f'{self.single_path}/{instance.name}'])
+                else:
+                    # Install new single instance
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Instance {instance.name} from {rserver} Version: {instance.version}')
+                    src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
+                    dest = f'{self.single_path}/{instance.name}'
+                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                    self.watch_single([f'{self.single_path}/{instance.name}'])
+            for instance in self.instances_status_single:
+                status = new_status.find_name(instance.name)
+                if status is None:
+                    # Remove single instance
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: Single Instance {instance.name}')
+                    if instance.running:
+                        for single in self.run_single:
+                            name = single.path.split('/')[-1]
+                            if name == instance.name:
+                                single.stop()
+                                self.remove_single(single)
+                    source = f'{self.single_path}/{instance.name}'
+                    # Backup single config
+                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{date}')
+                    if not destination.exists():
+                        destination.mkdir(parents=True)
+                    shutil.copytree(source, destination, dirs_exist_ok=True)
+                    shutil.rmtree(source, ignore_errors=True)
 
     def update_from_status(self, status_file : str, rserver : str):
         new_status = InstancesStatus(status_file)
@@ -463,6 +721,7 @@ class PBRun():
                 status = self.instances_status.find_name(instance.name)
                 if status is not None:
                     if instance.version > status.version:
+                        # Install new multi version
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}')
                         # Remove old *.json configs
                         dest = f'{self.multi_path}/{instance.name}'
@@ -476,6 +735,7 @@ class PBRun():
                         shutil.copytree(src, dest, dirs_exist_ok=True)
                         self.watch_multi([f'{self.multi_path}/{instance.name}'])
                 else:
+                    # Install new multi instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                     src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                     dest = f'{self.multi_path}/{instance.name}'
@@ -484,6 +744,7 @@ class PBRun():
             for instance in self.instances_status:
                 status = new_status.find_name(instance.name)
                 if status is None:
+                    # Remove multi instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: Multi Instance {instance.name}')
                     if instance.running:
                         for multi in self.run_multi:
@@ -521,12 +782,22 @@ class PBRun():
                     if multi:
                         self.watch_multi([f'{self.multi_path}/{instance}'])
                         self.update_activate()
+                    else:
+                        self.watch_single([f'{self.single_path}/{instance}'])
+                        self.update_activate_single()
                 cfile.unlink(missing_ok=True)
     
     def update_activate(self):
         self.activate_ts = int(datetime.now().timestamp())
         self.instances_status.activate_ts = self.activate_ts
         self.pb_config.set("main", "activate_ts", str(self.activate_ts))
+        with open('pbgui.ini', 'w') as pbgui_configfile:
+            self.pb_config.write(pbgui_configfile)
+
+    def update_activate_single(self):
+        self.activate_single_ts = int(datetime.now().timestamp())
+        self.instances_status_single.activate_ts = self.activate_single_ts
+        self.pb_config.set("main", "activate_single_ts", str(self.activate_single_ts))
         with open('pbgui.ini', 'w') as pbgui_configfile:
             self.pb_config.write(pbgui_configfile)
 
@@ -547,6 +818,48 @@ class PBRun():
         instances = glob.glob(p)
         for instance in instances:
             self.load(instance)
+
+    def watch_single(self, single_instances : list = None):
+        if not single_instances:
+            p = str(Path(f'{self.single_path}/*'))
+            single_instances = glob.glob(p)
+        for single_instance in single_instances:
+            file = Path(f'{single_instance}/instance.cfg')
+            if file.exists():
+                run_single = RunSingle()
+                status = InstanceStatus()
+#                status.multi = False
+                run_single.path = single_instance
+#                run_multi.user = multi_instance.split('/')[-1]
+#                status.name = run_single.user
+                run_single.name = self.name
+                run_single.pbdir = self.pbdir
+                run_single.pbgdir = self.pbgdir
+                if run_single.load():
+                    if run_single.is_running():
+                        running_version = self.find_running_version(single_instance)
+                        if running_version < run_single.version:
+                            run_single.stop()
+                            run_single.create_parameters()
+                            run_single.start()
+                    else:
+                        run_single.create_parameters()
+                        run_single.start()
+                    self.add_single(run_single)
+                    status.running = True
+                else:
+                    self.remove_single(run_single)
+                    status.running = False
+                    run_single.stop()
+                status.name = single_instance.split('/')[-1]
+                status.multi = run_single.multi
+                status.version = run_single.version
+                status.enabled_on = run_single.name
+                if status.multi:
+                    self.instances_status_single.remove(status)
+                else:
+                    self.instances_status_single.add(status)
+        self.instances_status_single.save()
 
     def watch_multi(self, multi_instances : list = None):
         if not multi_instances:
@@ -651,8 +964,9 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
-    run.load_all()
+    # run.load_all()
     run.watch_multi()
+    run.watch_single()
     count = 0
     while True:
         try:
@@ -661,19 +975,23 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-            run.has_restart()
-            run.has_update()
+            # run.has_restart()
+            # run.has_update()
             run.has_activate()
             run.has_update_status()
-            for run_instance in run:
-                run_instance.watch()
+            # for run_instance in run:
+            #     run_instance.watch()
             for run_multi in run.run_multi:
                 run_multi.watch()
+            for run_single in run.run_single:
+                run_single.watch()
             if count%2 == 0:
-                for run_instance in run:
-                    run_instance.clean_log()
+                # for run_instance in run:
+                #     run_instance.clean_log()
                 for run_multi in run.run_multi:
                     run_multi.clean_log()
+                for run_single in run.run_single:
+                    run_single.clean_log()
             sleep(5)
             count += 1
         except Exception as e:
