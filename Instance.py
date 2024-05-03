@@ -30,6 +30,7 @@ class Instance(Base):
         self._enabled = False
         self._multi = False
         self._enabled_on = "disabled"
+        self._version = 0
         self._pbshare_grid = False
         self._error = None # not saved
         self._symbol_ccxt = None
@@ -70,6 +71,8 @@ class Instance(Base):
     def multi(self): return self._multi
     @property
     def enabled_on(self): return self._enabled_on
+    @property
+    def version(self): return self._version
     @property
     def pbshare_grid(self): return self._pbshare_grid
     @property
@@ -251,6 +254,10 @@ class Instance(Base):
     @enabled_on.setter
     def enabled_on(self, new_enabled_on):
         self._enabled_on = new_enabled_on
+
+    @version.setter
+    def version(self, new_version):
+        self._version = new_version
 
     @pbshare_grid.setter
     def pbshare_grid(self, new_pbshare_grid):
@@ -1094,6 +1101,7 @@ class Instance(Base):
                 instance_path.mkdir(parents=True)
             self._config.config_file = f'{self._instance_path}/config.json'
             self._config.save_config()
+            self._version += 1
             file = Path(f'{instance_path}/instance.cfg')
             self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
             state = self.__dict__.copy()
