@@ -34,7 +34,7 @@ class InstancesStatus():
 #        pbgdir = Path.cwd()
 #        self.status_file = f'{pbgdir}/data/cmd/status.json'
         self.status_file = status_file
-        self.status_ts = None
+        self.status_ts = 0
         self.load()
 
     def __iter__(self):
