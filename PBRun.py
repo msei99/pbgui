@@ -712,6 +712,7 @@ class PBRun():
                         destination.mkdir(parents=True)
                     shutil.copytree(source, destination, dirs_exist_ok=True)
                     shutil.rmtree(source, ignore_errors=True)
+                    self.instances_status_single.remove(instance)
 
     def update_from_status(self, status_file : str, rserver : str):
         new_status = InstancesStatus(status_file)
@@ -855,10 +856,11 @@ class PBRun():
                 status.multi = run_single.multi
                 status.version = run_single.version
                 status.enabled_on = run_single.name
-                if status.multi:
-                    self.instances_status_single.remove(status)
-                else:
-                    self.instances_status_single.add(status)
+                # if status.multi:
+                #     self.instances_status_single.remove(status)
+                # else:
+                #     self.instances_status_single.add(status)
+                self.instances_status_single.add(status)
         self.instances_status_single.save()
 
     def watch_multi(self, multi_instances : list = None):
