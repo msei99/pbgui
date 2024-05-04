@@ -675,24 +675,26 @@ class PBRun():
                     if instance.version > status.version:
                         # Install new single version
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Version {instance.name} Old: {status.version} New: {instance.version}')
-                        # Remove old *.json configs
-                        dest = f'{self.single_path}/{instance.name}'
-                        p = str(Path(f'{dest}/*'))
-                        items = glob.glob(p)
-                        for item in items:
-                            if item.endswith('.json'):
-                                Path(item).unlink(missing_ok=True)
+                        # # Remove old *.json configs
+                        # dest = f'{self.single_path}/{instance.name}'
+                        # p = str(Path(f'{dest}/*'))
+                        # items = glob.glob(p)
+                        # for item in items:
+                        #     if item.endswith('.json'):
+                        #         Path(item).unlink(missing_ok=True)
                         src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                         dest = f'{self.single_path}/{instance.name}'
-                        shutil.copytree(src, dest, dirs_exist_ok=True)
-                        self.watch_single([f'{self.single_path}/{instance.name}'])
+                        if Path(src).exists():
+                            shutil.copytree(src, dest, dirs_exist_ok=True)
+                        # self.watch_single([f'{self.single_path}/{instance.name}'])
                 else:
                     # Install new single instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Instance {instance.name} from {rserver} Version: {instance.version}')
                     src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                     dest = f'{self.single_path}/{instance.name}'
-                    shutil.copytree(src, dest, dirs_exist_ok=True)
-                    self.watch_single([f'{self.single_path}/{instance.name}'])
+                    if Path(src).exists():
+                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                    # self.watch_single([f'{self.single_path}/{instance.name}'])
             for instance in self.instances_status_single:
                 status = new_status.find_name(instance.name)
                 if status is None:
@@ -705,14 +707,15 @@ class PBRun():
                                 single.stop()
                                 self.remove_single(single)
                     source = f'{self.single_path}/{instance.name}'
-                    # Backup single config
-                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{date}')
-                    if not destination.exists():
-                        destination.mkdir(parents=True)
-                    shutil.copytree(source, destination, dirs_exist_ok=True)
-                    shutil.rmtree(source, ignore_errors=True)
-                    self.instances_status_single.remove(instance)
+                    if Path(source).exists():
+                        # Backup single config
+                        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{date}')
+                        if not destination.exists():
+                            destination.mkdir(parents=True)
+                        shutil.copytree(source, destination, dirs_exist_ok=True)
+                        shutil.rmtree(source, ignore_errors=True)
+            self.watch_single()
 
     def update_from_status(self, status_file : str, rserver : str):
         new_status = InstancesStatus(status_file)
