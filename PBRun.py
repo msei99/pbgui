@@ -686,7 +686,7 @@ class PBRun():
                         dest = f'{self.single_path}/{instance.name}'
                         if Path(src).exists():
                             shutil.copytree(src, dest, dirs_exist_ok=True)
-                        # self.watch_single([f'{self.single_path}/{instance.name}'])
+                            self.watch_single([f'{self.single_path}/{instance.name}'])
                 else:
                     # Install new single instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Instance {instance.name} from {rserver} Version: {instance.version}')
@@ -694,8 +694,9 @@ class PBRun():
                     dest = f'{self.single_path}/{instance.name}'
                     if Path(src).exists():
                         shutil.copytree(src, dest, dirs_exist_ok=True)
-                    # self.watch_single([f'{self.single_path}/{instance.name}'])
-            for instance in self.instances_status_single:
+                        self.watch_single([f'{self.single_path}/{instance.name}'])
+            remove_instance = False
+            for instance in self.instances_status_single[:]:
                 status = new_status.find_name(instance.name)
                 if status is None:
                     # Remove single instance
@@ -715,7 +716,10 @@ class PBRun():
                             destination.mkdir(parents=True)
                         shutil.copytree(source, destination, dirs_exist_ok=True)
                         shutil.rmtree(source, ignore_errors=True)
-            self.watch_single()
+                        remove_instance = True
+                        self.instances_status_single.remove(instance)
+            if remove_instance:
+                self.instances_status_single.save()
 
     def update_from_status(self, status_file : str, rserver : str):
         new_status = InstancesStatus(status_file)
