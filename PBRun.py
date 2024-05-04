@@ -696,7 +696,7 @@ class PBRun():
                         shutil.copytree(src, dest, dirs_exist_ok=True)
                         self.watch_single([f'{self.single_path}/{instance.name}'])
             remove_instances = []
-            for instance in self.instances_status_single[:]:
+            for instance in self.instances_status_single:
                 status = new_status.find_name(instance.name)
                 if status is None:
                     # Remove single instance
