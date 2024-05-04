@@ -832,6 +832,8 @@ class PBRun():
         if not single_instances:
             p = str(Path(f'{self.single_path}/*'))
             single_instances = glob.glob(p)
+            # Remove all existing instances from status
+            self.instances_status_single.instances = []
         for single_instance in single_instances:
             file = Path(f'{single_instance}/instance.cfg')
             if file.exists():
