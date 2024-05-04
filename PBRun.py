@@ -695,7 +695,7 @@ class PBRun():
                     if Path(src).exists():
                         shutil.copytree(src, dest, dirs_exist_ok=True)
                         self.watch_single([f'{self.single_path}/{instance.name}'])
-            remove_instance = False
+            remove_instances = []
             for instance in self.instances_status_single[:]:
                 status = new_status.find_name(instance.name)
                 if status is None:
@@ -716,9 +716,10 @@ class PBRun():
                             destination.mkdir(parents=True)
                         shutil.copytree(source, destination, dirs_exist_ok=True)
                         shutil.rmtree(source, ignore_errors=True)
-                        remove_instance = True
-                        self.instances_status_single.remove(instance)
-            if remove_instance:
+                        remove_instances.append(instance)
+            if remove_instances:
+                for instance in remove_instances:
+                    self.instances_status_single.remove(instance)
                 self.instances_status_single.save()
 
     def update_from_status(self, status_file : str, rserver : str):
