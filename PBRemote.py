@@ -602,6 +602,7 @@ class PBRemote():
         disk = psutil.disk_usage('/')
         cpu = psutil.cpu_percent()
         boot = psutil.boot_time()
+        self.api_md5 = self.calculate_api_md5()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
