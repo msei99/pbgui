@@ -117,8 +117,11 @@ def opt_results():
 
 set_page_config()
 
-# Init Session State
+# Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
+    st.switch_page("pbgui.py")
+# Init Services and Instances
+if 'services' not in st.session_state:
     st.switch_page("pbgui.py")
 
 # Init OptimizeConfigs

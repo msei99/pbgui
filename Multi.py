@@ -356,12 +356,15 @@ class MultiInstance():
                 if "enable" in ed["edited_rows"][row]:
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
-                            if instance.multi:
-                                instance.enabled_on = "disabled"
+                            if not instance.multi and instance.enabled_on == "disabled":
+                                if instance.multi:
+                                    instance.enabled_on = "disabled"
+                                else:
+                                    instance.enabled_on = self.enabled_on
+                                instance.multi = not instance.multi
+#                                st.rerun()
                             else:
-                                instance.enabled_on = self.enabled_on
-                            instance.multi = not instance.multi
-#                            st.rerun()
+                                ed_key += 1
                 if "edit" in ed["edited_rows"][row]:
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
@@ -373,7 +376,10 @@ class MultiInstance():
         for id, symbol in enumerate(self._symbols):
             for instance in st.session_state.pbgui_instances:
                 if instance.user == self.user and instance.symbol == symbol:
-                    enable_multi = instance.multi
+                    if instance.multi or (not instance.multi and instance.enabled_on == "disabled"):
+                        enable_multi = instance.multi
+                    else:
+                        enable_multi = None
                     long_enabled = instance._config.long_enabled
                     long_we = instance._config.long_we
                     long_mode = instance.long_mode
@@ -410,7 +416,7 @@ class MultiInstance():
             })
         column_config = {
             "id": None,
-            "inst": None
+            "enable": st.column_config.CheckboxColumn(label="enable on multi", help="If no Checkbox is shown, Symbol is running as a Single Instance and can not be enabled on this Multi"),
             }
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
@@ -499,3 +505,10 @@ class MultiInstances:
             if inst.load(instance):
                 self.instances.append(inst)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
+
+
+def main():
+    print("Don't Run this Class from CLI")
+
+if __name__ == '__main__':
+    main()

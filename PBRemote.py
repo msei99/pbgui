@@ -379,6 +379,28 @@ class RemoteServer():
             self.instances_status_single.update_status()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_single ts: {self.name} old: {status_ts} new: {self.instances_status_single.status_ts}')
 
+    def sync_api(self):
+        api_file = Path(f'{self._path}/api-keys.json')
+        if api_file.exists():
+            api_keys = Path(f'{self._pbdir}/api-keys.json')
+            if not self.calculate_md5(api_file) != self.calculate_md5(api_keys):
+                # Backup api-keys
+                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                pbgdir = Path.cwd()
+                destination = Path(f'{pbgdir}/data/backup/api-keys/{date}')
+                if not destination.exists():
+                    destination.mkdir(parents=True)
+                shutil.copy(api_keys, destination)
+                # Copy new api-keys
+                shutil.copy(api_file, api_keys)
+
+    def calculate_md5(self, file: Path):
+        if file.exists():
+            with open(file, 'rb') as file_obj:
+                file_contents = file_obj.read()
+            return hashlib.md5(file_contents).hexdigest()
+        return None
+
 class PBRemote():
     def __init__(self):
         self.error = None          
@@ -546,6 +568,23 @@ class PBRemote():
             self.sync('up', 'instances')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status_single.json up: {self.name}')
             self.sync('up', 'status_single')
+
+    def sync_api_up(self):
+        pbgdir = Path.cwd()
+        api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
+        source = Path(f'{self.pbdir}/api-keys.json')
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync api-keys.json to all remote servers')
+        shutil.copy(source, api_file)
+    
+    def check_if_api_synced(self):
+        for server in self.remote_servers:
+            if not server.is_api_md5_same(self.api_md5):
+                return False
+        pbgdir = Path.cwd()
+        api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
+        if api_file.exists():
+            api_file.unlink(missing_ok=True)
+        return True
 
     def alive(self):
         timestamp = round(datetime.now().timestamp())
@@ -754,6 +793,7 @@ def main():
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             remote.sync_multi_up()
             remote.sync_single_up()
+            remote.check_if_api_synced()
             remote.alive()
             remote.sync_to()
             remote.sync('down', 'cmd')
@@ -761,6 +801,7 @@ def main():
                 server.load()
                 server.sync_multi_down()
                 server.sync_single_down()
+                server.sync_api()
                 if server.sync_from(remote.name):
                     remote.sync("up", 'instances')
                     remote.load_local()
