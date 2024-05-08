@@ -488,11 +488,11 @@ class PBRemote():
     def sync(self, direction: str, spath: str):
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'status':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,*_api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'status_single':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_single.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'multi':
