@@ -202,6 +202,10 @@ set_page_config("Backtest")
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     st.switch_page("pbgui.py")
+# Init Services and Instances
+if 'services' not in st.session_state:
+    st.switch_page("pbgui.py")
+
 if 'my_bt' in st.session_state:
     my_bt = st.session_state.my_bt
 else:

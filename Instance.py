@@ -8,6 +8,7 @@ from PBRemote import PBRemote
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
+import shutil
 import json
 import glob
 import pandas as pd
@@ -626,6 +627,17 @@ class Instance(Base):
         return self.exchange.fetch_timestamp()
 
     def remove(self):
+        # Backup
+        source = f'{self._instance_path}'
+        pbgdir = Path.cwd()
+        if Path(source).exists():
+            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            name = self._instance_path.split("/")[-1]
+            destination = Path(f'{pbgdir}/data/backup/instances/{name}/{date}')
+            if not destination.exists():
+                destination.mkdir(parents=True)
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+        # Remove
         rmtree(self._instance_path, ignore_errors=True)
 
     def fetch_trades(self):

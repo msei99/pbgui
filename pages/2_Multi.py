@@ -1,16 +1,9 @@
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, upload_pbconfigdb
-from Instance import Instances, Instance
-from Multi import MultiInstance, MultiInstances
-from Backtest import BacktestItem
+from pbgui_func import set_page_config
+from Multi import MultiInstance
 from PBRun import PBRun
-from PBStat import PBStat
-from PBRemote import PBRemote
-from datetime import datetime
 import pbgui_help
 import pandas as pd
-import platform
 from time import sleep
 
 def edit_multi_instance():
@@ -108,10 +101,9 @@ set_page_config()
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     st.switch_page("pbgui.py")
-if 'pbgui_instances' not in st.session_state:
-    st.session_state.pbgui_instances = Instances()
-if 'multi_instances' not in st.session_state:
-    st.session_state.multi_instances = MultiInstances()
+# Init Services and Instances
+if 'services' not in st.session_state:
+    st.switch_page("pbgui.py")
 
 if 'edit_multi_instance' in st.session_state:
     edit_multi_instance()

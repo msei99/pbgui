@@ -142,15 +142,12 @@ def select_user():
 
 set_page_config()
 
-# Init Session State
+# Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     st.switch_page("pbgui.py")
-
-if 'users' not in st.session_state:
-    st.session_state.users = Users()
-
-if 'pbgui_instances' not in st.session_state:
-    st.session_state.pbgui_instances = Instances()
+# Init Services and Instances
+if 'services' not in st.session_state:
+    st.switch_page("pbgui.py")
 
 # Display Setup
 if 'edit_user' in st.session_state:

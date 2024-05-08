@@ -13,6 +13,28 @@ import platform
 from time import sleep
 
 
+# @st.experimental_dialog("Delete Instance?")
+def delete_instance(instance):
+    st.warning(f"Delete Instance {instance.user} {instance.symbol} {instance.market_type} ?", icon="⚠️")
+    # reason = st.text_input("Because...")
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button(":green[Yes]"):
+            services = st.session_state.services
+            with st.spinner('Stop Services...'):
+                services.stop_all_started()
+            with st.spinner('Delete Instance...'):
+                st.session_state.pbgui_instances.remove(instance)
+            with st.spinner('Start Services...'):
+                services.start_all_was_running()
+            # instances.remove(instance)
+            st.session_state.ed_key += 1
+            st.rerun()
+    with col2:
+        if st.button(":red[No]"):
+            st.session_state.ed_key += 1
+            st.rerun()
+
 def bgcolor_positive_or_negative(value):
     bgcolor = "lightcoral" if value < 0 else "lightgreen"
     return f"background-color: {bgcolor};"
@@ -22,10 +44,8 @@ def select_instance():
     if "pbgui_instances" not in st.session_state:
         return
     instances = st.session_state.pbgui_instances
-    if "error" in st.session_state:
-        st.error(st.session_state.error, icon="🚨")
-    if "confirm" in st.session_state:
-        st.session_state.confirm = st.checkbox(st.session_state.confirm_text)
+    # Init PBremote
+    pbremote = st.session_state.pbremote
     # Navigation
     with st.sidebar:
         if st.button(":recycle:"):
@@ -35,63 +55,87 @@ def select_instance():
             st.rerun()
         if st.button("Refresh from Disk"):
             del st.session_state.pbgui_instances
+            with st.spinner('Initializing Instances...'):
+                st.session_state.pbgui_instances = Instances()
             st.rerun()
         if not platform.system() == "Windows":
             if st.button("Import"):
                 st.session_state.import_instance = True
                 st.rerun()
-    if "editor_select_instance" in st.session_state:
-        ed = st.session_state["editor_select_instance"]
+    if not "ed_key" in st.session_state:
+        st.session_state.ed_key = 0
+    if f'editor_select_instance_{st.session_state.ed_key}' in st.session_state:
+        ed = st.session_state[f"editor_select_instance_{st.session_state.ed_key}"]
         for row in ed["edited_rows"]:
+            selected_row = st.session_state.edit_single_instances_d[row]['id']
             if "Edit" in ed["edited_rows"][row]:
-                st.session_state.edit_instance = instances.instances[row]
-                if "confirm" in st.session_state:
-                    del st.session_state.confirm
-                    del st.session_state.confirm_text
+                st.session_state.edit_instance = instances.instances[selected_row]
                 st.rerun()
             if "Delete" in ed["edited_rows"][row]:
-                if not "confirm" in st.session_state:
-                    st.session_state.confirm_text = f':red[Delete selected instance ({instances.instances[row].user} {instances.instances[row].symbol} {instances.instances[row].market_type})?]'
-                    st.session_state.confirm = False
-                    st.rerun()
-                elif "confirm" in st.session_state:
-                    if st.session_state.confirm:
-                        start_pbstat = False
-                        start_pbrun = False
-                        start_pbremote = False
-                        if PBStat().is_running():
-                            PBStat().stop()
-                            start_pbstat = True
-                        if PBRun().is_running():
-                            PBRun().stop()
-                            start_pbrun = True
-                        if PBRemote().is_running():
-                            PBRemote().stop()
-                            start_pbremote = True
-                        instances.remove(instances.instances[row])
-                        if start_pbstat:
-                            PBStat().run()
-                        if start_pbrun:
-                            PBRun().run()
-                        if start_pbremote:
-                            PBRemote().run()
-                        del st.session_state.confirm
-                        del st.session_state.confirm_text
-                        st.rerun()
+                delete_instance(instances.instances[selected_row])
+    if "editor_select_instance_multi" in st.session_state:
+        ed = st.session_state["editor_select_instance_multi"]
+        for row in ed["edited_rows"]:
+            selected_row = st.session_state.edit_single_instances_d_multi[row]['id']
+            if "Edit" in ed["edited_rows"][row]:
+                st.session_state.edit_instance = instances.instances[selected_row]
+                st.rerun()
     d = []
+    d_multi = []
     for id, instance in enumerate(instances):
-        d.append({
-            'id': id,
-            'Edit': False,
-            'User': instance.user,
-            'Symbol': instance.symbol,
-            'Market_type': instance.market_type,
-            'Enabled On': instance.enabled_on,
-            'Delete': False,
-        })
+        # Find running_version
+        if instance.enabled_on == pbremote.name:
+            running_version = pbremote.local_run.instances_status_single.find_version(f'{instance.user}_{instance.symbol}_{instance.market_type}')
+        elif instance.enabled_on in pbremote.list():
+            running_version = pbremote.find_server(instance.enabled_on).instances_status_single.find_version(f'{instance.user}_{instance.symbol}_{instance.market_type}')
+        else:
+            running_version = 0
+        # Create running_on
+        running_on = []
+        if pbremote.local_run.instances_status_single.is_running(f'{instance.user}_{instance.symbol}_{instance.market_type}'):
+            running_on.append(pbremote.name)
+        for server in pbremote.list():
+            if pbremote.find_server(server).instances_status_single.is_running(f'{instance.user}_{instance.symbol}_{instance.market_type}'):
+                running_on.append(server)
+        # Create remote_str
+        if instance.enabled_on in running_on and (instance.version == running_version):
+            remote_str = f'✅ Running {running_on}'
+        elif running_on:
+            remote_str = f'🔄 Running {running_on}'
+        elif instance.enabled_on != 'disabled':
+            remote_str = '🔄 Activation required'
+        else:
+            remote_str = '❌'
+        if not instance.multi:
+            d.append({
+                'id': id,
+                'Edit': False,
+                'User': instance.user,
+                'Symbol': instance.symbol,
+                'Market_type': instance.market_type,
+                'Enabled On': instance.enabled_on,
+                'Version': instance.version,
+                'Remote': remote_str,
+                'Remote Version': running_version,
+                'Delete': False,
+            })
+        else:
+            d_multi.append({
+                'id': id,
+                'Edit': False,
+                'User': instance.user,
+                'Symbol': instance.symbol,
+                'Market_type': instance.market_type,
+                'Enabled On': instance.enabled_on,
+            })
+    st.session_state.edit_single_instances_d = d
+    st.session_state.edit_single_instances_d_multi = d_multi
     column_config = {
         "id": None}
-    st.data_editor(data=d, width=None, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Enabled On'])
+    st.header("Single Instances")
+    st.data_editor(data=d, width=None, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On','Version','Remote','Remote Version'])
+    st.header("Instances used in Multi configuration")
+    st.data_editor(data=d_multi, width=None, height=36+(len(d_multi))*35, use_container_width=True, key="editor_select_instance_multi", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On'])
 
 def edit_instance():
     # Display Error
@@ -100,9 +144,9 @@ def edit_instance():
     # Init instance
     instance = st.session_state.edit_instance
     # Init PBremote
-    if 'remote' not in st.session_state:
-        st.session_state.remote = PBRemote()
-    remote = st.session_state.remote
+    # if 'remote' not in st.session_state:
+    #     st.session_state.remote = PBRemote()
+    pbremote = st.session_state.pbremote
     # Init session_state for keys
     if "live_enable" in st.session_state:
         if st.session_state.live_enable != instance.enabled:
@@ -149,7 +193,7 @@ def edit_instance():
                 PBRemote().restart()
 #            st.rerun()
         if st.button("Activate"):
-            remote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
+            pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
         if st.button("Backtest"):
             st.session_state.my_bt = BacktestItem(instance._config.config)
             st.session_state.my_bt.user = instance.user
@@ -185,7 +229,7 @@ def edit_instance():
             enabled_on = [instance.enabled_on]
             st.selectbox('Enabled on multi',enabled_on, key="edit_instance_enabled_on", disabled=True)
         else:
-            enabled_on = ["disabled",remote.name] + remote.list()
+            enabled_on = ["disabled",pbremote.name] + pbremote.list()
             enabled_on_index = enabled_on.index(instance.enabled_on)
             st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_instance_enabled_on")
     with col_2:
@@ -210,10 +254,11 @@ set_page_config()
 # Init session state
 if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     st.switch_page("pbgui.py")
-if 'pbgui_instances' not in st.session_state:
-    st.session_state.pbgui_instances = Instances()
+# Init Services and Instances
+if 'services' not in st.session_state:
+    st.switch_page("pbgui.py")
 
-elif 'edit_instance' in st.session_state:
+if 'edit_instance' in st.session_state:
     edit_instance()
 elif 'import_instance' in st.session_state:
     import_instance()
