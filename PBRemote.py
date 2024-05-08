@@ -383,7 +383,8 @@ class RemoteServer():
         api_file = Path(f'{self._path}/api-keys.json')
         if api_file.exists():
             api_keys = Path(f'{self._pbdir}/api-keys.json')
-            if not self.calculate_md5(api_file) != self.calculate_md5(api_keys):
+            if self.calculate_md5(api_file) != self.calculate_md5(api_keys):
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install new API Keys from: {self.name}')
                 # Backup api-keys
                 date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 pbgdir = Path.cwd()
