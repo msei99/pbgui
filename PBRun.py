@@ -803,10 +803,10 @@ class PBRun():
                 run_single.name = self.name
                 run_single.pbdir = self.pbdir
                 run_single.pbgdir = self.pbgdir
-                # Stop old instance if we start them as a new single instance (can be removed in a future version)
-                if run_single.name != "disabled":
-                    self.stop_old_instance(single_instance)
                 if run_single.load():
+                    # Stop old instance if we start them as a new single instance (can be removed in a future version)
+                    if run_single.name != "disabled":
+                        self.stop_old_instance(single_instance)
                     if run_single.is_running():
                         running_version = self.find_running_version(single_instance)
                         if running_version < run_single.version:
