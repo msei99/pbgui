@@ -216,20 +216,6 @@ class RunSingle():
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd_end}')
 
-    # def start(self):
-    #     if not self.is_running():
-    #         config = PurePath(f'{self.path}/config.json')
-    #         cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/passivbot.py'), PurePath(f'{self.path}/multi_run.hjson')]
-    #         logfile = Path(f'{self.path}/passivbot.log')
-    #         log = open(logfile,"ab")
-    #         if platform.system() == "Windows":
-    #             creationflags = subprocess.DETACHED_PROCESS
-    #             creationflags |= subprocess.CREATE_NO_WINDOW
-    #             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
-    #         else:
-    #             subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
-    #         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_multi.py {self.path}/multi_run.hjson')
-
     def clean_log(self):
         logfile = Path(f'{self.path}/passivbot.log')
         if logfile.exists():
@@ -238,22 +224,6 @@ class RunSingle():
                 copy(logfile,logfile_old)
                 with open(logfile,'r+') as file:
                     file.truncate()
-
-    # def create_multi_hjson(self):
-    #     # Write running Version to file
-    #     version = str(self._multi_config["version"])
-    #     version_file = Path(f'{self.path}/running_version.txt')
-    #     with open(version_file, "w", encoding='utf-8') as f:
-    #         f.write(version)
-    #     # Generate clean multi_run.hjson file
-    #     del self._multi_config["enabled_on"]
-    #     del self._multi_config["version"]
-    #     self._multi_config["live_configs_dir"] = self.path
-    #     self._multi_config["default_config_path"] = f'{self.pbdir}/configs/live/recursive_grid_mode.example.json'
-    #     run_config = hjson.dumps(self._multi_config)
-    #     config_file = Path(f'{self.path}/multi_run.hjson')
-    #     with open(config_file, "w", encoding='utf-8') as f:
-    #         f.write(run_config)
 
     def create_parameters(self):
         # Write running Version to file
@@ -436,24 +406,6 @@ class RunMulti():
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
 
-    # def save(self):
-    #     instances = {}
-    #     for instance in self.instances:
-    #         instances[instance.name] = ({
-    #             "enabled_on" : instance.enabled_on,
-    #             "version": instance.version,
-    #             "multi": instance.multi,
-    #             "running": instance.running
-    #         })
-    #     status = {
-    #         "activate_ts" : self.activate_ts,
-    #         "activate_pbname" : self.pbname,
-    #         "instances" : instances
-    #     }
-    #     file = Path(self.status_file)
-    #     with open(file, "w", encoding='utf-8') as f:
-    #         json.dump(status, f, indent=4)
-
 class PBRun():
     def __init__(self):
         self.run_instances = []
@@ -557,36 +509,36 @@ class PBRun():
                 version = f.read()
         return int(version)
 
-    def start_instance(self, instance):
-        self.change_enabled(instance, True)
-        ipath = f'{self.instances_path}/{instance}'
-        self.update(ipath, True)
+    # def start_instance(self, instance):
+    #     self.change_enabled(instance, True)
+    #     ipath = f'{self.instances_path}/{instance}'
+    #     self.update(ipath, True)
 
     def stop_instance(self, instance):
         self.change_enabled(instance, False)
         ipath = f'{self.instances_path}/{instance}'
         self.update(ipath, False)
 
-    def restart_instance(self, instance):
-        user = "_".join(instance.split("_")[0:-2])
-        symbol = instance.split("_")[-2]
-        self.restart(user, symbol)
+    # def restart_instance(self, instance):
+    #     user = "_".join(instance.split("_")[0:-2])
+    #     symbol = instance.split("_")[-2]
+    #     self.restart(user, symbol)
 
     def disable_instance(self, instance):
         self.change_enabled(instance, False)
 
-    def enable_instance(self, instance):
-        self.change_enabled(instance, True)
+    # def enable_instance(self, instance):
+    #     self.change_enabled(instance, True)
 
-    def is_enabled_instance(self, instance):
-        ipath = f'{self.instances_path}/{instance}'
-        ifile = Path(f'{ipath}/instance.cfg')
-        if ifile.exists():
-            with open(ifile, "r", encoding='utf-8') as f:
-                inst = json.load(f)
-            if inst["_enabled"]:
-                return True
-        return False
+    # def is_enabled_instance(self, instance):
+    #     ipath = f'{self.instances_path}/{instance}'
+    #     ifile = Path(f'{ipath}/instance.cfg')
+    #     if ifile.exists():
+    #         with open(ifile, "r", encoding='utf-8') as f:
+    #             inst = json.load(f)
+    #         if inst["_enabled"]:
+    #             return True
+    #     return False
 
     def change_enabled(self, instance : str, enabled : bool):
         ipath = f'{self.instances_path}/{instance}'
@@ -598,47 +550,47 @@ class PBRun():
         with open(ifile, "w", encoding='utf-8') as f:
             json.dump(inst, f, indent=4)
 
-    def restart(self, user : str, symbol : str):
-        cfile = Path(f'{self.cmd_path}/restart.cmd')
-        cfg = ({
-            "user": user,
-            "symbol": symbol})
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
+    # def restart(self, user : str, symbol : str):
+    #     cfile = Path(f'{self.cmd_path}/restart.cmd')
+    #     cfg = ({
+    #         "user": user,
+    #         "symbol": symbol})
+    #     with open(cfile, "w", encoding='utf-8') as f:
+    #         json.dump(cfg, f)
 
-    def has_restart(self):
-        cfile = Path(f'{self.cmd_path}/restart.cmd')
-        if cfile.exists():
-            with open(cfile, "r", encoding='utf-8') as f:
-                cfg = json.load(f)
-                for instance in self.run_instances:
-                    if instance.user == cfg["user"] and instance.symbol == cfg["symbol"]:
-                        instance.stop()
-                        instance.load()
-                        instance.start()
-            cfile.unlink(missing_ok=True)
+    # def has_restart(self):
+    #     cfile = Path(f'{self.cmd_path}/restart.cmd')
+    #     if cfile.exists():
+    #         with open(cfile, "r", encoding='utf-8') as f:
+    #             cfg = json.load(f)
+    #             for instance in self.run_instances:
+    #                 if instance.user == cfg["user"] and instance.symbol == cfg["symbol"]:
+    #                     instance.stop()
+    #                     instance.load()
+    #                     instance.start()
+    #         cfile.unlink(missing_ok=True)
     
-    def update(self, instance_path : str, enabled : bool):
-        cfile = Path(f'{self.cmd_path}/update.cmd')
-        cfg = ({
-            "path": str(PurePath(instance_path)),
-            "enabled": enabled})
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
+    # def update(self, instance_path : str, enabled : bool):
+    #     cfile = Path(f'{self.cmd_path}/update.cmd')
+    #     cfg = ({
+    #         "path": str(PurePath(instance_path)),
+    #         "enabled": enabled})
+    #     with open(cfile, "w", encoding='utf-8') as f:
+    #         json.dump(cfg, f)
 
-    def has_update(self):
-        cfile = Path(f'{self.cmd_path}/update.cmd')
-        if cfile.exists():
-            with open(cfile, "r", encoding='utf-8') as f:
-                cfg = json.load(f)
-                if cfg["enabled"]:
-                    self.load(cfg["path"])
-                else:
-                    for instance in self.run_instances:
-                        if instance.path == cfg["path"]:
-                            instance.stop()
-                            self.remove(instance)
-            cfile.unlink(missing_ok=True)
+    # def has_update(self):
+    #     cfile = Path(f'{self.cmd_path}/update.cmd')
+    #     if cfile.exists():
+    #         with open(cfile, "r", encoding='utf-8') as f:
+    #             cfg = json.load(f)
+    #             if cfg["enabled"]:
+    #                 self.load(cfg["path"])
+    #             else:
+    #                 for instance in self.run_instances:
+    #                     if instance.path == cfg["path"]:
+    #                         instance.stop()
+    #                         self.remove(instance)
+    #         cfile.unlink(missing_ok=True)
 
     def update_status(self, status_file : str, rserver : str):
         unique = str(uuid.uuid4())
@@ -675,13 +627,6 @@ class PBRun():
                     if instance.version > status.version:
                         # Install new single version
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Version {instance.name} Old: {status.version} New: {instance.version}')
-                        # # Remove old *.json configs
-                        # dest = f'{self.single_path}/{instance.name}'
-                        # p = str(Path(f'{dest}/*'))
-                        # items = glob.glob(p)
-                        # for item in items:
-                        #     if item.endswith('.json'):
-                        #         Path(item).unlink(missing_ok=True)
                         src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                         dest = f'{self.single_path}/{instance.name}'
                         if Path(src).exists():
@@ -750,6 +695,7 @@ class PBRun():
                     dest = f'{self.multi_path}/{instance.name}'
                     shutil.copytree(src, dest, dirs_exist_ok=True)
                     self.watch_multi([f'{self.multi_path}/{instance.name}'])
+            remove_instances = []
             for instance in self.instances_status:
                 status = new_status.find_name(instance.name)
                 if status is None:
@@ -761,13 +707,19 @@ class PBRun():
                                 multi.stop()
                                 self.remove_multi(multi)
                     source = f'{self.multi_path}/{instance.name}'
-                    # Backup multi config
-                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    destination = Path(f'{self.pbgdir}/data/backup/mult/{instance.name}/{date}')
-                    if not destination.exists():
-                        destination.mkdir(parents=True)
-                    shutil.copytree(source, destination, dirs_exist_ok=True)
-                    shutil.rmtree(source, ignore_errors=True)
+                    if Path(source).exists():
+                        # Backup multi config
+                        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        destination = Path(f'{self.pbgdir}/data/backup/mult/{instance.name}/{date}')
+                        if not destination.exists():
+                            destination.mkdir(parents=True)
+                        shutil.copytree(source, destination, dirs_exist_ok=True)
+                        shutil.rmtree(source, ignore_errors=True)
+                        remove_instances.append(instance)
+            if remove_instances:
+                for instance in remove_instances:
+                    self.instances_status.remove(instance)
+                self.instances_status.save()
 
     def activate(self, instance : str, multi : bool):
         unique = str(uuid.uuid4())
@@ -828,6 +780,14 @@ class PBRun():
         for instance in instances:
             self.load(instance)
 
+    # can be removed on a future version
+    def stop_old_instance(self, path: str):
+        for instance in self.run_instances:
+            if instance.path == path:
+                instance.stop()
+                self.disable_instance(instance.path.split('/')[-1])
+                self.remove(instance)
+    
     def watch_single(self, single_instances : list = None):
         if not single_instances:
             p = str(Path(f'{self.single_path}/*'))
@@ -839,13 +799,13 @@ class PBRun():
             if file.exists():
                 run_single = RunSingle()
                 status = InstanceStatus()
-#                status.multi = False
                 run_single.path = single_instance
-#                run_multi.user = multi_instance.split('/')[-1]
-#                status.name = run_single.user
                 run_single.name = self.name
                 run_single.pbdir = self.pbdir
                 run_single.pbgdir = self.pbgdir
+                # Stop old instance if we start them as a new single instance (can be removed in a future version)
+                if run_single.name != "disabled":
+                    self.stop_old_instance(single_instance)
                 if run_single.load():
                     if run_single.is_running():
                         running_version = self.find_running_version(single_instance)
@@ -866,10 +826,6 @@ class PBRun():
                 status.multi = run_single.multi
                 status.version = run_single.version
                 status.enabled_on = run_single.name
-                # if status.multi:
-                #     self.instances_status_single.remove(status)
-                # else:
-                #     self.instances_status_single.add(status)
                 self.instances_status_single.add(status)
         self.instances_status_single.save()
 
@@ -976,7 +932,7 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
-    # run.load_all()
+    run.load_all()
     run.watch_multi()
     run.watch_single()
     count = 0
@@ -991,15 +947,15 @@ def main():
             # run.has_update()
             run.has_activate()
             run.has_update_status()
-            # for run_instance in run:
-            #     run_instance.watch()
+            for run_instance in run:
+                run_instance.watch()
             for run_multi in run.run_multi:
                 run_multi.watch()
             for run_single in run.run_single:
                 run_single.watch()
             if count%2 == 0:
-                # for run_instance in run:
-                #     run_instance.clean_log()
+                for run_instance in run:
+                    run_instance.clean_log()
                 for run_multi in run.run_multi:
                     run_multi.clean_log()
                 for run_single in run.run_single:
