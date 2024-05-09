@@ -561,6 +561,8 @@ class PBRemote():
     
     def sync_single_up(self):
         if self.local_run.instances_status_single.has_new_status():
+            # Update old run status (can be removed in next version)
+            self.load_local()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
             status_ts = self.local_run.instances_status_single.status_ts
             self.local_run.instances_status_single.update_status()
