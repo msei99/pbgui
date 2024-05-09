@@ -109,6 +109,8 @@ def pbremote_details():
             pbremote.bucket = st.session_state.pbremote_bucket
     # Navigation
     with st.sidebar:
+        if st.button(":recycle:"):
+            st.rerun()
         if st.button(":back:", key="button_pbremote_back"):
             del st.session_state.pbremote_details
             st.rerun()
@@ -146,7 +148,6 @@ def pbremote_details():
         st.header("API not in sync with remote servers:")
         st.write(f"{api_sync_list}")
         if st.button(f'Sync API to all',key="sync_api"):
-            print("sync")
             pbremote.sync_api_up()
     if "server" in st.session_state:
         server = st.session_state.server
@@ -181,6 +182,8 @@ def pbremote_details():
                 cpu_color = "yellow"
             st.markdown(f"##### CPU utilization: :{cpu_color}[{server.cpu}] %  |  System boot: :blue[{boot}]")
         d_single = []
+        server.instances_status_single.instances = []
+        server.instances_status_single.load()
         for single in server.instances_status_single:
             if single.running:
                 d_single.append({
@@ -188,6 +191,8 @@ def pbremote_details():
                     'Version': single.version
                 })
         d_multi = []
+        server.instances_status.instances = []
+        server.instances_status.load()
         for multi in server.instances_status:
             if multi.running:
                 d_multi.append({
