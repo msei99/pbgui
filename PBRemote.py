@@ -103,25 +103,25 @@ class RemoteServer():
         if self._bucket != new_bucket:
             self._bucket = new_bucket
 
-    def is_running(self, user : str, symbol : str):
-        self.load()
-        if self.run:
-            for running in self.run:
-                if running["user"] == user and running["symbol"] == symbol:
-                    return True
-        if self.has_instance(user,symbol):
-            return False
-        else:
-            return None
+    # def is_running(self, user : str, symbol : str):
+    #     self.load()
+    #     if self.run:
+    #         for running in self.run:
+    #             if running["user"] == user and running["symbol"] == symbol:
+    #                 return True
+    #     if self.has_instance(user,symbol):
+    #         return False
+    #     else:
+    #         return None
 
-    def has_instance(self, user : str, symbol : str):
-        inst = {
-            "user": user,
-            "symbol": symbol
-        }
-        if inst in self._instances:
-            return True
-        return False
+    # def has_instance(self, user : str, symbol : str):
+    #     inst = {
+    #         "user": user,
+    #         "symbol": symbol
+    #     }
+    #     if inst in self._instances:
+    #         return True
+    #     return False
 
     def is_api_md5_same(self, api_md5 : str):
         if self.api_md5 == api_md5:
@@ -187,161 +187,161 @@ class RemoteServer():
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
 
-    def send_to(self, command : str, user : str = None, symbol : str = None, market_type : str = None):
-        if command == "sync_api":
-            dest = Path(f'{self._path}/../../cmd/{self.name}_api-keys.json')
-            if dest.exists():
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} api sync_to: {self.name} already started')
-                return
-        unique = str(uuid.uuid4())
-        timestamp = round(datetime.now().timestamp())
-        if user:
-            instance = f'{user}_{symbol}_{market_type}'
-        else:
-            instance = "all"
-        cfile = str(Path(f'{self._path}/../../cmd/send_{self.name}_{unique}.cmd'))
-        cfg = ({
-            "timestamp": timestamp,
-            "unique": unique,
-            "to": self.name,
-            "command": command,
-            "instance": instance
-            })
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
+    # def send_to(self, command : str, user : str = None, symbol : str = None, market_type : str = None):
+    #     if command == "sync_api":
+    #         dest = Path(f'{self._path}/../../cmd/{self.name}_api-keys.json')
+    #         if dest.exists():
+    #             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} api sync_to: {self.name} already started')
+    #             return
+    #     unique = str(uuid.uuid4())
+    #     timestamp = round(datetime.now().timestamp())
+    #     if user:
+    #         instance = f'{user}_{symbol}_{market_type}'
+    #     else:
+    #         instance = "all"
+    #     cfile = str(Path(f'{self._path}/../../cmd/send_{self.name}_{unique}.cmd'))
+    #     cfg = ({
+    #         "timestamp": timestamp,
+    #         "unique": unique,
+    #         "to": self.name,
+    #         "command": command,
+    #         "instance": instance
+    #         })
+    #     with open(cfile, "w", encoding='utf-8') as f:
+    #         json.dump(cfg, f)
 #        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {self.name} {command} {instance}')
 
-    def ack_to(self, command : str, instance : str, unique : str):
-        timestamp = round(datetime.now().timestamp())
-        cfile = str(Path(f'{self._path}/../../cmd/{self.name}_{unique}.ack'))
-        cfg = ({
-            "timestamp": timestamp,
-            "unique": unique,
-            "to": self.name,
-            "command": command,
-            "instance": instance
-            })
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_to: {self.name} {command} {instance} {unique}')
+    # def ack_to(self, command : str, instance : str, unique : str):
+    #     timestamp = round(datetime.now().timestamp())
+    #     cfile = str(Path(f'{self._path}/../../cmd/{self.name}_{unique}.ack'))
+    #     cfg = ({
+    #         "timestamp": timestamp,
+    #         "unique": unique,
+    #         "to": self.name,
+    #         "command": command,
+    #         "instance": instance
+    #         })
+    #     with open(cfile, "w", encoding='utf-8') as f:
+    #         json.dump(cfg, f)
+    #     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_to: {self.name} {command} {instance} {unique}')
 
-    def ack_from(self, pbname : str):
-        p = str(Path(f'{self._path}/{pbname}_*.ack'))
-        ack_remote = glob.glob(p)
-        if ack_remote:
-            for ack in ack_remote:
-                remote = Path(ack)
-                try:
-                    with open(remote, "r", encoding='utf-8') as f:
-                        cfg = json.load(f)
-                        if "to" in cfg and "unique" in cfg:
-                            to = cfg["to"]
-                            if to == pbname:
-                                unique = cfg["unique"]
-                                instance = cfg["instance"]
-                                command = cfg["command"]
-                                if command == "sync_api":
-                                    cfile = Path(f'{self._path}/../../cmd/{self.name}_api-keys.json')
-                                    if cfile.exists():
-                                        cfile.unlink(missing_ok=True)
-                                cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd')
-                                if cfile.exists():
-                                    cfile.unlink(missing_ok=True)
-                                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {command} {instance} {unique}')
-                                    return True
-                except Exception as e:
-                    print(f'{str(remote)} is corrupted {e}')
+    # def ack_from(self, pbname : str):
+    #     p = str(Path(f'{self._path}/{pbname}_*.ack'))
+    #     ack_remote = glob.glob(p)
+    #     if ack_remote:
+    #         for ack in ack_remote:
+    #             remote = Path(ack)
+    #             try:
+    #                 with open(remote, "r", encoding='utf-8') as f:
+    #                     cfg = json.load(f)
+    #                     if "to" in cfg and "unique" in cfg:
+    #                         to = cfg["to"]
+    #                         if to == pbname:
+    #                             unique = cfg["unique"]
+    #                             instance = cfg["instance"]
+    #                             command = cfg["command"]
+    #                             if command == "sync_api":
+    #                                 cfile = Path(f'{self._path}/../../cmd/{self.name}_api-keys.json')
+    #                                 if cfile.exists():
+    #                                     cfile.unlink(missing_ok=True)
+    #                             cfile = Path(f'{self._path}/../../cmd/sync_{self.name}_{unique}.cmd')
+    #                             if cfile.exists():
+    #                                 cfile.unlink(missing_ok=True)
+    #                                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} ack_from: {self.name} {command} {instance} {unique}')
+    #                                 return True
+    #             except Exception as e:
+    #                 print(f'{str(remote)} is corrupted {e}')
 
-    def sync_from(self, pbname : str):
-        p = str(Path(f'{self._path}/sync_{pbname}_*.cmd'))
-        sync_remote = glob.glob(p)
-        if sync_remote:
-            for sync in sync_remote:
-                remote = Path(sync)
-                try:
-                    with open(remote, "r", encoding='utf-8') as f:
-                        cfg = json.load(f)
-                        if "to" in cfg and "instance" in cfg and "unique" in cfg:
-                            to = cfg["to"]
-                            if to == pbname:
-                                command = cfg["command"]
-                                instance = cfg["instance"]
-                                unique = cfg["unique"]
-                                if unique not in self._unique:
-                                    if command == "sync_api":
-                                        api_keys = PurePath(f'{self._pbdir}/api-keys.json')
-                                        # Backup api-keys
-                                        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                                        api_backup = Path(f'{self._path}/../../api-keys')
-                                        if not api_backup.exists():
-                                            api_backup.mkdir(parents=True)
-                                        backup_dest = Path(f'{api_backup}/api-keys_{date}.json')
-                                        if Path(api_keys).exists():
-                                            shutil.copy(api_keys, backup_dest)
-                                        # Copy new api-keys
-                                        src = PurePath(f'{self._path}/{to}_api-keys.json')
-                                        shutil.copy(src, api_keys)
-                                    elif command == "sync":
-                                        self.sync(pbname)
-                                        src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
-                                        dest = PurePath(f'{self._path}/../../instances/{instance}')
-                                        if PBRun().is_enabled_instance(instance):
-                                            shutil.copytree(src, dest, dirs_exist_ok=True)
-                                            PBRun().enable_instance(instance)
-                                            PBRun().restart_instance(instance)
-                                        else:
-                                            shutil.copytree(src, dest, dirs_exist_ok=True)
-                                            PBRun().disable_instance(instance)
-                                    elif command == "remove":
-                                        dest = PurePath(f'{self._path}/../../instances/{instance}')
-                                        shutil.rmtree(dest, ignore_errors=True)
-                                    elif command == "start":
-                                        PBRun().start_instance(instance)
-                                    elif command == "stop":
-                                        PBRun().stop_instance(instance)
-                                    else:
-                                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: unknown command {self.name} {command} {instance} {unique}')    
-                                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {command} {instance} {unique}')
-                                    self.ack_to(command, instance, unique)
-                                    self._unique.append(unique)
-                                    return True
-                except Exception as e:
-                    print(f'{str(remote)} is corrupted {e}')
+    # def sync_from(self, pbname : str):
+    #     p = str(Path(f'{self._path}/sync_{pbname}_*.cmd'))
+    #     sync_remote = glob.glob(p)
+    #     if sync_remote:
+    #         for sync in sync_remote:
+    #             remote = Path(sync)
+    #             try:
+    #                 with open(remote, "r", encoding='utf-8') as f:
+    #                     cfg = json.load(f)
+    #                     if "to" in cfg and "instance" in cfg and "unique" in cfg:
+    #                         to = cfg["to"]
+    #                         if to == pbname:
+    #                             command = cfg["command"]
+    #                             instance = cfg["instance"]
+    #                             unique = cfg["unique"]
+    #                             if unique not in self._unique:
+    #                                 if command == "sync_api":
+    #                                     api_keys = PurePath(f'{self._pbdir}/api-keys.json')
+    #                                     # Backup api-keys
+    #                                     date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    #                                     api_backup = Path(f'{self._path}/../../api-keys')
+    #                                     if not api_backup.exists():
+    #                                         api_backup.mkdir(parents=True)
+    #                                     backup_dest = Path(f'{api_backup}/api-keys_{date}.json')
+    #                                     if Path(api_keys).exists():
+    #                                         shutil.copy(api_keys, backup_dest)
+    #                                     # Copy new api-keys
+    #                                     src = PurePath(f'{self._path}/{to}_api-keys.json')
+    #                                     shutil.copy(src, api_keys)
+    #                                 elif command == "sync":
+    #                                     self.sync(pbname)
+    #                                     src = PurePath(f'{self._path}/../instances_{self.name}/{instance}')
+    #                                     dest = PurePath(f'{self._path}/../../instances/{instance}')
+    #                                     if PBRun().is_enabled_instance(instance):
+    #                                         shutil.copytree(src, dest, dirs_exist_ok=True)
+    #                                         PBRun().enable_instance(instance)
+    #                                         PBRun().restart_instance(instance)
+    #                                     else:
+    #                                         shutil.copytree(src, dest, dirs_exist_ok=True)
+    #                                         PBRun().disable_instance(instance)
+    #                                 elif command == "remove":
+    #                                     dest = PurePath(f'{self._path}/../../instances/{instance}')
+    #                                     shutil.rmtree(dest, ignore_errors=True)
+    #                                 elif command == "start":
+    #                                     PBRun().start_instance(instance)
+    #                                 elif command == "stop":
+    #                                     PBRun().stop_instance(instance)
+    #                                 else:
+    #                                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: unknown command {self.name} {command} {instance} {unique}')    
+    #                                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {self.name} {command} {instance} {unique}')
+    #                                 self.ack_to(command, instance, unique)
+    #                                 self._unique.append(unique)
+    #                                 return True
+    #             except Exception as e:
+    #                 print(f'{str(remote)} is corrupted {e}')
 
-        else:
-            p = str(Path(f'{self.path}/../../cmd/*.ack'))
-            sync_ack = glob.glob(p)
-            if sync_ack:
-                for file in sync_ack:
-                    afile = Path(file)
-                    try:
-                        with open(afile, "r", encoding='utf-8') as f:
-                            cfg = json.load(f)
-                        if cfg:
-                            to = cfg["to"]
-                            unique = cfg["unique"]
-                            instance = cfg["instance"]
-                            command = cfg["command"]
-                            if to == self.name:
-                                if unique in self._unique:
-                                    self._unique.remove(unique)
-                                afile.unlink(missing_ok=True)
-                                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {self.name} {command} {instance} {unique}')
-                    except Exception as e:
-                        print(f'{str(afile)} is corrupted {e}')
-                        traceback.print_exc()
+    #     else:
+    #         p = str(Path(f'{self.path}/../../cmd/*.ack'))
+    #         sync_ack = glob.glob(p)
+    #         if sync_ack:
+    #             for file in sync_ack:
+    #                 afile = Path(file)
+    #                 try:
+    #                     with open(afile, "r", encoding='utf-8') as f:
+    #                         cfg = json.load(f)
+    #                     if cfg:
+    #                         to = cfg["to"]
+    #                         unique = cfg["unique"]
+    #                         instance = cfg["instance"]
+    #                         command = cfg["command"]
+    #                         if to == self.name:
+    #                             if unique in self._unique:
+    #                                 self._unique.remove(unique)
+    #                             afile.unlink(missing_ok=True)
+    #                             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} remove_ack: {self.name} {command} {instance} {unique}')
+    #                 except Exception as e:
+    #                     print(f'{str(afile)} is corrupted {e}')
+    #                     traceback.print_exc()
 
-    def sync(self, pbname: str):
-        pbgdir = Path.cwd()
-        spath = 'instances'
-        cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
-        logfile = Path(f'{pbgdir}/data/logs/sync.log')
-        log = open(logfile,"ab")
-        if platform.system() == "Windows":
-            creationflags = subprocess.CREATE_NO_WINDOW
-            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-        else:
-            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+    # def sync(self, pbname: str):
+    #     pbgdir = Path.cwd()
+    #     spath = 'instances'
+    #     cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{pbname}/*,cmd_**}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+    #     logfile = Path(f'{pbgdir}/data/logs/sync.log')
+    #     log = open(logfile,"ab")
+    #     if platform.system() == "Windows":
+    #         creationflags = subprocess.CREATE_NO_WINDOW
+    #         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+    #     else:
+    #         subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def sync_multi_down(self):
         if self.instances_status.has_new_status():
@@ -516,37 +516,37 @@ class PBRemote():
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 #        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
 
-    def sync_to(self):
-        p = str(Path(f'{self.cmd_path}/send_*.cmd'))
-        sync_cmd = glob.glob(p)
-        if sync_cmd:
-            for file in sync_cmd:
-                cfile = Path(file)
-                try:
-                    with open(cfile, "r", encoding='utf-8') as f:
-                        cfg = json.load(f)
-                    to = cfg["to"]
-                    unique = cfg["unique"]
-                    instance = cfg["instance"]
-                    command = cfg["command"]
-                    if command == "sync_api":
-                        src = PurePath(f'{self.pbdir}/api-keys.json')
-                        dest = PurePath(f'{self.cmd_path}/{to}_api-keys.json')
-                        shutil.copy(src, dest)
-                    if command == "copy":
-                        src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
-                        dest = PurePath(f'{self.instances_path}/{instance}')
-                        shutil.copytree(src, dest, dirs_exist_ok=True)
-                        PBRun().disable_instance(instance)
-                        cfile.unlink(missing_ok=True)
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
-                    if command == "sync":
-                        self.sync('up', 'instances')
-                    if command in ['start','stop','sync','sync_api','remove']:
-                        cfile.rename(PurePath(f'{self.cmd_path}/sync_{to}_{unique}.cmd'))
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
-                except Exception as e:
-                    print(f'{str(cfile)} is corrupted {e}')
+    # def sync_to(self):
+    #     p = str(Path(f'{self.cmd_path}/send_*.cmd'))
+    #     sync_cmd = glob.glob(p)
+    #     if sync_cmd:
+    #         for file in sync_cmd:
+    #             cfile = Path(file)
+    #             try:
+    #                 with open(cfile, "r", encoding='utf-8') as f:
+    #                     cfg = json.load(f)
+    #                 to = cfg["to"]
+    #                 unique = cfg["unique"]
+    #                 instance = cfg["instance"]
+    #                 command = cfg["command"]
+    #                 if command == "sync_api":
+    #                     src = PurePath(f'{self.pbdir}/api-keys.json')
+    #                     dest = PurePath(f'{self.cmd_path}/{to}_api-keys.json')
+    #                     shutil.copy(src, dest)
+    #                 if command == "copy":
+    #                     src = PurePath(f'{self.remote_path}/instances_{to}/{instance}')
+    #                     dest = PurePath(f'{self.instances_path}/{instance}')
+    #                     shutil.copytree(src, dest, dirs_exist_ok=True)
+    #                     PBRun().disable_instance(instance)
+    #                     cfile.unlink(missing_ok=True)
+    #                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_from: {to} {command} {instance} {unique}')
+    #                 if command == "sync":
+    #                     self.sync('up', 'instances')
+    #                 if command in ['start','stop','sync','sync_api','remove']:
+    #                     cfile.rename(PurePath(f'{self.cmd_path}/sync_{to}_{unique}.cmd'))
+    #                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} sync_to: {to} {command} {instance} {unique}')
+    #             except Exception as e:
+    #                 print(f'{str(cfile)} is corrupted {e}')
 
     def sync_multi_up(self):
         if self.local_run.instances_status.has_new_status():
@@ -782,10 +782,10 @@ def main():
         exit(1)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
     remote.startts = round(datetime.now().timestamp())
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances up: {remote.name}')
-    remote.sync('up', 'instances')
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances down: {remote.name}')
-    remote.sync('down', 'instances')
+    # print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances up: {remote.name}')
+    # remote.sync('up', 'instances')
+    # print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync instances down: {remote.name}')
+    # remote.sync('down', 'instances')
     while True:
         try:
             if logfile.exists():
@@ -797,20 +797,20 @@ def main():
             remote.sync_single_up()
             remote.check_if_api_synced()
             remote.alive()
-            remote.sync_to()
+            # remote.sync_to()
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
                 server.sync_multi_down()
                 server.sync_single_down()
                 server.sync_api()
-                if server.sync_from(remote.name):
-                    remote.sync("up", 'instances')
-                    remote.load_local()
-                # Sync from Cloud Storage when we get an .ack from remote Server or when remote server was restarted
-                if server.ack_from(remote.name) or server.startts > remote.sync_downts:
-                    remote.sync("down", 'instances')
-                    server.load_instances()
+                # if server.sync_from(remote.name):
+                #     remote.sync("up", 'instances')
+                #     remote.load_local()
+                # # Sync from Cloud Storage when we get an .ack from remote Server or when remote server was restarted
+                # if server.ack_from(remote.name) or server.startts > remote.sync_downts:
+                #     remote.sync("down", 'instances')
+                #     server.load_instances()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
             traceback.print_exc()
