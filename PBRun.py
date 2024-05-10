@@ -88,7 +88,7 @@ class RunInstance():
 
     def stop(self):
         if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: {self.user} {self.symbol}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: Old Instance {self.user} {self.symbol}')
             self.pid().kill()
 
     def start(self):
