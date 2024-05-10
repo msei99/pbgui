@@ -1,10 +1,7 @@
 import streamlit as st
-from pbgui_func import set_page_config
+from pbgui_func import set_page_config, is_session_state_initialized
 from Multi import MultiInstance
 from PBRun import PBRun
-import pbgui_help
-import pandas as pd
-from time import sleep
 
 def edit_multi_instance():
     # Display Error
@@ -81,7 +78,6 @@ def select_instance():
         d.append({
             'id': id,
             'Edit': False,
-            # 'Running': instance.is_running(),
             'User': instance.user,
             'Enabled On': instance.enabled_on,
             'TWE': twe_str,
@@ -98,11 +94,8 @@ def select_instance():
 
 set_page_config()
 
-# Init session state
-if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    st.switch_page("pbgui.py")
-# Init Services and Instances
-if 'services' not in st.session_state:
+# Init session states
+if is_session_state_initialized():
     st.switch_page("pbgui.py")
 
 if 'edit_multi_instance' in st.session_state:

@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config
+from pbgui_func import set_page_config, is_session_state_initialized
 import pbgui_help
 from pathlib import Path
 from datetime import datetime
@@ -205,18 +205,18 @@ def pbremote_details():
                 'User': old["user"],
                 'Symbol': old["symbol"],
             })
-        st.header("Running Single Instances")
+        st.header(f"Running Single Instances ({len(d_single)})")
         if d_single:
             st.dataframe(data=d_single, width=640, height=36+(len(d_single))*35)
         else:
             st.write("None")
-        st.header("Running Multi Instances")
+        st.header(f"Running Multi Instances ({len(d_multi)})")
         if d_multi:
             st.dataframe(data=d_multi, width=640, height=36+(len(d_multi))*35)
         else:
             st.write("None")
         if d_old:
-            st.header("Running old PBRun/PBRemote Single Instances")
+            st.header(f"Running old PBRun/PBRemote Single Instances ({len(d_old)})")
             st.dataframe(data=d_old, width=640, height=36+(len(d_old))*35)
 
 
@@ -276,11 +276,8 @@ def pbshare_details():
 
 set_page_config()
 
-# Init session state
-if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    st.switch_page("pbgui.py")
-# Init Services and Instances
-if 'services' not in st.session_state:
+# Init session states
+if is_session_state_initialized():
     st.switch_page("pbgui.py")
 
 if 'pbrun_details' in st.session_state:

@@ -190,13 +190,11 @@ class RunSingle():
             except psutil.AccessDenied:
                 pass
             if self.user in cmdline and self.symbol in cmdline and any("passivbot.py" in sub for sub in cmdline):
-#            if any(self.user in sub for sub in cmdline) and any("passivbot.py" in sub for sub in cmdline):
                 return process
 
     def stop(self):
         if self.is_running():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: {self.user} {self.symbol}')
-            # print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: passivbot.py {self.path}/config.json')
             self.pid().kill()
 
     def start(self):
@@ -277,7 +275,6 @@ class RunSingle():
 
     def load(self):
         file = Path(f'{self.path}/instance.cfg')
-        # file = Path(f'{self.path}/multi.hjson')
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
@@ -509,36 +506,13 @@ class PBRun():
                 version = f.read()
         return int(version)
 
-    # def start_instance(self, instance):
-    #     self.change_enabled(instance, True)
-    #     ipath = f'{self.instances_path}/{instance}'
-    #     self.update(ipath, True)
-
     def stop_instance(self, instance):
         self.change_enabled(instance, False)
         ipath = f'{self.instances_path}/{instance}'
         self.update(ipath, False)
 
-    # def restart_instance(self, instance):
-    #     user = "_".join(instance.split("_")[0:-2])
-    #     symbol = instance.split("_")[-2]
-    #     self.restart(user, symbol)
-
     def disable_instance(self, instance):
         self.change_enabled(instance, False)
-
-    # def enable_instance(self, instance):
-    #     self.change_enabled(instance, True)
-
-    # def is_enabled_instance(self, instance):
-    #     ipath = f'{self.instances_path}/{instance}'
-    #     ifile = Path(f'{ipath}/instance.cfg')
-    #     if ifile.exists():
-    #         with open(ifile, "r", encoding='utf-8') as f:
-    #             inst = json.load(f)
-    #         if inst["_enabled"]:
-    #             return True
-    #     return False
 
     def change_enabled(self, instance : str, enabled : bool):
         ipath = f'{self.instances_path}/{instance}'
@@ -549,48 +523,6 @@ class PBRun():
             f.close()
         with open(ifile, "w", encoding='utf-8') as f:
             json.dump(inst, f, indent=4)
-
-    # def restart(self, user : str, symbol : str):
-    #     cfile = Path(f'{self.cmd_path}/restart.cmd')
-    #     cfg = ({
-    #         "user": user,
-    #         "symbol": symbol})
-    #     with open(cfile, "w", encoding='utf-8') as f:
-    #         json.dump(cfg, f)
-
-    # def has_restart(self):
-    #     cfile = Path(f'{self.cmd_path}/restart.cmd')
-    #     if cfile.exists():
-    #         with open(cfile, "r", encoding='utf-8') as f:
-    #             cfg = json.load(f)
-    #             for instance in self.run_instances:
-    #                 if instance.user == cfg["user"] and instance.symbol == cfg["symbol"]:
-    #                     instance.stop()
-    #                     instance.load()
-    #                     instance.start()
-    #         cfile.unlink(missing_ok=True)
-    
-    # def update(self, instance_path : str, enabled : bool):
-    #     cfile = Path(f'{self.cmd_path}/update.cmd')
-    #     cfg = ({
-    #         "path": str(PurePath(instance_path)),
-    #         "enabled": enabled})
-    #     with open(cfile, "w", encoding='utf-8') as f:
-    #         json.dump(cfg, f)
-
-    # def has_update(self):
-    #     cfile = Path(f'{self.cmd_path}/update.cmd')
-    #     if cfile.exists():
-    #         with open(cfile, "r", encoding='utf-8') as f:
-    #             cfg = json.load(f)
-    #             if cfg["enabled"]:
-    #                 self.load(cfg["path"])
-    #             else:
-    #                 for instance in self.run_instances:
-    #                     if instance.path == cfg["path"]:
-    #                         instance.stop()
-    #                         self.remove(instance)
-    #         cfile.unlink(missing_ok=True)
 
     def update_status(self, status_file : str, rserver : str):
         unique = str(uuid.uuid4())
@@ -943,8 +875,6 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-            # run.has_restart()
-            # run.has_update()
             run.has_activate()
             run.has_update_status()
             for run_instance in run:

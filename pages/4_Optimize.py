@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config
+from pbgui_func import set_page_config, is_session_state_initialized
 from Optimize import OptimizeItem, OptimizeQueue, OptimizeResults
 from OptimizeConfig import OptimizeConfigs
 
@@ -117,11 +117,8 @@ def opt_results():
 
 set_page_config()
 
-# Init session state
-if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    st.switch_page("pbgui.py")
-# Init Services and Instances
-if 'services' not in st.session_state:
+# Init session states
+if is_session_state_initialized():
     st.switch_page("pbgui.py")
 
 # Init OptimizeConfigs

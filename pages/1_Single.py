@@ -1,16 +1,12 @@
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, upload_pbconfigdb
+from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized
 from Instance import Instances, Instance
 from Backtest import BacktestItem
 from PBRun import PBRun
 from PBStat import PBStat
 from PBRemote import PBRemote
-from datetime import datetime
 import pbgui_help
-import pandas as pd
 import platform
-from time import sleep
 
 
 # @st.experimental_dialog("Delete Instance?")
@@ -27,7 +23,6 @@ def delete_instance(instance):
                 st.session_state.pbgui_instances.remove(instance)
             with st.spinner('Start Services...'):
                 services.start_all_was_running()
-            # instances.remove(instance)
             st.session_state.ed_key += 1
             st.rerun()
     with col2:
@@ -144,8 +139,6 @@ def edit_instance():
     # Init instance
     instance = st.session_state.edit_instance
     # Init PBremote
-    # if 'remote' not in st.session_state:
-    #     st.session_state.remote = PBRemote()
     pbremote = st.session_state.pbremote
     # Init session_state for keys
     if "live_enable" in st.session_state:
@@ -200,11 +193,6 @@ def edit_instance():
             st.session_state.my_bt.symbol = instance.symbol
             st.session_state.my_bt.market_type = instance.market_type
             st.switch_page("pages/3_Backtest.py")
-        # st.toggle("enable", value=instance.enabled, key="live_enable", help=pbgui_help.instance_enable)
-        # if instance.enabled:
-        #     if st.button("restart", key="live_restart", help=pbgui_help.instance_restart):
-        #         st.session_state.edit_instance.save()
-        #         PBRun().restart(instance.user, instance.symbol)
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
         if not "error" in st.session_state:
             if st.button("Upload"):
@@ -251,11 +239,8 @@ def import_instance():
 
 set_page_config()
 
-# Init session state
-if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
-    st.switch_page("pbgui.py")
-# Init Services and Instances
-if 'services' not in st.session_state:
+# Init session states
+if is_session_state_initialized():
     st.switch_page("pbgui.py")
 
 if 'edit_instance' in st.session_state:
