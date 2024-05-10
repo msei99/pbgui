@@ -45,6 +45,19 @@ def set_page_config(page : str = "Start"):
         }
     )
 
+def is_session_state_initialized():
+    # Init Services
+    if (
+        'pbdir' not in st.session_state or
+        'pbgdir' not in st.session_state or
+        'services' not in st.session_state or
+        'pbgui_instances' not in st.session_state or
+        'multi_instances' not in st.session_state or
+        'users' not in st.session_state
+    ):
+        return True
+    return False
+
 def validateJSON(jsonData):
     try:
         json.loads(jsonData)
