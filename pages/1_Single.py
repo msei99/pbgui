@@ -48,6 +48,35 @@ def select_instance():
         if st.button("Add"):
             st.session_state.edit_instance = Instance()
             st.rerun()
+        if st.button("Activate ALL"):
+            for instance in instances:
+                if not instance.multi:
+                    # Create running_on
+                    running_on = []
+                    if pbremote.local_run.instances_status_single.is_running(f'{instance.user}_{instance.symbol}_{instance.market_type}'):
+                        running_on.append(pbremote.name)
+                    for server in pbremote.list():
+                        if pbremote.find_server(server).instances_status_single.is_running(f'{instance.user}_{instance.symbol}_{instance.market_type}'):
+                            running_on.append(server)
+                    # Find running_version
+                    if instance.enabled_on == pbremote.name:
+                        running_version = pbremote.local_run.instances_status_single.find_version(f'{instance.user}_{instance.symbol}_{instance.market_type}')
+                    elif instance.enabled_on in pbremote.list():
+                        running_version = pbremote.find_server(instance.enabled_on).instances_status_single.find_version(f'{instance.user}_{instance.symbol}_{instance.market_type}')
+                    else:
+                        running_version = 0
+                    # Activate
+                    print(running_on, instance.enabled_on, running_version, instance.version, instance.is_running())
+                    if instance.enabled_on == 'disabled' and running_on:
+                        pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
+                        print("1")
+                    elif instance.enabled_on != 'disabled' and instance.enabled_on not in running_on:
+                        pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
+                        print("2")
+                    elif running_on and (instance.version != running_version):
+                        pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
+                        print("3")
+            # st.rerun()
         if st.button("Refresh from Disk"):
             del st.session_state.pbgui_instances
             with st.spinner('Initializing Instances...'):
@@ -181,9 +210,9 @@ def edit_instance():
             st.session_state.edit_instance.save()
             if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
                 st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
-                PBStat().restart()
-                PBRun().restart_pbrun()
-                PBRemote().restart()
+                # PBStat().restart()
+                # PBRun().restart_pbrun()
+                # PBRemote().restart()
 #            st.rerun()
         if st.button("Activate"):
             pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)

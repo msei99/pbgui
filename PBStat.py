@@ -115,6 +115,9 @@ def main():
             trade_count += 1
             if len(stat.instances) < 20:
                 sleep(60)
+            # Refresh Instances if there are some new or removed
+            stat.instances.instances = []
+            stat.instances.load()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
 

@@ -174,6 +174,7 @@ class RunSingle():
     
     def watch(self):
         if not self.is_running():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Single from watch: {self.user} {self.symbol}')
             self.start()
 
     def is_running(self):
@@ -212,7 +213,7 @@ class RunSingle():
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
             else:
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd_end}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Single: {cmd_end}')
 
     def clean_log(self):
         logfile = Path(f'{self.path}/passivbot.log')

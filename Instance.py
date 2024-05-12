@@ -4,7 +4,7 @@ import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from PBRun import PBRun, RunInstance
-from PBRemote import PBRemote
+# from PBRemote import PBRemote
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
@@ -238,14 +238,14 @@ class Instance(Base):
             print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
 
-    @enabled.setter
-    def enabled(self, new_enabled):
-        self._enabled = new_enabled
-        self.save()
-        PBRun().update(self._instance_path, self._enabled)
-        if PBRemote().is_running():
-            PBRemote().stop()
-            PBRemote().run()
+    # @enabled.setter
+    # def enabled(self, new_enabled):
+    #     self._enabled = new_enabled
+    #     self.save()
+    #     PBRun().update(self._instance_path, self._enabled)
+    #     if PBRemote().is_running():
+    #         PBRemote().stop()
+    #         PBRemote().run()
 
     @multi.setter
     def multi(self, new_multi):
