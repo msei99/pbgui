@@ -20,8 +20,9 @@ from Status import InstanceStatus, InstancesStatus
 
 class RunInstance():
     def __init__(self):
-        self._enabled = None
+        self._enabled = False
         self._multi = False
+        self.enabled_on = "disabled"
         self._user = None
         self._symbol = None
         self._parameter = None
@@ -110,7 +111,7 @@ class RunInstance():
                     subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, creationflags=creationflags)
                 else:
                     subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd_end}')
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: Old Instance {cmd_end}')
 
     def clean_log(self):
         logfile = Path(f'{self.path}/passivbot.log')
@@ -125,9 +126,12 @@ class RunInstance():
         file = Path(f'{self.path}/instance.cfg')
         with open(file, "r", encoding='utf-8') as f:
             instance_cfg = json.load(f)
-            self.enabled = instance_cfg["_enabled"]
+            if "_enabled" in instance_cfg:
+                self.enabled = instance_cfg["_enabled"]
             if "_multi" in instance_cfg:
                 self.multi = instance_cfg["_multi"]
+            if "_enabled_on" in instance_cfg:
+                self.enabled_on = instance_cfg["_enabled_on"]
             self.user = instance_cfg["_user"]
             self.symbol = instance_cfg["_symbol"]
             self.parameter = ""
@@ -703,7 +707,7 @@ class PBRun():
             run_instance.load()
             if run_instance.enabled and not run_instance.multi:
                 self.add(run_instance)
-            else:
+            elif run_instance.enabled_on != self.name:
                 run_instance.stop()
 
     def load_all(self):
