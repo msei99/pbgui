@@ -357,12 +357,11 @@ class MultiInstance():
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
                             if not instance.multi and instance.enabled_on == "disabled":
-                                if instance.multi:
-                                    instance.enabled_on = "disabled"
-                                else:
-                                    instance.enabled_on = self.enabled_on
-                                instance.multi = not instance.multi
-#                                st.rerun()
+                                instance.enabled_on = self.enabled_on
+                                instance.multi = True
+                            elif instance.multi:
+                                instance.enabled_on = "disabled"
+                                instance.multi = False
                             else:
                                 ed_key += 1
                 if "edit" in ed["edited_rows"][row]:
