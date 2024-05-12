@@ -1117,6 +1117,8 @@ class Instance(Base):
             file = Path(f'{instance_path}/instance.cfg')
             self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
             state = self.__dict__.copy()
+            # _enabled can be deleted in next version
+            del state['_enabled']
             del state['_instance_path']
             del state['_error']
             del state['_market_types']
