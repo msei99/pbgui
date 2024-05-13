@@ -725,6 +725,13 @@ class PBRun():
                 self.disable_instance(instance.path.split('/')[-1])
                 self.remove(instance)
     
+    # can be removed on a future version
+    def is_old_instance(self, path: str):
+        for instance in self.run_instances:
+            if instance.path == path:
+                return True
+        return False
+
     def watch_single(self, single_instances : list = None):
         if not single_instances:
             p = str(Path(f'{self.single_path}/*'))
@@ -756,9 +763,13 @@ class PBRun():
                     self.add_single(run_single)
                     status.running = True
                 else:
+                    # Stop old instance if started as a new single instance somewhere else
+                    if run_single.name != "disabled":
+                        self.stop_old_instance(single_instance)
                     self.remove_single(run_single)
                     status.running = False
-                    run_single.stop()
+                    if not self.is_old_instance(single_instance):
+                        run_single.stop()
                 status.name = single_instance.split('/')[-1]
                 status.multi = run_single.multi
                 status.version = run_single.version
