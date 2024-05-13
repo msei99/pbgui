@@ -19,9 +19,6 @@ def select_instance():
         if st.button("Refresh from Disk"):
             del st.session_state.pbgui_instances
             st.rerun()
-        if st.button("Remote"):
-            st.session_state.list_remote = True
-            st.rerun()
     if "editor_select_instance" in st.session_state:
         ed = st.session_state["editor_select_instance"]
         for row in ed["edited_rows"]:
