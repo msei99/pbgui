@@ -4,10 +4,11 @@ import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from PBRun import PBRun, RunInstance
-from PBRemote import PBRemote
+# from PBRemote import PBRemote
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
+import shutil
 import json
 import glob
 import pandas as pd
@@ -30,6 +31,7 @@ class Instance(Base):
         self._enabled = False
         self._multi = False
         self._enabled_on = "disabled"
+        self._version = 0
         self._pbshare_grid = False
         self._error = None # not saved
         self._symbol_ccxt = None
@@ -70,6 +72,8 @@ class Instance(Base):
     def multi(self): return self._multi
     @property
     def enabled_on(self): return self._enabled_on
+    @property
+    def version(self): return self._version
     @property
     def pbshare_grid(self): return self._pbshare_grid
     @property
@@ -234,14 +238,14 @@ class Instance(Base):
             print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
 
-    @enabled.setter
-    def enabled(self, new_enabled):
-        self._enabled = new_enabled
-        self.save()
-        PBRun().update(self._instance_path, self._enabled)
-        if PBRemote().is_running():
-            PBRemote().stop()
-            PBRemote().run()
+    # @enabled.setter
+    # def enabled(self, new_enabled):
+    #     self._enabled = new_enabled
+    #     self.save()
+    #     PBRun().update(self._instance_path, self._enabled)
+    #     if PBRemote().is_running():
+    #         PBRemote().stop()
+    #         PBRemote().run()
 
     @multi.setter
     def multi(self, new_multi):
@@ -251,6 +255,10 @@ class Instance(Base):
     @enabled_on.setter
     def enabled_on(self, new_enabled_on):
         self._enabled_on = new_enabled_on
+
+    @version.setter
+    def version(self, new_version):
+        self._version = new_version
 
     @pbshare_grid.setter
     def pbshare_grid(self, new_pbshare_grid):
@@ -619,6 +627,17 @@ class Instance(Base):
         return self.exchange.fetch_timestamp()
 
     def remove(self):
+        # Backup
+        source = f'{self._instance_path}'
+        pbgdir = Path.cwd()
+        if Path(source).exists():
+            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            name = self._instance_path.split("/")[-1]
+            destination = Path(f'{pbgdir}/data/backup/instances/{name}/{date}')
+            if not destination.exists():
+                destination.mkdir(parents=True)
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+        # Remove
         rmtree(self._instance_path, ignore_errors=True)
 
     def fetch_trades(self):
@@ -1094,9 +1113,12 @@ class Instance(Base):
                 instance_path.mkdir(parents=True)
             self._config.config_file = f'{self._instance_path}/config.json'
             self._config.save_config()
+            self._version += 1
             file = Path(f'{instance_path}/instance.cfg')
             self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
             state = self.__dict__.copy()
+            # _enabled can be deleted in next version
+            del state['_enabled']
             del state['_instance_path']
             del state['_error']
             del state['_market_types']
