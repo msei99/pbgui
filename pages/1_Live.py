@@ -51,7 +51,7 @@ def select_instance():
             'id': id,
             'View': False,
             'History': False,
-            'Running': instance.is_running(),
+            # 'Running': instance.is_running(),
             'User': instance.user,
             'Symbol': instance.symbol,
             'Market_type': instance.market_type,
