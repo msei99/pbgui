@@ -1,8 +1,6 @@
 import streamlit as st
-from pbgui_func import set_page_config
-import pbgui_help
-from User import Users, User
-from Instance import Instances
+from pbgui_func import set_page_config, is_session_state_initialized
+from User import User
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
 
@@ -142,15 +140,9 @@ def select_user():
 
 set_page_config()
 
-# Init Session State
-if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
+# Init session states
+if is_session_state_initialized():
     st.switch_page("pbgui.py")
-
-if 'users' not in st.session_state:
-    st.session_state.users = Users()
-
-if 'pbgui_instances' not in st.session_state:
-    st.session_state.pbgui_instances = Instances()
 
 # Display Setup
 if 'edit_user' in st.session_state:

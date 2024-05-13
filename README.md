@@ -137,6 +137,13 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v0.97 (07-05-2024)
+- Backup Instance before delete.
+- Moved the Edit/Delete functions from Live to Single Instances Page.
+- Select where to run a single instance and activate it.
+- Version Number for Single Instances.
+- Simplify PBRemote for single instances. No longer need to copy instances and start/stop them.
+
 ## v0.96 (28-04-2024)
 - Services Status and Configure Page
 - PBRemote bucket must be configured in pbgui.ini
@@ -345,11 +352,12 @@ First release with basic backtest and optimization functionality
 
 ## Support:
 If you like to support pbgui, please join one of my copytradings:\
+If you don't have an bybit account, please use my Referral Code: XZAJLZ https://www.bybit.com/invite?ref=XZAJLZ \
 Byybit:
 - manicptlowrisk1: ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0 https://i.bybit.com/28bMabOR
 - manicptlowrisk2: INJ, FET, DOGE, AGIX TWE 2.25 https://i.bybit.com/25alabs3
 - manicptlowrisk3: SOL, SHIB, INJ, RNDR TWE 2.25 https://i.bybit.com/1Kgab32u
-- manicptrndr: RNDR only https://i.bybit.com/1qabmY01
+- manicptrndr: RNDR only https://i.bybit.com/1qabmY01 \
 
 Binance:
 - manicptlowrisk: INJ, FET, RNDR, DOGE TWE 2.0 https://www.binance.com/en/copy-trading/lead-details?portfolioId=3746904129636329728

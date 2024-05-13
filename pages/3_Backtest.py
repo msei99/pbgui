@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config
+from pbgui_func import set_page_config, is_session_state_initialized
 from Backtest import BacktestItem, BacktestQueue, BacktestResults
 from Instance import Instance
 import datetime
@@ -199,9 +199,10 @@ def bt_import():
 
 set_page_config("Backtest")
 
-# Init session state
-if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
+# Init session states
+if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
 if 'my_bt' in st.session_state:
     my_bt = st.session_state.my_bt
 else:
