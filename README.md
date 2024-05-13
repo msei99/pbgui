@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v0.96
+v0.97
 
 ## Migration to v0.95 Multi
 
