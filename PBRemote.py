@@ -213,7 +213,8 @@ class RemoteServer():
                 destination = Path(f'{pbgdir}/data/backup/api-keys/{date}')
                 if not destination.exists():
                     destination.mkdir(parents=True)
-                shutil.copy(api_keys, destination)
+                if api_keys.exists():
+                    shutil.copy(api_keys, destination)
                 # Copy new api-keys
                 shutil.copy(api_file, api_keys)
 
@@ -365,8 +366,9 @@ class PBRemote():
         pbgdir = Path.cwd()
         api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
         source = Path(f'{self.pbdir}/api-keys.json')
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync api-keys.json to all remote servers')
-        shutil.copy(source, api_file)
+        if source.exists():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync api-keys.json to all remote servers')
+            shutil.copy(source, api_file)
     
     def check_if_api_synced(self):
         for server in self.remote_servers:
