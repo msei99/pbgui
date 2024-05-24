@@ -1,21 +1,9 @@
-import psutil
-import subprocess
-import configparser
-import shlex
-import sys
 from pathlib import Path, PurePath
 from time import sleep
-import glob
 import json
-import hjson
-import shutil
 from io import TextIOWrapper
 from datetime import datetime
-import platform
 from shutil import copy
-import os
-import traceback
-import uuid
 
 class InstanceStatus():
     def __init__(self):
@@ -34,7 +22,7 @@ class InstancesStatus():
 #        pbgdir = Path.cwd()
 #        self.status_file = f'{pbgdir}/data/cmd/status.json'
         self.status_file = status_file
-        self.status_ts = None
+        self.status_ts = 0
         self.load()
 
     def __iter__(self):
@@ -55,6 +43,12 @@ class InstancesStatus():
                 self.instances[index] = istatus
                 return
         self.instances.append(istatus)
+
+    def remove(self, istatus : InstanceStatus):
+        for index, instance in enumerate(self.instances):
+            if instance.name == istatus.name:
+                self.instances.pop(index)
+                return
 
     def is_running(self, name: str):
         if self.has_new_status():

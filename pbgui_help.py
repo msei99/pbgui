@@ -93,6 +93,13 @@ opt_iters = """
     n optimize iters
     ```"""
 
+opt_today = """
+    ```
+    If selected, the optimizer will always take the current date as the
+    end date. This means that when the date changes, the next rerun is
+    executed up to the current day.
+    ```"""
+
 opt_reruns = """
     ```
     n optimizer reruns
@@ -198,6 +205,32 @@ pbstat = """
     # python PBRun.py
     # python PBRemote.py
     python PBStat.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
+    ```"""
+
+pbshare = """
+    ```
+    This is the Data Sharing Manager from PBGUI.
+    Enable, to start generating live grid and other statistics to share.
+    To start the Data Sharing Manager after reboot your server, you have to
+    start PBShare.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    # python PBRun.py
+    # python PBRemote.py
+    # python PBStat.py
+    python PBShare.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -483,4 +516,32 @@ config_version = """
     see a new higher version number, it will switch to the new config.
     No need to manual change this number. It will automatical increased
     if you hit save.
+    ```"""
+
+pbshare_grid = """
+    ```
+    enable for generate grid picture and share them on gphoto
+    ```"""
+pbshare_bucket = """
+    ```
+    Select the rclone remote server where the grid pictures should be uploaded.
+    ```"""
+pbshare_interval = """
+    ```
+    Interval in seconds to generate grid pictures.
+    ```"""
+pbshare_upload_images = """
+    ``` 
+    Enable to upload grid pictures.
+    ```"""
+pbshare_download_index = """
+    ```
+    Download the index.html for preview.
+    You can open and view it in your browser.
+    You can upload it to your webserver to share your grid pictures.
+    A simple free way to share it, is using github pages.
+    ```"""
+pbremote_bucket = """
+    ```
+    Select the rclone bucket to use for sync.
     ```"""

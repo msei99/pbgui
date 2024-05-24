@@ -4,6 +4,10 @@ import os
 import inspect
 import platform
 from pbgui_func import check_password, set_page_config
+from Services import Services
+from Instance import Instances
+from Multi import MultiInstances
+from User import Users
 
 def update_dir(key):
     choice = st.session_state[key]
@@ -67,3 +71,20 @@ pb_config.set("main", "pbdir", os.path.abspath(st.session_state.pbdir))
 pb_config.set("main", "pbname", st.session_state.pbname)
 with open('pbgui.ini', 'w') as pbgui_configfile:
     pb_config.write(pbgui_configfile)
+
+# Init Services
+if 'services' not in st.session_state:
+    with st.spinner('Initializing Services...'):
+        st.session_state.services = Services()
+# Init Instances
+if 'pbgui_instances' not in st.session_state:
+    with st.spinner('Initializing Instances...'):
+        st.session_state.pbgui_instances = Instances()
+# Init Multi Instances
+if 'multi_instances' not in st.session_state:
+    with st.spinner('Initializing Multi Instances...'):
+        st.session_state.multi_instances = MultiInstances()
+# Init Users
+if 'users' not in st.session_state:
+    with st.spinner('Initializing Users...'):
+        st.session_state.users = Users()

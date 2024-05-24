@@ -30,6 +30,7 @@ class OptimizeItem(Base):
         self.oc = OptimizeConfig()
         self.sd = None
         self.ed = None
+        self.ed_now = False
         self.sb = None
         self.reruns = 1
         self.finish = 0
@@ -346,29 +347,38 @@ class OptimizeItem(Base):
     def edit_item(self):
         col_1, col_2, col_3 = st.columns([1,1,1])
         with col_1:
-            if "key_optimize_sb" in st.session_state:
-                self.sb = st.session_state.key_optimize_sb
-            st.number_input('STARTING_BALANCE',value=self.sb,step=500, key="key_optimize_sb")
             if "key_optimize_long_enabled" in st.session_state:
                 self.oc.do_long = st.session_state.key_optimize_long_enabled
             st.toggle("Long enabled", value=self.oc.do_long, key="key_optimize_long_enabled", help=None)
+            if "key_optimize_sb" in st.session_state:
+                self.sb = st.session_state.key_optimize_sb
+            st.number_input('STARTING_BALANCE',value=self.sb,step=500, key="key_optimize_sb")
             if "key_optimize_passivbot_mode" in st.session_state:
                 self.oc.passivbot_mode = st.session_state.key_optimize_passivbot_mode
             st.radio('PASSIVBOT_MODE',('recursive_grid', 'neat_grid', 'clock'), index=self.oc.passivbot_mode_index, key="key_optimize_passivbot_mode")
         with col_2:
-            if "key_optimize_sd" in st.session_state:
-                self.sd = st.session_state.key_optimize_sd.strftime("%Y-%m-%d")
-            st.date_input("START_DATE", datetime.datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD", key="key_optimize_sd")
             if "key_optimize_short_enabled" in st.session_state:
                 self.oc.do_short = st.session_state.key_optimize_short_enabled
             st.toggle("Short enabled", value=self.oc.do_short, key="key_optimize_short_enabled", help=None)
+            if "key_optimize_sd" in st.session_state:
+                self.sd = st.session_state.key_optimize_sd.strftime("%Y-%m-%d")
+            st.date_input("START_DATE", datetime.datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD", key="key_optimize_sd")
             if "key_optimize_algorithm" in st.session_state:
                 self.oc.algorithm = st.session_state.key_optimize_algorithm
             st.radio("ALGORITHM",('harmony_search', 'particle_swarm_optimization'),index=self.oc.algorithm_index, key="key_optimize_algorithm")
         with col_3:
+            if "key_optimize_ed_now" in st.session_state:
+                self.ed_now = st.session_state.key_optimize_ed_now
+            st.checkbox("today", value=self.ed_now, key="key_optimize_ed_now", help=pbgui_help.opt_today)
             if "key_optimize_ed" in st.session_state:
                 self.ed = st.session_state.key_optimize_ed.strftime("%Y-%m-%d")
-            st.date_input("END_DATE", datetime.datetime.strptime(self.ed, '%Y-%m-%d'), format="YYYY-MM-DD", key="key_optimize_ed")
+            if self.ed_now:
+                self.ed = "today"
+            if self.ed == "today":
+                ed = datetime.date.today()
+            else:
+                ed = datetime.datetime.strptime(self.ed, '%Y-%m-%d')
+            st.date_input("END_DATE", ed, format="YYYY-MM-DD", key="key_optimize_ed", disabled=self.ed_now)
             if "key_optimize_iters" in st.session_state:
                 self.oc.iters = st.session_state.key_optimize_iters
             st.number_input('ITERS',value=self.oc.iters,step=1000, help=pbgui_help.opt_iters, key="key_optimize_iters")
