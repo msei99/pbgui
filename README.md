@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v0.95
+v0.97
 
 ## Migration to v0.95 Multi
 
@@ -104,18 +104,59 @@ sudo -v ; curl https://rclone.org/install.sh | sudo bash
 ```
 As a recommendation, Synology C2 Object Storage offers a reliable option.
 They provide 15GB of free storage, and you can sign up at https://c2.synology.com/en-uk/object-storage/overview.
-After registration, create a bucket and configure rclone on your PC and servers using the following steps:
+After registration, create your bucket using your own unique name. Please note that using "pbgui" as a bucket name will not work, as it has already been chosen by me. Configure rclone on your PC and servers by following the steps below:
 Rclone configuration (Synology):
 ```
 rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=eu-002.s3.synologyc2.net no_check_bucket=true access_key_id=<key> secret_access_key=<secret>
 ```
-Finally, enable PBRemote on your servers and home PC, and you're all set.
-On your servers, you only need to run Streamlit once to configure the passivbot directory and server name. After that, you can stop Streamlit and only start PBRun.py and PBRemote using the start.sh script.
+You need to configure pbgui.ini with a minimum of this settings on your VPS.
+Example pbgui.ini (replace parameters with your own correct settings).
+```
+[main]
+pbdir = /home/mani/software/passivbot
+pbname = manibot50
+[pbremote]
+bucket = pbgui:
+```
+There is no need to install or run streamlit on your Remote Server.
+Start PBRun.py and PBRemote using the start.sh script.
+
+## PBShare Data Sharing Manager
+With PBShare, you can generate Live Grid pictures and upload them to imagekit.io.
+On every instance, you have the option to enable the Live Grid feature.
+Within the Services section of PBShare, you can download an index.html file that can be placed on your web server for sharing purposes.
+To utilize this service, you will need to create a free ImageKit account.
+For uploading the pictures to ImageKit, rclone is used.
+To set up rclone, use the following command:
+```
+rclone config create <name> imagekit endpoint=<url_endpoint> public_key=<public_key> private_key=<private_key>
+```
 
 ## Running on Windows
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v0.98 (24-05-2024)
+- Bugfix: When switch from backtest to single, user and symbol was changed
+- Bugfix: When changed the user on a instance, it was posible that you end up with the old and new instance running passivbot
+- Bugfix: Switchpage from Multi config to Single was wrong
+- Bugfix: Switchpage from Single Edit to Backtest sometimes end at backtest queue
+
+## v0.97 (07-05-2024)
+- Backup Instance before delete.
+- Moved the Edit/Delete functions from Live to Single Instances Page.
+- Select where to run a single instance and activate it.
+- Version Number for Single Instances.
+- Simplify PBRemote for single instances. No longer need to copy instances and start/stop them.
+
+## v0.96 (28-04-2024)
+- Services Status and Configure Page
+- PBRemote bucket must be configured in pbgui.ini
+- Recognize and display config type
+- Preview Grid on Instance
+- PBShare for generating Live Grid pictures
+- Generating a index.html for sharing your Grid pictures
 
 ## v0.95 (28-03-2024)
 - Bugfixes and realeased to master
@@ -317,11 +358,12 @@ First release with basic backtest and optimization functionality
 
 ## Support:
 If you like to support pbgui, please join one of my copytradings:\
+If you don't have an bybit account, please use my Referral Code: XZAJLZ https://www.bybit.com/invite?ref=XZAJLZ \
 Byybit:
 - manicptlowrisk1: ADA, DOGE, RNDR, OP WE 0.5 TWE 2.0 https://i.bybit.com/28bMabOR
 - manicptlowrisk2: INJ, FET, DOGE, AGIX TWE 2.25 https://i.bybit.com/25alabs3
 - manicptlowrisk3: SOL, SHIB, INJ, RNDR TWE 2.25 https://i.bybit.com/1Kgab32u
-- manicptrndr: RNDR only https://i.bybit.com/1qabmY01
+- manicptrndr: RNDR only https://i.bybit.com/1qabmY01 \
 
 Binance:
 - manicptlowrisk: INJ, FET, RNDR, DOGE TWE 2.0 https://www.binance.com/en/copy-trading/lead-details?portfolioId=3746904129636329728

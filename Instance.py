@@ -4,30 +4,38 @@ import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from PBRun import PBRun, RunInstance
-from PBRemote import PBRemote
+# from PBRemote import PBRemote
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
+import shutil
 import json
 import glob
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from time import sleep
 from bokeh.plotting import figure
 import numpy as np
 from shutil import rmtree
 import sys
 import traceback
+import plotly.graph_objects as go
 
 class Instance(Base):
-    def __init__(self):
+    def __init__(self, config: str = None):
         super().__init__()
+        self._config = Config(config=config)
+    # def __init__(self):
+    #     super().__init__()
         self._instance_path = None
         self._enabled = False
         self._multi = False
+        self._enabled_on = "disabled"
+        self._version = 0
+        self._pbshare_grid = False
         self._error = None # not saved
         self._symbol_ccxt = None
-        self._config = Config() # not saved
+        # self._config = Config() # not saved
         self._assigned_balance = 0
         self._co = -1
         self._leverage = 7
@@ -54,10 +62,22 @@ class Instance(Base):
     def instance_path(self): return self._instance_path
     @property
     def config(self): return self._config.config
+    @config.setter
+    def config(self, new_config):
+        if self._config.config != new_config:
+            self._config.config = new_config
     @property
     def enabled(self): return self._enabled
     @property
     def multi(self): return self._multi
+    @property
+    def enabled_on(self): return self._enabled_on
+    @property
+    def version(self): return self._version
+    @property
+    def pbshare_grid(self): return self._pbshare_grid
+    @property
+    def preview_grid(self): return self._config.preview_grid
     @property
     def symbol_ccxt(self): return self._symbol_ccxt
     @property
@@ -218,19 +238,31 @@ class Instance(Base):
             print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
 
-    @enabled.setter
-    def enabled(self, new_enabled):
-        self._enabled = new_enabled
-        self.save()
-        PBRun().update(self._instance_path, self._enabled)
-        if PBRemote().is_running():
-            PBRemote().stop()
-            PBRemote().run()
+    # @enabled.setter
+    # def enabled(self, new_enabled):
+    #     self._enabled = new_enabled
+    #     self.save()
+    #     PBRun().update(self._instance_path, self._enabled)
+    #     if PBRemote().is_running():
+    #         PBRemote().stop()
+    #         PBRemote().run()
 
     @multi.setter
     def multi(self, new_multi):
         self._multi = new_multi
         self.save()
+
+    @enabled_on.setter
+    def enabled_on(self, new_enabled_on):
+        self._enabled_on = new_enabled_on
+
+    @version.setter
+    def version(self, new_version):
+        self._version = new_version
+
+    @pbshare_grid.setter
+    def pbshare_grid(self, new_pbshare_grid):
+        self._pbshare_grid = new_pbshare_grid
 
     @co.setter
     def co(self, new_co):
@@ -595,6 +627,17 @@ class Instance(Base):
         return self.exchange.fetch_timestamp()
 
     def remove(self):
+        # Backup
+        source = f'{self._instance_path}'
+        pbgdir = Path.cwd()
+        if Path(source).exists():
+            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            name = self._instance_path.split("/")[-1]
+            destination = Path(f'{pbgdir}/data/backup/instances/{name}/{date}')
+            if not destination.exists():
+                destination.mkdir(parents=True)
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+        # Remove
         rmtree(self._instance_path, ignore_errors=True)
 
     def fetch_trades(self):
@@ -739,6 +782,8 @@ class Instance(Base):
             st.markdown(f'### Symbol: {self.symbol} {round(balance,2)} USDT')
             st.markdown(f'### Asset: {spot_balance} {symbol} = {round(spot_balance*price,2)} USDT')
         # open/close orders
+        # sort orders by price reversed
+        orders = sorted(orders, key=lambda x: x["price"], reverse=True)
         for order in orders:
             color = "red" if order["side"] == "sell" else "green"
             qty = order["amount"] * size
@@ -746,6 +791,169 @@ class Instance(Base):
             p.line(x=self._ohlcv_df["timestamp"], y=order["price"], color=color, line_width=2, line_dash="dotted", legend_label=legend)
         p.legend.location = "bottom_left"
         st.bokeh_chart(p, use_container_width=True)
+
+    def view_grid(self, sb: float = None):
+        if self._config.type != "recursive_grid":
+            return
+        self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+        ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe="4h", limit=100)
+        self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
+        w = (self._ohlcv_df["timestamp"][1] - self._ohlcv_df["timestamp"][0]) * 0.8
+        p = figure(
+            x_axis_label='date',
+            y_axis_label='USDT',
+            x_axis_type='datetime',
+            tools = "pan,box_zoom,wheel_zoom,save,reset",
+            active_scroll="wheel_zoom")
+        p.segment(x0=self._ohlcv_df["timestamp"], y0=self._ohlcv_df["high"], x1=self._ohlcv_df["timestamp"], y1=self._ohlcv_df["low"], color=self._ohlcv_df["color"])
+        p.vbar(x=self._ohlcv_df["timestamp"], width=w, top=self._ohlcv_df["open"], bottom=self._ohlcv_df["close"], color=self._ohlcv_df["color"])
+        sys.path.insert(0,st.session_state.pbdir)
+        sys.path.insert(0,f'{st.session_state.pbdir}')
+        try:
+            njit_funcs_recursive_grid = __import__("njit_funcs_recursive_grid")
+            # njit_funcs = __import__("njit_funcs")
+        except Exception as e:
+            st.write("### Can not import grid functions from passivbot")
+            return
+        symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults = self.exchange.fetch_symbol_info(self.symbol, self.market_type)
+        # print(symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults)
+        short = json.loads(self._config.config)["short"]
+        long = json.loads(self._config.config)["long"]
+        price = self.fetch_price()["last"]
+        if sb:
+            balance = sb
+        else:
+            balance = self.balance
+        if balance == 0:
+            return
+        if short["enabled"]:
+            entries_short = njit_funcs_recursive_grid.calc_recursive_entries_short(
+                balance,
+                0.0,            # psize,
+                0.0,            # pprice
+                price,          # lowest_ask, self.tickers[symbol]["ask"],
+                price,          # ema_band_upper, self.emas_short[symbol].max(),
+                False,          # self.inverse,
+                qty_steps,      # self.qty_steps[symbol],
+                price_steps,    # self.price_steps[symbol],
+                min_qtys,       # self.min_qtys[symbol],
+                min_costs,      # self.min_costs[symbol],
+                c_mults,        # self.c_mults[symbol],
+                short["initial_qty_pct"],
+                short["initial_eprice_ema_dist"],
+                short["ddown_factor"],
+                short["rentry_pprice_dist"],
+                short["rentry_pprice_dist_wallet_exposure_weighting"],
+                short["wallet_exposure_limit"],
+                short["auto_unstuck_ema_dist"],
+                short["auto_unstuck_wallet_exposure_threshold"],
+                0,              # auto_unstuck_on_timer,
+                whole_grid=True,
+            )
+            # print(entries_short)
+            entries_short = sorted(entries_short, key=lambda x: x[1], reverse=True)
+            for entry in entries_short:
+                # print(entry)
+                # print(entry[0])
+                # print(entry[1])
+                p.line(x=self._ohlcv_df["timestamp"], y=entry[1], color="red", line_width=2, line_dash="dotted", legend_label=f"{entry[1]}: {entry[0]}")
+        if long["enabled"]:
+            entries_long = njit_funcs_recursive_grid.calc_recursive_entries_long(
+                balance,
+                0.0,            # psize,
+                0.0,            # pprice
+                price,          # highest_bid, self.tickers[symbol]["bid"],
+                price,          # ema_band_lower, self.emas_long[symbol].min(),
+                False,          # self.inverse,
+                qty_steps,      # self.qty_steps[symbol],
+                price_steps,    # self.price_steps[symbol],
+                min_qtys,       # self.min_qtys[symbol],
+                min_costs,      # self.min_costs[symbol],
+                c_mults,        # self.c_mults[symbol],
+                long["initial_qty_pct"],
+                long["initial_eprice_ema_dist"],
+                long["ddown_factor"],
+                long["rentry_pprice_dist"],
+                long["rentry_pprice_dist_wallet_exposure_weighting"],
+                long["wallet_exposure_limit"],
+                long["auto_unstuck_ema_dist"],
+                long["auto_unstuck_wallet_exposure_threshold"],
+                0,              # auto_unstuck_on_timer,
+                whole_grid=True,
+            )
+            # print(entries_long)
+            for entry in entries_long:
+                # print(entry)
+                # print(entry[0])
+                # print(entry[1])
+                p.line(x=self._ohlcv_df["timestamp"], y=entry[1], color="green", line_width=2, line_dash="dotted", legend_label=f"{entry[1]}: {entry[0]}")
+        p.legend.location = "bottom_left"
+        st.bokeh_chart(p, use_container_width=True)
+
+    def save_ohlcv(self):
+        ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe="1h", limit=100)
+        self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
+        w = (self._ohlcv_df["timestamp"][1] - self._ohlcv_df["timestamp"][0]) * 0.8
+        layout = go.Layout(title=f'{self.symbol} | {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")} UTC', title_font=dict(size=36), showlegend=True)
+        fig = go.Figure(data=[go.Candlestick(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
+               open=self._ohlcv_df["open"], high=self._ohlcv_df["high"],
+               low=self._ohlcv_df["low"], close=self._ohlcv_df["close"],
+               increasing_line_color='green', decreasing_line_color='red')],
+               layout=layout)
+        # remove legend from trace 0
+        fig.data[0].showlegend = False
+        fig.update_layout(yaxis=dict(title='USDT', title_font=dict(size=24)), xaxis_rangeslider_visible=False, width=1280, height=1024, xaxis_type='category')
+        fig.update_layout(xaxis_rangeslider_visible=False, width=1280, height=1024, xaxis_tickformat='%H:%M')
+        fig.update_xaxes(tickangle=-45, tickfont=dict(size=10), dtick='4')
+        fig.update_layout(xaxis_rangeslider_visible=False, width=1280, height=1024)
+        if self._status:
+            balance = self.balance
+            price = self.price
+            orders = self._status["orders"]
+            if self.market_type == "futures":
+                position = self._status["position"]
+            else: 
+                position = None
+                spot_balance = self._status["spot_balance"]
+        else:
+            balance = self.fetch_balance()
+            price = self.fetch_price()["last"]
+            orders = self.fetch_open_orders()
+            if self.market_type == "futures":
+                position = self.fetch_position()
+            else: 
+                position = None
+                spot_balance = self.fetch_spot_balance()
+        # price
+        color = "red" if price < self._ohlcv_df["open"].iloc[-1] else "green"
+        # add price line to candlestick
+        fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'), y=[price] * len(self._ohlcv_df), mode='lines', line=dict(color=color, width=1), name=f'price: {str(round(price,5))}'))
+        if position:
+            if position["entryPrice"]:
+                color = "red" if price < position["entryPrice"] else "green"
+                size = position["contractSize"]
+                qty = position["contracts"] * size
+                fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
+                                        y=[position["entryPrice"]] * len(self._ohlcv_df), mode='lines',
+                                        line=dict(color=color, width=1, dash = 'dash'),
+                                        name=f'position: {str(round(position["entryPrice"],5))} qty: {str(qty)}<br>Pnl: {str(round(position["unrealizedPnl"],5))}'))
+            else:
+                size = 1.0
+        else:
+            size = 1.0
+        orders = sorted(orders, key=lambda x: x["price"], reverse=True)
+        for order in orders:
+            color = "red" if order["side"] == "sell" else "green"
+            qty = order["amount"] * size
+            legend = f'close: {str(order["price"])} qty: {str(qty)}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(qty)}'
+            fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
+                                    y=[order["price"]] * len(self._ohlcv_df),
+                                    mode='lines',
+                                    line=dict(color=color, width=2, dash = 'dot'), name=legend))
+        fig.write_image(f'{self._instance_path}/grid_{self.user}_{self.symbol}.png', width=1280, height=1024, scale=2)
+        return
 
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):
@@ -905,9 +1113,12 @@ class Instance(Base):
                 instance_path.mkdir(parents=True)
             self._config.config_file = f'{self._instance_path}/config.json'
             self._config.save_config()
+            self._version += 1
             file = Path(f'{instance_path}/instance.cfg')
             self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
             state = self.__dict__.copy()
+            # _enabled can be deleted in next version
+            del state['_enabled']
             del state['_instance_path']
             del state['_error']
             del state['_market_types']
@@ -1060,6 +1271,8 @@ class Instances:
             inst = Instance()
             if inst.load(instance):
                 self.instances.append(inst)
+        # sort instance by user and symbol
+        self.instances = sorted(self.instances, key=lambda d: d.symbol) 
         self.instances = sorted(self.instances, key=lambda d: d.user) 
 
     def view_log(self, log_filename: str):

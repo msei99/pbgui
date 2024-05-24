@@ -1,17 +1,7 @@
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, upload_pbconfigdb
-from Instance import Instances, Instance
-from Multi import MultiInstance, MultiInstances
-from Backtest import BacktestItem
+from pbgui_func import set_page_config, is_session_state_initialized
+from Multi import MultiInstance
 from PBRun import PBRun
-from PBStat import PBStat
-from PBRemote import PBRemote
-from datetime import datetime
-import pbgui_help
-import pandas as pd
-import platform
-from time import sleep
 
 def edit_multi_instance():
     # Display Error
@@ -22,7 +12,7 @@ def edit_multi_instance():
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
-            del st.session_state.multi_instances
+#            del st.session_state.multi_instances
             del st.session_state.edit_multi_instance
             st.rerun()
         if st.button(":floppy_disk:"):
@@ -88,7 +78,6 @@ def select_instance():
         d.append({
             'id': id,
             'Edit': False,
-            # 'Running': instance.is_running(),
             'User': instance.user,
             'Enabled On': instance.enabled_on,
             'TWE': twe_str,
@@ -105,13 +94,9 @@ def select_instance():
 
 set_page_config()
 
-# Init session state
-if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
+# Init session states
+if is_session_state_initialized():
     st.switch_page("pbgui.py")
-if 'pbgui_instances' not in st.session_state:
-    st.session_state.pbgui_instances = Instances()
-if 'multi_instances' not in st.session_state:
-    st.session_state.multi_instances = MultiInstances()
 
 if 'edit_multi_instance' in st.session_state:
     edit_multi_instance()

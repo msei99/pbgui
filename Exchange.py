@@ -14,7 +14,7 @@ class Exchanges(Enum):
     OKX = 'okx'
     KUCOIN = 'kucoin'
     BINGX = 'bingx'
-    
+
     @staticmethod
     def list():
         return list(map(lambda c: c.value, Exchanges))
@@ -93,7 +93,7 @@ class Exchange:
             orders = self.instance.fetch_open_orders(symbol=symbol, params = {"type": market_type})
         elif self.id == 'bingx':
             orders = self.instance.fetch_open_orders(symbol=symbol)
-        else:    
+        else:
             orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 
@@ -116,7 +116,7 @@ class Exchange:
         try:
             balance = self.instance.fetch_balance(params = {"type": market_type})
         except Exception as e:
-            return e   
+            return e
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
@@ -135,7 +135,7 @@ class Exchange:
                         symbol = symbol.replace("BTC", "")
                     elif symbol.endswith('EUR'):
                         symbol = symbol.replace("EUR", "")
-                    return float(balance["total"][symbol])    
+                    return float(balance["total"][symbol])
                 else:
                     if "USDT" in balance["total"]:
                         return float(balance["total"]["USDT"])
@@ -145,7 +145,7 @@ class Exchange:
             if market_type == 'swap': return float(balance["info"]["totalWalletBalance"])
             else:
                 if symbol:
-                    return float(balance["total"][symbol])    
+                    return float(balance["total"][symbol])
                 else:
                     return float(balance["total"]["USDT"])
         elif self.id == "bingx":
@@ -493,7 +493,7 @@ class Exchange:
                         return v["symbol"]
         elif self.id == 'bitget':
             if symbol.endswith('USD'):
-                return f'{symbol}_DMCBL'    
+                return f'{symbol}_DMCBL'
             return f'{symbol}_UMCBL'
         elif self.id == 'kucoinfutures':
             return f'{symbol}M'
@@ -502,8 +502,73 @@ class Exchange:
         elif self.id == 'bingx':
             return f'{symbol[0:-4]}/USDT:USDT'
         else:
-            return symbol
+            if market_type == "spot":
+                return f'{symbol[0:-4]}/USDT'
+            else:
+                return symbol
 
+    def load_market(self):
+        if not self.instance: self.connect()
+        self._markets = self.instance.load_markets()
+        return self._markets
+
+    def fetch_symbol_info(self, symbol: str, market_type: str):
+        if not self.instance: self.connect()
+        if not self._markets: self._markets = self.instance.load_markets()
+        if market_type == "spot":
+            symbol = f'{symbol[0:-4]}/USDT'
+        else:
+            symbol = f'{symbol[0:-4]}/USDT:USDT'
+        symbol_info = self._markets[symbol]
+        # print(symbol_info)
+        if self.id == 'binance':
+            if market_type == "futures":
+                min_costs = (
+                    0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
+                )
+                min_qtys = symbol_info["limits"]["amount"]["min"]
+                for felm in symbol_info["info"]["filters"]:
+                    if felm["filterType"] == "PRICE_FILTER":
+                        price_steps = float(felm["tickSize"])
+                    elif felm["filterType"] == "MARKET_LOT_SIZE":
+                        qty_steps = float(felm["stepSize"])
+                c_mults = symbol_info["contractSize"]
+            else:
+                for q in symbol_info["info"]["filters"]:
+                    if q["filterType"] == "LOT_SIZE":
+                        min_qtys = symbol_info["min_qty"] = float(q["minQty"])
+                        qty_steps = symbol_info["qty_step"] = float(q["stepSize"])
+                    elif q["filterType"] == "PRICE_FILTER":
+                        price_steps = symbol_info["price_step"] = float(q["tickSize"])
+                    elif q["filterType"] == "NOTIONAL":
+                        min_costs = symbol_info["min_cost"] = float(q["minNotional"])
+                c_mults = 1.0
+        elif self.id == 'bybit':
+            if market_type == "futures":
+                min_costs = (
+                    0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
+                )
+                min_qtys = symbol_info["limits"]["amount"]["min"]
+                qty_steps = symbol_info["precision"]["amount"]
+                price_steps = symbol_info["precision"]["price"]
+                c_mults = symbol_info["contractSize"]
+            else:
+                min_costs = (
+                    0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
+                )
+                min_qtys = symbol_info["limits"]["amount"]["min"]
+                qty_steps = symbol_info["precision"]["amount"]
+                price_steps = symbol_info["precision"]["price"]
+                c_mults = 1.0
+        else:
+            min_costs = max(
+                5.1, 0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
+            )
+            min_qtys = symbol_info["limits"]["amount"]["min"]
+            qty_steps = symbol_info["precision"]["amount"]
+            price_steps = symbol_info["precision"]["price"]
+            c_mults = symbol_info["contractSize"]
+        return symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults
 
     def fetch_symbols(self):
         if not self.instance: self.connect()
