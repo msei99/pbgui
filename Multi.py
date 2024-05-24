@@ -368,7 +368,7 @@ class MultiInstance():
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == list(self._symbols.keys())[row]:
                             st.session_state.edit_instance = instance
-                            st.switch_page("pages/1_Live.py")
+                            st.switch_page("pages/1_Single.py")
         slist = []
         self.TWE_long = 0.0
         self.TWE_short = 0.0
