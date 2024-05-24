@@ -678,11 +678,11 @@ class PBRun():
                     instance = cfg["instance"]
                     multi = cfg["multi"]
                     if multi:
-                        self.watch_multi([f'{self.multi_path}/{instance}'])
                         self.update_activate()
+                        self.watch_multi([f'{self.multi_path}/{instance}'])
                     else:
-                        self.watch_single([f'{self.single_path}/{instance}'])
                         self.update_activate_single()
+                        self.watch_single([f'{self.single_path}/{instance}'])
                 cfile.unlink(missing_ok=True)
     
     def update_activate(self):
@@ -775,6 +775,11 @@ class PBRun():
                 status.version = run_single.version
                 status.enabled_on = run_single.name
                 self.instances_status_single.add(status)
+        # Remove non existing instances from status
+        for instance in self.instances_status_single:
+            instance_path = f'{self.pbgdir}/data/instances/{instance.name}'
+            if not Path(instance_path).exists():
+                self.instances_status_single.remove(instance)
         self.instances_status_single.save()
 
     def watch_multi(self, multi_instances : list = None):

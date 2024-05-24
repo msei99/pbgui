@@ -137,6 +137,12 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v0.98 (24-05-2024)
+- Bugfix: When switch from backtest to single, user and symbol was changed
+- Bugfix: When changed the user on a instance, it was posible that you end up with the old and new instance running passivbot
+- Bugfix: Switchpage from Multi config to Single was wrong
+- Bugfix: Switchpage from Single Edit to Backtest sometimes end at backtest queue
+
 ## v0.97 (07-05-2024)
 - Backup Instance before delete.
 - Moved the Edit/Delete functions from Live to Single Instances Page.
