@@ -12,7 +12,7 @@ def edit_multi_instance():
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
-            del st.session_state.multi_instances
+#            del st.session_state.multi_instances
             del st.session_state.edit_multi_instance
             st.rerun()
         if st.button(":floppy_disk:"):

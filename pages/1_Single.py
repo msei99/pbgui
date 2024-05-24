@@ -221,6 +221,13 @@ def edit_instance():
             st.session_state.my_bt.user = instance.user
             st.session_state.my_bt.symbol = instance.symbol
             st.session_state.my_bt.market_type = instance.market_type
+            del st.session_state.edit_instance
+            if "bt_queue" in st.session_state:
+                del st.session_state.bt_queue
+            if "bt_compare" in st.session_state:
+                del st.session_state.bt_compare
+            if "bt_import" in st.session_state:
+                del st.session_state.bt_import
             st.switch_page("pages/3_Backtest.py")
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
         if not "error" in st.session_state:
