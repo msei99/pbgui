@@ -122,6 +122,7 @@ class RunInstance():
                     file.truncate()
 
     def load(self):
+        """Load the instance file with passivbot's parameters in self"""
         file = Path(f'{self.path}/instance.cfg')
         with open(file, "r", encoding='utf-8') as f:
             instance_cfg = json.load(f)
@@ -460,7 +461,7 @@ class PBRun():
         self.index += 1
         return next(self)
 
-    def add(self, run_instance: RunInstance):
+    def add(self, run_instance: RunInstance): # Deprecated (Instances)
         if run_instance:
             if run_instance.path:
                 for instance in self.run_instances:
@@ -468,7 +469,7 @@ class PBRun():
                         return
                 self.run_instances.append(run_instance)
 
-    def remove(self, run_instance: RunInstance):
+    def remove(self, run_instance: RunInstance): # Deprecated (Instances)
         if run_instance:
             self.run_instances.remove(run_instance)
 
@@ -698,7 +699,7 @@ class PBRun():
         with open('pbgui.ini', 'w') as pbgui_configfile:
             self.pb_config.write(pbgui_configfile)
 
-    def load(self, instance: str):
+    def load(self, instance: str): # Deprecated (Instances)
         file = Path(f'{instance}/instance.cfg')
         if file.exists():
             run_instance = RunInstance()
@@ -709,7 +710,7 @@ class PBRun():
             elif run_instance.enabled_on != self.name:
                 run_instance.stop()
 
-    def load_all(self):
+    def load_all(self): # Deprecated (Instances)
         self.run_instances = []
         p = str(Path(f'{self.instances_path}/*'))
         instances = glob.glob(p)
@@ -863,12 +864,21 @@ class PBRun():
                 self.my_pid = int(pid) if pid.isnumeric() else None
 
     def save_pid(self):
+        """Saves the process ID into /data/pid/pbrun.pid."""
         self.my_pid = os.getpid()
         with open(self.pidfile, 'w') as f:
             f.write(str(self.my_pid))
 
 
 def main():
+    """
+    Main function of PBRun, responsible for starting and logging passivbot instances.
+
+    ### Usage : 
+    - Run PBRun and save its process ID to pbrun.pid.
+    - Logs in pbgui/data/logs/PBRun.log and creates a .old if the file is too heavy.
+    - Create and monitor single, multi and instances of passivbot. (Instances will be deleted in future versions)
+    """
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
@@ -884,7 +894,7 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
-    run.load_all()
+    run.load_all() # Deprecated (Instances)
     run.watch_multi()
     run.watch_single()
     count = 0
@@ -897,7 +907,7 @@ def main():
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.has_activate()
             run.has_update_status()
-            for run_instance in run:
+            for run_instance in run: # Deprecated (Instances)
                 run_instance.watch()
             for run_multi in run.run_multi:
                 run_multi.watch()
