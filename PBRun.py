@@ -8,7 +8,6 @@ from time import sleep
 import glob
 import json
 import hjson
-import shutil
 from io import TextIOWrapper
 from datetime import datetime
 import platform
