@@ -2,6 +2,7 @@ import psutil
 import subprocess
 import sys
 import os
+import traceback
 from pathlib import Path, PurePath
 from time import sleep
 from io import TextIOWrapper
@@ -116,10 +117,10 @@ def main():
             if len(stat.instances) < 20:
                 sleep(60)
             # Refresh Instances if there are some new or removed
-            stat.instances.instances = []
-            stat.instances.load()
+            stat.instances = []
+            stat.load()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
-
+            traceback.print_exc()
 if __name__ == '__main__':
     main()
