@@ -11,7 +11,7 @@ import hjson
 from io import TextIOWrapper
 from datetime import datetime
 import platform
-from shutil import copy
+from shutil import copy, copytree, rmtree
 import os
 import traceback
 import uuid
@@ -324,6 +324,7 @@ class RunMulti():
         self.pbgdir = None
     
     def watch(self):
+        """Starts PB multi if it does not run."""
         if not self.is_running():
             self.start()
 
@@ -388,6 +389,7 @@ class RunMulti():
             f.write(run_config)
 
     def load(self):
+        """Load config for PB multi."""
         file = Path(f'{self.path}/multi.hjson')
         if file.exists():
             try:
@@ -567,7 +569,7 @@ class PBRun():
                         src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                         dest = f'{self.single_path}/{instance.name}'
                         if Path(src).exists():
-                            shutil.copytree(src, dest, dirs_exist_ok=True)
+                            copytree(src, dest, dirs_exist_ok=True)
                             self.watch_single([f'{self.single_path}/{instance.name}'])
                 else:
                     # Install new single instance
@@ -575,7 +577,7 @@ class PBRun():
                     src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                     dest = f'{self.single_path}/{instance.name}'
                     if Path(src).exists():
-                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        copytree(src, dest, dirs_exist_ok=True)
                         self.watch_single([f'{self.single_path}/{instance.name}'])
             remove_instances = []
             for instance in self.instances_status_single:
@@ -596,8 +598,8 @@ class PBRun():
                         destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        shutil.copytree(source, destination, dirs_exist_ok=True)
-                        shutil.rmtree(source, ignore_errors=True)
+                        copytree(source, destination, dirs_exist_ok=True)
+                        rmtree(source, ignore_errors=True)
                         remove_instances.append(instance)
             if remove_instances:
                 for instance in remove_instances:
@@ -623,14 +625,14 @@ class PBRun():
                                 Path(item).unlink(missing_ok=True)
                         src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                         dest = f'{self.multi_path}/{instance.name}'
-                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        copytree(src, dest, dirs_exist_ok=True)
                         self.watch_multi([f'{self.multi_path}/{instance.name}'])
                 else:
                     # Install new multi instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                     src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                     dest = f'{self.multi_path}/{instance.name}'
-                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                    copytree(src, dest, dirs_exist_ok=True)
                     self.watch_multi([f'{self.multi_path}/{instance.name}'])
             remove_instances = []
             for instance in self.instances_status:
@@ -650,8 +652,8 @@ class PBRun():
                         destination = Path(f'{self.pbgdir}/data/backup/mult/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        shutil.copytree(source, destination, dirs_exist_ok=True)
-                        shutil.rmtree(source, ignore_errors=True)
+                        copytree(source, destination, dirs_exist_ok=True)
+                        rmtree(source, ignore_errors=True)
                         remove_instances.append(instance)
             if remove_instances:
                 for instance in remove_instances:
@@ -783,6 +785,12 @@ class PBRun():
         self.instances_status_single.save()
 
     def watch_multi(self, multi_instances : list = None):
+        """
+        Watches PB multi instances and manages their status.
+
+        Args:
+            multi_instance (list, optional): List of muilti-instance paths. Defaults to None.
+        """
         if not multi_instances:
             p = str(Path(f'{self.multi_path}/*'))
             multi_instances = glob.glob(p)
