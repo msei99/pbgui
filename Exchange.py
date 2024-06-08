@@ -84,6 +84,8 @@ class Exchange:
 
     def fetch_price(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
+        if symbol == "ADAUSDT_UMCBL":
+            symbol = "ADA/USDT:USDT"
         price = self.instance.fetch_ticker(symbol=symbol)
         return price
 
@@ -345,6 +347,9 @@ class Exchange:
             #     all_trades = bingx_trades
             else:
                 while True:
+                    if since == end_time:
+                        print(f'User:{self.user.name} Symbol:{symbol} {since} Done')
+                        break
                     trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "endTime": end_time})
                     if trades and trades[-1]['id'] != last_trade_id:
                         first_trade = trades[0]
@@ -466,6 +471,9 @@ class Exchange:
             end_time = self.instance.milliseconds()
             last_funding_id = ""
             while True:
+                if since == end_time:
+                    print(f'User:{self.user.name} Symbol:{symbol} {since} Done')
+                    break
                 fundings = self.instance.fetch_funding_history(symbol=symbol, since=since, limit=100, params = {"endTime": end_time})
                 if fundings and fundings[-1]['id'] != last_funding_id:
                     first_funding = fundings[0]
@@ -492,9 +500,10 @@ class Exchange:
                     if v["id"] == symbol and v["swap"]:
                         return v["symbol"]
         elif self.id == 'bitget':
-            if symbol.endswith('USD'):
-                return f'{symbol}_DMCBL'
-            return f'{symbol}_UMCBL'
+            return f'{symbol[0:-4]}/USDT:USDT'
+            # if symbol.endswith('USD'):
+            #     return f'{symbol}_DMCBL'
+            # return f'{symbol}_UMCBL'
         elif self.id == 'kucoinfutures':
             return f'{symbol}M'
         elif self.id == 'okx':
@@ -578,8 +587,11 @@ class Exchange:
         for (k,v) in list(self._markets.items()):
             if v["swap"] and v["active"]:
                 if self.id == "bitget":
-                    if v["id"][-6:] == '_UMCBL' or v["id"][-6:] == '_DMCBL':
-                        self.swap.append(v["id"].split("_")[0])
+                    # print(k,v)
+                    # if v["id"][-6:] == '_UMCBL' or v["id"][-6:] == '_DMCBL':
+                    #     self.swap.append(v["id"].split("_")[0])
+                    if v["id"][-4:] == 'USDT':
+                        self.swap.append(v["id"])
                 elif self.id == "kucoinfutures":
                     if v["id"][-5:] == 'USDTM':
                         self.swap.append(v["id"][:len(v["id"])-1])
@@ -598,6 +610,8 @@ class Exchange:
                 self.spot.append(v["id"])
         self.spot.sort()
         self.swap.sort()
+        # print(self.spot)
+        # print(self.swap)
         self.save_symbols()
 
     def save_symbols(self):
@@ -610,7 +624,6 @@ class Exchange:
             pb_config.set("exchanges", f'{self.id}.spot', f'{self.spot}')
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
-
 
     def load_symbols(self):
         pb_config = configparser.ConfigParser()

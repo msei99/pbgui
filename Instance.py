@@ -826,7 +826,8 @@ class Instance(Base):
         else:
             balance = self.balance
         if balance == 0:
-            return
+            balance = 1000
+            # return
         if short["enabled"]:
             entries_short = njit_funcs_recursive_grid.calc_recursive_entries_short(
                 balance,
@@ -1058,7 +1059,7 @@ class Instance(Base):
                 self.__dict__.update(state)
                 self._instance_path = path
                 self.user = state["_user"]
-                if not self._symbol_ccxt:
+                if not self._symbol_ccxt or self._symbol_ccxt.endswith("_UMCBL") or self._symbol_ccxt.endswith("_DMCBL"):
                     self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
                     state["_symbol_ccxt"] = self._symbol_ccxt
                     with open(file, "w", encoding='utf-8') as f:

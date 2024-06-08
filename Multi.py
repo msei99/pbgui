@@ -52,7 +52,7 @@ class MultiInstance():
     @enabled_on.setter
     def enabled_on(self, new_enabled_on):
         self._enabled_on = new_enabled_on
-    # version
+    # version 
     @property
     def version(self): return self._version
     @version.setter
