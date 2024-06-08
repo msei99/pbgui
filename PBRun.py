@@ -647,7 +647,7 @@ class PBRun():
                     if Path(source).exists():
                         # Backup multi config
                         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                        destination = Path(f'{self.pbgdir}/data/backup/mult/{instance.name}/{date}')
+                        destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
                         shutil.copytree(source, destination, dirs_exist_ok=True)

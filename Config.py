@@ -171,7 +171,12 @@ class Config:
         # Display Error
         if "error_config" in st.session_state:
             st.error(st.session_state.error_config, icon="🚨")
-        st.text_area("Instance config", self.config, key="config_instance_config", height=600)
+        height = 600
+        if not self.config is None:
+            height = len(self.config.splitlines()) *23
+        if height < 600:
+            height = 600
+        st.text_area("Instance config", self.config, key="config_instance_config", height=height)
 
 def main():
     print("Don't Run this Class from CLI")

@@ -6,6 +6,7 @@ import json
 import psutil
 import sys
 import platform
+import traceback
 import subprocess
 import shlex
 import glob
@@ -13,7 +14,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import validateJSON, config_pretty_str
+from pbgui_func import PBDIR, PBGDIR, config_pretty_str
 import uuid
 from Base import Base
 from Config import Config
@@ -31,7 +32,6 @@ class BacktestItem(Base):
         self.sd = None
         self.ed = None
         self.sb = None
-        self.pbdir = None
         self.initialize()
 
     @property
@@ -149,8 +149,7 @@ class BacktestItem(Base):
     def update_pbconfigdb(self):
         day = 24*60*60
         url = "https://pbconfigdb.scud.dedyn.io/result/pbconfigdb.pbgui.json"
-        pbgdir = Path.cwd()
-        local = Path(f'{pbgdir}/data/pbconfigdb')
+        local = Path(f'{PBGDIR}/data/pbconfigdb')
         if not local.exists():
             local.mkdir(parents=True)
         dbfile = Path(f'{local}/pbconfigdb.json')
@@ -191,8 +190,7 @@ class BacktestItem(Base):
             print(f'{str(file)} is corrupted {e}')
 
     def save(self):
-        pbgdir = Path.cwd()
-        dest = Path(f'{pbgdir}/data/bt_queue')
+        dest = Path(f'{PBGDIR}/data/bt_queue')
         unique_filename = str(uuid.uuid4())
         if not self.file:
             self.file = Path(f'{dest}/{unique_filename}.json') 
@@ -287,21 +285,17 @@ class BacktestItem(Base):
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            pb_config = configparser.ConfigParser()
-            pb_config.read('pbgui.ini')
-            if pb_config.has_option("main", "pbdir"):
-                pbdir = pb_config.get("main", "pbdir")
-                cmd = [sys.executable, '-u', PurePath(f'{pbdir}/backtest.py')]
-                cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
-                cmd.extend(shlex.split(cmd_end))
-                cmd.extend(['-bd', PurePath(f'{pbdir}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
-                log = open(self.log,"w")
-                if platform.system() == "Windows":
-                    creationflags = subprocess.DETACHED_PROCESS
-                    creationflags |= subprocess.CREATE_NO_WINDOW
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, creationflags=creationflags)
-                else:
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
+            cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest.py')]
+            cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
+            cmd.extend(shlex.split(cmd_end))
+            cmd.extend(['-bd', PurePath(f'{PBDIR}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
+            log = open(self.log,"w")
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, start_new_session=True)
 
 class BacktestQueue:
     def __init__(self):
@@ -353,8 +347,7 @@ class BacktestQueue:
             self.items.append(item)
 
     def cleanup(self):
-        pbgdir = Path.cwd()
-        dest = Path(f'{pbgdir}/data/bt_queue')
+        dest = Path(f'{PBGDIR}/data/bt_queue')
         p = str(Path(f'{dest}/*'))
         items = glob.glob(p)
         for item in items:
@@ -385,8 +378,7 @@ class BacktestQueue:
         return r
         
     def load(self):
-        pbgdir = Path.cwd()
-        dest = Path(f'{pbgdir}/data/bt_queue')
+        dest = Path(f'{PBGDIR}/data/bt_queue')
         p = str(Path(f'{dest}/*.json'))
         items = glob.glob(p)
         self.items = []
@@ -401,9 +393,8 @@ class BacktestQueue:
 
     def run(self):
         if not self.is_running():
-            pbgdir = Path.cwd()
-            cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/Backtest.py')]
-            dest = Path(f'{pbgdir}/data/logs')
+            cmd = [sys.executable, '-u', PurePath(f'{PBGDIR}/Backtest.py')]
+            dest = Path(f'{PBGDIR}/data/logs')
             if not dest.exists():
                 dest.mkdir(parents=True)
             logfile = Path(f'{dest}/Backtest.log')
@@ -414,9 +405,9 @@ class BacktestQueue:
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
                 creationflags |= subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBGDIR, text=True, creationflags=creationflags)
             else:
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, start_new_session=True)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBGDIR, text=True, start_new_session=True)
 
     def stop(self):
         if self.is_running():

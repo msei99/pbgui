@@ -137,7 +137,12 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.98 (24-05-2024)
+## v0.98 (27-05-2024)
+- Backtest Multi added
+- Bugfix: Refresh on Multi Page not working
+- Bugfix: PBStat Something went wrong, but continue 'list' object has no attribute ...
+- Bugfix: Remove some debug print statement
+- Bugfix: Make bitget work on ccxt version 4.3.24
 - Bugfix: When switch from backtest to single, user and symbol was changed
 - Bugfix: When changed the user on a instance, it was posible that you end up with the old and new instance running passivbot
 - Bugfix: Switchpage from Multi config to Single was wrong
