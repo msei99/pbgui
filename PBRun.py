@@ -429,9 +429,9 @@ class PBRun():
     It does so with update_status_*.cmd, and activate_*.cmd. These files are created while using PBGui, and when PBRun receives activate_*.cmd, it creates the single of multi instances for passivbot, when it receives update_status_*.cmd, it inform on the status of this instances, so the bot specified in the status can start instances of passivbot.
     """
     def __init__(self):
-        self.run_instances = [RunInstance]
-        self.run_multi = [RunMulti]
-        self.run_single = [RunSingle]
+        self.run_instances = []
+        self.run_multi = []
+        self.run_single = []
         self.index = 0
         self.pbgdir = Path.cwd()
         self.pb_config = configparser.ConfigParser()
