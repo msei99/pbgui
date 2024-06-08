@@ -8,11 +8,10 @@ from time import sleep
 import glob
 import json
 import hjson
-import shutil
 from io import TextIOWrapper
 from datetime import datetime
 import platform
-from shutil import copy
+from shutil import copy, copytree, rmtree
 import os
 import traceback
 import uuid
@@ -123,6 +122,7 @@ class RunInstance():
                     file.truncate()
 
     def load(self):
+        """Load the instance file with passivbot's parameters in self"""
         file = Path(f'{self.path}/instance.cfg')
         with open(file, "r", encoding='utf-8') as f:
             instance_cfg = json.load(f)
@@ -229,6 +229,20 @@ class RunSingle():
                     file.truncate()
 
     def create_parameters(self):
+        """Create the list of parameters used when running passivbot single instance.
+
+        Parameters :
+            - "_long_mode": Determines long mode parameters ("-lm gs", "-lm p", or "-lm t").
+            - "_short_mode": Determines short mode parameters ("-sm gs", "-sm p", or "-sm t").
+            - "_market_type": If not "swap", adds "-m spot" to parameters.
+            - "_ohlcv": If False, adds "-oh n" to parameters.
+            - "_co": Adds "-co {value}" if "_co" is present and not equal to -1.
+            - "_leverage": Adds "-lev {value}" if "_leverage" is present and not equal to 7.
+            - "_assigned_balance": Adds "-ab {value}" if "_assigned_balance" is present and not equal to 0.
+            - "_price_distance_threshold": Adds "-pt {value}" if "_price_distance_threshold" is present and not equal to 0.5.
+            - "_price_precision": Adds "-pp {value}" if "_price_precision" is present and not equal to 0.0.
+            - "_price_step": Adds "-ps {value}" if "_price_step" is present and not equal to 0.0.
+        """
         # Write running Version to file
         if "_version" in self._single_config:
             version = str(self._single_config["_version"])
@@ -388,6 +402,7 @@ class RunMulti():
             f.write(run_config)
 
     def load(self):
+        """Load config for PB multi."""
         file = Path(f'{self.path}/multi.hjson')
         if file.exists():
             try:
@@ -409,10 +424,14 @@ class RunMulti():
                 traceback.print_exc()
 
 class PBRun():
+    """PBRun links together PBRemote, PBGui and Passivbot, while being independant and can maintain passivbot working by itself.
+
+    It does so with update_status_*.cmd, and activate_*.cmd. These files are created while using PBGui, and when PBRun receives activate_*.cmd, it creates the single of multi instances for passivbot, when it receives update_status_*.cmd, it inform on the status of this instances, so the bot specified in the status can start instances of passivbot.
+    """
     def __init__(self):
-        self.run_instances = []
-        self.run_multi = []
-        self.run_single = []
+        self.run_instances = [RunInstance]
+        self.run_multi = [RunMulti]
+        self.run_single = [RunSingle]
         self.index = 0
         self.pbgdir = Path.cwd()
         self.pb_config = configparser.ConfigParser()
@@ -461,7 +480,7 @@ class PBRun():
         self.index += 1
         return next(self)
 
-    def add(self, run_instance: RunInstance):
+    def add(self, run_instance: RunInstance): # Deprecated (Instances)
         if run_instance:
             if run_instance.path:
                 for instance in self.run_instances:
@@ -469,7 +488,7 @@ class PBRun():
                         return
                 self.run_instances.append(run_instance)
 
-    def remove(self, run_instance: RunInstance):
+    def remove(self, run_instance: RunInstance): # Deprecated (Instances)
         if run_instance:
             self.run_instances.remove(run_instance)
 
@@ -514,12 +533,13 @@ class PBRun():
     def stop_instance(self, instance):
         self.change_enabled(instance, False)
         ipath = f'{self.instances_path}/{instance}'
-        self.update(ipath, False)
+        self.update(ipath, False)   # No function ? Deprecated?
 
-    def disable_instance(self, instance):
+    def disable_instance(self, instance): # Can be removed with the removal of Instances from the code.
         self.change_enabled(instance, False)
 
     def change_enabled(self, instance : str, enabled : bool):
+        # May be useless if disable_instance and stop_instance are.
         ipath = f'{self.instances_path}/{instance}'
         ifile = Path(f'{ipath}/instance.cfg')
         with open(ifile, "r", encoding='utf-8') as f:
@@ -530,6 +550,7 @@ class PBRun():
             json.dump(inst, f, indent=4)
 
     def update_status(self, status_file : str, rserver : str):
+        """Function only called on PBRemote"""
         unique = str(uuid.uuid4())
         cfile = Path(f'{self.cmd_path}/update_status_{unique}.cmd')
         cfg = ({
@@ -539,6 +560,10 @@ class PBRun():
             json.dump(cfg, f)
 
     def has_update_status(self):
+        """Checks for new status, and update the status files accordingly.
+        
+        Checks for any file called update_status.cmd, and adds it to the status.json file already existant, required to run PB single and multi.
+        """
         p = str(Path(f'{self.cmd_path}/update_status_*.cmd'))
         status_files = glob.glob(p)
         for cfile in status_files:
@@ -555,6 +580,18 @@ class PBRun():
                 cfile.unlink(missing_ok=True)
 
     def update_from_status_single(self, status_file : str, rserver : str):
+        """Updates the single status based on the provided status file.
+
+        Notes:
+            - Compares the new coming status timestamp with the current one.
+            - Installs new single versions or instances if some.
+            - Removes old *.json configuration files.
+            - Removes instances not found in the new status.
+
+        Args:
+            status_file (str): Path to the status file.
+            rserver (str): Name of the remote server.
+        """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_single_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
@@ -567,7 +604,7 @@ class PBRun():
                         src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                         dest = f'{self.single_path}/{instance.name}'
                         if Path(src).exists():
-                            shutil.copytree(src, dest, dirs_exist_ok=True)
+                            copytree(src, dest, dirs_exist_ok=True)
                             self.watch_single([f'{self.single_path}/{instance.name}'])
                 else:
                     # Install new single instance
@@ -575,7 +612,7 @@ class PBRun():
                     src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                     dest = f'{self.single_path}/{instance.name}'
                     if Path(src).exists():
-                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        copytree(src, dest, dirs_exist_ok=True)
                         self.watch_single([f'{self.single_path}/{instance.name}'])
             remove_instances = []
             for instance in self.instances_status_single:
@@ -596,8 +633,8 @@ class PBRun():
                         destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        shutil.copytree(source, destination, dirs_exist_ok=True)
-                        shutil.rmtree(source, ignore_errors=True)
+                        copytree(source, destination, dirs_exist_ok=True)
+                        rmtree(source, ignore_errors=True)
                         remove_instances.append(instance)
             if remove_instances:
                 for instance in remove_instances:
@@ -605,6 +642,18 @@ class PBRun():
                 self.instances_status_single.save()
 
     def update_from_status(self, status_file : str, rserver : str):
+        """Updates the multi status based on the provided status file.
+
+        Notes:
+            - Compares the new coming status timestamp with the current one.
+            - Installs new multi versions or instances if some.
+            - Removes old *.json configuration files.
+            - Removes instances not found in the new status.
+
+        Args:
+            status_file (str): Path to the status file.
+            rserver (str): Name of the remote server.
+        """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
@@ -623,14 +672,14 @@ class PBRun():
                                 Path(item).unlink(missing_ok=True)
                         src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                         dest = f'{self.multi_path}/{instance.name}'
-                        shutil.copytree(src, dest, dirs_exist_ok=True)
+                        copytree(src, dest, dirs_exist_ok=True)
                         self.watch_multi([f'{self.multi_path}/{instance.name}'])
                 else:
                     # Install new multi instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                     src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                     dest = f'{self.multi_path}/{instance.name}'
-                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                    copytree(src, dest, dirs_exist_ok=True)
                     self.watch_multi([f'{self.multi_path}/{instance.name}'])
             remove_instances = []
             for instance in self.instances_status:
@@ -647,11 +696,11 @@ class PBRun():
                     if Path(source).exists():
                         # Backup multi config
                         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                        destination = Path(f'{self.pbgdir}/data/backup/mult/{instance.name}/{date}')
+                        destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        shutil.copytree(source, destination, dirs_exist_ok=True)
-                        shutil.rmtree(source, ignore_errors=True)
+                        copytree(source, destination, dirs_exist_ok=True)
+                        rmtree(source, ignore_errors=True)
                         remove_instances.append(instance)
             if remove_instances:
                 for instance in remove_instances:
@@ -668,6 +717,10 @@ class PBRun():
             json.dump(cfg, f)
 
     def has_activate(self):
+        """Checks for activation file
+
+        This method scans for activation files (activate_*.cmd) in the cmd directory. If an activation file exists, it reads the new configuration to activate and start it as a single or multi config. Depending on the configuration, it either create a single or multi config using their respective watch function.
+        """
         p = str(Path(f'{self.cmd_path}/activate_*.cmd'))
         activates = glob.glob(p)
         for cfile in activates:
@@ -699,7 +752,7 @@ class PBRun():
         with open('pbgui.ini', 'w') as pbgui_configfile:
             self.pb_config.write(pbgui_configfile)
 
-    def load(self, instance: str):
+    def load(self, instance: str): # Deprecated (Instances)
         file = Path(f'{instance}/instance.cfg')
         if file.exists():
             run_instance = RunInstance()
@@ -710,7 +763,7 @@ class PBRun():
             elif run_instance.enabled_on != self.name:
                 run_instance.stop()
 
-    def load_all(self):
+    def load_all(self): # Deprecated (Instances)
         self.run_instances = []
         p = str(Path(f'{self.instances_path}/*'))
         instances = glob.glob(p)
@@ -733,6 +786,11 @@ class PBRun():
         return False
 
     def watch_single(self, single_instances : list = None):
+        """Create of delete single instances and activate them or not depending on their status.
+
+        Args:
+            single_instances (list, optional): List of single-instance paths. Defaults to None.
+        """
         if not single_instances:
             p = str(Path(f'{self.single_path}/*'))
             single_instances = glob.glob(p)
@@ -783,6 +841,11 @@ class PBRun():
         self.instances_status_single.save()
 
     def watch_multi(self, multi_instances : list = None):
+        """Create of delete multi instances and activate them or not depending on their status.
+
+        Args:
+            multi_instance (list, optional): List of muilti-instance paths. Defaults to None.
+        """
         if not multi_instances:
             p = str(Path(f'{self.multi_path}/*'))
             multi_instances = glob.glob(p)
@@ -864,12 +927,21 @@ class PBRun():
                 self.my_pid = int(pid) if pid.isnumeric() else None
 
     def save_pid(self):
+        """Saves the process ID into /data/pid/pbrun.pid."""
         self.my_pid = os.getpid()
         with open(self.pidfile, 'w') as f:
             f.write(str(self.my_pid))
 
 
 def main():
+    """
+    Main function of PBRun, responsible for starting and logging passivbot instances.
+
+    ### Usage : 
+    - Run PBRun and save its process ID to pbrun.pid.
+    - Logs in pbgui/data/logs/PBRun.log and creates a .old if the file is too heavy.
+    - Create and monitor single, multi and instances of passivbot. (Instances will be deleted in future versions)
+    """
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
@@ -885,7 +957,7 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
-    run.load_all()
+    run.load_all() # Deprecated (Instances)
     run.watch_multi()
     run.watch_single()
     count = 0
@@ -898,7 +970,7 @@ def main():
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.has_activate()
             run.has_update_status()
-            for run_instance in run:
+            for run_instance in run: # Deprecated (Instances)
                 run_instance.watch()
             for run_multi in run.run_multi:
                 run_multi.watch()
