@@ -494,6 +494,15 @@ class BacktestMultiItem:
         if "edit_bt_multi_name" in st.session_state:
             if st.session_state.edit_bt_multi_name != self.name:
                 self.name = st.session_state.edit_bt_multi_name
+        if "edit_bt_multi_sb" in st.session_state:
+            if st.session_state.edit_bt_multi_sb != self.sb:
+                self.sb = st.session_state.edit_bt_multi_sb
+        if "edit_bt_multi_sd" in st.session_state:
+            if st.session_state.edit_bt_multi_sd.strftime("%Y-%m-%d") != self.sd:
+                self.sd = st.session_state.edit_bt_multi_sd.strftime("%Y-%m-%d")
+        if "edit_bt_multi_ed" in st.session_state:
+            if st.session_state.edit_bt_multi_ed.strftime("%Y-%m-%d") != self.ed:
+                self.ed = st.session_state.edit_bt_multi_ed.strftime("%Y-%m-%d")
         if "edit_bt_multi_loss_allowance_pct" in st.session_state:
             if st.session_state.edit_bt_multi_loss_allowance_pct != self.loss_allowance_pct:
                 self.loss_allowance_pct = st.session_state.edit_bt_multi_loss_allowance_pct
@@ -567,9 +576,9 @@ class BacktestMultiItem:
                 color = None
             st.text_input(f":{color}[Backtest Name]", value=self.name, max_chars=64, key="edit_bt_multi_name")
         with col3:
-            st.empty()
+            st.date_input("START_DATE", datetime.datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_bt_multi_sd")
         with col4:
-            st.empty()
+            st.date_input("END_DATE", datetime.datetime.strptime(self.ed, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_bt_multi_ed")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.number_input("loss_allowance_pct", min_value=0.0, max_value=100.0, value=self.loss_allowance_pct, step=0.001, format="%.3f", key="edit_bt_multi_loss_allowance_pct", help=pbgui_help.loss_allowance_pct)
@@ -587,7 +596,7 @@ class BacktestMultiItem:
             st.checkbox("short_enabled", value=self.short_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_bt_multi_short_enabled")
             st.number_input("TWE_short", min_value=0.0, max_value=100.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_bt_multi_TWE_short", disabled= True, help=pbgui_help.TWE_long_short)
         with col3:
-            st.empty()
+            st.number_input('STARTING_BALANCE',value=self.sb,step=500, key="edit_bt_multi_sb")
         with col4:
             st.checkbox("auto_gs", value=self.auto_gs, help=pbgui_help.auto_gs, key="edit_bt_multi_auto_gs")
             st.number_input("execution_delay_seconds", min_value=1, max_value=60, value=self.execution_delay_seconds, step=1, format="%.d", key="edit_bt_multi_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
@@ -608,15 +617,17 @@ class BacktestMultiItem:
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.selectbox('SYMBOL', self.exchange_symbols, key="edit_bt_multi_exchange_symbol")
-            if st.button("Add Symbol", key="button_add_symbol_backtest_multi"):
-                new_symbol = st.session_state.edit_bt_multi_exchange_symbol
-                if new_symbol not in self.symbols:
-                    config_file = Path(f'{self.path}/{new_symbol}.json')
-                    config = Config(config_file)
-                    config.load_config()
-                    self.symbols[new_symbol] = config   
-                    st.session_state.bt_multi_edit_symbol = new_symbol
-                    st.rerun()
+            if self.path:
+                if Path(self.path).exists:
+                    if st.button("Add Symbol", key="button_add_symbol_backtest_multi"):
+                        new_symbol = st.session_state.edit_bt_multi_exchange_symbol
+                        if new_symbol not in self.symbols:
+                            config_file = Path(f'{self.path}/{new_symbol}.json')
+                            config = Config(config_file)
+                            config.load_config()
+                            self.symbols[new_symbol] = config   
+                            st.session_state.bt_multi_edit_symbol = new_symbol
+                            st.rerun()
 
     def remove_selected_results(self):
         ed_key = st.session_state.ed_key
@@ -898,7 +909,7 @@ class BacktestMultiResult:
             tooltips=[
                 ( 'name',   '$name'            ),
                 ( 'date',   '@x{%F}'            ),
-                ( 'total', '@y{0.00} $'      ),
+                ( 'total', '@y{0,0.00} $'      ),
             ],
             formatters={
                 '@x'           : 'datetime', # use 'datetime' formatter for '@date' field
@@ -920,6 +931,7 @@ class BacktestMultiResult:
         self.be.add_layout(be_leg,'right')
         self.be.legend.location = "top_left"
         self.be.legend.click_policy="hide"
+        self.be.yaxis.formatter = NumeralTickFormatter(format="$ 0,0")
         st.bokeh_chart(self.be, use_container_width=True)
 
     def create_chart_sym(self, symbols: dict):
@@ -927,7 +939,7 @@ class BacktestMultiResult:
             tooltips=[
                 ( 'name',   '$name'            ),
                 ( 'date',   '@x{%F}'            ),
-                ( 'total', '@y{0.00} $'      ),
+                ( 'total', '@y{0,0.00} $'      ),
             ],
             formatters={
                 '@x'           : 'datetime', # use 'datetime' formatter for '@date' field
@@ -945,15 +957,18 @@ class BacktestMultiResult:
             tools = "pan,box_zoom,wheel_zoom,save,reset",
             active_scroll="wheel_zoom")
         self.sym.add_tools(hover)
-        for symbol, config in symbols.items():
-            symbol_df = self.fills[self.fills['symbol'] == symbol]
+        for symbol in symbols:
+            symbol_df = self.fills[self.fills['symbol'] == symbol].copy()
             symbol_df["sym_balance"] = symbol_df["pnl"].cumsum()
+            pd.options.display.float_format = '{:.2f}'.format
+            print(symbol_df)
             self.sym.line(symbol_df['time'], symbol_df['sym_balance'], legend_label=f'{symbol}', line_width=2, color=Category20_20[self.sym_color], name=f'{symbol}')
             self.sym_color +=1
         sym_leg = self.sym.legend[0]
         self.sym.add_layout(sym_leg,'right')
         self.sym.legend.location = "top_left"
         self.sym.legend.click_policy="hide"
+        self.sym.yaxis.formatter = NumeralTickFormatter(format="$ 0,0")
         st.bokeh_chart(self.sym, use_container_width=True)
 
 
