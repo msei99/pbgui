@@ -2,6 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_initialized
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
+from Instance import Instances
 from PBRun import PBRun
 
 def edit_multi_instance():
@@ -23,6 +24,9 @@ def edit_multi_instance():
             multi_instance.activate()
         if st.button("Refresh from Disk"):
             del st.session_state.pbgui_instances
+            with st.spinner('Initializing Instances...'):
+                st.session_state.pbgui_instances = Instances()
+            multi_instance.initialize()
             st.rerun()
         if st.button("Backtest"):
             del st.session_state.edit_multi_instance
@@ -42,6 +46,9 @@ def select_instance():
     # Navigation
     with st.sidebar:
         if st.button(":recycle:"):
+            del st.session_state.pbgui_instances
+            with st.spinner('Initializing Instances...'):
+                st.session_state.pbgui_instances = Instances()
             del st.session_state.multi_instances
             with st.spinner('Initializing Multi Instances...'):
                 st.session_state.multi_instances = MultiInstances()

@@ -35,6 +35,7 @@ class MultiInstance():
                 del st.session_state.edit_multi_stuck_threshold
                 del st.session_state.edit_multi_unstuck_close_pct
                 del st.session_state.edit_multi_execution_delay_seconds
+                del st.session_state.edit_multi_price_distance_threshold
                 del st.session_state.edit_multi_auto_gs
                 del st.session_state.edit_multi_TWE_long
                 del st.session_state.edit_multi_TWE_short
@@ -88,6 +89,12 @@ class MultiInstance():
     @execution_delay_seconds.setter
     def execution_delay_seconds(self, new_execution_delay_seconds):
         self._execution_delay_seconds = new_execution_delay_seconds
+    # price_distance_threshold
+    @property
+    def price_distance_threshold(self): return self._price_distance_threshold
+    @price_distance_threshold.setter
+    def price_distance_threshold(self, new_price_distance_threshold):
+        self._price_distance_threshold = new_price_distance_threshold
     # auto_gs
     @property
     def auto_gs(self): return self._auto_gs
@@ -138,6 +145,7 @@ class MultiInstance():
         self._stuck_threshold = 0.9
         self._unstuck_close_pct = 0.01
         self._execution_delay_seconds = 2
+        self._price_distance_threshold = 0.002
         self._auto_gs = True
         self._TWE_long = 2.0
         self._TWE_short = 0.1
@@ -160,6 +168,8 @@ class MultiInstance():
             self._unstuck_close_pct = float(self._multi_config["unstuck_close_pct"])
         if "execution_delay_seconds" in self._multi_config:
             self._execution_delay_seconds = self._multi_config["execution_delay_seconds"]
+        if "price_distance_threshold" in self._multi_config:
+            self._price_distance_threshold = self._multi_config["price_distance_threshold"]
         if "auto_gs" in self._multi_config:
             self._auto_gs = self._multi_config["auto_gs"]
         if "TWE_long" in self._multi_config:
@@ -292,6 +302,7 @@ class MultiInstance():
         self._multi_config["stuck_threshold"] = self.stuck_threshold
         self._multi_config["unstuck_close_pct"] = self.unstuck_close_pct
         self._multi_config["execution_delay_seconds"] = self.execution_delay_seconds
+        self._multi_config["price_distance_threshold"] = self.price_distance_threshold
         self._multi_config["auto_gs"] = self.auto_gs
         self._multi_config["symbols"] = self.generate_active_symbols()
         self._multi_config["TWE_long"] = self.TWE_long
@@ -331,6 +342,9 @@ class MultiInstance():
         if "edit_multi_execution_delay_seconds" in st.session_state:
             if st.session_state.edit_multi_execution_delay_seconds != self.execution_delay_seconds:
                 self.execution_delay_seconds = st.session_state.edit_multi_execution_delay_seconds
+        if "edit_multi_price_distance_threshold" in st.session_state:
+            if st.session_state.edit_multi_price_distance_threshold != self.price_distance_threshold:
+                self.price_distance_threshold = st.session_state.edit_multi_price_distance_threshold
         if "edit_multi_auto_gs" in st.session_state:
             if st.session_state.edit_multi_auto_gs != self.auto_gs:
                 self.auto_gs = st.session_state.edit_multi_auto_gs
@@ -442,14 +456,20 @@ class MultiInstance():
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.checkbox("long_enabled", value=self.long_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_multi_long_enabled")
-            st.number_input("TWE_long", min_value=0.0, max_value=100.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_multi_TWE_long", disabled= True, help=pbgui_help.TWE_long_short)
         with col2:
             st.checkbox("short_enabled", value=self.short_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_multi_short_enabled")
-            st.number_input("TWE_short", min_value=0.0, max_value=100.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_multi_TWE_short", disabled= True, help=pbgui_help.TWE_long_short)
         with col3:
             st.empty()
         with col4:
             st.checkbox("auto_gs", value=self.auto_gs, help=pbgui_help.auto_gs, key="edit_multi_auto_gs")
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.number_input("TWE_long", min_value=0.0, max_value=100.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_multi_TWE_long", disabled= True, help=pbgui_help.TWE_long_short)
+        with col2:
+            st.number_input("TWE_short", min_value=0.0, max_value=100.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_multi_TWE_short", disabled= True, help=pbgui_help.TWE_long_short)
+        with col3:
+            st.number_input("price_distance_threshold", min_value=0.0, max_value=1.0, value=self.price_distance_threshold, step=0.001, format="%.3f", key="edit_multi_price_distance_threshold", help=pbgui_help.price_distance_threshold)
+        with col4:
             st.number_input("execution_delay_seconds", min_value=1, max_value=60, value=self.execution_delay_seconds, step=1, format="%.d", key="edit_multi_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
         # Display Symbols
         st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])

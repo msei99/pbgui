@@ -138,6 +138,7 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v0.98 (27-05-2024)
+- Multi: price_distance_threshold added
 - Backtest Multi added
 - Bugfix: Refresh on Multi Page not working
 - Bugfix: PBStat Something went wrong, but continue 'list' object has no attribute ...
