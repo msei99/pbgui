@@ -68,8 +68,13 @@ class BacktestMultiQueueItem():
     def is_running(self):
         if not self.pid:
             self.load_pid()
-        if self.pid and psutil.pid_exists(self.pid) and any(sub.lower().endswith("backtest_multi.py") for sub in psutil.Process(self.pid).cmdline()):
-            return True
+        try:
+            if self.pid and psutil.pid_exists(self.pid) and any(sub.lower().endswith("backtest_multi.py") for sub in psutil.Process(self.pid).cmdline()):
+                return True
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.AccessDenied:
+            pass
         return False
 
     def is_finish(self):
@@ -124,7 +129,6 @@ class BacktestMultiQueueItem():
                 cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py')]
                 cmd.extend(shlex.split(self.parameters))
                 cmd.extend(['-bc', self.hjson])
-                print(cmd)
             else:
                 cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', self.hjson]
             log = open(self.log,"w")
@@ -1060,7 +1064,6 @@ class BacktestMultiResult:
             symbol_df = self.fills[self.fills['symbol'] == symbol].copy()
             symbol_df["sym_balance"] = symbol_df["pnl"].cumsum()
             pd.options.display.float_format = '{:.2f}'.format
-            print(symbol_df)
             self.sym.line(symbol_df['time'], symbol_df['sym_balance'], legend_label=f'{symbol}', line_width=2, color=Category20_20[self.sym_color], name=f'{symbol}')
             self.sym_color +=1
         sym_leg = self.sym.legend[0]
