@@ -462,6 +462,11 @@ particle_swarm = """
     the algorithm.
     ```"""
 
+leverage = """
+    ```
+    leverage set on exchange
+    ```"""
+
 loss_allowance_pct = """
     ```
     multisym auto unstuck: will use profits from other positions to offset

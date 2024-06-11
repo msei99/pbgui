@@ -23,7 +23,6 @@ from Config import Config
 from pathlib import Path, PurePath
 from User import Users
 from shutil import rmtree
-import requests
 import datetime
 
 class BacktestMultiQueueItem():
@@ -32,6 +31,7 @@ class BacktestMultiQueueItem():
         self.filename = None
         self.hjson = None
         self.exchange = None
+        self.parameters = None
         self.log = None
         self.pid = None
         self.pidfile = None
@@ -41,6 +41,7 @@ class BacktestMultiQueueItem():
         file = Path(f'{PBGDIR}/data/bt_multi_queue/{self.filename}.json')
         file.unlink(missing_ok=True)
         self.log.unlink(missing_ok=True)
+        self.pidfile.unlink(missing_ok=True)
 
     def load_log(self):
         if self.log:
@@ -53,6 +54,8 @@ class BacktestMultiQueueItem():
         st.code(logfile)
 
     def status(self):
+        if self.is_backtesting():
+            return "backtesting..."
         if self.is_running():
             return "running"
         if self.is_finish():
@@ -89,6 +92,17 @@ class BacktestMultiQueueItem():
         else:
             return False
 
+    def is_backtesting(self):
+        if self.is_running():
+            log = self.load_log()
+            if log:
+                if "plotting for" in log:
+                    return False
+                elif "backtesting..." in log:
+                    return True
+            else:
+                return False
+
     def stop(self):
         if self.is_running():
             p = psutil.Process(self.pid)
@@ -104,33 +118,15 @@ class BacktestMultiQueueItem():
         with open(self.pidfile, 'w') as f:
             f.write(str(self.pid))
 
-    # def pid(self):
-    #     for process in psutil.process_iter():
-    #         try:
-    #             cmdline = process.cmdline()
-    #         except psutil.NoSuchProcess:
-    #             pass
-    #         except psutil.AccessDenied:
-    #             pass
-    #         if any("backtest_multi.py" in sub for sub in cmdline):
-    #             if (
-    #                 cmdline[5] == self.user and
-    #                 cmdline[7] == self.symbol and
-    #                 cmdline[9] == self.sd and
-    #                 cmdline[11] == self.ed and
-    #                 cmdline[13] == str(self.sb) and
-    #                 cmdline[15] == self.market_type and
-    #                 cmdline[18] == str(PurePath(self._config.config_file))
-    #             ):
-    #                 return process
-
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', self.hjson]
-            # cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
-            # cmd.extend(shlex.split(cmd_end))
-            # cmd.extend(['-bd', PurePath(f'{PBDIR}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
-            # self.log = Path(f'{PBGDIR}/data/bt_multi_queue/{self.filename}.log')
+            if self.parameters:
+                cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py')]
+                cmd.extend(shlex.split(self.parameters))
+                cmd.extend(['-bc', self.hjson])
+                print(cmd)
+            else:
+                cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', self.hjson]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -222,6 +218,12 @@ class BacktestMultiQueue:
             if item.is_running():
                 r+=1
         return r
+
+    def downloading(self):
+        for item in self.items:
+            if item.is_running() and not item.is_backtesting():
+                return True
+        return False
         
     def load(self):
         dest = Path(f'{PBGDIR}/data/bt_multi_queue')
@@ -236,6 +238,7 @@ class BacktestMultiQueue:
                 qitem.filename = config["filename"]
                 qitem.hjson = config["hjson"]
                 qitem.exchange = config["exchange"]
+                qitem.parameters = config["parameters"]
                 qitem.log = Path(f'{PBGDIR}/data/bt_multi_queue/{qitem.filename}.log')
                 qitem.pidfile = Path(f'{PBGDIR}/data/bt_multi_queue/{qitem.filename}.pid')
                 self.add(qitem)
@@ -277,7 +280,8 @@ class BacktestMultiQueue:
                 return process
 
     def view(self):
-        self.load()
+        if not self.items:
+            self.load()
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
@@ -314,14 +318,16 @@ class BacktestMultiQueue:
                 'finish': bt.is_finish(),
             })
         column_config = {
-            "id": None,
+            # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
             "view": st.column_config.CheckboxColumn(label="View Results"),
             "log": st.column_config.CheckboxColumn(label="View Logfile"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
         #Display Queue
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'view_bt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
+        height = 36+(len(d))*35
+        if height > 1000: height = 1016
+        st.data_editor(data=d, height=height, use_container_width=True, key=f'view_bt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
         if f'view_bt_queue_{ed_key}' in st.session_state:
             ed = st.session_state[f'view_bt_queue_{ed_key}']
             for row in ed["edited_rows"]:
@@ -429,6 +435,15 @@ class BacktestMultiItem:
         self.symbols = {}
         self.backtest_symbols = {}
         self.exchange_symbols = self.load_symbols()
+        self.loss_allowance_pct_min = 0.01
+        self.loss_allowance_pct_max = 0.1
+        self.loss_allowance_pct_step = 0.01
+        self.stuck_threshold_min = 0.86
+        self.stuck_threshold_max = 0.95
+        self.stuck_threshold_step = 0.01
+        self.unstuck_close_pct_min = 0.005
+        self.unstuck_close_pct_max = 0.05
+        self.unstuck_close_pct_step = 0.005
 
     def load_symbols(self):
         pb_config = configparser.ConfigParser()
@@ -485,6 +500,80 @@ class BacktestMultiItem:
             except Exception as e:
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
+
+    def optimize(self):
+        LOSS_ALLOWANCE_PCT_MIN = 0.0
+        LOSS_ALLOWANCE_PCT_MAX = 1.0
+        STUCK_THRESHOLD_MIN = 0.0
+        STUCK_THRESHOLD_MAX = 1.0
+        UNSTUCK_CLOSE_PCT_MIN = 0.0
+        UNSTUCK_CLOSE_PCT_MAX = 1.0
+
+        # Init session_state for keys
+        if "edit_bt_multi_loss_allowance_pct_min" in st.session_state:
+            if st.session_state.edit_bt_multi_loss_allowance_pct_min != self.loss_allowance_pct_min:
+                self.loss_allowance_pct_min = st.session_state.edit_bt_multi_loss_allowance_pct_min
+        if "edit_bt_multi_loss_allowance_pct_max" in st.session_state:
+            if st.session_state.edit_bt_multi_loss_allowance_pct_max != self.loss_allowance_pct_max:
+                self.loss_allowance_pct_max = st.session_state.edit_bt_multi_loss_allowance_pct_max
+        if "edit_bt_multi_loss_allowance_pct_step" in st.session_state:
+            if st.session_state.edit_bt_multi_loss_allowance_pct_step != self.loss_allowance_pct_step:
+                self.loss_allowance_pct_step = st.session_state.edit_bt_multi_loss_allowance_pct_step
+        if "edit_bt_multi_stuck_threshold_min" in st.session_state:
+            if st.session_state.edit_bt_multi_stuck_threshold_min != self.stuck_threshold_min:
+                self.stuck_threshold_min = st.session_state.edit_bt_multi_stuck_threshold_min
+        if "edit_bt_multi_stuck_threshold_max" in st.session_state:
+            if st.session_state.edit_bt_multi_stuck_threshold_max != self.stuck_threshold_max:
+                self.stuck_threshold_max = st.session_state.edit_bt_multi_stuck_threshold_max
+        if "edit_bt_multi_stuck_threshold_step" in st.session_state:
+            if st.session_state.edit_bt_multi_stuck_threshold_step != self.stuck_threshold_step:
+                self.stuck_threshold_step = st.session_state.edit_bt_multi_stuck_threshold_step
+        if "edit_bt_multi_unstuck_close_pct_min" in st.session_state:
+            if st.session_state.edit_bt_multi_unstuck_close_pct_min != self.unstuck_close_pct_min:
+                self.unstuck_close_pct_min = st.session_state.edit_bt_multi_unstuck_close_pct_min
+        if "edit_bt_multi_unstuck_close_pct_max" in st.session_state:
+            if st.session_state.edit_bt_multi_unstuck_close_pct_max != self.unstuck_close_pct_max:
+                self.unstuck_close_pct_max = st.session_state.edit_bt_multi_unstuck_close_pct_max
+        if "edit_bt_multi_unstuck_close_pct_step" in st.session_state:
+            if st.session_state.edit_bt_multi_unstuck_close_pct_step != self.unstuck_close_pct_step:
+                self.unstuck_close_pct_step = st.session_state.edit_bt_multi_unstuck_close_pct_step
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            self.loss_allowance_pct_counter = int(round((self.loss_allowance_pct_max - self.loss_allowance_pct_min) / self.loss_allowance_pct_step + 1, 0 ))
+            st.number_input("Backtests", value=self.loss_allowance_pct_counter, format="%.d", key="edit_bt_multi_loss_allowance_pct_counter", disabled= True)
+            self.stuck_threshold_counter = int(round((self.stuck_threshold_max - self.stuck_threshold_min) / self.stuck_threshold_step + 1, 0))
+            st.number_input("Backtests", value=self.stuck_threshold_counter, format="%.d", key="edit_bt_multi_stuck_threshold_counter", disabled= True)
+            self.unstuck_close_pct_counter = int(round((self.unstuck_close_pct_max - self.unstuck_close_pct_min) / self.unstuck_close_pct_step + 1, 0))
+            st.number_input("Backtests", value=self.unstuck_close_pct_counter, format="%.d", key="edit_bt_multi_unstuck_close_pct_counter", disabled= True)
+            backtests = self.loss_allowance_pct_counter * self.stuck_threshold_counter * self.unstuck_close_pct_counter
+            st.number_input("Total Backtests", value=backtests, format="%.d", key="edit_bt_multi_backtests", disabled= True)
+        with col2:
+            st.number_input("loss_allowance_pct_min", min_value=LOSS_ALLOWANCE_PCT_MIN, max_value=self.loss_allowance_pct_max, value=self.loss_allowance_pct_min, step=0.01, format="%.3f", key="edit_bt_multi_loss_allowance_pct_min")
+            st.number_input("stuck_threshold_min", min_value=STUCK_THRESHOLD_MIN, max_value=self.stuck_threshold_max, value=self.stuck_threshold_min, step=0.01, format="%.3f", key="edit_bt_multi_stuck_threshold_min")
+            st.number_input("unstuck_close_pct_min", min_value=UNSTUCK_CLOSE_PCT_MIN, max_value=self.unstuck_close_pct_max, value=self.unstuck_close_pct_min, step=0.01, format="%.3f", key="edit_bt_multi_unstuck_close_pct_min")
+            st.write(" ")
+            st.write(" ")
+            if st.button("Generate Backtests"):
+                self.generate_backtests()
+        with col3:
+            st.number_input("loss_allowance_pct_max", min_value=self.loss_allowance_pct_min, max_value=LOSS_ALLOWANCE_PCT_MAX, value=self.loss_allowance_pct_max, step=0.01, format="%.3f", key="edit_bt_multi_loss_allowance_pct_max")
+            st.number_input("stuck_threshold_max", min_value=self.stuck_threshold_min, max_value=STUCK_THRESHOLD_MAX, value=self.stuck_threshold_max, step=0.01, format="%.3f", key="edit_bt_multi_stuck_threshold_max")
+            st.number_input("unstuck_close_pct_max", min_value=self.unstuck_close_pct_min, max_value=UNSTUCK_CLOSE_PCT_MAX, value=self.unstuck_close_pct_max, step=0.01, format="%.3f", key="edit_bt_multi_unstuck_close_pct_max")
+        with col4:
+            st.number_input("loss_allowance_pct_step", min_value=0.001, max_value=0.1, value=self.loss_allowance_pct_step, step=0.005, format="%.3f", key="edit_bt_multi_loss_allowance_pct_step")
+            st.number_input("stuck_threshold_step", min_value=0.01, max_value=0.1, value=self.stuck_threshold_step, step=0.01, format="%.3f", key="edit_bt_multi_stuck_threshold_step")
+            st.number_input("unstuck_close_pct_step", min_value=0.001, max_value=0.1, value=self.unstuck_close_pct_step, step=0.005, format="%.3f", key="edit_bt_multi_unstuck_close_pct_step")
+
+    def generate_backtests(self):
+        count = 0
+        for lap in range(0, self.loss_allowance_pct_counter):
+            for st in range(0, self.stuck_threshold_counter):
+                for ucp in range(0, self.unstuck_close_pct_counter):
+                    bt_lap = round(self.loss_allowance_pct_min + lap * self.loss_allowance_pct_step, 3)
+                    bt_st = round(self.stuck_threshold_min + st * self.stuck_threshold_step, 3)
+                    bt_ucp = round(self.unstuck_close_pct_min + ucp * self.unstuck_close_pct_step, 3)
+                    parameters = f'-lap {bt_lap} -st {bt_st} -ucp {bt_ucp}'
+                    self.save_queue(parameters)
 
     def edit(self):
         # Init session_state for keys
@@ -591,14 +680,20 @@ class BacktestMultiItem:
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.checkbox("long_enabled", value=self.long_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_bt_multi_long_enabled")
-            st.number_input("TWE_long", min_value=0.0, max_value=100.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_bt_multi_TWE_long", disabled= True, help=pbgui_help.TWE_long_short)
         with col2:
             st.checkbox("short_enabled", value=self.short_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_bt_multi_short_enabled")
+        with col3:
+            st.empty()
+        with col4:
+            st.checkbox("auto_gs", value=self.auto_gs, help=pbgui_help.auto_gs, key="edit_bt_multi_auto_gs")
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.number_input("TWE_long", min_value=0.0, max_value=100.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_bt_multi_TWE_long", disabled= True, help=pbgui_help.TWE_long_short)
+        with col2:
             st.number_input("TWE_short", min_value=0.0, max_value=100.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_bt_multi_TWE_short", disabled= True, help=pbgui_help.TWE_long_short)
         with col3:
             st.number_input('STARTING_BALANCE',value=self.sb,step=500, key="edit_bt_multi_sb")
         with col4:
-            st.checkbox("auto_gs", value=self.auto_gs, help=pbgui_help.auto_gs, key="edit_bt_multi_auto_gs")
             st.number_input("execution_delay_seconds", min_value=1, max_value=60, value=self.execution_delay_seconds, step=1, format="%.d", key="edit_bt_multi_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
         # Display Symbols
         st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_we','short','short_we'])
@@ -619,15 +714,18 @@ class BacktestMultiItem:
             st.selectbox('SYMBOL', self.exchange_symbols, key="edit_bt_multi_exchange_symbol")
             if self.path:
                 if Path(self.path).exists:
-                    if st.button("Add Symbol", key="button_add_symbol_backtest_multi"):
-                        new_symbol = st.session_state.edit_bt_multi_exchange_symbol
-                        if new_symbol not in self.symbols:
-                            config_file = Path(f'{self.path}/{new_symbol}.json')
-                            config = Config(config_file)
-                            config.load_config()
-                            self.symbols[new_symbol] = config   
-                            st.session_state.bt_multi_edit_symbol = new_symbol
-                            st.rerun()
+                    with col2:
+                        st.write(" ")
+                        st.write(" ")
+                        if st.button("Add Symbol", key="button_add_symbol_backtest_multi"):
+                            new_symbol = st.session_state.edit_bt_multi_exchange_symbol
+                            if new_symbol not in self.symbols:
+                                config_file = Path(f'{self.path}/{new_symbol}.json')
+                                config = Config(config_file)
+                                config.load_config()
+                                self.symbols[new_symbol] = config   
+                                st.session_state.bt_multi_edit_symbol = new_symbol
+                                st.rerun()
 
     def remove_selected_results(self):
         ed_key = st.session_state.ed_key
@@ -812,7 +910,7 @@ class BacktestMultiItem:
         self.hjson = Path(f'{self.path}/backtest.hjson')
         self.create_backtest_config()
 
-    def save_queue(self):
+    def save_queue(self, parameters : str = None):
         dest = Path(f'{PBGDIR}/data/bt_multi_queue')
         unique_filename = str(uuid.uuid4())
         file = Path(f'{dest}/{unique_filename}.json') 
@@ -820,6 +918,7 @@ class BacktestMultiItem:
             "name": self.name,
             "filename": unique_filename,
             "hjson": str(self.hjson),
+            "parameters": parameters,
             "exchange": self.exchange,
         }
         if not dest.exists():
@@ -925,8 +1024,8 @@ class BacktestMultiResult:
             tools = "pan,box_zoom,wheel_zoom,save,reset",
             active_scroll="wheel_zoom")
         self.be.add_tools(hover)
-        self.be.line(self.fills['time'], self.fills['balance'], legend_label='balance', line_width=2, color=Category20_20[0], name=f'balance')
-        self.be.line(self.fills['time'], self.fills['equity'], legend_label='equity', line_width=1, color=Category20_20[1], name=f'equity')
+        self.be.line(self.stats['time'], self.stats['balance'], legend_label='balance', line_width=2, color=Category20_20[0], name=f'balance')
+        self.be.line(self.stats['time'], self.stats['equity'], legend_label='equity', line_width=1, color=Category20_20[1], name=f'equity')
         be_leg = self.be.legend[0]
         self.be.add_layout(be_leg,'right')
         self.be.legend.location = "top_left"
@@ -1020,8 +1119,6 @@ class BacktestsMulti:
                 bt.load_results()
                 self.backtests.append(bt)
     
-
-
 def main():
     bt = BacktestMultiQueue()
     while True:
@@ -1029,12 +1126,15 @@ def main():
         for item in bt.items:
             while bt.running() == bt.cpu:
                 time.sleep(5)
+            while bt.downloading():
+                time.sleep(5)
             bt.pb_config.read('pbgui.ini')
             if not eval(bt.pb_config.get("backtest_multi", "autostart")):
                 return
             if item.status() == "not started":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.filename} started')
                 item.run()
+                time.sleep(1)
         time.sleep(60)
 
 if __name__ == '__main__':

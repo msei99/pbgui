@@ -224,6 +224,8 @@ class BacktestItem(Base):
                     return f.read()
 
     def status(self):
+        if self.is_backtesting():
+            return "backtesting..."
         if self.is_running():
             return "running"
         if self.is_finish():
@@ -257,6 +259,17 @@ class BacktestItem(Base):
                 return True
         else:
             return False
+
+    def is_backtesting(self):
+        if self.is_running():
+            log = self.load_log()
+            if log:
+                if "Summary" in log:
+                    return False
+                elif "backtesting..." in log:
+                    return True
+            else:
+                return False
 
     def stop(self):
         if self.is_running():
@@ -377,6 +390,12 @@ class BacktestQueue:
                 r+=1
         return r
         
+    def downloading(self):
+        for item in self.items:
+            if item.is_running() and not item.is_backtesting():
+                return True
+        return False
+
     def load(self):
         dest = Path(f'{PBGDIR}/data/bt_queue')
         p = str(Path(f'{dest}/*.json'))
@@ -911,6 +930,8 @@ def main():
         bt.load()
         for item in bt.items:
             while bt.running() == bt.cpu:
+                time.sleep(5)
+            while bt.downloading():
                 time.sleep(5)
             bt.pb_config.read('pbgui.ini')
             if not eval(bt.pb_config.get("backtest", "autostart")):
