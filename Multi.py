@@ -30,6 +30,7 @@ class MultiInstance():
             if "edit_multi_user" in st.session_state and "edit_multi_loss_allowance_pct" in st.session_state:
                 del st.session_state.edit_multi_enabled_on
                 del st.session_state.edit_multi_version
+                del st.session_state.edit_multi_leverage
                 del st.session_state.edit_multi_loss_allowance_pct
                 del st.session_state.edit_multi_pnls_max_lookback_days
                 del st.session_state.edit_multi_stuck_threshold
@@ -59,6 +60,12 @@ class MultiInstance():
     @version.setter
     def version(self, new_version):
         self._version = new_version
+    # leverage
+    @property
+    def leverage(self): return self._leverage
+    @leverage.setter
+    def leverage(self, new_leverage):
+        self._leverage = new_leverage
     # loss_allowance_pct
     @property
     def loss_allowance_pct(self): return self._loss_allowance_pct
@@ -140,6 +147,7 @@ class MultiInstance():
         # Init defaults
         self._enabled_on = "disabled"
         self._version = 0
+        self._leverage = 10.0
         self._loss_allowance_pct = 0.002
         self._pnls_max_lookback_days = 30
         self._stuck_threshold = 0.9
@@ -158,6 +166,8 @@ class MultiInstance():
             self._enabled_on = self._multi_config["enabled_on"]
         if "version" in self._multi_config:
             self._version = self._multi_config["version"]
+        if "leverage" in self._multi_config:
+            self._leverage = float(self._multi_config["leverage"])
         if "loss_allowance_pct" in self._multi_config:
             self._loss_allowance_pct = float(self._multi_config["loss_allowance_pct"])
         if "pnls_max_lookback_days" in self._multi_config:
@@ -297,6 +307,7 @@ class MultiInstance():
             del st.session_state.edit_multi_version
         self._multi_config["version"] = self.version
         self._multi_config["enabled_on"] = self.enabled_on
+        self._multi_config["leverage"] = self.leverage
         self._multi_config["loss_allowance_pct"] = self.loss_allowance_pct
         self._multi_config["pnls_max_lookback_days"] = self.pnls_max_lookback_days
         self._multi_config["stuck_threshold"] = self.stuck_threshold
@@ -327,6 +338,9 @@ class MultiInstance():
         if "edit_multi_version" in st.session_state:
             if st.session_state.edit_multi_version != self.version:
                 self.version = st.session_state.edit_multi_version
+        if "edit_multi_leverage" in st.session_state:
+            if st.session_state.edit_multi_leverage != self.leverage:
+                self.leverage = st.session_state.edit_multi_leverage
         if "edit_multi_loss_allowance_pct" in st.session_state:
             if st.session_state.edit_multi_loss_allowance_pct != self.loss_allowance_pct:
                 self.loss_allowance_pct = st.session_state.edit_multi_loss_allowance_pct
@@ -441,9 +455,9 @@ class MultiInstance():
             st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_multi_enabled_on")
             st.empty()
         with col3:
-            st.empty()
-        with col4:
             st.number_input("config version", min_value=self.version, value=self.version, step=1, format="%.d", key="edit_multi_version", help=pbgui_help.config_version)
+        with col4:
+            st.number_input("leverage", min_value=0.0, max_value=10.0, value=self.leverage, step=1.0, format="%.1f", key="edit_multi_leverage", help=pbgui_help.leverage)
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.number_input("loss_allowance_pct", min_value=0.0, max_value=100.0, value=self.loss_allowance_pct, step=0.001, format="%.3f", key="edit_multi_loss_allowance_pct", help=pbgui_help.loss_allowance_pct)

@@ -15,7 +15,7 @@ def bt_multi():
     bt_multi = st.session_state.bt_multi
     # Navigation
     with st.sidebar:
-        if st.button(":back:"):
+        if st.button(":top:"):
             del st.session_state.bt_multi
             st.rerun()
         if st.button(":floppy_disk:"):
@@ -23,6 +23,10 @@ def bt_multi():
                 bt_multi.save()
             else:
                 info_popup("Name is empty")
+        if st.button("Results"):
+            st.session_state.bt_multi_results = bt_multi
+            del st.session_state.bt_multi
+            st.rerun()
         if st.button("Queue"):
             del st.session_state.bt_multi
             st.session_state.bt_multi_queue = BacktestMultiQueue()
@@ -38,7 +42,10 @@ def bt_multi():
                     info_popup("Backtest not saved")
                 elif not bt_multi.symbols:
                     info_popup("No Symbols")
+    st.title(f"Backtest Multi: {bt_multi.name}")
     bt_multi.edit()
+    with st.expander("Optimize loss_allowance_pct, stuck_threshold and unstuck_close_pct", expanded=False):
+        bt_multi.optimize()
 
 def bt_multi_edit_symbol():
     # Init bt_multi
@@ -51,6 +58,7 @@ def bt_multi_edit_symbol():
             st.rerun()
         if st.button(":floppy_disk:"):
             bt_multi.symbols[symbol].save_config()
+    st.title(f"Backtest Multi: {bt_multi.name} - Symbol: {symbol}")
     bt_multi.symbols[symbol].edit_config()
 
 def bt_multi_list():
@@ -71,7 +79,15 @@ def bt_multi_results():
     bt_multi_results = st.session_state.bt_multi_results
     # Navigation
     with st.sidebar:
-        if st.button(":back:"):
+        if st.button(":top:"):
+            del st.session_state.bt_multi_results
+            st.rerun()
+        if st.button("Edit"):
+            st.session_state.bt_multi = bt_multi_results
+            del st.session_state.bt_multi_results
+            st.rerun()
+        if st.button("Queue"):
+            st.session_state.bt_multi_queue = BacktestMultiQueue()
             del st.session_state.bt_multi_results
             st.rerun()
         if st.button(":wastebasket: selected"):
@@ -80,7 +96,7 @@ def bt_multi_results():
         if st.button(":wastebasket: all"):
             bt_multi_results.remove_all_results()
             st.rerun()
-
+    st.title(f"Backtest Multi Results: {bt_multi_results.name}")
     bt_multi_results.view_results()
 
 def bt_multi_queue():
@@ -95,8 +111,10 @@ def bt_multi_queue():
             bt_multi_queue.autostart = st.session_state.backtest_multi_autostart
     # Navigation
     with st.sidebar:
-        st.button(":recycle:")
-        if st.button(":back:"):
+        if st.button(":recycle:"):
+            bt_multi_queue.items = []
+            st.rerun()
+        if st.button(":top:"):
             del st.session_state.bt_multi_queue
             st.rerun()
         st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=bt_multi_queue.cpu, step=1, key = "backtest_multi_cpu")
@@ -110,6 +128,7 @@ def bt_multi_queue():
         if st.button(":wastebasket: all"):
             bt_multi_queue.remove_finish(all=True)
             st.rerun()
+    st.title("Backtest Multi Queue")
     bt_multi_queue.view()
 
 set_page_config("Multi Backtest")
