@@ -6,6 +6,7 @@ from datetime import datetime
 from shutil import copy
 
 class InstanceStatus():
+    """Stocks information about one passivbot configuration."""
     def __init__(self):
         self.name = None
         self.version = None

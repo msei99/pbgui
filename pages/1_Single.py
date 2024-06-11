@@ -66,16 +66,12 @@ def select_instance():
                     else:
                         running_version = 0
                     # Activate
-                    print(running_on, instance.enabled_on, running_version, instance.version, instance.is_running())
                     if instance.enabled_on == 'disabled' and running_on:
                         pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
-                        print("1")
                     elif instance.enabled_on != 'disabled' and instance.enabled_on not in running_on:
                         pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
-                        print("2")
                     elif running_on and (instance.version != running_version):
                         pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
-                        print("3")
             # st.rerun()
         if st.button("Refresh from Disk"):
             del st.session_state.pbgui_instances

@@ -7,6 +7,10 @@ import multiprocessing
 
 
 def bt_add():
+    # Init
+    if not "my_bt" in st.session_state:
+        st.session_state.my_bt = BacktestItem()
+    my_bt = st.session_state.my_bt
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
@@ -190,6 +194,8 @@ def bt_compare():
     bt_results.view()
 
 def bt_import():
+    # Init
+    my_bt = st.session_state.my_bt
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
@@ -202,12 +208,6 @@ set_page_config("Backtest")
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
-
-if 'my_bt' in st.session_state:
-    my_bt = st.session_state.my_bt
-else:
-    my_bt = BacktestItem()
-    st.session_state.my_bt = my_bt
 
 if "bt_queue" in st.session_state:
     bt_queue()
