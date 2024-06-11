@@ -462,6 +462,11 @@ particle_swarm = """
     the algorithm.
     ```"""
 
+leverage = """
+    ```
+    leverage set on exchange
+    ```"""
+
 loss_allowance_pct = """
     ```
     multisym auto unstuck: will use profits from other positions to offset
@@ -490,6 +495,11 @@ unstuck_close_pct = """
 execution_delay_seconds = """
     ```
     delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
+    ```"""
+
+price_distance_threshold = """
+    ```
+    minimum distance to current price action required for EMA based limit orders
     ```"""
 
 auto_gs = """

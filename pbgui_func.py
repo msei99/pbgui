@@ -3,6 +3,22 @@ import json
 import pprint
 import uuid
 import requests
+import configparser
+from pathlib import Path
+
+def load_pbdir():
+    if "pbdir" not in st.session_state:
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("main", "pbdir"):
+            st.session_state.pbdir = pb_config.get("main", "pbdir")
+        else:
+            st.session_state.pbdir = ""
+    return st.session_state.pbdir
+
+PBDIR = load_pbdir()
+
+PBGDIR = Path.cwd()
 
 def check_password():
     """Returns `True` if the user had the correct password."""
