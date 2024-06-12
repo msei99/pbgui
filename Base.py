@@ -95,8 +95,9 @@ class Base:
             st.session_state.base_market_type = self.market_type
             st.session_state.base_ohlcv = self.ohlcv
         else:
-            if st.session_state.base_update_symbols:
-                self.update_symbols()
+            if "base_update_symbols" in st.session_state:
+                if st.session_state.base_update_symbols:
+                    self.update_symbols()
             if st.session_state.base_user != self.user:
                 self.user = st.session_state.base_user
                 st.session_state.base_market_type = self.market_type
