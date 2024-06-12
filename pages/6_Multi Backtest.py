@@ -63,7 +63,9 @@ def bt_multi_edit_symbol():
 
 def bt_multi_list():
     # Init bt_multi_list
-    bt_multi_list = BacktestsMulti()
+    if "bt_multi_list" not in st.session_state:
+        st.session_state.bt_multi_list = BacktestsMulti()
+    bt_multi_list = st.session_state.bt_multi_list
     # Navigation
     with st.sidebar:
         if st.button("Queue"):
@@ -77,8 +79,14 @@ def bt_multi_list():
 def bt_multi_results():
     # Init bt_multi_results
     bt_multi_results = st.session_state.bt_multi_results
+    if not bt_multi_results.backtest_results:
+        with st.spinner("Loading Results"):
+            st.session_state.bt_multi_results.load_results()
     # Navigation
     with st.sidebar:
+        if st.button(":recycle:"):
+            bt_multi_results.backtest_results = []
+            st.rerun()
         if st.button(":top:"):
             del st.session_state.bt_multi_results
             st.rerun()

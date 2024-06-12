@@ -770,7 +770,9 @@ class BacktestMultiItem:
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
         #Display Backtests
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_btmulti_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
+        height = 36+(len(d))*35
+        if height > 1000: height = 1016
+        st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btmulti_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
         if f'select_btmulti_result_{ed_key}' in st.session_state:
             ed = st.session_state[f'select_btmulti_result_{ed_key}']
             for row in ed["edited_rows"]:
@@ -899,6 +901,11 @@ class BacktestMultiItem:
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
     
+    def calculate_results(self):
+        p = str(Path(f'{PBDIR}/backtests/pbgui_multi/{self.name}/multisymbol/{self.exchange}/**/analysis.json'))
+        files = glob.glob(p, recursive=False)
+        return len(files)
+
     def load_results(self):
         p = str(Path(f'{PBDIR}/backtests/pbgui_multi/{self.name}/multisymbol/{self.exchange}/**/analysis.json'))
         files = glob.glob(p, recursive=False)
@@ -1080,7 +1087,8 @@ class BacktestsMulti:
 
     def view_backtests(self):
         # Init
-        self.find_backtests()
+        if not self.backtests:
+            self.find_backtests()
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
@@ -1089,11 +1097,9 @@ class BacktestsMulti:
             for row in ed["edited_rows"]:
                 if "edit" in ed["edited_rows"][row]:
                     st.session_state.bt_multi = self.backtests[row]
-                    # del st.session_state.bt_multi_list
                     st.rerun()
                 if "view" in ed["edited_rows"][row]:
                     st.session_state.bt_multi_results = self.backtests[row]
-                    # del st.session_state.bt_multi_list
                     st.rerun()
         d = []
         for id, bt in enumerate(self.backtests):
@@ -1102,7 +1108,7 @@ class BacktestsMulti:
                 'edit': False,
                 'Name': bt.name,
                 'view': False,
-                'Backtests': len(bt.backtest_results),
+                'Backtests': bt.calculate_results(),
             })
         column_config = {
             "id": None,
@@ -1119,7 +1125,6 @@ class BacktestsMulti:
             for p in found_bt:
                 bt = BacktestMultiItem(PurePath(p).parent)
                 bt.load()
-                bt.load_results()
                 self.backtests.append(bt)
     
 def main():
