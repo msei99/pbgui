@@ -130,7 +130,7 @@ class BacktestMultiQueueItem():
                 cmd.extend(shlex.split(self.parameters))
                 cmd.extend(['-bc', self.hjson])
             else:
-                cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', self.hjson]
+                cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
