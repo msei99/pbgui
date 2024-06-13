@@ -458,7 +458,7 @@ class BacktestMultiItem:
             return []
 
     def create_from_multi(self, path: str):
-        self.name = path.split("/")[-1] 
+        self.name = PurePath(path).name
         file = Path(f'{path}/multi.hjson')
         if file.exists():
             try:
@@ -860,7 +860,7 @@ class BacktestMultiItem:
             }, indent=4))
 
     def load(self):
-        self.name = str(self.path).split("/")[-1]
+        self.name = PurePath(self.path).name
         self.hjson = Path(f'{self.path}/backtest.hjson')
         if self.hjson.exists():
             try:
