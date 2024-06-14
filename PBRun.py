@@ -672,15 +672,17 @@ class PBRun():
                                 Path(item).unlink(missing_ok=True)
                         src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                         dest = f'{self.multi_path}/{instance.name}'
-                        copytree(src, dest, dirs_exist_ok=True)
-                        self.watch_multi([f'{self.multi_path}/{instance.name}'])
+                        if Path(src).exists():
+                            copytree(src, dest, dirs_exist_ok=True)
+                            self.watch_multi([f'{self.multi_path}/{instance.name}'])
                 else:
                     # Install new multi instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                     src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                     dest = f'{self.multi_path}/{instance.name}'
-                    copytree(src, dest, dirs_exist_ok=True)
-                    self.watch_multi([f'{self.multi_path}/{instance.name}'])
+                    if Path(src).exists():
+                        copytree(src, dest, dirs_exist_ok=True)
+                        self.watch_multi([f'{self.multi_path}/{instance.name}'])
             remove_instances = []
             for instance in self.instances_status:
                 status = new_status.find_name(instance.name)
@@ -880,6 +882,11 @@ class PBRun():
                 status.version = run_multi.version
                 status.enabled_on = run_multi.name
                 self.instances_status.add(status)
+        # Remove non existing instances from status
+        for instance in self.instances_status:
+            instance_path = f'{self.pbgdir}/data/multi/{instance.name}'
+            if not Path(instance_path).exists():
+                self.instances_status.remove(instance)
         self.instances_status.save()
 
     def run(self):
