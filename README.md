@@ -138,6 +138,11 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v0.99 (13-06-2024)
+- Bugfix for Windows Optimizer and MultiBacktest should now work
+- PBRun: Add errorhandling for missing multi instances
+- Backtest Multi: Speed up queue an results display
+
 ## v0.98 (11-06-2024)
 - Backtest Multi: Run multiple backtests for find best settings of loss_allowance_pct, stuck_threshold and unstuck_close_pct
 - Bugfix: Backtester no longer downloads ohlcv from exchanges multiple times parallel
