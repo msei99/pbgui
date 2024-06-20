@@ -311,54 +311,26 @@ class Exchange:
                         trade["price"] = float(trade["price"])
                         bingx_trades.append(trade)
                 all_trades = bingx_trades
-            # elif self.id == "bingx":
-            #     since = 1700000461000
-            #     week = 7 * 24 * 60 * 60 * 1000
-            #     now = self.instance.milliseconds()
-            #     limit = 50
-            #     end = since + week
-            #     self.instance.load_markets()
-            #     self.instance.verbose = True
-            #     while True:
-            #         trades = self.instance.fetch_my_trades(symbol=symbol, since=since, limit=limit, params = {"endTs": end})
-            #         if trades:
-            #             first_trade = trades[0]
-            #             last_trade = trades[-1]
-            #             all_trades = trades + all_trades
-            #             print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['timestamp'], 'till', last_trade['timestamp'])
-            #         if len(trades) == limit:
-            #             end = trades[0]['timestamp']
-            #         else:
-            #             print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
-            #             since += week
-            #             end = since + week
-            #         if since > now:
-            #             print(f'User:{self.user.name} Symbol:{symbol} Done')
-            #             break
-            #     print(all_trades)
-            #     bingx_trades = []
-            #     for trade in all_trades:
-            #         bingx_symbol = f'{symbol.split("/")[0]}-{symbol.split(":")[-1]}'
-            #         if trade["info"]["symbol"] == bingx_symbol:
-            #             order = self.instance.fetch_order(symbol=symbol, id=trade["order"])
-            #             print(order)
-            #             trade["id"] = trade["order"]
-            #             bingx_trades.append(trade)
-            #     all_trades = bingx_trades
-            else:
+            elif self.id == "bitget":
+                # week = 7 * 24 * 60 * 60 * 1000
+                max = 90 * 24 * 60 * 60 * 1000
+                now = self.instance.milliseconds()
+                end = since + max
+                limit = 100
                 while True:
-                    if since == end_time:
-                        print(f'User:{self.user.name} Symbol:{symbol} {since} Done')
-                        break
-                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "endTime": end_time})
-                    if trades and trades[-1]['id'] != last_trade_id:
+                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, limit=limit, params = {"type": market_type, "endTime": end})
+                    if trades:
                         first_trade = trades[0]
-                        last_trade = trades[len(trades) - 1]
-                        last_trade_id = trades[-1]['id']
-                        end_time = first_trade['timestamp']
+                        last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['datetime'], 'till', last_trade['datetime'])
+                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['timestamp'], 'till', last_trade['timestamp'])
+                    if len(trades) == limit:
+                        end = trades[0]['timestamp']
                     else:
+                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                        since += max
+                        end = since + max
+                    if since > now:
                         print(f'User:{self.user.name} Symbol:{symbol} Done')
                         break
         if all_trades:
@@ -468,23 +440,43 @@ class Exchange:
                 bingx_fundings.append(funding)
             all_fundings = bingx_fundings
         elif self.id == "bitget":
-            end_time = self.instance.milliseconds()
-            last_funding_id = ""
+            max = 90 * 24 * 60 * 60 * 1000
+            now = self.instance.milliseconds()
+            end = since + max
+            limit = 100
             while True:
-                if since == end_time:
-                    print(f'User:{self.user.name} Symbol:{symbol} {since} Done')
-                    break
-                fundings = self.instance.fetch_funding_history(symbol=symbol, since=since, limit=100, params = {"endTime": end_time})
-                if fundings and fundings[-1]['id'] != last_funding_id:
+                fundings = self.instance.fetch_funding_history(symbol=symbol, since=since, limit=limit, params = {"endTime": end})
+                if fundings:
                     first_funding = fundings[0]
                     last_funding = fundings[-1]
-                    last_funding_id = fundings[-1]['id']
-                    end_time = first_funding['timestamp']
                     all_fundings = fundings + all_fundings
-                    print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(fundings), 'fundings from', first_funding['datetime'], 'till', last_funding['datetime'])
+                    print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(fundings), 'fundings from', first_funding['timestamp'], 'till', last_funding['timestamp'])
+                if len(fundings) == limit:
+                    end = fundings[0]['timestamp']
                 else:
+                    print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(fundings), 'fundings from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since += max
+                    end = since + max
+                if since > now:
                     print(f'User:{self.user.name} Symbol:{symbol} Done')
                     break
+            # end_time = self.instance.milliseconds()
+            # last_funding_id = ""
+            # while True:
+            #     if since == end_time:
+            #         print(f'User:{self.user.name} Symbol:{symbol} {since} Done')
+            #         break
+            #     fundings = self.instance.fetch_funding_history(symbol=symbol, since=since, limit=100, params = {"endTime": end_time})
+            #     if fundings and fundings[-1]['id'] != last_funding_id:
+            #         first_funding = fundings[0]
+            #         last_funding = fundings[-1]
+            #         last_funding_id = fundings[-1]['id']
+            #         end_time = first_funding['timestamp']
+            #         all_fundings = fundings + all_fundings
+            #         print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(fundings), 'fundings from', first_funding['datetime'], 'till', last_funding['datetime'])
+            #     else:
+            #         print(f'User:{self.user.name} Symbol:{symbol} Done')
+            #         break
         if all_fundings:
             return all_fundings
 
