@@ -405,12 +405,12 @@ class Instance(Base):
                     df = pd.DataFrame(data)
                     if self.sb_change:
                         balance = self.sb
-                if trade["side"].startswith("open_"):
+                if trade["info"]["tradeSide"].startswith("open"):
                     last_psize = psize
                     psize = round(psize + trade["amount"],10)
                     pprice = (pprice*last_psize + trade["amount"]*trade["price"])/psize
                     price = trade["price"]
-                if trade["side"].startswith("close_") and psize > 0:
+                if trade["info"]["tradeSide"].startswith("close") and psize > 0:
                     last_psize = psize
                     psize = round(psize - trade["amount"],10)
                     win = trade["amount"] * trade["price"] - trade["amount"] * pprice
@@ -958,8 +958,8 @@ class Instance(Base):
 
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):
-            # self.fetch_trades()
-            # self.fetch_fundings()
+            self.fetch_trades()
+            self.fetch_fundings()
             self._trades = self.trades_to_df()
         if self._trades is None:
             st.write("### No Trades available.")
