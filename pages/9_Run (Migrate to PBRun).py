@@ -7,7 +7,7 @@ import pbgui_help
 from datetime import datetime
 from pathlib import Path, PurePath
 import sys
-import shutil
+from shutil import copy
 import json
 import os
 import platform
@@ -47,7 +47,7 @@ def save_yaml(instance):
         path = PurePath(f'data/run/manager')
         if not os.path.exists(path):
             os.makedirs(path)
-        shutil.copy(PurePath(f'{st.session_state.pbdir}/manager/config.yaml'), PurePath(f'{path}/{date}_config.yaml'))
+        copy(PurePath(f'{st.session_state.pbdir}/manager/config.yaml'), PurePath(f'{path}/{date}_config.yaml'))
         with open(PurePath(f'{st.session_state.pbdir}/manager/config.yaml'), 'w', encoding='utf-8') as f:
             f.write(yaml)
 
@@ -102,7 +102,7 @@ def save_instance_config(instance, config):
     if not os.path.exists(path):
         os.makedirs(path)
     if os.path.isfile(instance.config):
-        shutil.copy(instance.config, f'{path}/{instance.symbol}_{date}.json')
+        copy(instance.config, f'{path}/{instance.symbol}_{date}.json')
     with open(instance.config, 'w', encoding='utf-8') as f:
         f.write(config)
 
@@ -366,7 +366,7 @@ if 'pbdir' not in st.session_state or 'pbgdir' not in st.session_state:
     st.switch_page("pbgui.py")
 else:
     if not os.path.isfile(f'{st.session_state.pbdir}/manager/config.yaml'):
-        shutil.copy(f'{st.session_state.pbdir}/manager/config.example.yaml', f'{st.session_state.pbdir}/manager/config.yaml')
+        copy(f'{st.session_state.pbdir}/manager/config.example.yaml', f'{st.session_state.pbdir}/manager/config.yaml')
     sys.path.insert(0,st.session_state.pbdir)
     sys.path.insert(0,f'{st.session_state.pbdir}/manager')
     manager = __import__("manager")

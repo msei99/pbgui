@@ -6,9 +6,8 @@ from User import Users
 from pathlib import Path
 import hjson
 import glob
-from shutil import rmtree
+from shutil import rmtree, copy
 import traceback
-import shutil
 
 class MultiInstance():
     def __init__(self):
@@ -239,7 +238,7 @@ class MultiInstance():
                     else:
                         ps = ""
                     symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}{pp}{ps}'.rstrip()
-                    shutil.copy(f'{instance.instance_path}/config.json', f'{self.instance_path}/{instance.symbol}.json')
+                    copy(f'{instance.instance_path}/config.json', f'{self.instance_path}/{instance.symbol}.json')
                 else:
                     Path(f'{self.instance_path}/{instance.symbol}.json').unlink(missing_ok=True)
         return symbols
