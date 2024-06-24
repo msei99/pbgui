@@ -19,7 +19,7 @@ from datetime import datetime
 import platform
 from PBRun import PBRun
 from Status import InstancesStatusList
-import shutil
+from shutil import copy
 import hashlib
 import traceback
 
@@ -255,9 +255,9 @@ class RemoteServer():
                 if not destination.exists():
                     destination.mkdir(parents=True)
                 if api_keys.exists():
-                    shutil.copy(api_keys, destination)
+                    copy(api_keys, destination)
                 # Copy new api-keys
-                shutil.copy(api_file, api_keys)
+                copy(api_file, api_keys)
 
     def calculate_md5(self, file: Path):
         """Checks if the two API files have the same hash using md5 protocol."""
@@ -442,7 +442,7 @@ class PBRemote():
         source = Path(f'{self.pbdir}/api-keys.json')
         if source.exists():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync api-keys.json to all remote servers')
-            shutil.copy(source, api_file)
+            copy(source, api_file)
     
     def check_if_api_synced(self):
         """Verify that the API keys are the same in PBGUI and PB folders and deletes PBGUI folder's file if api are synced."""
