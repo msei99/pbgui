@@ -1,3 +1,10 @@
+"""
+PBRun is the main bit of PBGui, being split in 3 main parts, PBRun and RunSingle/RunMulti, the two last doing the same things respective to their config.
+
+PBRun checks for status and activate files, updating the old ones to the newest, and starting functions from RunSingle or RunMulti if there are any needed.
+
+RunMulti and Single do start and stop passivbot programs.
+"""
 import psutil
 import subprocess
 import configparser
@@ -15,7 +22,7 @@ from shutil import copy, copytree, rmtree
 import os
 import traceback
 import uuid
-from Status import InstanceStatus, InstancesStatus
+from Status import InstanceStatus, InstancesStatusList
 
 class RunInstance():
     def __init__(self):
@@ -429,9 +436,9 @@ class PBRun():
     It does so with update_status_*.cmd, and activate_*.cmd. These files are created while using PBGui, and when PBRun receives activate_*.cmd, it creates the single of multi instances for passivbot, when it receives update_status_*.cmd, it inform on the status of this instances, so the bot specified in the status can start instances of passivbot.
     """
     def __init__(self):
-        self.run_instances = [RunInstance]
-        self.run_multi = [RunMulti]
-        self.run_single = [RunSingle]
+        self.run_instances = []
+        self.run_multi = []
+        self.run_single = []
         self.index = 0
         self.pbgdir = Path.cwd()
         self.pb_config = configparser.ConfigParser()
@@ -448,10 +455,10 @@ class PBRun():
             self.activate_single_ts = int(self.pb_config.get("main", "activate_single_ts"))
         else:
             self.activate_single_ts = 0
-        self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
+        self.instances_status = InstancesStatusList(f'{self.pbgdir}/data/cmd/status.json')
         self.instances_status.pbname = self.name
         self.instances_status.activate_ts = self.activate_ts
-        self.instances_status_single = InstancesStatus(f'{self.pbgdir}/data/cmd/status_single.json')
+        self.instances_status_single = InstancesStatusList(f'{self.pbgdir}/data/cmd/status_single.json')
         self.instances_status_single.pbname = self.name
         self.instances_status_single.activate_ts = self.activate_single_ts
         if self.pb_config.has_option("main", "pbdir"):
@@ -592,7 +599,7 @@ class PBRun():
             status_file (str): Path to the status file.
             rserver (str): Name of the remote server.
         """
-        new_status = InstancesStatus(status_file)
+        new_status = InstancesStatusList(status_file)
         if new_status.activate_ts > self.activate_single_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
@@ -654,7 +661,7 @@ class PBRun():
             status_file (str): Path to the status file.
             rserver (str): Name of the remote server.
         """
-        new_status = InstancesStatus(status_file)
+        new_status = InstancesStatusList(status_file)
         if new_status.activate_ts > self.activate_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
@@ -672,15 +679,17 @@ class PBRun():
                                 Path(item).unlink(missing_ok=True)
                         src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                         dest = f'{self.multi_path}/{instance.name}'
-                        copytree(src, dest, dirs_exist_ok=True)
-                        self.watch_multi([f'{self.multi_path}/{instance.name}'])
+                        if Path(src).exists():
+                            copytree(src, dest, dirs_exist_ok=True)
+                            self.watch_multi([f'{self.multi_path}/{instance.name}'])
                 else:
                     # Install new multi instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
                     src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                     dest = f'{self.multi_path}/{instance.name}'
-                    copytree(src, dest, dirs_exist_ok=True)
-                    self.watch_multi([f'{self.multi_path}/{instance.name}'])
+                    if Path(src).exists():
+                        copytree(src, dest, dirs_exist_ok=True)
+                        self.watch_multi([f'{self.multi_path}/{instance.name}'])
             remove_instances = []
             for instance in self.instances_status:
                 status = new_status.find_name(instance.name)
@@ -880,6 +889,11 @@ class PBRun():
                 status.version = run_multi.version
                 status.enabled_on = run_multi.name
                 self.instances_status.add(status)
+        # Remove non existing instances from status
+        for instance in self.instances_status:
+            instance_path = f'{self.pbgdir}/data/multi/{instance.name}'
+            if not Path(instance_path).exists():
+                self.instances_status.remove(instance)
         self.instances_status.save()
 
     def run(self):
