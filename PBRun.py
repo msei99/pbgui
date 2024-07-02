@@ -395,8 +395,9 @@ class RunMulti():
         del self._multi_config["enabled_on"]
         del self._multi_config["version"]
         self._multi_config["live_configs_dir"] = self.path
-        if self._multi_config["default_config_path"] != "":
-            self._multi_config["default_config_path"] = f'{self.path}/default.json'
+        if "default_config_path" in self._multi_config:
+            if self._multi_config["default_config_path"] != "":
+                self._multi_config["default_config_path"] = f'{self.path}/default.json'
         run_config = hjson.dumps(self._multi_config)
         config_file = Path(f'{self.path}/multi_run.hjson')
         with open(config_file, "w", encoding='utf-8') as f:
