@@ -105,6 +105,7 @@ class Users:
                 if "passphrase" in users[user]:
                     my_user.passphrase = users[user]["passphrase"]
                 self.users.append(my_user)
+        self.users.sort(key=lambda x: x.name)
 
     def save(self):
         save_users = {}

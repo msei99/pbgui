@@ -44,7 +44,21 @@ class MultiInstance():
                 del st.session_state.edit_multi_TWE_short
                 del st.session_state.edit_multi_long_enabled
                 del st.session_state.edit_multi_short_enabled
-                del st.session_state.edit_multi_universal_live_config
+                if "edit_multi_universal_live_config" in st.session_state:
+                    del st.session_state.edit_multi_universal_live_config
+                del st.session_state.edit_multi_approved_symbols
+                del st.session_state.edit_multi_ignored_symbols
+                del st.session_state.edit_multi_n_longs
+                del st.session_state.edit_multi_n_shorts
+                del st.session_state.edit_multi_minimum_market_age_days
+                del st.session_state.edit_multi_ohlcv_interval
+                del st.session_state.edit_multi_n_ohlcvs
+                del st.session_state.edit_multi_relative_volume_filter_clip_pct
+                del st.session_state.edit_multi_max_n_cancellations_per_batch
+                del st.session_state.edit_multi_max_n_creations_per_batch
+                del st.session_state.edit_multi_forced_mode_long
+                del st.session_state.edit_multi_forced_mode_short
+                del st.session_state.edit_multi_filter_by_min_effective_cost
             # Init
             self._multi_config = {}
             self.initialize()
@@ -259,7 +273,7 @@ class MultiInstance():
         self._symbols = []
         self._ignored_symbols = []
         self._default_config = ""
-        self._default_config_path = ""
+        self._default_config_path = f'{self.instance_path}/default.json'
         default_config = Path(f'{self.instance_path}/default.json')
         if default_config.exists():
             self.default_config = Config(default_config)
@@ -353,7 +367,11 @@ class MultiInstance():
                 if symbol not in self._symbols:
                     self._symbols.append(symbol)
             # Init TWE_enabled
-            if self._multi_config["approved_symbols"][self._symbols[0]].split(' ')[-2] != '-sw':
+            if not self._symbols:
+                self.TWE_enabled = True
+            elif not self._multi_config["approved_symbols"]:
+                self.TWE_enabled = False
+            elif self._multi_config["approved_symbols"][self._symbols[0]].split(' ')[-2] != '-sw':
                 self.TWE_enabled = True
         # Old config Versions using "symbol" as key
         if "symbols" in self._multi_config:
@@ -386,8 +404,10 @@ class MultiInstance():
 
     def generate_active_symbols(self):
         symbols = {}
+        user_symbols = []
         for instance in st.session_state.pbgui_instances:
             if instance.user == self.user and instance.market_type == "futures":
+                user_symbols.append(instance.symbol)
                 if instance.multi:
                     instance.enabled_on = self.enabled_on
                     instance.save()
@@ -423,14 +443,13 @@ class MultiInstance():
                 else:
                     Path(f'{self.instance_path}/{instance.symbol}.json').unlink(missing_ok=True)
         for symbol in self._symbols:
-            if symbol not in symbols:
+            if symbol not in user_symbols:
                 config_file = Path(f'{self.instance_path}/{symbol}.json')
                 if config_file.exists():
                     multi_config = Config(config_file)
                     multi_config.load_config()
                 else:
                     multi_config = self.default_config
-
                 if multi_config.long_enabled:
                     lm = f'-lm n'
                     lw = f'-lw {multi_config.long_we}'
