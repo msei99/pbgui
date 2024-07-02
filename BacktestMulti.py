@@ -557,8 +557,10 @@ class BacktestMultiItem:
             st.number_input("unstuck_close_pct_min", min_value=UNSTUCK_CLOSE_PCT_MIN, max_value=self.unstuck_close_pct_max, value=self.unstuck_close_pct_min, step=0.01, format="%.3f", key="edit_bt_multi_unstuck_close_pct_min")
             st.write(" ")
             st.write(" ")
-            if st.button("Generate Backtests"):
-                self.generate_backtests()
+            if self.name and self.hjson and self.symbols:
+                if st.button("Generate Backtests"):
+                    self.save()
+                    self.generate_backtests()
         with col3:
             st.number_input("loss_allowance_pct_max", min_value=self.loss_allowance_pct_min, max_value=LOSS_ALLOWANCE_PCT_MAX, value=self.loss_allowance_pct_max, step=0.01, format="%.3f", key="edit_bt_multi_loss_allowance_pct_max")
             st.number_input("stuck_threshold_max", min_value=self.stuck_threshold_min, max_value=STUCK_THRESHOLD_MAX, value=self.stuck_threshold_max, step=0.01, format="%.3f", key="edit_bt_multi_stuck_threshold_max")

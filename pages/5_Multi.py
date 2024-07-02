@@ -4,6 +4,24 @@ from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
 from Instance import Instances
 from PBRun import PBRun
+from pathlib import PurePath
+
+def edit_multi_config():
+    # Display Error
+    if "error" in st.session_state:
+        st.error(st.session_state.error, icon="🚨")
+    # Init config
+    multi_config = st.session_state.edit_multi_config
+    # Navigation
+    with st.sidebar:
+        if st.button(":back:"):
+            del st.session_state.edit_multi_config
+            st.rerun()
+        if st.button(":floppy_disk:"):
+            multi_config.save_config()
+    symbol = PurePath(multi_config.config_file).stem
+    st.header(f'{symbol}')
+    multi_config.edit_config()
 
 def edit_multi_instance():
     # Display Error
@@ -114,7 +132,9 @@ set_page_config()
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
 
-if 'edit_multi_instance' in st.session_state:
+if 'edit_multi_config' in st.session_state:
+    edit_multi_config()
+elif 'edit_multi_instance' in st.session_state:
     edit_multi_instance()
 else:
     select_instance()

@@ -1,6 +1,6 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_initialized
-from User import User
+from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
 
@@ -21,6 +21,9 @@ def edit_user():
                 del st.session_state.error
             del st.session_state.edit_user
             del st.session_state.users
+            with st.spinner('Initializing Users...'):
+               st.session_state.users = Users()
+
             st.rerun()
         if not in_use and not "error" in st.session_state:
             if st.button(":wastebasket:"):
