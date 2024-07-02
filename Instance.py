@@ -1148,7 +1148,7 @@ class Instance(Base):
         logfile = Path(f'{self._instance_path}/passivbot.log')
         logr = ""
         if logfile.exists():
-            with open(logfile, 'r', encoding='utf-8') as f:
+            with open(logfile, 'r', encoding='utf-8', errors='ignore') as f:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line

@@ -156,6 +156,10 @@ class Config:
                 st.session_state.config_short_enabled = self.short_enabled
                 st.session_state.config_long_we = self.long_we
                 st.session_state.config_short_we = self.short_we
+            else:
+                if validateJSON(st.session_state.config_instance_config):
+                    if "error_config" in st.session_state:
+                        del st.session_state.error_config
         # if self.config:
         #     self.config = st.session_state.config_instance_config
         col1, col2, col3 = st.columns([1,1,1])
@@ -176,7 +180,7 @@ class Config:
             height = len(self.config.splitlines()) *23
         if height < 600:
             height = 600
-        st.text_area("Instance config", self.config, key="config_instance_config", height=height)
+        st.text_area("config", self.config, key="config_instance_config", height=height)
 
 def main():
     print("Don't Run this Class from CLI")
