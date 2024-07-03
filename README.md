@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v0.97
+v0.99
 
 ## Migration to v0.95 Multi
 
@@ -20,6 +20,7 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 ![Alt text](docs/images/live1.png)
 ![Alt text](docs/images/live2.png)
 ![Alt text](docs/images/pbconfigdb.png)
+![Alt text](docs/images/backtest_multi1.png)
 ![Alt text](docs/images/backtest.png)
 ![Alt text](docs/images/backtest2.png)
 ![Alt text](docs/images/optimize1.png)
@@ -137,7 +138,23 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.98 (24-05-2024)
+## v0.99 (02-07-2024)
+- Multi: Support for all config options
+- MultiForager: Added Multi forager
+- Bugfix for Windows Optimizer and MultiBacktest should now work
+- PBRun: Add errorhandling for missing multi instances
+- Backtest Multi: Speed up queue an results display
+
+## v0.98 (11-06-2024)
+- Backtest Multi: Run multiple backtests for find best settings of loss_allowance_pct, stuck_threshold and unstuck_close_pct
+- Bugfix: Backtester no longer downloads ohlcv from exchanges multiple times parallel
+- Multi: Add leverage (only global not by symbol)
+- Multi: price_distance_threshold added
+- Backtest Multi added
+- Bugfix: Refresh on Multi Page not working
+- Bugfix: PBStat Something went wrong, but continue 'list' object has no attribute ...
+- Bugfix: Remove some debug print statement
+- Bugfix: Make bitget work on ccxt version 4.3.24
 - Bugfix: When switch from backtest to single, user and symbol was changed
 - Bugfix: When changed the user on a instance, it was posible that you end up with the old and new instance running passivbot
 - Bugfix: Switchpage from Multi config to Single was wrong

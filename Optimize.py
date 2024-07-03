@@ -112,9 +112,9 @@ class OptimizeItem(Base):
             pb_config.read('pbgui.ini')
             if self.pbdir:
                 cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/optimize.py')]
-                cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.BOOLS[self.oc.do_long]} -se {self.BOOLS[self.oc.do_short]} -oc {str(PurePath(self.oc.config_file))}'
+                cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.BOOLS[self.oc.do_long]} -se {self.BOOLS[self.oc.do_short]}'
                 cmd.extend(shlex.split(cmd_end))
-                cmd.extend(['-bd', str(PurePath(f'{self.pbdir}/backtests/pbgui'))])
+                cmd.extend(['-oc', str(PurePath(f'{self.oc.config_file}')), '-bd', str(PurePath(f'{self.pbdir}/backtests/pbgui'))])
                 log = open(self.log,"w")
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
                 if platform.system() == "Windows":

@@ -1,4 +1,4 @@
-streamlit==1.33.0
+streamlit==1.35.0
 streamlit-scrollable-textbox==0.0.3
 streamlit-autorefresh==1.0.1
 bokeh==2.4.3

@@ -110,9 +110,9 @@
             grid.innerHTML = '';
         {%- for symbol in symbols %}
             // {{symbol}}
-            let {{symbol}} = document.createElement("img");
-            {{symbol}}.src = "https://ik.imagekit.io/zt8y0hunm/{{user}}/tr:w-1280/grid_{{user}}_{{symbol}}.png?updatedAt=" + timestamp;
-            document.getElementById("grid").appendChild({{symbol}});
+            let _{{symbol}} = document.createElement("img");
+            _{{symbol}}.src = "https://ik.imagekit.io/zt8y0hunm/{{user}}/tr:w-1280/grid_{{user}}_{{symbol}}.png?updatedAt=" + timestamp;
+            document.getElementById("grid").appendChild(_{{symbol}});
         {%- endfor %}
         }
     {%- endfor %}
