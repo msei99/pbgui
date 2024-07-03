@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime
-from shutil import copy
+import shutil
 import configparser
 
 class User:
@@ -121,7 +121,7 @@ class Users:
         destination = Path(f'{self.api_backup}/api-keys_{date}.json')
         if not self.api_backup.exists():
             self.api_backup.mkdir(parents=True)
-        copy(self.api_path, destination)
+        shutil.copy(self.api_path, destination)
         with Path(f'{self.api_path}').open("w", encoding="UTF-8") as f:
             json.dump(save_users, f, indent=4)
 
