@@ -8,6 +8,7 @@ from PBRun import PBRun, RunInstance
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
+import shutil
 import json
 import glob
 import pandas as pd
@@ -15,7 +16,7 @@ from datetime import datetime, timezone
 from time import sleep
 from bokeh.plotting import figure
 import numpy as np
-from shutil import rmtree, copytree
+from shutil import rmtree
 import sys
 import traceback
 import plotly.graph_objects as go
@@ -635,7 +636,7 @@ class Instance(Base):
             destination = Path(f'{pbgdir}/data/backup/instances/{name}/{date}')
             if not destination.exists():
                 destination.mkdir(parents=True)
-        copytree(source, destination, dirs_exist_ok=True)
+        shutil.copytree(source, destination, dirs_exist_ok=True)
         # Remove
         rmtree(self._instance_path, ignore_errors=True)
 
