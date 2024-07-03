@@ -2,13 +2,13 @@ import psutil
 import subprocess
 import sys
 import os
-import traceback
 from pathlib import Path, PurePath
 from time import sleep
 from io import TextIOWrapper
 from datetime import datetime
 from Instance import Instances
 import platform
+import traceback
 
 class PBStat(Instances):
     def __init__(self):
@@ -80,10 +80,12 @@ class PBStat(Instances):
                 instance.fetch_fundings()
 
     def fetch_status(self):
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch status')
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Fetch status')
         for instance in self.instances:
             if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "okx"]:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Save Status {instance.user} {instance.symbol}')
                 instance.save_status()
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End Fetch status')
 
 def main():
     pbgdir = Path.cwd()
@@ -122,5 +124,6 @@ def main():
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
             traceback.print_exc()
+
 if __name__ == '__main__':
     main()
