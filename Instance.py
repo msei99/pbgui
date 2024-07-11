@@ -1048,7 +1048,8 @@ class Instance(Base):
     def refresh(self):
         path = self._instance_path
         self.__init__()
-        self.load(path)
+        if path:
+            self.load(path)
 
     def load(self, path: Path):
         file = Path(f'{path}/instance.cfg')
@@ -1264,6 +1265,10 @@ class Instances:
     def refresh(self):
         for instance in self.instances:
             instance.load(instance._instance_path)
+    
+    def reload_instances(self):
+        self.instances = []
+        self.load()
 
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))

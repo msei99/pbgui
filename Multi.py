@@ -266,8 +266,8 @@ class MultiInstance():
         self._execution_delay_seconds = 2
         self._price_distance_threshold = 0.002
         self._auto_gs = True
-        self._TWE_long = 2.0
-        self._TWE_short = 0.1
+        self._TWE_long = 0.0
+        self._TWE_short = 0.0
         self._long_enabled = True
         self._short_enabled = False
         self._symbols = []
@@ -366,21 +366,11 @@ class MultiInstance():
             for symbol in self._multi_config["approved_symbols"]:
                 if symbol not in self._symbols:
                     self._symbols.append(symbol)
-            # Init TWE_enabled
-            if not self._symbols:
-                self.TWE_enabled = True
-            elif not self._multi_config["approved_symbols"]:
-                self.TWE_enabled = False
-            elif self._multi_config["approved_symbols"][self._symbols[0]].split(' ')[-2] != '-sw':
-                self.TWE_enabled = True
         # Old config Versions using "symbol" as key
         if "symbols" in self._multi_config:
             for symbol in self._multi_config["symbols"]:
                 if symbol not in self._symbols:
                     self._symbols.append(symbol)
-            # Init TWE_enabled
-            if self._multi_config["symbols"][self._symbols[0]].split(' ')[-2] != '-sw':
-                self.TWE_enabled = True
         # Init PBremote
         if 'remote' not in st.session_state:
             st.session_state.remote = PBRemote()
@@ -415,7 +405,10 @@ class MultiInstance():
                         lm = f'-lm n'
                         lw = f'-lw {instance._config.long_we}'
                     else:
-                        lm = f'-lm m'
+                        if self.auto_gs:
+                            lm = f'-lm gs'
+                        else:
+                            lm = f'-lm m'
                         lw = f'-lw 0.0'
                     if instance.long_mode == "graceful_stop":
                         lm = f'-lm gs'
@@ -427,7 +420,10 @@ class MultiInstance():
                         sm = f'-sm n'
                         sw = f'-sw {instance._config.short_we}'
                     else:
-                        sm = f'-sm m'
+                        if self.auto_gs:
+                            sm = f'-sm gs'
+                        else:
+                            sm = f'-sm m'
                         sw = f'-sw 0.0'
                     if instance.short_mode == "graceful_stop":
                         sm = f'-sm gs'
@@ -435,14 +431,12 @@ class MultiInstance():
                         sm = f'-sm p'
                     elif instance.short_mode == "tp_only":
                         sm = f'-sm t'
-                    if self.TWE_enabled:
-                        symbols[instance.symbol] = f'{lm} {sm}'
-                    else:
-                        symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}'    
+                    symbols[instance.symbol] = f'{lm} {lw} {sm} {sw}'    
                     shutil.copy(f'{instance.instance_path}/config.json', f'{self.instance_path}/{instance.symbol}.json')
                 else:
                     Path(f'{self.instance_path}/{instance.symbol}.json').unlink(missing_ok=True)
         for symbol in self._symbols:
+            default_config = False
             if symbol not in user_symbols:
                 config_file = Path(f'{self.instance_path}/{symbol}.json')
                 if config_file.exists():
@@ -450,20 +444,27 @@ class MultiInstance():
                     multi_config.load_config()
                 else:
                     multi_config = self.default_config
+                    default_config = True
                 if multi_config.long_enabled:
                     lm = f'-lm n'
                     lw = f'-lw {multi_config.long_we}'
                 else:
-                    lm = f'-lm m'
+                    if self.auto_gs:
+                        lm = f'-lm gs'
+                    else:
+                        lm = f'-lm m'
                     lw = f'-lw 0.0'
                 if multi_config.short_enabled:
                     sm = f'-sm n'
                     sw = f'-sw {multi_config.short_we}'
                 else:
-                    sm = f'-sm m'
+                    if self.auto_gs:
+                        sm = f'-sm gs'
+                    else:
+                        sm = f'-sm m'
                     sw = f'-sw 0.0'
-                if self.TWE_enabled:
-                    symbols[symbol] = f'{lm} {sm}'
+                if default_config:
+                    symbols[symbol] = ''
                 else:
                     symbols[symbol] = f'{lm} {lw} {sm} {sw}'
         return symbols
@@ -530,6 +531,7 @@ class MultiInstance():
         else:
             self._multi_config["default_config_path"] = ""
         self._multi_config["universal_live_config"] = hjson.loads(self.universal_live_config)
+        self._multi_config["live_configs_dir"] = f'{self.instance_path}'
         self._multi_config["ignored_symbols"] = self._ignored_symbols
         self._multi_config["n_longs"] = self.n_longs
         self._multi_config["n_shorts"] = self.n_shorts
@@ -593,9 +595,6 @@ class MultiInstance():
         if "edit_multi_TWE_short" in st.session_state:
             if st.session_state.edit_multi_TWE_short != self.TWE_short:
                 self.TWE_short = st.session_state.edit_multi_TWE_short
-        if "edit_multi_TWE_enabled" in st.session_state:
-            if st.session_state.edit_multi_TWE_enabled != self.TWE_enabled:
-                self.TWE_enabled = st.session_state.edit_multi_TWE_enabled
         if "edit_multi_long_enabled" in st.session_state:
             if st.session_state.edit_multi_long_enabled != self.long_enabled:
                 self.long_enabled = st.session_state.edit_multi_long_enabled
@@ -669,6 +668,8 @@ class MultiInstance():
                             # else:
                             #     ed_key += 1
                     if not single:
+                        config_file = Path(f'{self.instance_path}/{self._symbols[row]}.json')
+                        config_file.unlink(missing_ok=True)
                         self._symbols.remove(self._symbols[row])
                 if "edit" in ed["edited_rows"][row]:
                     for instance in st.session_state.pbgui_instances:
@@ -682,14 +683,12 @@ class MultiInstance():
                     st.session_state.edit_multi_config = config
                     st.rerun()
         slist = []
-        if not self.TWE_enabled:
-            self.TWE_long = 0.0
-            self.TWE_short = 0.0
-        n_long_enabled = 0
-        n_short_enabled = 0
+        inactive_long = 0
+        inactive_short = 0
         for id, symbol in enumerate(self._symbols):
             config = 'default'
             for instance in st.session_state.pbgui_instances:
+                # Single instance config
                 if instance.user == self.user and instance.symbol == symbol:
                     config = 'single'
                     if instance.multi or (not instance.multi and instance.enabled_on == "disabled"):
@@ -697,65 +696,135 @@ class MultiInstance():
                     else:
                         enable_multi = None
                     multi_config = instance._config
+                    # Setup mode
+                    if multi_config.long_enabled:
+                        long_mode = instance.long_mode
+                        # Setup WE
+                        long_we = multi_config.long_we
+                    else:
+                        long_we = 0.0
+                        inactive_long += 1
+                        if self.auto_gs:
+                            long_mode = 'graceful_stop'
+                        else:
+                            long_mode = 'manual'
+                    if multi_config.short_enabled:
+                        short_mode = instance.short_mode
+                        # Setup WE
+                        short_we = multi_config.short_we
+                    else:
+                        short_we = 0.0
+                        inactive_short += 1
+                        if self.auto_gs:
+                            short_mode = 'graceful_stop'
+                        else:
+                            short_mode = 'manual'
             if config == 'default':
+                # local and default config are always enabled
+                enable_multi = True
+                # Local config
                 config_file = Path(f'{self.instance_path}/{symbol}.json')
                 if config_file.exists():
                     multi_config = Config(config_file)
                     multi_config.load_config()
                     config = "local"
+                    # Setup mode
+                    if multi_config.long_enabled:
+                        long_mode = 'normal'
+                        # Setup WE
+                        long_we = multi_config.long_we
+                    else:
+                        long_we = 0.0
+                        inactive_short += 1
+                        if self.auto_gs:
+                            long_mode = 'graceful_stop'
+                        else:
+                            long_mode = 'manual'
+                    if multi_config.short_enabled:
+                        short_mode = 'normal'
+                        # Setup WE
+                        short_we = multi_config.short_we
+                    else:
+                        short_we = 0.0
+                        inactive_short += 1
+                        if self.auto_gs:
+                            short_mode = 'graceful_stop'
+                        else:
+                            short_mode = 'manual'
+            if config == "default":
+                multi_config = self.default_config
+                if self.n_longs > 0:
+                    long_we = self.TWE_long / self.n_longs
+                    long_mode = 'normal'
                 else:
-                    multi_config = self.default_config
-                enable_multi = True
-            long_enabled = multi_config.long_enabled
-            if not self.TWE_enabled:
-                long_we = multi_config.long_we
-                short_we = multi_config.short_we
-            else:
-                long_we = self.TWE_long / len(self._symbols)
-                short_we = self.TWE_short / len(self._symbols)
-            long_mode = 'normal'
-            short_enabled = multi_config.short_enabled
-            short_mode = 'normal'
-            if long_enabled:
-                if not self.TWE_enabled:
-                    self.TWE_long += long_we
-            if not long_enabled:
-                long_we = 0.0
-                if long_mode == "normal":
-                    long_mode = "manual"
-            if short_enabled:
-                if not self.TWE_enabled:
-                    self.TWE_short += short_we
-            if not short_enabled:
-                short_we = 0.0
-                if short_mode == "normal":
-                    short_mode = "manual"
-            # calculate number of enabled long and short
-            if enable_multi:
-                if long_enabled:
-                    n_long_enabled += 1
-                if short_enabled:
-                    n_short_enabled += 1
+                    if self.long_enabled:
+                        long_mode = 'normal'
+                        long_we = self.TWE_long / len(self._symbols)
+                    else:
+                        long_we = 0.0
+                        if self.auto_gs:
+                            long_mode = 'graceful_stop'
+                        else:
+                            long_mode = 'manual'  
+                if self.n_shorts > 0:
+                    short_we = self.TWE_short / self.n_shorts
+                    short_mode = 'normal'
+                else:
+                    if self.short_enabled:
+                        short_mode = 'normal'
+                        short_we = self.TWE_short / len(self._symbols)
+                    else:
+                        short_we = 0.0
+                        if self.auto_gs:
+                            short_mode = 'graceful_stop'
+                        else:
+                            short_mode = 'manual'
             slist.append({
                 'id': id,
                 'enable': enable_multi,
                 'edit': False,
                 'symbol': symbol,
                 'config': config,
-                'long' : long_enabled,
                 'long_mode' : long_mode,
                 'long_we' : long_we,
-                'short' : short_enabled,
                 'short_mode' : short_mode,
                 'short_we' : short_we
             })
         # recalculate long_we and short_we
-        if self.TWE_enabled:
-            for symbol in slist:
-                if symbol['long']:
-                    symbol['long_we'] = self.TWE_long / n_long_enabled
-                if symbol['short']:
-                    symbol['short_we'] = self.TWE_short / n_short_enabled
+        real_TWE_long = 0
+        real_TWE_short = 0
+        not_defaults_long = 0
+        not_defaults_short = 0
+        for id, symbol in enumerate(slist):
+            if symbol["enable"]:
+                if symbol['config'] != 'default':
+                    if symbol['long_mode'] == 'normal':
+                        not_defaults_long += 1
+                        real_TWE_long += symbol['long_we']
+                    if symbol['short_mode'] == 'normal':
+                        not_defaults_short += 1
+                        real_TWE_short += symbol['short_we']
+                else:
+                    if self.n_longs == 0 and self.n_shorts == 0:
+                        if symbol['long_mode'] == 'normal':
+                            # Correct long_we calculated from inactive symbols
+                            slist[id]["long_we"] = self.TWE_long / (len(self._symbols) - inactive_long)
+                            real_TWE_long += symbol['long_we']
+                        if symbol['short_mode'] == 'normal':
+                            # Correct short_we calculated from inactive symbols
+                            slist[id]["short_we"] = self.TWE_short / (len(self._symbols) - inactive_short)
+                            real_TWE_short += symbol['short_we']
+                    else:
+                        # Correct we calculated from inactive symbols
+                        slist[id]["long_we"] = self.TWE_long / (self.n_longs - inactive_long)
+                        slist[id]["short_we"] = self.TWE_short / (self.n_shorts - inactive_short)
+        # Calculate real TWE with inactive symbols
+        if self.n_longs > 0:
+            if self.n_longs > not_defaults_long:
+                real_TWE_long +=  self.TWE_long / (self.n_longs - inactive_long) * (self.n_longs - inactive_long - not_defaults_long)
+        if self.n_shorts > 0:
+            if self.n_shorts > not_defaults_short:
+                real_TWE_short +=  self.TWE_short / (self.n_shorts - inactive_short) * (self.n_shorts - inactive_short - not_defaults_short)
         column_config = {
             "id": None,
             "enable": st.column_config.CheckboxColumn(label="enable on multi", help="If no Checkbox is shown, Symbol is running as a Single Instance and can not be enabled on this Multi"),
@@ -788,20 +857,24 @@ class MultiInstance():
         with col2:
             st.checkbox("short_enabled", value=self.short_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_multi_short_enabled")
         with col3:
-            st.checkbox("Enable TWE", value=self.TWE_enabled, help=pbgui_help.multi_TWE_enabled, key="edit_multi_TWE_enabled")
+            st.empty()
         with col4:
             st.checkbox("auto_gs", value=self.auto_gs, help=pbgui_help.auto_gs, key="edit_multi_auto_gs")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            st.number_input("TWE_long", min_value=0.0, max_value=100.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_multi_TWE_long", disabled=not self.TWE_enabled, help=pbgui_help.TWE_long_short)
+            st.number_input(f"TWE_long (Real: {round(real_TWE_long,2)})", min_value=0.0, max_value=1000.0, value=self.TWE_long, step=0.1, format="%.2f", key="edit_multi_TWE_long", help=pbgui_help.TWE_long_short)
         with col2:
-            st.number_input("TWE_short", min_value=0.0, max_value=100.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_multi_TWE_short", disabled=not self.TWE_enabled, help=pbgui_help.TWE_long_short)
+            st.number_input(f"TWE_short (Real: {round(real_TWE_short,2)})", min_value=0.0, max_value=1000.0, value=self.TWE_short, step=0.1, format="%.2f", key="edit_multi_TWE_short", help=pbgui_help.TWE_long_short)
         with col3:
             st.number_input("price_distance_threshold", min_value=0.0, max_value=1.0, value=self.price_distance_threshold, step=0.001, format="%.3f", key="edit_multi_price_distance_threshold", help=pbgui_help.price_distance_threshold)
         with col4:
             st.number_input("execution_delay_seconds", min_value=1, max_value=60, value=self.execution_delay_seconds, step=1, format="%.d", key="edit_multi_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
         # Forager Settings
-        with st.expander("Forager Settings", expanded=False):
+        if self.n_longs == 0 and self.n_shorts == 0:
+            forager_expanded = False
+        else:
+            forager_expanded = True
+        with st.expander("Forager Settings", expanded=forager_expanded):
             col1, col2, col3, col4 = st.columns([1,1,1,1])
             with col1:
                 st.number_input("n_longs", min_value=0, max_value=100, value=self.n_longs, step=1, format="%.d", key="edit_multi_n_longs", help=pbgui_help.n_longs_shorts)
@@ -857,11 +930,21 @@ class MultiInstance():
         for symbol in self._symbols:
             if symbol not in self._available_symbols:
                 self._symbols.remove(symbol)
+        if st.button("Add All to approved_symbols", key="edit_multi_add_all_to_approved"):
+            for symbol in self._available_symbols:
+                if symbol not in self._symbols:
+                    self._symbols.append(symbol)
+            st.rerun()
         st.multiselect('approved_symbols', self._available_symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
         # Add Symbol to ignored_symbols
         for symbol in self._ignored_symbols:
             if symbol not in self._available_symbols:
                 self._ignored_symbols.remove(symbol)
+        if st.button("Add All to ignored_symbols", key="edit_multi_add_all_to_ignored"):
+            for symbol in self._available_symbols:
+                if symbol not in self._ignored_symbols:
+                    self._ignored_symbols.append(symbol)
+            st.rerun()
         st.multiselect('ignored_symbols', self._available_symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
         # Import configs
         import_path = os.path.abspath(st_file_selector(st, path=PBDIR, key = 'multi_import_config', label = 'Import from directory'))

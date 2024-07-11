@@ -577,7 +577,7 @@ class Exchange:
         self.swap = []
         self.spot = []
         for (k,v) in list(self._markets.items()):
-            if v["swap"] and v["active"]:
+            if v["swap"] and v["active"] and v["linear"]:
                 if self.id == "bitget":
                     # print(k,v)
                     # if v["id"][-6:] == '_UMCBL' or v["id"][-6:] == '_DMCBL':
@@ -592,12 +592,17 @@ class Exchange:
                         self.swap.append(''.join(v["id"].split("-")[0:2]))
                 elif self.id == "bybit":
                     if v["id"].endswith('USDT'):
+                        print(v)
+                        self.swap.append(v["id"])
+                elif self.id == "binance":
+                    if v["id"].endswith('USDT'):
+                        print(v)
                         self.swap.append(v["id"])
                 elif self.id == "bingx":
                     if v["id"].endswith('USDT'):
                         self.swap.append(''.join(v["id"].split("-")))
-                else:
-                    self.swap.append(v["id"])
+                # else:
+                #     self.swap.append(v["id"])
             if v["spot"] and v["active"] and (self.id == "bybit" or self.id == "binance"):
                 self.spot.append(v["id"])
         self.spot.sort()
