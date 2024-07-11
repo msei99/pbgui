@@ -79,7 +79,7 @@ def is_session_state_initialized():
 def validateJSON(jsonData):
     try:
         json.loads(jsonData)
-    except ValueError as err:
+    except (ValueError,TypeError) as err:
         return False
     return True
 
@@ -147,3 +147,15 @@ def st_file_selector(st_placeholder, path='.', label='Select a file/folder', key
     selected_path = os.path.normpath(os.path.join(base_path, selected_file))
     st_placeholder.write(os.path.abspath(selected_path))
     return selected_path
+
+@st.experimental_dialog("Error")
+def error_popup(message):
+    st.error(f'{message}', icon="⚠️")
+    if st.button(":green[OK]"):
+        st.rerun()
+
+@st.experimental_dialog("Info")
+def info_popup(message):
+    st.info(f'{message}', icon="✅")
+    if st.button(":green[OK]"):
+        st.rerun()

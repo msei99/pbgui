@@ -2,7 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_initialized
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
-from Instance import Instances
+from Instance import Instances, Instance
 from PBRun import PBRun
 from pathlib import PurePath
 
@@ -52,6 +52,15 @@ def edit_multi_instance():
             st.session_state.bt_multi.create_from_multi(multi_instance.instance_path)
             st.switch_page("pages/6_Multi Backtest.py")
     multi_instance.edit()
+    if multi_instance.default_config.preview_grid:
+        if "preview_grid_instance" not in st.session_state:
+            st.session_state.preview_grid_instance = Instance()
+        instance = st.session_state.preview_grid_instance
+        instance.config = multi_instance.default_config.config
+        instance.user = multi_instance.user
+        instance.symbol = "BTCUSDT"
+        instance.market_type = "futures"
+        instance.view_grid(10000)
 
 def select_instance():
     # Init MultiInstances

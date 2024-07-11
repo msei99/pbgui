@@ -509,22 +509,23 @@ auto_gs = """
 
 TWE_long_short = """
     ```
-    PBGui does automatic calculate this value from instance configs. If you like
-    to change this behavior, you can Enable TWE and set the value manual.
-    Then calculation for every symbol will be TWE_pos_side / len(active_symbols_pos_side)
+    total wallet exposure limits long and short.
+    Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
+    The WE from single/local config takes precedence.
+    Example:
+    Configured TWE 2.0
+    2 symbols with local config WE 0.5
+    3 symbols with default/universal config
+    Result: 
+    2 x 0.5 WE
+    3 x 0.4 WE (2.0/5)
+    Real TWE will be 2.2
     ```"""
 
 multi_long_short_enabled = """
     ```
     if true, mode defaults to 'normal'.
     If false, mode defaults to 'manual'.
-    ```"""
-
-multi_TWE_enabled = """
-    ```
-    If enabled, you can configure TWE. PBGui no longer automatic calculate TWE from
-    configs WE.
-    Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
     ```"""
 
 n_longs_shorts = """

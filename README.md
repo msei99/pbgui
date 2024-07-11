@@ -138,7 +138,10 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.99 (02-07-2024)
+## v0.99 (11-07-2024)
+- Multi: Calculation of Real TWE
+- Multi: Add all Symbols
+- Multi: Mixing local configs together with forager
 - Multi: Support for all config options
 - MultiForager: Added Multi forager
 - Bugfix for Windows Optimizer and MultiBacktest should now work
