@@ -197,13 +197,14 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-            if timestamp + 86400 < round(datetime.now().timestamp()):
+            if timestamp + 21600 < round(datetime.now().timestamp()):
                 remove = True
                 timestamp = round(datetime.now().timestamp())
             else:
                 remove = False
             share.generate_grid_picture(remove)
             sleep(share.interval)
+            share.reload_instances()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
             traceback.print_exc()

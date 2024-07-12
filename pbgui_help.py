@@ -462,6 +462,11 @@ particle_swarm = """
     the algorithm.
     ```"""
 
+leverage = """
+    ```
+    leverage set on exchange
+    ```"""
+
 loss_allowance_pct = """
     ```
     multisym auto unstuck: will use profits from other positions to offset
@@ -492,6 +497,11 @@ execution_delay_seconds = """
     delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
     ```"""
 
+price_distance_threshold = """
+    ```
+    minimum distance to current price action required for EMA based limit orders
+    ```"""
+
 auto_gs = """
     ```
     set all non-specified symbols on graceful stop
@@ -499,14 +509,123 @@ auto_gs = """
 
 TWE_long_short = """
     ```
-    PBGui does automatic calculate this value from instance configs. You can not
-    change this value, this is just an information of your Total Wallet Exposure.
+    total wallet exposure limits long and short.
+    Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
+    The WE from single/local config takes precedence.
+    Example:
+    Configured TWE 2.0
+    2 symbols with local config WE 0.5
+    3 symbols with default/universal config
+    Result: 
+    2 x 0.5 WE
+    3 x 0.4 WE (2.0/5)
+    Real TWE will be 2.2
     ```"""
 
 multi_long_short_enabled = """
     ```
     if true, mode defaults to 'normal'.
     If false, mode defaults to 'manual'.
+    ```"""
+
+n_longs_shorts = """
+    ```
+    Max number of positions to have open.
+    If n_longs and n_shorts are both zero, forager mode is disabled.
+    n_longs: 0 // if > 0, overrides longs_enabled
+    n_shorts: 0 // if > 0, overrides shorts_enabled
+    ```"""
+
+minimum_market_age_days = """
+    ```
+    minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
+    ```"""
+
+ohlcv_interval = """
+    ```
+    interval of ohlcvs used for noisiness, volumes and EMAs
+    ```"""
+
+n_ohlcvs = """
+    ```
+    number of ohlcvs used for noisiness, volumes and EMAs
+    ```"""
+
+relative_volume_filter_clip_pct = """
+    ```
+    Volume filter: disapprove the lowest relative volume symbols. Default 0.1 == 10%. Set to zero to allow all.
+    ```"""
+
+max_n_per_batch = """
+    ```
+    how many executions in parallel per batch
+    ```"""
+
+filter_by_min_effective_cost = """
+    ```
+    if true, will disallow symbols where balance * WE_limit * initial_qty_pct < min_effective_cost
+    ```"""
+
+forced_mode_long_short = """
+    ```
+    Force all positions to the same mode. Individually flagged modes take precedence.
+    Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]
+    ```"""
+
+multi_approved_symbols = """
+    ```
+    Approved symbols that are enabled and can be selected in forager mode
+    Forager mode = Dynamically enable bots on markets of higher noisiness.
+    Only select among approved_symbols defined.
+    If approved_symbols == [], all symbols are eligible.
+    ```"""
+
+multi_ignored_symbols = """
+    ```
+    put on graceful_stop if auto_gs, else manual
+    ```"""
+
+multi_config_type = """
+    ```
+    Choose between default or universal config.
+    ```"""
+
+multi_universal_config = """
+    ```
+    Example format for universal config:
+    {
+      long:
+      {
+        ddown_factor: 0.8697
+        ema_span_0:  776.7
+        ema_span_1:  774.3
+        initial_eprice_ema_dist:  -0.008465
+        initial_qty_pct:  0.01167
+        markup_range:  0.002187
+        min_markup:  0.008534
+        n_close_orders:  4.0
+        rentry_pprice_dist:  0.04938
+        rentry_pprice_dist_wallet_exposure_weighting:  2.143
+      }
+      short:
+      {
+        ddown_factor: 1.114
+        ema_span_0: 1074.0
+        ema_span_1: 786.2
+        initial_eprice_ema_dist: -0.07048
+        initial_qty_pct: 0.01296
+        markup_range: 0.006174
+        min_markup: 0.003647
+        n_close_orders: 1.675
+        rentry_pprice_dist: 0.05371
+        rentry_pprice_dist_wallet_exposure_weighting: 2.492
+      }
+    }
+    ```"""
+
+default_config = """
+    ```
+    If symbol has no config, default to this config
     ```"""
 
 config_version = """
