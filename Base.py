@@ -46,9 +46,11 @@ class Base:
                 self._market_types = ['futures']
                 self._market_type = 'swap'
             if self._market_type == 'swap':
-                self._symbols = self._exchange.swap
+                self._symbols = ['Select Symbol'] + self._exchange.swap
+                # self._symbols = self._exchange.swap
             else:
-                self._symbols = self._exchange.spot
+                self._symbols = ['Select Symbol'] + self._exchange.spot
+                # self._symbols = self._exchange.spot
             if self._symbol not in self._symbols:
                 self._symbol = self._symbols[0]
 
@@ -91,12 +93,14 @@ class Base:
         if not self.symbols or not "base_user" in st.session_state:
             st.session_state.base_user = self.user
             self.user = self.user
-            st.session_state.base_symbol = self.symbol
+            st.session_state.base_symbol = self.symbols[0]
+            # st.session_state.base_symbol = self.symbol
             st.session_state.base_market_type = self.market_type
             st.session_state.base_ohlcv = self.ohlcv
         else:
-            if st.session_state.base_update_symbols:
-                self.update_symbols()
+            if "base_update_symbols" in st.session_state:
+                if st.session_state.base_update_symbols:
+                    self.update_symbols()
             if st.session_state.base_user != self.user:
                 self.user = st.session_state.base_user
                 st.session_state.base_market_type = self.market_type
@@ -114,7 +118,12 @@ class Base:
 #            st.selectbox('User',self._users.list(), index = self._users.list().index(st.session_state.base_user), key="base_user")
             st.session_state.placeholder = st.empty()
         with col_2:
-            st.selectbox('SYMBOL', self.symbols, key="base_symbol")
+            if self.symbol == "Select Symbol":
+                color = "red"
+            else:
+                color = None
+                st.session_state.base_symbol = self.symbol
+            st.selectbox(f':{color}[SYMBOL]', self.symbols, key="base_symbol")
 #            st.selectbox('SYMBOL', self.symbols, index=self.symbols.index(st.session_state.base_symbol), key="base_symbol")
             st.button("Update Symbols from Exchange", key="base_update_symbols")
         with col_3:

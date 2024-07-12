@@ -7,6 +7,10 @@ import multiprocessing
 
 
 def bt_add():
+    # Init
+    if not "my_bt" in st.session_state:
+        st.session_state.my_bt = BacktestItem()
+    my_bt = st.session_state.my_bt
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
@@ -37,6 +41,16 @@ def bt_add():
             my_bt.ed = st.session_state.config_bt_ed.strftime("%Y-%m-%d")
         st.date_input("END_DATE", datetime.datetime.strptime(my_bt.ed, '%Y-%m-%d'), format="YYYY-MM-DD", key="config_bt_ed")
     my_bt.edit_config()
+    # Clear Errors
+    if "error" in st.session_state:
+        if st.session_state.error == 'Config is empty':
+            if my_bt.config:
+                del st.session_state.error
+                st.rerun()
+        elif st.session_state.error == 'Select Symbol':
+            if my_bt.symbol != "Select Symbol":
+                del st.session_state.error
+                st.rerun()
     if my_bt.preview_grid:
         if "preview_grid_instance" not in st.session_state:
             st.session_state.preview_grid_instance = Instance()
@@ -49,6 +63,8 @@ def bt_add():
     if st.button("Add to Backtest Queue"):
         if not my_bt.config:
             st.session_state.error = 'Config is empty'
+        elif my_bt.symbol == "Select Symbol":
+            st.session_state.error = 'Select Symbol'
         elif not "error" in st.session_state:
             my_bt.save()
             my_bt.file = None
@@ -190,6 +206,8 @@ def bt_compare():
     bt_results.view()
 
 def bt_import():
+    # Init
+    my_bt = st.session_state.my_bt
     # Navigation
     with st.sidebar:
         if st.button(":back:"):
@@ -202,12 +220,6 @@ set_page_config("Backtest")
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
-
-if 'my_bt' in st.session_state:
-    my_bt = st.session_state.my_bt
-else:
-    my_bt = BacktestItem()
-    st.session_state.my_bt = my_bt
 
 if "bt_queue" in st.session_state:
     bt_queue()
