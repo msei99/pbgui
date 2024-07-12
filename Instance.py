@@ -405,12 +405,12 @@ class Instance(Base):
                     df = pd.DataFrame(data)
                     if self.sb_change:
                         balance = self.sb
-                if trade["side"].startswith("open_"):
+                if trade["info"]["tradeSide"].startswith("open"):
                     last_psize = psize
                     psize = round(psize + trade["amount"],10)
                     pprice = (pprice*last_psize + trade["amount"]*trade["price"])/psize
                     price = trade["price"]
-                if trade["side"].startswith("close_") and psize > 0:
+                if trade["info"]["tradeSide"].startswith("close") and psize > 0:
                     last_psize = psize
                     psize = round(psize - trade["amount"],10)
                     win = trade["amount"] * trade["price"] - trade["amount"] * pprice
@@ -958,8 +958,8 @@ class Instance(Base):
 
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):
-            # self.fetch_trades()
-            # self.fetch_fundings()
+            self.fetch_trades()
+            self.fetch_fundings()
             self._trades = self.trades_to_df()
         if self._trades is None:
             st.write("### No Trades available.")
@@ -1048,7 +1048,8 @@ class Instance(Base):
     def refresh(self):
         path = self._instance_path
         self.__init__()
-        self.load(path)
+        if path:
+            self.load(path)
 
     def load(self, path: Path):
         file = Path(f'{path}/instance.cfg')
@@ -1148,7 +1149,7 @@ class Instance(Base):
         logfile = Path(f'{self._instance_path}/passivbot.log')
         logr = ""
         if logfile.exists():
-            with open(logfile, 'r', encoding='utf-8') as f:
+            with open(logfile, 'r', encoding='utf-8', errors='ignore') as f:
                 log = f.readlines()
                 for line in reversed(log):
                     logr = logr+line
@@ -1264,6 +1265,10 @@ class Instances:
     def refresh(self):
         for instance in self.instances:
             instance.load(instance._instance_path)
+    
+    def reload_instances(self):
+        self.instances = []
+        self.load()
 
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))

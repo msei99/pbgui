@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v0.98
+v0.99
 
 ## Migration to v0.95 Multi
 
@@ -138,7 +138,12 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v0.99 (13-06-2024)
+## v0.99 (12-07-2024)
+- Multi: Calculation of Real TWE
+- Multi: Add all Symbols
+- Multi: Mixing local configs together with forager
+- Multi: Support for all config options
+- MultiForager: Added Multi forager
 - Bugfix for Windows Optimizer and MultiBacktest should now work
 - PBRun: Add errorhandling for missing multi instances
 - Backtest Multi: Speed up queue an results display

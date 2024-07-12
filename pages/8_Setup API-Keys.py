@@ -1,6 +1,6 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_initialized
-from User import User
+from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
 
@@ -21,6 +21,9 @@ def edit_user():
                 del st.session_state.error
             del st.session_state.edit_user
             del st.session_state.users
+            with st.spinner('Initializing Users...'):
+               st.session_state.users = Users()
+
             st.rerun()
         if not in_use and not "error" in st.session_state:
             if st.button(":wastebasket:"):
@@ -41,11 +44,11 @@ def edit_user():
                     users.users.append(user)
                 users.save()
                 # cleanup for Remote Server Manager
-                if "remote" in st.session_state:
-                    del st.session_state.remote
-                PBRemote().restart()
-                if "pbgui_instances" in st.session_state:
-                    del st.session_state.pbgui_instances
+                # if "remote" in st.session_state:
+                #     del st.session_state.remote
+                # PBRemote().restart()
+                # if "pbgui_instances" in st.session_state:
+                #     del st.session_state.pbgui_instances
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:
         new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)

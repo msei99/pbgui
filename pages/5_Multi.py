@@ -2,8 +2,26 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_initialized
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
-from Instance import Instances
+from Instance import Instances, Instance
 from PBRun import PBRun
+from pathlib import PurePath
+
+def edit_multi_config():
+    # Display Error
+    if "error" in st.session_state:
+        st.error(st.session_state.error, icon="🚨")
+    # Init config
+    multi_config = st.session_state.edit_multi_config
+    # Navigation
+    with st.sidebar:
+        if st.button(":back:"):
+            del st.session_state.edit_multi_config
+            st.rerun()
+        if st.button(":floppy_disk:"):
+            multi_config.save_config()
+    symbol = PurePath(multi_config.config_file).stem
+    st.header(f'{symbol}')
+    multi_config.edit_config()
 
 def edit_multi_instance():
     # Display Error
@@ -34,6 +52,15 @@ def edit_multi_instance():
             st.session_state.bt_multi.create_from_multi(multi_instance.instance_path)
             st.switch_page("pages/6_Multi Backtest.py")
     multi_instance.edit()
+    if multi_instance.default_config.preview_grid:
+        if "preview_grid_instance" not in st.session_state:
+            st.session_state.preview_grid_instance = Instance()
+        instance = st.session_state.preview_grid_instance
+        instance.config = multi_instance.default_config.config
+        instance.user = multi_instance.user
+        instance.symbol = "BTCUSDT"
+        instance.market_type = "futures"
+        instance.view_grid(10000)
 
 def select_instance():
     # Init MultiInstances
@@ -114,7 +141,9 @@ set_page_config()
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
 
-if 'edit_multi_instance' in st.session_state:
+if 'edit_multi_config' in st.session_state:
+    edit_multi_config()
+elif 'edit_multi_instance' in st.session_state:
     edit_multi_instance()
 else:
     select_instance()

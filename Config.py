@@ -156,6 +156,10 @@ class Config:
                 st.session_state.config_short_enabled = self.short_enabled
                 st.session_state.config_long_we = self.long_we
                 st.session_state.config_short_we = self.short_we
+            else:
+                if validateJSON(st.session_state.config_instance_config):
+                    if "error_config" in st.session_state:
+                        del st.session_state.error_config
         # if self.config:
         #     self.config = st.session_state.config_instance_config
         col1, col2, col3 = st.columns([1,1,1])
@@ -168,15 +172,20 @@ class Config:
         with col3:
             st.toggle("Preview Grid", value=self.preview_grid, key="config_preview_grid", help=None)
             st.selectbox("Config Type", [self.type], index=0, key="config_type", help=None, disabled=True)
+        # Init height and color with defaults
+        height = 600
+        color = None
         # Display Error
         if "error_config" in st.session_state:
             st.error(st.session_state.error_config, icon="🚨")
-        height = 600
+            color = "red"
         if not self.config is None:
             height = len(self.config.splitlines()) *23
         if height < 600:
             height = 600
-        st.text_area("Instance config", self.config, key="config_instance_config", height=height)
+        if not self.config:
+            color = "red"
+        st.text_area(f':{color}[config]', self.config, key="config_instance_config", height=height)
 
 def main():
     print("Don't Run this Class from CLI")
