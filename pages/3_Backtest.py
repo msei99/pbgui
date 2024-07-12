@@ -41,6 +41,16 @@ def bt_add():
             my_bt.ed = st.session_state.config_bt_ed.strftime("%Y-%m-%d")
         st.date_input("END_DATE", datetime.datetime.strptime(my_bt.ed, '%Y-%m-%d'), format="YYYY-MM-DD", key="config_bt_ed")
     my_bt.edit_config()
+    # Clear Errors
+    if "error" in st.session_state:
+        if st.session_state.error == 'Config is empty':
+            if my_bt.config:
+                del st.session_state.error
+                st.rerun()
+        elif st.session_state.error == 'Select Symbol':
+            if my_bt.symbol != "Select Symbol":
+                del st.session_state.error
+                st.rerun()
     if my_bt.preview_grid:
         if "preview_grid_instance" not in st.session_state:
             st.session_state.preview_grid_instance = Instance()
@@ -53,6 +63,8 @@ def bt_add():
     if st.button("Add to Backtest Queue"):
         if not my_bt.config:
             st.session_state.error = 'Config is empty'
+        elif my_bt.symbol == "Select Symbol":
+            st.session_state.error = 'Select Symbol'
         elif not "error" in st.session_state:
             my_bt.save()
             my_bt.file = None

@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized
+from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized, info_popup, error_popup
 from Instance import Instances, Instance
 from Backtest import BacktestItem
 from PBRun import PBRun
@@ -203,9 +203,17 @@ def edit_instance():
             del st.session_state.edit_instance
             st.rerun()
         if st.button(":floppy_disk:", help=pbgui_help.instance_save):
-            st.session_state.edit_instance.save()
-            if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
-                st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
+            if instance.symbol == "Select Symbol":
+                error_popup("Symbol not selected")
+            elif not instance._config.config:
+                error_popup("Config is empty")
+            elif "error_config" in st.session_state:
+                error_popup(st.session_state.error_config)
+            else:
+                st.session_state.edit_instance.save()
+                if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
+                    st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
+                info_popup("Instance saved")
                 # PBStat().restart()
                 # PBRun().restart_pbrun()
                 # PBRemote().restart()
@@ -226,7 +234,7 @@ def edit_instance():
                 del st.session_state.bt_import
             st.switch_page("pages/3_Backtest.py")
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
-        if not "error" in st.session_state:
+        if not "error_config" in st.session_state and not instance.symbol == "Select Symbol" and instance._config.config:
             if st.button("Upload"):
                 upload_pbconfigdb(instance._config.config, instance.symbol, source_name)
     instance.edit_base()
