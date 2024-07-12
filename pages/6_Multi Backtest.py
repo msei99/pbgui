@@ -68,6 +68,9 @@ def bt_multi_list():
     bt_multi_list = st.session_state.bt_multi_list
     # Navigation
     with st.sidebar:
+        if st.button(":recycle:"):
+            st.session_state.bt_multi_list = BacktestsMulti()
+            st.rerun()
         if st.button("Queue"):
             st.session_state.bt_multi_queue = BacktestMultiQueue()
             st.rerun()

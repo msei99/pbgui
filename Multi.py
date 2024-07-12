@@ -759,7 +759,10 @@ class MultiInstance():
                 else:
                     if self.long_enabled:
                         long_mode = 'normal'
-                        long_we = self.TWE_long / len(self._symbols)
+                        if len(self._symbols) == 0:
+                            long_we = 0.0
+                        else:
+                            long_we = self.TWE_long / len(self._symbols)
                     else:
                         long_we = 0.0
                         if self.auto_gs:
@@ -772,7 +775,10 @@ class MultiInstance():
                 else:
                     if self.short_enabled:
                         short_mode = 'normal'
-                        short_we = self.TWE_short / len(self._symbols)
+                        if len(self._symbols) == 0:
+                            short_we = 0.0
+                        else:
+                            short_we = self.TWE_short / len(self._symbols)
                     else:
                         short_we = 0.0
                         if self.auto_gs:
@@ -808,23 +814,29 @@ class MultiInstance():
                     if self.n_longs == 0 and self.n_shorts == 0:
                         if symbol['long_mode'] == 'normal':
                             # Correct long_we calculated from inactive symbols
-                            slist[id]["long_we"] = self.TWE_long / (len(self._symbols) - inactive_long)
-                            real_TWE_long += symbol['long_we']
+                            if len(self._symbols) - inactive_long > 0:
+                                slist[id]["long_we"] = self.TWE_long / (len(self._symbols) - inactive_long)
+                                real_TWE_long += symbol['long_we']
                         if symbol['short_mode'] == 'normal':
                             # Correct short_we calculated from inactive symbols
-                            slist[id]["short_we"] = self.TWE_short / (len(self._symbols) - inactive_short)
-                            real_TWE_short += symbol['short_we']
+                            if len(self._symbols) - inactive_short > 0:
+                                slist[id]["short_we"] = self.TWE_short / (len(self._symbols) - inactive_short)
+                                real_TWE_short += symbol['short_we']
                     else:
                         # Correct we calculated from inactive symbols
-                        slist[id]["long_we"] = self.TWE_long / (self.n_longs - inactive_long)
-                        slist[id]["short_we"] = self.TWE_short / (self.n_shorts - inactive_short)
+                        if self.n_longs - inactive_long > 0:
+                            slist[id]["long_we"] = self.TWE_long / (self.n_longs - inactive_long)
+                        if self.n_shorts - inactive_short > 0:
+                            slist[id]["short_we"] = self.TWE_short / (self.n_shorts - inactive_short)
         # Calculate real TWE with inactive symbols
         if self.n_longs > 0:
             if self.n_longs > not_defaults_long:
-                real_TWE_long +=  self.TWE_long / (self.n_longs - inactive_long) * (self.n_longs - inactive_long - not_defaults_long)
+                if (self.n_longs - inactive_long) * (self.n_longs - inactive_long - not_defaults_long) > 0:
+                    real_TWE_long +=  self.TWE_long / (self.n_longs - inactive_long) * (self.n_longs - inactive_long - not_defaults_long)
         if self.n_shorts > 0:
             if self.n_shorts > not_defaults_short:
-                real_TWE_short +=  self.TWE_short / (self.n_shorts - inactive_short) * (self.n_shorts - inactive_short - not_defaults_short)
+                if (self.n_shorts - inactive_short) * (self.n_shorts - inactive_short - not_defaults_short) > 0:
+                    real_TWE_short +=  self.TWE_short / (self.n_shorts - inactive_short) * (self.n_shorts - inactive_short - not_defaults_short)
         column_config = {
             "id": None,
             "enable": st.column_config.CheckboxColumn(label="enable on multi", help="If no Checkbox is shown, Symbol is running as a Single Instance and can not be enabled on this Multi"),
