@@ -138,6 +138,8 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v0.991 (13-07-2024)
+- Live: Bugfix some calculation errors
 ## v0.99 (12-07-2024)
 - Multi: Calculation of Real TWE
 - Multi: Add all Symbols
