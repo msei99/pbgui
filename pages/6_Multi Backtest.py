@@ -1,7 +1,9 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized
+from pbgui_func import set_page_config, is_session_state_initialized, error_popup
 from BacktestMulti import BacktestMultiItem, BacktestsMulti, BacktestMultiQueue
 import datetime
+from Instance import Instance
+from User import Users
 import multiprocessing
 
 @st.experimental_dialog("Error")
@@ -60,6 +62,22 @@ def bt_multi_edit_symbol():
             bt_multi.symbols[symbol].save_config()
     st.title(f"Backtest Multi: {bt_multi.name} - Symbol: {symbol}")
     bt_multi.symbols[symbol].edit_config()
+    if bt_multi.symbols[symbol].preview_grid:
+        if "preview_grid_instance" not in st.session_state:
+            st.session_state.preview_grid_instance = Instance()
+        instance = st.session_state.preview_grid_instance
+        instance.config = bt_multi.symbols[symbol].config
+        user = Users().find_exchange_user(bt_multi.exchange)
+        if user:
+            instance.user = user
+            instance.symbol = symbol
+            instance.market_type = "futures"
+            instance.view_grid(bt_multi.sb)
+        else:
+            error_popup(f"Can't preview grid. No User for Exchange {bt_multi.exchange} found")
+            if "config_preview_grid" in st.session_state:
+                del st.session_state.config_preview_grid
+                st.session_state.config_preview_grid = False
 
 def bt_multi_list():
     # Init bt_multi_list

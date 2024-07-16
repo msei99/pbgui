@@ -492,8 +492,8 @@ class BacktestMultiItem:
                     self._long_enabled = backtest_config["long_enabled"]
                 if "short_enabled" in backtest_config:
                     self._short_enabled = backtest_config["short_enabled"]
-                if "symbols" in backtest_config:
-                    symbols = backtest_config["symbols"]
+                if "approved_symbols" in backtest_config:
+                    symbols = backtest_config["approved_symbols"]
                     for symbol, parameters in symbols.items():
                         config_file = Path(f'{path}/{symbol}.json')
                         if config_file.exists():
@@ -783,7 +783,7 @@ class BacktestMultiItem:
                         self.backtest_results[row].load_stats()
                         self.backtest_results[row].load_fills()
                         self.backtest_results[row].create_chart_be()
-                        self.backtest_results[row].create_chart_sym(self.symbols)
+                        self.backtest_results[row].create_chart_sym(self.backtest_results[row].symbols)
                         self.backtest_results[row].view()
                 if "plot" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["plot"]:
@@ -939,6 +939,10 @@ class BacktestMultiItem:
         with open(file, "w", encoding='utf-8') as f:
             json.dump(bt_dict, f, indent=4)
 
+    def remove(self):
+        self.remove_all_results()
+        rmtree(self.path, ignore_errors=True)
+
 class BacktestMultiResult:
     def __init__(self, result_path: str = None):
         self.result_path = result_path
@@ -947,6 +951,7 @@ class BacktestMultiResult:
     def initialize(self):
         self.result = self.load_result()
         self.backtest_config = self.load_backtest_config()
+        self.symbols = self.load_symbols()
         self.sd = self.backtest_config["start_date"]
         self.drawdown_max = self.result["drawdown_max"]
         self.final_balance = self.result["final_balance"]
@@ -965,6 +970,13 @@ class BacktestMultiResult:
         except Exception as e:
             print(f'{str(r)} is corrupted {e}')
     
+    def load_symbols(self):
+        if self.backtest_config:
+            symbols = []
+            for symbol in self.backtest_config["symbols"]:
+                symbols.append(symbol)
+            return symbols
+
     def load_backtest_config(self):
         r = Path(f'{self.result_path}/backtest_config.hjson')
         try:
@@ -1103,6 +1115,11 @@ class BacktestsMulti:
                 if "view" in ed["edited_rows"][row]:
                     st.session_state.bt_multi_results = self.backtests[row]
                     st.rerun()
+                if 'delete' in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]['delete']:
+                        self.backtests[row].remove()
+                        self.backtests.pop(row)
+                        st.rerun()
         d = []
         for id, bt in enumerate(self.backtests):
             d.append({
@@ -1111,6 +1128,7 @@ class BacktestsMulti:
                 'Name': bt.name,
                 'view': False,
                 'Backtests': bt.calculate_results(),
+                'delete' : False,
             })
         column_config = {
             "id": None,
