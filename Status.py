@@ -1,12 +1,17 @@
-from pathlib import Path, PurePath
-from time import sleep
+"""
+Status collects and stores multiple parameters related to running a PassivBot configuration.
+
+The collected data are stored in a list of statuses (InsancesStatusList()), where each individual PassivBot instances deployed on PBGui has its own Status (InstanceStatus()).
+
+Each status includes informations such as the name, the version, where it is supposed to run, whether it is a multi configuration, and whether it is running on the local server. 
+
+This status list is then sent through PBRemote to the remote storage, enabling us to manage bots from the master server.
+"""
+from pathlib import Path
 import json
-from io import TextIOWrapper
-from datetime import datetime
-from shutil import copy
 
 class InstanceStatus():
-    """Stocks information about one passivbot configuration."""
+    """Stores information about one passivbot configuration."""
     def __init__(self):
         self.name = None
         self.version = None
@@ -14,8 +19,10 @@ class InstanceStatus():
         self.enabled_on = None
         self.running = None
 
-class InstancesStatus():
-    def __init__(self, status_file: str):
+class InstancesStatusList():
+    """Stores every InstanceStatus into status.json, manages and loads them."""
+    def __init__(self, status_file: str): 
+        """status_file (str): Path to the status file."""
         self.instances = []
         self.index = 0
         self.pbname = None
@@ -34,18 +41,31 @@ class InstancesStatus():
             raise StopIteration
         self.index += 1
         return next(self)
-    
-    def list(self):
+
+    def list(self): # Never referenced ?
+        """Returns a list of names of all the passivbot instances in the status list."""
         return list(map(lambda c: c.name, self.instances))
 
-    def add(self, istatus : InstanceStatus):
+    def add(self, istatus: InstanceStatus):
+        """
+        Adds a new instance status or updates an existing one in the status list.
+
+        Args:
+            istatus (InstanceStatus): The instance status to add or to update.
+        """
         for index, instance in enumerate(self.instances):
             if instance.name == istatus.name:
                 self.instances[index] = istatus
                 return
         self.instances.append(istatus)
 
-    def remove(self, istatus : InstanceStatus):
+    def remove(self, istatus: InstanceStatus):
+        """
+        Removes an instance from the status list.
+
+        Args:
+            istatus (InstanceStatus): The instance status to remove.
+        """
         for index, instance in enumerate(self.instances):
             if instance.name == istatus.name:
                 self.instances.pop(index)
@@ -59,12 +79,27 @@ class InstancesStatus():
                 return instance.running
 
     def find_name(self, name: str):
+        """
+        Checks If an instance already has a status and return It.
+
+        Returns:
+            InstanceStatus: The instance with the specified name, or None if not found.
+        """
         for instance in self.instances:
             if instance.name == name:
                 return instance
         return None
 
     def find_version(self, name: str):
+        """
+        Finds the version of an instance by name in the status list.
+
+        Args:
+            name (str): The name of the instance.
+
+        Returns:
+            str: The version of the instance, or 0 if not found.
+        """
         for instance in self.instances:
             if instance.name == name:
                 return instance.version
@@ -78,10 +113,12 @@ class InstancesStatus():
         return False
 
     def update_status(self):
+        """Updates the status timestamp from the status list."""
         if Path(self.status_file).exists():
             self.status_ts = Path(self.status_file).stat().st_mtime
 
     def load(self):
+        """Loads the status information from the status list."""
         file = Path(self.status_file)
         if file.exists():
             self.status_ts = file.stat().st_mtime
@@ -100,6 +137,7 @@ class InstancesStatus():
                         self.add(status)
 
     def save(self):
+        """Saves the current status information to the status file."""
         instances = {}
         for instance in self.instances:
             instances[instance.name] = ({
@@ -109,9 +147,9 @@ class InstancesStatus():
                 "running": instance.running
             })
         status = {
-            "activate_ts" : self.activate_ts,
-            "activate_pbname" : self.pbname,
-            "instances" : instances
+            "activate_ts": self.activate_ts,
+            "activate_pbname": self.pbname,
+            "instances": instances
         }
         file = Path(self.status_file)
         with open(file, "w", encoding='utf-8') as f:
