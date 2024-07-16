@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized
+from pbgui_func import set_page_config, is_session_state_initialized, error_popup
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
 from Instance import Instances, Instance
@@ -50,6 +50,12 @@ def edit_multi_instance():
             del st.session_state.edit_multi_instance
             st.session_state.bt_multi = BacktestMultiItem()
             st.session_state.bt_multi.create_from_multi(multi_instance.instance_path)
+            if "bt_multi_queue" in st.session_state:
+                del st.session_state.bt_multi_queue
+            if "bt_multi_results" in st.session_state:
+                del st.session_state.bt_multi_results
+            if "bt_multi_edit_symbol" in st.session_state:
+                del st.session_state.bt_multi_edit_symbol
             st.switch_page("pages/6_Multi Backtest.py")
     multi_instance.edit()
     if multi_instance.default_config.preview_grid:
@@ -61,6 +67,27 @@ def edit_multi_instance():
         instance.symbol = "BTCUSDT"
         instance.market_type = "futures"
         instance.view_grid(10000)
+
+@st.experimental_dialog("Delete Instance?")
+def delete_instance(instance):
+    st.warning(f"Delete Instance {instance.user} ?", icon="⚠️")
+    # reason = st.text_input("Because...")
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button(":green[Yes]"):
+            services = st.session_state.services
+            with st.spinner('Stop Services...'):
+                services.stop_all_started()
+            with st.spinner('Delete Instance...'):
+                st.session_state.multi_instances.remove(instance)
+            with st.spinner('Start Services...'):
+                services.start_all_was_running()
+            st.session_state.ed_key += 1
+            st.rerun()
+    with col2:
+        if st.button(":red[No]"):
+            st.session_state.ed_key += 1
+            st.rerun()
 
 def select_instance():
     # Init MultiInstances
@@ -86,24 +113,22 @@ def select_instance():
         if st.button("Activate ALL"):
             multi_instances.activate_all()
             st.rerun()
-    if "editor_select_multi_instance" in st.session_state:
-        ed = st.session_state["editor_select_multi_instance"]
+    if not "ed_key" in st.session_state:
+        st.session_state.ed_key = 0
+    if f'editor_select_multi_instance_{st.session_state.ed_key}' in st.session_state:
+        ed = st.session_state[f"editor_select_multi_instance_{st.session_state.ed_key}"]
         for row in ed["edited_rows"]:
             if "Edit" in ed["edited_rows"][row]:
                 st.session_state.edit_multi_instance = multi_instances.instances[row]
                 st.rerun()
             if "Delete" in ed["edited_rows"][row]:
-                if not "confirm" in st.session_state:
-                    st.session_state.confirm_text = f':red[Delete selected instance ({multi_instances.instances[row].user})?]'
-                    st.session_state.confirm = False
-                    st.rerun()
-                elif "confirm" in st.session_state:
-                    if st.session_state.confirm:
-                        multi_instances.remove(multi_instances.instances[row])
-                        PBRun().restart_pbrun()
-                        del st.session_state.confirm
-                        del st.session_state.confirm_text
-                        st.rerun()
+                instance = multi_instances.instances[row]
+                running_on = instance.is_running_on()
+                if running_on:
+                    error_popup(f"Instance {instance.user} is running on {running_on} and can't be deleted")
+                    st.session_state.ed_key += 1
+                else:
+                    delete_instance(instance)
     d = []
     for id, instance in enumerate(multi_instances):
         twe_str: str = (f"{ 'L=' + str( round(instance.TWE_long,2)) if instance.long_enabled else ''}"
@@ -132,7 +157,7 @@ def select_instance():
         })
     column_config = {
         "id": None}
-    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key="editor_select_multi_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
+    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_multi_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
     
 
 set_page_config()
