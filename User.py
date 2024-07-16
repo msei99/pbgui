@@ -86,6 +86,11 @@ class Users:
             if user.name == name:
                 return user.exchange
 
+    def find_exchange_user(self, exchange: str):
+        for user in self.users:
+            if user.exchange == exchange:
+                return user.name
+
     def load(self):
         try:
             with Path(self.api_path).open(encoding="UTF-8") as f:
