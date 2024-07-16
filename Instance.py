@@ -148,7 +148,10 @@ class Instance(Base):
             if self.market_type == "spot":
                 upnl = self._status["spot_balance"] * self._status["price"]["last"]
             elif self.market_type == "futures":
-                upnl = self._status["position"]["unrealizedPnl"]
+                if self._status["position"]:
+                    upnl = self._status["position"]["unrealizedPnl"]
+                else:
+                    upnl = 0
             else:
                 upnl = 0
             if not upnl:
@@ -166,9 +169,13 @@ class Instance(Base):
                     psize = self._status["spot_balance"]
             elif self.market_type == "futures":
                 if "position" in self._status:
-                    if not self._status["position"]["contracts"]:
-                        return 0
-                    psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
+                    if self._status["position"]:
+                        if self._status["position"]["contracts"]:
+                            psize = round(self._status["position"]["contracts"]*self._status["position"]["contractSize"],2)
+                        else:
+                            psize = 0
+                    else:
+                        psize = 0
             else:
                 psize = 0
             return psize

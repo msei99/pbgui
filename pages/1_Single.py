@@ -9,7 +9,7 @@ import pbgui_help
 import platform
 
 
-# @st.experimental_dialog("Delete Instance?")
+@st.experimental_dialog("Delete Instance?")
 def delete_instance(instance):
     st.warning(f"Delete Instance {instance.user} {instance.symbol} {instance.market_type} ?", icon="⚠️")
     # reason = st.text_input("Because...")
@@ -92,7 +92,12 @@ def select_instance():
                 st.session_state.edit_instance = instances.instances[selected_row]
                 st.rerun()
             if "Delete" in ed["edited_rows"][row]:
-                delete_instance(instances.instances[selected_row])
+                instance = instances.instances[selected_row]
+                if st.session_state.edit_single_instances_d[row]['Enabled On'] != 'disabled':
+                    error_popup(f"Instance {instance.user} {instance.symbol} {instance.market_type} is running on {st.session_state.edit_single_instances_d[row]['Enabled On']} and can't be deleted")
+                    st.session_state.ed_key += 1
+                else:
+                    delete_instance(instances.instances[selected_row])
     if "editor_select_instance_multi" in st.session_state:
         ed = st.session_state["editor_select_instance_multi"]
         for row in ed["edited_rows"]:
