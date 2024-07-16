@@ -18,7 +18,7 @@ from io import TextIOWrapper
 from datetime import datetime
 import platform
 from PBRun import PBRun
-from Status import InstancesStatusList
+from Status import InstancesStatus
 import shutil
 import hashlib
 import traceback
@@ -52,9 +52,9 @@ class RemoteServer():
         self._cpu = None
         self._boot = None
         self.pbname = None
-        self.instances_status = InstancesStatusList(f'{self.path}/status.json')
+        self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()
-        self.instances_status_single = InstancesStatusList(f'{self.path}/status_single.json')
+        self.instances_status_single = InstancesStatus(f'{self.path}/status_single.json')
         self.instances_status_single.load()
 
     @property
