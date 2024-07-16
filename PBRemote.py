@@ -1,3 +1,10 @@
+"""
+Remotes establish a connection between the local server and the remote storage, enabling to send files and commands to other servers to run new passivbot intances.
+
+RemoteServer() creates a profile for the local server to interact with the remote storage, it imports the information from remote to local, and will update the status after doing so.
+
+PBRemote() will synchronise from the local server to the remote storage, exporting files, more informations with PBRemote.sync() function.
+"""
 import psutil
 import subprocess
 import configparser
@@ -11,13 +18,22 @@ from io import TextIOWrapper
 from datetime import datetime
 import platform
 from PBRun import PBRun
-from Status import InstancesStatus
+from Status import InstancesStatusList
 import shutil
 import hashlib
 import traceback
 
 class RemoteServer():
     def __init__(self, path: str):
+        """
+        Initialize a RemoteServer instance to manage PB configurations.
+        
+        It exports both multi and single configurations to the remote storage. 
+        It lists the instances that will be used in PBRun (_instances) and verifies that the API keys in PB directory are up to date.
+
+        Args:
+            path (str): Path to the remote server configuration.
+        """
         self._name = None
         self._ts = None
         self._startts = 0
@@ -36,9 +52,9 @@ class RemoteServer():
         self._cpu = None
         self._boot = None
         self.pbname = None
-        self.instances_status = InstancesStatus(f'{self.path}/status.json')
+        self.instances_status = InstancesStatusList(f'{self.path}/status.json')
         self.instances_status.load()
-        self.instances_status_single = InstancesStatus(f'{self.path}/status_single.json')
+        self.instances_status_single = InstancesStatusList(f'{self.path}/status_single.json')
         self.instances_status_single.load()
 
     @property
@@ -101,12 +117,27 @@ class RemoteServer():
         if self._bucket != new_bucket:
             self._bucket = new_bucket
 
-    def is_api_md5_same(self, api_md5 : str):
+    def is_api_md5_same(self, api_md5: str):
+        """
+        Check if the API MD5 hash is the same as the stored one.
+
+        Args:
+            api_md5 (str): The API MD5 hash to compare.
+
+        Returns:
+            bool: True if the API MD5 hash is the same, False otherwise.
+        """
         if self.api_md5 == api_md5:
             return True
         return False
 
     def is_online(self):
+        """
+        Check if the remote server is online by loading the alive_*.cmd file and checking if the latest is less than 60 seconds ago.
+
+        Returns:
+            bool: True if the remote server is online, False otherwise.
+        """
         self.load()
         timestamp = round(datetime.now().timestamp())
         self._rtd = timestamp - self.ts
@@ -115,6 +146,7 @@ class RemoteServer():
         return False
 
     def load_instances(self):
+        """Load instances for this server, checking by server's name."""
         self._instances = []
         p = str(Path(f'{self._path}/../instances_{self.name}/*'))
         instances = glob.glob(p)
@@ -133,6 +165,9 @@ class RemoteServer():
                     print(f'{str(file)} is corrupted {e}')
 
     def load(self):
+        """
+        Load the server's configuration.
+        """
         p = str(Path(f'{self._path}/alive_*.cmd'))
         alive_remote = glob.glob(p)
         alive_remote.sort()
@@ -166,6 +201,7 @@ class RemoteServer():
                     print(f'{str(remote)} is corrupted {e}')
 
     def sync_multi_down(self):
+        """Sync the multi.hjson configurations from the local machine to the remote storage."""
         if self.instances_status.has_new_status():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi from: {self.name}')
@@ -184,6 +220,7 @@ class RemoteServer():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
 
     def sync_single_down(self):
+        """Sync the instance.cfg and config.json files from the local machine to the remote storage."""
         if self.instances_status_single.has_new_status():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync single from: {self.name}')
@@ -202,6 +239,10 @@ class RemoteServer():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_single ts: {self.name} old: {status_ts} new: {self.instances_status_single.status_ts}')
 
     def sync_api(self):
+        """
+        Checks if the api-keys.json from pbgui (self._path) is different from api-keys.json from passivbot (self._pbdir).
+        If different, It creates a backup of the passivbot api-keys.json to pbgui/data/backup/api-keys, and then copy the new api-keys.json file to the passivbot directory.
+        """
         api_file = Path(f'{self._path}/api-keys.json')
         if api_file.exists():
             api_keys = Path(f'{self._pbdir}/api-keys.json')
@@ -219,6 +260,7 @@ class RemoteServer():
                 shutil.copy(api_file, api_keys)
 
     def calculate_md5(self, file: Path):
+        """Checks if the two API files have the same hash using md5 protocol."""
         if file.exists():
             with open(file, 'rb') as file_obj:
                 file_contents = file_obj.read()
@@ -226,7 +268,14 @@ class RemoteServer():
         return None
 
 class PBRemote():
+    """
+    PBRemote class is used to manage the local server and synchronizing data from the remote storage.
+    """
     def __init__(self):
+        """
+        Initializes the PBRemote instance, sets up directories, loads configuration,
+        and checks for rclone installation and configuration.
+        """
         self.error = None          
         self.remote_servers = []
         self.local_run = PBRun()
@@ -267,7 +316,7 @@ class PBRemote():
             return
         self.bucket_dir = f'{self.bucket}{self.bucket.split(":")[0]}'
         self.load_remote()
-        self.load_local()
+        self.load_local() # Load specific to instances (deprecated?)
 
     def __iter__(self):
         return iter(self.remote_servers)
@@ -282,6 +331,7 @@ class PBRemote():
         return list(map(lambda c: c.name, self.remote_servers))
 
     def find_server(self, name: str):
+        """Find the server by name"""
         for server in self.remote_servers:
             if server.name == name:
                 return server
@@ -309,6 +359,29 @@ class PBRemote():
                 return process
 
     def sync(self, direction: str, spath: str):
+        """
+        Synchronise from the local server to the remote storage server.
+        
+        Files it sends from local to remote : 
+            For cmd files:
+                - alive_*.cmd
+                - sync_*.cmd
+                - *.ack
+                - api-keys.json
+            For instances: 
+                - instance.cfg
+                - config.json
+            For status: 
+                - sync_*.cmd
+                - *.ack
+            For multi :
+                - multi.hjson
+                - *.json
+            
+        Args:
+            direction (str): Either "up" (sync from local to remote) or "down" (sync from remote to local).
+            spath (str): The specific path to synchronize (e.g., "cmd", "instances", "status").
+        """
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,sync_*.cmd,*.ack,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
@@ -363,6 +436,7 @@ class PBRemote():
             self.sync('up', 'status_single')
 
     def sync_api_up(self):
+        """Takes the api-keys.json from passivbot folder to sync it to other remotes by putting it in data/cmd/api-keys.json."""
         pbgdir = Path.cwd()
         api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
         source = Path(f'{self.pbdir}/api-keys.json')
@@ -371,6 +445,7 @@ class PBRemote():
             shutil.copy(source, api_file)
     
     def check_if_api_synced(self):
+        """Verify that the API keys are the same in PBGUI and PB folders and deletes PBGUI folder's file if api are synced."""
         for server in self.remote_servers:
             if not server.is_api_md5_same(self.api_md5):
                 return False
@@ -381,6 +456,10 @@ class PBRemote():
         return True
 
     def alive(self):
+        """
+        Saves system informations like the name, memory, swaps, disk space and cpu usage to an alive file that is then synchronised with rclone from local to the remote storage.
+        If there are more than 9 alive files, it will delete the oldest one.
+        """
         timestamp = round(datetime.now().timestamp())
         cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
         run = []
@@ -419,6 +498,7 @@ class PBRemote():
             local.unlink(missing_ok=True)
 
     def calculate_api_md5(self):
+        """Makes a md5 hash from the api-keys.json in passivbot folder."""
         file = Path(f'{self.pbdir}/api-keys.json')
         if file.exists():
             with open(file, 'rb') as file_obj:
@@ -427,6 +507,10 @@ class PBRemote():
         return None
 
     def load_remote(self):
+        """
+        Loads every cmd files and create a new RemoteServer instance for each new possible instances, and tries to start instances with load_instances(). 
+        It then adds the RemoteServer to remote_servers if the RemoteServer exists.
+        """
         pbgdir = Path.cwd()
         self.remote_servers = []
         p = str(Path(f'{pbgdir}/data/remote/cmd_*'))
@@ -445,6 +529,7 @@ class PBRemote():
         self.api_md5 = self.calculate_api_md5()
 
     def run(self):
+        """Starts PBRemote in unbuffered mode, and send an error message if it does not open every 10 secondes."""
         if not self.is_running():
             pbgdir = Path.cwd()
             cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/PBRemote.py')]
@@ -494,6 +579,7 @@ class PBRemote():
             f.write(str(self.my_pid))
 
     def load_config(self):
+        """Load the bucket name used in the remote storage from pbgui.ini."""
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
         if pb_config.has_section("pbremote"):
@@ -503,6 +589,7 @@ class PBRemote():
                 self.bucket = None
 
     def save_config(self):
+        """Save the bucket name used in the remote storage in pbgui.ini."""
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
         if not pb_config.has_section("pbremote"):
@@ -512,6 +599,7 @@ class PBRemote():
             pb_config.write(configfile)
 
     def is_rclone_installed(self):
+        """Checks the installation by running 'rclone version' as a process."""
         cmd = ['rclone', 'version']
         try:
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -520,6 +608,7 @@ class PBRemote():
             return False
     
     def fetch_buckets(self):
+        """Checks if rclone is installed and return all the buckets available in the remote server as an array."""
         if self.is_rclone_installed():
             cmd = ['rclone', 'listremotes']
             try:
@@ -532,6 +621,14 @@ class PBRemote():
 
 
 def main():
+    """
+    Main function of PBRemote, responsible for sharing data from one server to another.
+
+    ### Usage : 
+    - Run PBRemote and save its process ID to pbremote.pid.
+    - Logs in pbgui/data/logs/PBRemote.log and creates a .old file if the file is >10MB.
+    - 
+    """
     # print("Start PBRemote")
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')

@@ -1,3 +1,10 @@
+"""
+PBRun is the main bit of PBGui, being split in 3 main parts, PBRun and RunSingle/RunMulti, the two last doing the same things respective to their config.
+
+PBRun checks for status and activate files, updating the old ones to the newest, and starting functions from RunSingle or RunMulti if there are any needed.
+
+RunMulti and Single do start and stop passivbot programs.
+"""
 import psutil
 import subprocess
 import configparser
@@ -15,7 +22,7 @@ from shutil import copy, copytree, rmtree
 import os
 import traceback
 import uuid
-from Status import InstanceStatus, InstancesStatus
+from Status import InstanceStatus, InstancesStatusList
 
 class RunInstance():
     def __init__(self):
@@ -450,10 +457,10 @@ class PBRun():
             self.activate_single_ts = int(self.pb_config.get("main", "activate_single_ts"))
         else:
             self.activate_single_ts = 0
-        self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
+        self.instances_status = InstancesStatusList(f'{self.pbgdir}/data/cmd/status.json')
         self.instances_status.pbname = self.name
         self.instances_status.activate_ts = self.activate_ts
-        self.instances_status_single = InstancesStatus(f'{self.pbgdir}/data/cmd/status_single.json')
+        self.instances_status_single = InstancesStatusList(f'{self.pbgdir}/data/cmd/status_single.json')
         self.instances_status_single.pbname = self.name
         self.instances_status_single.activate_ts = self.activate_single_ts
         if self.pb_config.has_option("main", "pbdir"):
@@ -594,7 +601,7 @@ class PBRun():
             status_file (str): Path to the status file.
             rserver (str): Name of the remote server.
         """
-        new_status = InstancesStatus(status_file)
+        new_status = InstancesStatusList(status_file)
         if new_status.activate_ts > self.activate_single_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
@@ -656,7 +663,7 @@ class PBRun():
             status_file (str): Path to the status file.
             rserver (str): Name of the remote server.
         """
-        new_status = InstancesStatus(status_file)
+        new_status = InstancesStatusList(status_file)
         if new_status.activate_ts > self.activate_ts:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
