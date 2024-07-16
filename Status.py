@@ -19,7 +19,7 @@ class InstanceStatus():
         self.enabled_on = None
         self.running = None
 
-class InstancesStatusList():
+class InstancesStatus():
     """Stores every InstanceStatus into status.json, manages and loads them."""
     def __init__(self, status_file: str): 
         """status_file (str): Path to the status file."""
