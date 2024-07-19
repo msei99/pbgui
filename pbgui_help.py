@@ -664,3 +664,8 @@ pbremote_bucket = """
     ```
     Select the rclone bucket to use for sync.
     ```"""
+
+worst_drawdown_lower_bound = """
+    ```
+    will penalize worst_drawdowns greater than %
+    ```"""

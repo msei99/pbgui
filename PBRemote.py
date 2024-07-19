@@ -280,7 +280,7 @@ class PBRemote():
         self.remote_servers = []
         self.local_run = PBRun()
         self.index = 0
-        self.api_md5 = None
+        # self.api_md5 = None
         self.startts = None
         self.sync_downts = None
         pbgdir = Path.cwd()
@@ -317,6 +317,10 @@ class PBRemote():
         self.bucket_dir = f'{self.bucket}{self.bucket.split(":")[0]}'
         self.load_remote()
         self.load_local() # Load specific to instances (deprecated?)
+
+    # api_md5
+    @property
+    def api_md5(self): return self.calculate_api_md5()
 
     def __iter__(self):
         return iter(self.remote_servers)
@@ -474,7 +478,7 @@ class PBRemote():
         disk = psutil.disk_usage('/')
         cpu = psutil.cpu_percent()
         boot = psutil.boot_time()
-        self.api_md5 = self.calculate_api_md5()
+        # self.api_md5 = self.calculate_api_md5()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
@@ -526,7 +530,7 @@ class PBRemote():
 
     def load_local(self):
         self.local_run.load_all()
-        self.api_md5 = self.calculate_api_md5()
+        # self.api_md5 = self.calculate_api_md5()
 
     def run(self):
         """Starts PBRemote in unbuffered mode, and send an error message if it does not open every 10 secondes."""
