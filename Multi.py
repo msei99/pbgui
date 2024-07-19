@@ -1038,6 +1038,12 @@ class MultiInstances:
                 self.instances.append(inst)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
 
+    def is_user_used(self, user: str):
+        for instance in self.instances:
+           if user == instance.user:
+               return True
+        return False
+
 
 def main():
     print("Don't Run this Class from CLI")
