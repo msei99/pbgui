@@ -76,6 +76,12 @@ class Users:
                 return True
         return False
 
+    def remove_user(self, name: str):
+        for user in self.users:
+            if user.name == name:
+                self.users.remove(user)
+                self.save()
+
     def find_user(self, name: str):
         for user in self.users:
             if user.name == name:

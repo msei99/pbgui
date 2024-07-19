@@ -1,16 +1,10 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup
+from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup
 from BacktestMulti import BacktestMultiItem, BacktestsMulti, BacktestMultiQueue
 import datetime
 from Instance import Instance
 from User import Users
 import multiprocessing
-
-@st.experimental_dialog("Error")
-def info_popup(message):
-    st.error(f'{message}', icon="⚠️")
-    if st.button(":green[OK]"):
-        st.rerun()
 
 def bt_multi():
     # Init bt_multi
