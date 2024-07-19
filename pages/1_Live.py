@@ -1,6 +1,7 @@
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from pbgui_func import set_page_config, is_session_state_initialized
+from Instance import Instances
 import pandas as pd
 
 
@@ -18,6 +19,8 @@ def select_instance():
             st.rerun()
         if st.button("Refresh from Disk"):
             del st.session_state.pbgui_instances
+            with st.spinner('Initializing Instances...'):
+                st.session_state.pbgui_instances = Instances()
             st.rerun()
     if "editor_select_instance" in st.session_state:
         ed = st.session_state["editor_select_instance"]

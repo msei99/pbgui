@@ -138,6 +138,12 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v0.992 (19-07-2024)
+- Live: Bugfix Refresh from disk switched to startpage
+- API-Editor: Bugfix for user delete. It was posible to delete users that are in use
+- APU-Editor: Added a dialog yes/no for confirm the delete of a user
+- PBRemote: Bugfix for API sync. The sync all button was not shown after adding a new api
+
 ## v0.991 (16-07-2024)
 - Backtest Multi: Bugfix, not displaying all symbols from backtest results
 - Backtest Multi: Delete Backtests added

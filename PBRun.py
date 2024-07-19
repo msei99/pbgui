@@ -1,3 +1,10 @@
+"""
+PBRun is the main bit of PBGui, being split in 3 main parts, PBRun and RunSingle/RunMulti, the two last doing the same things respective to their config.
+
+PBRun checks for status and activate files, updating the old ones to the newest, and starting functions from RunSingle or RunMulti if there are any needed.
+
+RunMulti and Single do start and stop passivbot programs.
+"""
 import psutil
 import subprocess
 import configparser
