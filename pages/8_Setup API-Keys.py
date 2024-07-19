@@ -4,6 +4,20 @@ from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
 
+@st.experimental_dialog("Delete User?")
+def delete_user(user):
+    st.warning(f"Delete User {user} ?", icon="⚠️")
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button(":green[Yes]"):
+            st.session_state.users.remove_user(user)
+            st.session_state.ed_user_key += 1
+            st.rerun()
+    with col2:
+        if st.button(":red[No]"):
+            st.session_state.ed_user_key += 1
+            st.rerun()
+
 def edit_user():
     # Init
     user = st.session_state.edit_user
@@ -43,12 +57,6 @@ def edit_user():
                 if not users.has_user(user):
                     users.users.append(user)
                 users.save()
-                # cleanup for Remote Server Manager
-                # if "remote" in st.session_state:
-                #     del st.session_state.remote
-                # PBRemote().restart()
-                # if "pbgui_instances" in st.session_state:
-                #     del st.session_state.pbgui_instances
     col_1, col_2, col_3 = st.columns([1,1,1])
     with col_1:
         new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)
@@ -107,6 +115,7 @@ def select_user():
     # Init
     users = st.session_state.users
     instances = st.session_state.pbgui_instances
+    multi_instances = st.session_state.multi_instances
     if not "ed_user_key" in st.session_state:
         st.session_state.ed_user_key = 0
     with st.sidebar:
@@ -120,15 +129,12 @@ def select_user():
                 st.session_state.edit_user = users.users[row]
                 st.rerun()
             if "Delete" in ed["edited_rows"][row]:
-                if not instances.is_user_used(users.users[row].name):
-                    users.users.remove(users.users[row])
-                    users.save()
-                st.session_state.ed_user_key += 1
-                st.rerun()
+                if not instances.is_user_used(users.users[row].name) and not multi_instances.is_user_used(users.users[row].name):
+                    delete_user(users.users[row].name)
     d = []
     for id, user in enumerate(users):
         in_use = False
-        if instances.is_user_used(user.name):
+        if instances.is_user_used(user.name) or multi_instances.is_user_used(user.name):
             in_use = None
         d.append({
             'id': id,
