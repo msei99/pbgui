@@ -101,6 +101,8 @@ def opt_multi_queue():
     with st.sidebar:
         if st.button(":recycle:"):
             opt_multi_queue.items = []
+            if "ed_key" in st.session_state:
+                st.session_state.ed_key += 1
             st.rerun()
         if st.button(":top:"):
             del st.session_state.opt_multi_queue

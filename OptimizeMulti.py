@@ -104,7 +104,7 @@ class OptimizeMultiQueueItem():
             if log:
                 if "clean shutdown" in log:
                     return False
-                elif "optimizing..." in log:
+                elif "starting optimize" in log:
                     return True
             else:
                 return False
