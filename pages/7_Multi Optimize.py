@@ -81,12 +81,12 @@ def opt_multi_results():
             del st.session_state.opt_multi_results
             st.session_state.opt_multi_queue = OptimizeMultiQueue()
             st.rerun()
-        # if st.button(":wastebasket: selected"):
-        #     bt_multi_results.remove_selected_results()
-        #     st.rerun()
-        # if st.button(":wastebasket: all"):
-        #     bt_multi_results.remove_all_results()
-        #     st.rerun()
+        if st.button(":wastebasket: selected"):
+            opt_multi_results.remove_selected_results()
+            st.rerun()
+        if st.button(":wastebasket: all"):
+            opt_multi_results.remove_all_results()
+            st.rerun()
     st.title(f"Optimize Multi Results")
     opt_multi_results.view_results()
 
@@ -104,6 +104,10 @@ def opt_multi_queue():
             st.rerun()
         if st.button(":top:"):
             del st.session_state.opt_multi_queue
+            st.rerun()
+        if st.button("Results"):
+            del st.session_state.opt_multi_queue
+            st.session_state.opt_multi_results = OptimizeMultiResults()
             st.rerun()
         st.toggle("Autostart", value=opt_multi_queue.autostart, key="optimize_multi_autostart", help=None)
         if st.button(":wastebasket: selected"):
