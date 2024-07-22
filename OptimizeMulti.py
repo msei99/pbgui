@@ -25,6 +25,7 @@ from User import Users
 from shutil import rmtree
 import datetime
 from MultiBounds import MultiBounds
+from BacktestMulti import BacktestMultiItem
 
 class OptimizeMultiQueueItem():
     def __init__(self):
@@ -289,7 +290,6 @@ class OptimizeMultiQueue:
                 'id': id,
                 'run': False,
                 'Status': opt.status(),
-                'view': False,
                 'log': False,
                 'delete': False,
                 'name': opt.name,
@@ -300,7 +300,6 @@ class OptimizeMultiQueue:
         column_config = {
             # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
-            "view": st.column_config.CheckboxColumn(label="View Results"),
             "log": st.column_config.CheckboxColumn(label="View Logfile"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
@@ -320,26 +319,24 @@ class OptimizeMultiResults:
         self.results_path = Path(f'{PBDIR}/results_multi')
         self.analysis_path = Path(f'{PBDIR}/results_multi_analysis')
         self.results = []
-        self.analysis = []
         self.initialize()
     
     def initialize(self):
         self.find_results()
-        self.find_analysis
     
-    def remove(self):
-        rmtree(self.result_path)
+    def remove(self, file_name):
+        Path(file_name).unlink(missing_ok=True)
+        analysis = PurePath(file_name).stem[0:19]
+        analysis = str(self.analysis_path) + f'/{analysis}*.json'
+        analysis = glob.glob(analysis, recursive=False)
+        Path(analysis[0]).unlink(missing_ok=True)
 
     def find_results(self):
         self.results = []
-        p = str(self.results_path) + "/*.txt"
-        self.results = glob.glob(p, recursive=False)
+        if self.results_path.exists():
+            p = str(self.results_path) + "/*.txt"
+            self.results = glob.glob(p, recursive=False)
 
-    def find_analysis(self):
-        self.analysis = []
-        p = str(self.analysis_path) + "/*.json"
-        self.analysis = glob.glob(p, recursive=False)
-    
     def view_analysis(self, analysis):
         with open(analysis, "r", encoding='utf-8') as f:
             config = json.load(f)
@@ -350,17 +347,6 @@ class OptimizeMultiResults:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
-        # if f'select_opt_results_{ed_key}' in st.session_state:
-        #     ed = st.session_state[f'select_opt_results_{ed_key}']
-        #     for row in ed["edited_rows"]:
-        #         if "view" in ed["edited_rows"][row]:
-        #             # st.session_state.bt_multi_results = self.backtests[row]
-        #             st.rerun()
-        #         # if 'delete' in ed["edited_rows"][row]:
-        #         #     if ed["edited_rows"][row]['delete']:
-        #         #         self.backtests[row].remove()
-        #         #         self.backtests.pop(row)
-        #         #         st.rerun()
         d = []
         for id, opt in enumerate(self.results):
             analysis = PurePath(opt).stem[0:19]
@@ -378,13 +364,14 @@ class OptimizeMultiResults:
                 'Result': opt,
                 'Analysis': analysis,
                 'view': view,
-                # 'Backtests': bt.calculate_results(),
+                'backtest': False,
                 'delete' : False,
             })
         column_config = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
             "view": st.column_config.CheckboxColumn(label="View Analysis"),
+            "backtest": st.column_config.CheckboxColumn(label="Backtest"),
             }
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
@@ -394,6 +381,17 @@ class OptimizeMultiResults:
                 if "view" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["view"]:
                         self.view_analysis(d[row]["Analysis"])
+                if "backtest" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["backtest"]:
+                        st.session_state.bt_multi = BacktestMultiItem()
+                        st.session_state.bt_multi.create_from_multi_optimize(d[row]["Analysis"])
+                        if "bt_multi_queue" in st.session_state:
+                            del st.session_state.bt_multi_queue
+                        if "bt_multi_results" in st.session_state:
+                            del st.session_state.bt_multi_results
+                        if "bt_multi_edit_symbol" in st.session_state:
+                            del st.session_state.bt_multi_edit_symbol
+                        st.switch_page("pages/6_Multi Backtest.py")
 
     def generate_analysis(self, result_file):
         cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/tools/extract_best_multi_config.py'), str(result_file)]
@@ -419,6 +417,20 @@ class OptimizeMultiResults:
             analysis = analysis[0] if analysis else None
             return analysis
 
+    def remove_selected_results(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_optresults_{ed_key}']
+        for row in ed["edited_rows"]:
+            if "delete" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["delete"]:
+                    self.remove(self.results[row])
+        self.find_results()
+        self.results = []
+    
+    def remove_all_results(self):
+        rmtree(self.results_path, ignore_errors=True)
+        rmtree(self.analysis_path, ignore_errors=True)
+        self.results = []
 
 class OptimizeMultiItem:
     def __init__(self, optimize_file: str = None):
@@ -838,9 +850,8 @@ class OptimizeMultiItem:
         with open(file, "w", encoding='utf-8') as f:
             json.dump(bt_dict, f, indent=4)
 
-    # def remove(self):
-    #     self.remove_all_results()
-    #     rmtree(self.path, ignore_errors=True)
+    def remove(self):
+        self.hjson.unlink(missing_ok=True)
 
 class OptimizesMulti:
     def __init__(self):
@@ -859,28 +870,22 @@ class OptimizesMulti:
                 if "edit" in ed["edited_rows"][row]:
                     st.session_state.opt_multi = self.optimizes[row]
                     st.rerun()
-                # if "view" in ed["edited_rows"][row]:
-                #     st.session_state.bt_multi_results = self.backtests[row]
-                #     st.rerun()
-                # if 'delete' in ed["edited_rows"][row]:
-                #     if ed["edited_rows"][row]['delete']:
-                #         self.backtests[row].remove()
-                #         self.backtests.pop(row)
-                #         st.rerun()
+                if 'delete' in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]['delete']:
+                        self.optimizes[row].remove()
+                        self.optimizes.pop(row)
+                        st.rerun()
         d = []
         for id, opt in enumerate(self.optimizes):
             d.append({
                 'id': id,
                 'edit': False,
                 'Name': opt.name,
-                'view': False,
-                # 'Backtests': bt.calculate_results(),
                 'delete' : False,
             })
         column_config = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
-            "view": st.column_config.CheckboxColumn(label="View Results"),
             }
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optimize_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])

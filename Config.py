@@ -165,10 +165,10 @@ class Config:
         col1, col2, col3 = st.columns([1,1,1])
         with col1:
             st.toggle("Long enabled", value=self.long_enabled, key="config_long_enabled", help=None)
-            st.number_input("LONG_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=float(round(self.long_we,2)), step=0.05, format="%.2f", key="config_long_we", help=pbgui_help.exposure)
+            st.number_input("LONG_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=100.0, value=float(round(self.long_we,2)), step=0.05, format="%.2f", key="config_long_we", help=pbgui_help.exposure)
         with col2:
             st.toggle("Short enabled", value=self.short_enabled, key="config_short_enabled", help=None)
-            st.number_input("SHORT_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=3.0, value=float(round(self.short_we,2)), step=0.05, format="%.2f", key="config_short_we", help=pbgui_help.exposure)
+            st.number_input("SHORT_WALLET_EXPOSURE_LIMIT", min_value=0.0, max_value=100.0, value=float(round(self.short_we,2)), step=0.05, format="%.2f", key="config_short_we", help=pbgui_help.exposure)
         with col3:
             st.toggle("Preview Grid", value=self.preview_grid, key="config_preview_grid", help=None)
             st.selectbox("Config Type", [self.type], index=0, key="config_type", help=None, disabled=True)

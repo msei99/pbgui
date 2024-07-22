@@ -139,6 +139,8 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.0alpha (22-07-2024)
+- Optimize_Multi: Create Backtest from Analysis (Result)
+- Optimize_Multi: Remove Results added
 - Optimize_Multi: First running Version with multi optimizer
 
 ## v0.992 (19-07-2024)
