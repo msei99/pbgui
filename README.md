@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v0.99
+v1.0alpha
 
 ## Migration to v0.95 Multi
 
@@ -138,10 +138,13 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v1.0alpha (22-07-2024)
+- Optimize_Multi: First running Version with multi optimizer
+
 ## v0.992 (19-07-2024)
 - Live: Bugfix Refresh from disk switched to startpage
 - API-Editor: Bugfix for user delete. It was posible to delete users that are in use
-- APU-Editor: Added a dialog yes/no for confirm the delete of a user
+- API-Editor: Added a dialog yes/no for confirm the delete of a user
 - PBRemote: Bugfix for API sync. The sync all button was not shown after adding a new api
 
 ## v0.991 (16-07-2024)
