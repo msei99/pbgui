@@ -1,11 +1,7 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup
-from BacktestMulti import BacktestMultiItem, BacktestsMulti, BacktestMultiQueue
 from OptimizeMulti import OptimizeMultiItem, OptimizesMulti, OptimizeMultiQueue, OptimizeMultiResults
-import datetime
 from Instance import Instance
-from User import Users
-import multiprocessing
 
 def opt_multi():
     # Init bt_multi
@@ -66,14 +62,12 @@ def opt_multi_list():
 def opt_multi_results():
     # Init bt_multi_results
     opt_multi_results = st.session_state.opt_multi_results
-    # if not bt_multi_results.backtest_results:
-    #     with st.spinner("Loading Results"):
-    #         st.session_state.bt_multi_results.load_results()
     # Navigation
     with st.sidebar:
-        # if st.button(":recycle:"):
-        #     bt_multi_results.backtest_results = []
-        #     st.rerun()
+        if st.button(":recycle:"):
+            opt_multi_results.results = []
+            opt_multi_results.find_results()
+            st.rerun()
         if st.button(":top:"):
             del st.session_state.opt_multi_results
             st.rerun()

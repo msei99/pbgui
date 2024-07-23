@@ -1,7 +1,4 @@
 import streamlit as st
-from bokeh.plotting import figure
-from bokeh.palettes import Category20_20, Category20b_20, Category20c_20
-from bokeh.models import NumeralTickFormatter, HoverTool
 import pbgui_help
 import json
 import psutil
@@ -10,16 +7,12 @@ import platform
 import hjson
 import traceback
 import subprocess
-import shlex
 import glob
 import configparser
 import time
 import multiprocessing
-import pandas as pd
-from pbgui_func import PBDIR, PBGDIR, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import PBDIR, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
-from Base import Base
-from Config import Config
 from pathlib import Path, PurePath
 from User import Users
 from shutil import rmtree
@@ -211,7 +204,6 @@ class OptimizeMultiQueue:
         dest = Path(f'{PBGDIR}/data/opt_multi_queue')
         p = str(Path(f'{dest}/*.json'))
         items = glob.glob(p)
-        # self.items = []
         for item in items:
             with open(item, "r", encoding='utf-8') as f:
                 config = json.load(f)
@@ -274,9 +266,6 @@ class OptimizeMultiQueue:
                         self.items[row].stop()
                     else:
                         self.items[row].run()
-                    # st.session_state.bt_multi = self.backtests[row]
-                    # del st.session_state.bt_multi_list
-                    # st.rerun()
                 if "view" in ed["edited_rows"][row]:
                     opt = OptimizeMultiItem(f'{PBGDIR}/data/opt_multi/{self.items[row].name}')
                     opt.load()
@@ -329,7 +318,8 @@ class OptimizeMultiResults:
         analysis = PurePath(file_name).stem[0:19]
         analysis = str(self.analysis_path) + f'/{analysis}*.json'
         analysis = glob.glob(analysis, recursive=False)
-        Path(analysis[0]).unlink(missing_ok=True)
+        if analysis:
+            Path(analysis[0]).unlink(missing_ok=True)
 
     def find_results(self):
         self.results = []
@@ -414,8 +404,8 @@ class OptimizeMultiResults:
             if "delete" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["delete"]:
                     self.remove(self.results[row])
-        self.find_results()
         self.results = []
+        self.find_results()
     
     def remove_all_results(self):
         rmtree(self.results_path, ignore_errors=True)
