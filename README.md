@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v1.0alpha
+v1.0
 
 ## Migration to v0.95 Multi
 
@@ -138,7 +138,8 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v1.0alpha (22-07-2024)
+## v1.0 (23-07-2024)
+- Optimize_Multi: Generate Analysis from all_results added
 - Optimize_Multi: Create Backtest from Analysis (Result)
 - Optimize_Multi: Remove Results added
 - Optimize_Multi: First running Version with multi optimizer
