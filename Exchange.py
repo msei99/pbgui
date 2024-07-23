@@ -592,11 +592,11 @@ class Exchange:
                         self.swap.append(''.join(v["id"].split("-")[0:2]))
                 elif self.id == "bybit":
                     if v["id"].endswith('USDT'):
-                        print(v)
+                        # print(v)
                         self.swap.append(v["id"])
                 elif self.id == "binance":
                     if v["id"].endswith('USDT'):
-                        print(v)
+                        # print(v)
                         self.swap.append(v["id"])
                 elif self.id == "bingx":
                     if v["id"].endswith('USDT'):

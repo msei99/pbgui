@@ -505,6 +505,45 @@ class BacktestMultiItem:
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
 
+    def create_from_multi_optimize(self, path: str):
+        self.name = PurePath(path).stem
+        file = Path(path)
+        if file.exists():
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    analysis = json.load(f)
+                self.exchange = analysis["args"]["exchange"]
+                self.sd = analysis["args"]["start_date"]
+                self.ed = analysis["args"]["end_date"]  
+                self.sb = analysis["args"]["starting_balance"]
+                self.long_enabled = analysis["args"]["long_enabled"]
+                self.short_enabled = analysis["args"]["short_enabled"]
+                self.TWE_long = analysis["live_config"]["global"]["TWE_long"]
+                self.TWE_short = analysis["live_config"]["global"]["TWE_short"]
+                self.loss_allowance_pct = analysis["live_config"]["global"]["loss_allowance_pct"]
+                self.stuck_threshold = analysis["live_config"]["global"]["stuck_threshold"]
+                self.unstuck_close_pct = analysis["live_config"]["global"]["unstuck_close_pct"]
+                symbols = analysis["args"]["symbols"]
+                backtest_path = Path(f'{PBGDIR}/data/bt_multi/{self.name}')
+                symbol_config = {"config_name": self.name,
+                                 "logging_level": 0,
+                                 "long": analysis["live_config"]["long"],
+                                 "short": analysis["live_config"]["short"]
+                }
+                symbol_config["long"]["auto_unstuck_ema_dist"] = 0.0
+                symbol_config["long"]["auto_unstuck_wallet_exposure_threshold"] = 0.0
+                symbol_config["long"]["backwards_tp"] = True
+                symbol_config["short"]["auto_unstuck_ema_dist"] = 0.0
+                symbol_config["short"]["auto_unstuck_wallet_exposure_threshold"] = 0.0
+                symbol_config["short"]["backwards_tp"] = True
+                for symbol in symbols:
+                    config_file = Path(f'{backtest_path}/{symbol}.json')
+                    config = Config(config_file, config_pretty_str(symbol_config))
+                    self.symbols[symbol] = config
+            except Exception as e:
+                print(f'Something went wrong, but continue {e}')
+                traceback.print_exc()
+
     def optimize(self):
         LOSS_ALLOWANCE_PCT_MIN = 0.0
         LOSS_ALLOWANCE_PCT_MAX = 1.0
@@ -1152,7 +1191,7 @@ def main():
     while True:
         bt.load()
         for item in bt.items:
-            while bt.running() == bt.cpu:
+            while bt.running() >= bt.cpu:
                 time.sleep(5)
             while bt.downloading():
                 time.sleep(5)
