@@ -59,7 +59,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v0.99"
+            'About': "Passivbot GUI v1.0"
         }
     )
 
