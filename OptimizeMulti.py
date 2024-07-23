@@ -16,7 +16,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBDIR, PBGDIR, validateJSON, config_pretty_str, load_symbols_from_ini
+from pbgui_func import PBDIR, PBGDIR, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from Base import Base
 from Config import Config
@@ -353,17 +353,12 @@ class OptimizeMultiResults:
             analysis = str(self.analysis_path) + f'/{analysis}*.json'
             analysis = glob.glob(analysis, recursive=False)
             analysis = analysis[0] if analysis else None
-            if not analysis:
-                analysis = self.generate_analysis(opt)
-            if analysis:
-                view = False
-            else:
-                view = None
             d.append({
                 'id': id,
                 'Result': opt,
                 'Analysis': analysis,
-                'view': view,
+                'view': False,
+                "generate": False,
                 'backtest': False,
                 'delete' : False,
             })
@@ -371,6 +366,7 @@ class OptimizeMultiResults:
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
             "view": st.column_config.CheckboxColumn(label="View Analysis"),
+            "generate": st.column_config.CheckboxColumn(label="Generate Analysis"),
             "backtest": st.column_config.CheckboxColumn(label="Backtest"),
             }
         #Display optimizes
@@ -380,7 +376,13 @@ class OptimizeMultiResults:
             for row in ed["edited_rows"]:
                 if "view" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["view"]:
-                        self.view_analysis(d[row]["Analysis"])
+                        if d[row]["Analysis"]:
+                            self.view_analysis(d[row]["Analysis"])
+                if "generate" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["generate"]:
+                        self.generate_analysis(d[row]["Result"])
+                        st.session_state.ed_key += 1
+                        # st.rerun()
                 if "backtest" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["backtest"]:
                         st.session_state.bt_multi = BacktestMultiItem()
@@ -401,21 +403,9 @@ class OptimizeMultiResults:
         else:
             result = subprocess.run(cmd, capture_output=True, cwd=PBDIR, text=True, start_new_session=True)
         if "error" in result.stdout:
-            analysis = PurePath(result_file).stem[0:19]
-            analysis = str(self.analysis_path) + f'/{analysis}_error.json'
-            analysis_file = Path(analysis)
-            error = {
-                "error": result.stdout,
-            }
-            with open(analysis_file, "w", encoding='utf-8') as f:
-                json.dump(error, f, indent=4)
-            return analysis
+            error_popup(result.stdout)
         else:
-            analysis = PurePath(result_file).stem[0:19]
-            analysis = str(self.analysis_path) + f'/{analysis}*.json'
-            analysis = glob.glob(analysis, recursive=False)
-            analysis = analysis[0] if analysis else None
-            return analysis
+            info_popup(f"Analysis Generated {result.stdout}")
 
     def remove_selected_results(self):
         ed_key = st.session_state.ed_key
