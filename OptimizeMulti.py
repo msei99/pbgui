@@ -418,6 +418,7 @@ class OptimizeMultiItem:
         self.bounds = MultiBounds()
         self.users = Users()
         self.backtest_results = []
+        self.hjson = None
         self.initialize()
         if optimize_file:
             self.hjson = Path(optimize_file)
