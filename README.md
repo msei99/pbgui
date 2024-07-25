@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v1.0
+v1.01
 
 ## Migration to v0.95 Multi
 
@@ -137,6 +137,9 @@ rclone config create <name> imagekit endpoint=<url_endpoint> public_key=<public_
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.01 (23-07-2024)
+- Optimize_Multi: Bugfix for object has no attribute 'hjson'
 
 ## v1.0 (23-07-2024)
 - Optimize_Multi: Generate Analysis from all_results added

@@ -32,7 +32,7 @@ def opt_multi():
                 if not opt_multi.name:
                     info_popup("Name is empty")
                 elif not opt_multi.hjson:
-                    info_popup("Backtest not saved")
+                    info_popup("Optimize not saved")
                 elif not opt_multi.symbols:
                     info_popup("No Symbols")
     st.title(f"Optimize Multi: {opt_multi.name}")
