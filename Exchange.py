@@ -1,6 +1,6 @@
 import ccxt
 import configparser
-from User import User
+from User import User, Users
 from enum import Enum
 import json
 from pathlib import Path
@@ -84,10 +84,15 @@ class Exchange:
 
     def fetch_price(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
-        if symbol == "ADAUSDT_UMCBL":
-            symbol = "ADA/USDT:USDT"
+        # if symbol == "ADAUSDT_UMCBL":
+        #     symbol = "ADA/USDT:USDT"
         price = self.instance.fetch_ticker(symbol=symbol)
         return price
+
+    def fetch_prices(self, symbols: list, market_type: str):
+        if not self.instance: self.connect()
+        prices = self.instance.fetch_tickers(symbols=symbols)
+        return prices
 
     def fetch_open_orders(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
@@ -97,6 +102,11 @@ class Exchange:
             orders = self.instance.fetch_open_orders(symbol=symbol)
         else:
             orders = self.instance.fetch_open_orders(symbol=symbol)
+        return orders
+
+    def fetch_all_open_orders(self, symbol: str):
+        if not self.instance: self.connect()
+        orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 
     def fetch_position(self, symbol: str, market_type: str):
@@ -112,6 +122,11 @@ class Exchange:
         else:
             position = self.instance.fetch_position(symbol=symbol)
             return position
+
+    def fetch_positions(self):
+        if not self.instance: self.connect()
+        positions = self.instance.fetch_positions()
+        return positions
 
     def fetch_balance(self, market_type: str, symbol : str = None):
         if not self.instance: self.connect()
@@ -158,6 +173,193 @@ class Exchange:
         if not self.instance: self.connect()
         return self.instance.milliseconds()
 
+    def fetch_spot(self, since: int = None):
+        if self.user.key == 'key':
+            return []
+        all_histories = []
+        all = []
+        if not self.instance: self.connect()
+        if self.id == "bybit":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 2 * 365 * day - day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            limit = 100
+            end = since + week
+            while True:
+                trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {'type': 'spot', "endTime": end})
+                if trades:
+                    first_trade = trades[0]
+                    last_trade = trades[-1]
+                    all_histories = trades + all_histories
+                if len(trades) == limit:
+                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(first_trade['timestamp']), 'till', self.instance.iso8601(last_trade['timestamp']))
+                    end = trades[0]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = since + week
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+            for history in all_histories:
+                income = {}
+                income["symbol"] = history["info"]["symbol"]
+                income["timestamp"] = history["timestamp"]
+                income["side"] = history["side"]
+                income["income"] = history["cost"]
+                income["fee"] = history["info"]["execFee"]
+                income["uniqueid"] = history["info"]["orderId"]
+                all.append(income)
+        return all
+
+    def fetch_history(self, since: int = None):
+        if self.user.key == 'key':
+            return []
+        all_histories = []
+        all = []
+        if not self.instance: self.connect()
+        if self.id == "bybit":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 2 * 365 * day - day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            limit = 100
+            end = since + week
+            while True:
+                positions = self.instance.fetch_positions_history(since=since, limit=limit, params = {"endTime": end})
+                if positions:
+                    first_position = positions[0]
+                    last_position = positions[-1]
+                    all_histories = positions + all_histories
+                if len(positions) == limit:
+                    print(f'User:{self.user.name} Fetched', len(positions), 'positions from', self.instance.iso8601(first_position['timestamp']), 'till', self.instance.iso8601(last_position['timestamp']))
+                    end = positions[-1]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(positions), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = since + week
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+            for history in all_histories:
+                income = {}
+                income["symbol"] = history["info"]["symbol"]
+                income["timestamp"] = history["timestamp"]
+                income["income"] = history["realizedPnl"]
+                income["uniqueid"] = history["info"]["orderId"]
+                all.append(income)
+        elif self.id == "okx":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 120 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            limit = 100
+            end = since + week
+            while True:
+                ledgers = self.instance.fetch_ledger(since=since, limit=limit, params = {"method": "privateGetAccountBillsArchive", "instType": "SWAP", "end": end})
+                if ledgers:
+                    first_ledger = ledgers[0]
+                    last_ledger = ledgers[-1]
+                    all_histories = ledgers + all_histories
+                if len(ledgers) == limit:
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
+                    end = ledgers[0]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = since + week
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+                sleep(0.5)
+            for history in all_histories:
+                income = {}
+                income["symbol"] = history["symbol"][0:-5].replace("/", "").replace("-", "")
+                income["timestamp"] = history["timestamp"]
+                income["income"] = history["amount"]
+                income["uniqueid"] = history["id"]
+                all.append(income)
+        elif self.id == "bitget":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 120 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            limit = 100
+            end = since + week
+            while True:
+                ledgers = self.instance.fetch_ledger(since=since, limit=limit, params = {"type": "swap", "endTime": end})
+                if ledgers:
+                    first_ledger = ledgers[0]
+                    last_ledger = ledgers[-1]
+                    all_histories = ledgers + all_histories
+                if len(ledgers) == limit:
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
+                    end = ledgers[0]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = since + week
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+            for history in all_histories:
+                if history["info"]["symbol"] and history["info"]["amount"] != "0":
+                    income = {}
+                    income["symbol"] = history["info"]["symbol"]
+                    income["timestamp"] = history["timestamp"]
+                    income["income"] = history["info"]["amount"]
+                    income["uniqueid"] = history["info"]["billId"]
+                    all.append(income)
+        elif self.id == "binance":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 124 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            limit = 1000
+            end = since + week
+            while True:
+                imcomes = self.instance.fapiPrivateGetIncome({                        
+                                                        "pageSize": "100",
+                                                        "startTime": since,
+                                                        "limit": limit,
+                                                        "endTime": end,
+                                                        "timestamp": self.instance.milliseconds()
+                                                        })
+                if imcomes:
+                    first_imcome = imcomes[0]
+                    last_imcome = imcomes[-1]
+                    all_histories = imcomes + all_histories
+                if len(imcomes) == limit:
+                    print(f'User:{self.user.name} Fetched', len(imcomes), 'incomes from', self.instance.iso8601(int(first_imcome['time'])), 'till', self.instance.iso8601(int(last_imcome['time'])))
+                    since = int(imcomes[-1]['time'])
+                else:
+                    print(f'User:{self.user.name} Fetched', len(imcomes), 'incomes from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = end
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+            for history in all_histories:
+                if history["incomeType"] == "REALIZED_PNL":
+                    income = {}
+                    income["symbol"] = history["symbol"]
+                    income["timestamp"] = history["time"]
+                    income["income"] = history["income"]
+                    income["uniqueid"] = history["tradeId"]
+                    all.append(income)
+        return all
+    
     def fetch_trades(self, symbol: str, market_type: str, since: int):
         all_trades = []
         last_trade_id = ""
@@ -632,10 +834,12 @@ class Exchange:
         if not self.spot and not self.swap:
             self.fetch_symbols()
 
-
-
 def main():
     print("Don't Run this Class from CLI")
+    # users = Users()
+    # exchange = Exchange("bybit", users.find_user("bybit_SPOT"))
+    # spot = exchange.fetch_spot()
+    # print(spot)
 
 if __name__ == '__main__':
     main()

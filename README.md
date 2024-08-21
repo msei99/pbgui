@@ -2,9 +2,9 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v1.0
+v1.1
 
-## Migration to v0.95 Multi
+## Migration to v0.95 Multi (Will be removed on next version)
 
 Watch the video here: https://youtu.be/MCQ7E5n-Dro  
 Make sure to stop single instances before starting them in a passivbot_multi configuration  
@@ -15,6 +15,7 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 
 ![Alt text](docs/images/multi1.png)
 ![Alt text](docs/images/multi2.png)
+![Alt text](docs/images/dashboard1.png)
 ![Alt text](docs/images/live01.png)
 ![Alt text](docs/images/live02.png)
 ![Alt text](docs/images/live1.png)
@@ -92,6 +93,13 @@ python PBStat.py &
 ```
 This command will run the PBStat.py script in the background, allowing it to collect statistics.
 
+## PBData Databank for Dashboard
+Actually, the best way to enable PBData is by adding the following line to your start.sh script:
+```
+python PBData.py &
+```
+This command will run the PBData.py in the background and filling the database for the dashboard
+
 ## PBRemote Server Manager
 With PBRemote, you can efficiently manage passivbot instances on multiple servers directly from your PC.
 This includes starting, stopping, removing, and syncing instances from and to your servers.
@@ -137,6 +145,15 @@ rclone config create <name> imagekit endpoint=<url_endpoint> public_key=<public_
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.1 (20-08-2024)
+- Dashboard: Added Dashboards for replacing the Live View in future versions of PBGui
+- Dashboard: Added a SQLite database for fast view of the dashboards
+- PBData: New scrapper for fetch balance, positions, orders, prices and income from exchanges
+
+## v1.01 (23-07-2024)
+- Optimize_Multi: Bugfix for object has no attribute 'hjson'
+- Multi: Bugfix price_distance_threshold
 
 ## v1.0 (23-07-2024)
 - Optimize_Multi: Generate Analysis from all_results added
