@@ -68,7 +68,7 @@ def edit_multi_instance():
         instance.market_type = "futures"
         instance.view_grid(10000)
 
-@st.experimental_dialog("Delete Instance?")
+@st.dialog("Delete Instance?")
 def delete_instance(instance):
     st.warning(f"Delete Instance {instance.user} ?", icon="⚠️")
     # reason = st.text_input("Because...")

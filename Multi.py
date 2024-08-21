@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit_scrollable_textbox as stx
 import pbgui_help
-from pbgui_func import PBDIR, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector
+from pbgui_func import PBDIR, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
 import os
 from PBRemote import PBRemote
 from User import Users
@@ -316,7 +316,7 @@ class MultiInstance():
         if "execution_delay_seconds" in self._multi_config:
             self._execution_delay_seconds = self._multi_config["execution_delay_seconds"]
         if "price_distance_threshold" in self._multi_config:
-            self._price_distance_threshold = self._multi_config["price_distance_threshold"]
+            self._price_distance_threshold = float(self._multi_config["price_distance_threshold"])
         if "auto_gs" in self._multi_config:
             self._auto_gs = self._multi_config["auto_gs"]
         if "TWE_long" in self._multi_config:
@@ -677,6 +677,9 @@ class MultiInstance():
                             st.session_state.edit_instance = instance
                             st.switch_page("pages/1_Single.py")
                     # Edit Symbol config without single instance
+                    if not Path(self.instance_path).exists():
+                        info_popup("You need to save the Multi config first, before editing a symbol")
+                        return
                     config_file = Path(f'{self.instance_path}/{self._symbols[row]}.json')
                     config = Config(config_file)
                     config.load_config()
