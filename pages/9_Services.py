@@ -65,9 +65,24 @@ def pbshare_overview():
         pbshare_icon = '❌'
     st.metric(label="PBShare", value=pbshare_icon)
 
+def pbdata_overview():
+    pbdata = st.session_state.pbdata
+    pbdata_status = pbdata.is_running()
+    if "service_pbdata" in st.session_state:
+        if st.session_state.service_pbdata != pbdata_status:
+            pbdata_status = st.session_state.service_pbdata
+    st.toggle("PBData", value=pbdata_status, key="service_pbdata", help=pbgui_help.pbdata)
+    if pbdata_status:
+        pbdata.run()
+        pbdata_icon = '✅'
+    else:
+        pbdata.stop()
+        pbdata_icon = '❌'
+    st.metric(label="PBData", value=pbdata_icon)
+
 def overview():
     st.header("Service Status")
-    col_1, col_2, col_3, col_4 = st.columns([1,1,1,1])
+    col_1, col_2, col_3, col_4, col_5 = st.columns([1,1,1,1,1])
     with col_1:
         pbrun_overview()
         if st.button("Show Details", key="button_pbrun_details"):
@@ -87,6 +102,11 @@ def overview():
         pbshare_overview()
         if st.button("Show Details", key="button_pbshare_details"):
             st.session_state.pbshare_details = True
+            st.rerun()
+    with col_5:
+        pbdata_overview()
+        if st.button("Show Details", key="button_pbdata_details"):
+            st.session_state.pbdata_details = True
             st.rerun()
 
 def pbrun_details():
@@ -273,6 +293,25 @@ def pbshare_details():
         st.download_button("Download index.html", index.read_text(), "index.html", key="pbshare_download_index", help=pbgui_help.pbshare_download_index)
     if st.checkbox("Show logfile", key="pbshare_log"):
         st.session_state.pbgui_instances.view_log("PBShare")
+    
+def pbdata_details():
+    pbdata = st.session_state.pbdata
+    # Navigation
+    with st.sidebar:
+        if st.button(":back:", key="button_pbdata_back"):
+            del st.session_state.pbdata_details
+            st.rerun()
+    st.header("PBData Details")
+    pbdata_overview()
+    users = st.session_state.users
+
+    if "pbdata_users" in st.session_state:
+        if st.session_state.pbdata_users != pbdata.fetch_users:
+            pbdata.fetch_users = st.session_state.pbdata_users
+    st.multiselect('Users', users.list(), default=pbdata.fetch_users ,key="pbdata_users")
+
+    if st.checkbox("Show logfile", key="pbdata_log"):
+        st.session_state.pbgui_instances.view_log("PBData")
 
 set_page_config()
 
@@ -288,5 +327,7 @@ elif 'pbstat_details' in st.session_state:
     pbstat_details()
 elif 'pbshare_details' in st.session_state:
     pbshare_details()
+elif 'pbdata_details' in st.session_state:
+    pbdata_details()
 else:
     overview()
