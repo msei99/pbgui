@@ -4,7 +4,7 @@ from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
 
-@st.experimental_dialog("Delete User?")
+@st.dialog("Delete User?")
 def delete_user(user):
     st.warning(f"Delete User {user} ?", icon="⚠️")
     col1, col2 = st.columns([1,1])
