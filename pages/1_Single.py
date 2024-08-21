@@ -9,7 +9,7 @@ import pbgui_help
 import platform
 
 
-@st.experimental_dialog("Delete Instance?")
+@st.dialog("Delete Instance?")
 def delete_instance(instance):
     st.warning(f"Delete Instance {instance.user} {instance.symbol} {instance.market_type} ?", icon="⚠️")
     # reason = st.text_input("Because...")

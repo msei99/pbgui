@@ -154,6 +154,8 @@ pbrun = """
     python PBRun.py
     # python PBRemote.py
     # python PBStat.py
+    # python PBShare.py
+    # python PBData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -179,6 +181,8 @@ pbremote = """
     # python PBRun.py
     python PBRemote.py
     # python PBStat.py
+    # python PBShare.py
+    # python PBData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -205,6 +209,8 @@ pbstat = """
     # python PBRun.py
     # python PBRemote.py
     python PBStat.py
+    # python PBShare.py
+    # python PBData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -231,6 +237,35 @@ pbshare = """
     # python PBRemote.py
     # python PBStat.py
     python PBShare.py
+    # python PBData.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
+    ```"""
+
+pbdata = """
+    ```
+    This is the Data Manager from PBGUI.
+    It stores history, positions and orders in a local sqlite database.
+    Enable, to start fetching data from the exchanges.
+    To start the Data Manager after reboot your server, you have to
+    start PBData.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    # python PBRun.py
+    # python PBRemote.py
+    # python PBStat.py
+    # python PBShare.py
+    python PBData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
