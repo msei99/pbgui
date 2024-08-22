@@ -407,47 +407,73 @@ class Database():
             print(e)
 
     def select_top(self, user: list, start: str, end: str, top: int):
-        sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, "history"."symbol" AS symbol, SUM("history"."income") AS sum FROM "history"
-                WHERE "history"."user" IN ({})
-                    AND "history"."timestamp" >= ?
-                    AND "history"."timestamp" <= ?
-                GROUP BY "history"."symbol"
-                ORDER BY "sum" DESC, "history"."symbol"
-                LIMIT ? '''.format(','.join('?'*len(user)))
+        if 'ALL' in user:
+            sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, "history"."symbol" AS symbol, SUM("history"."income") AS sum FROM "history"
+                    WHERE "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    GROUP BY "history"."symbol"
+                    ORDER BY "sum" DESC, "history"."symbol"
+                    LIMIT ? '''
+            sql_parameters = (start, end, top)
+        else:
+            sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, "history"."symbol" AS symbol, SUM("history"."income") AS sum FROM "history"
+                    WHERE "history"."user" IN ({})
+                        AND "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    GROUP BY "history"."symbol"
+                    ORDER BY "sum" DESC, "history"."symbol"
+                    LIMIT ? '''.format(','.join('?'*len(user)))
+            sql_parameters = tuple(user) + (start, end, top)
         try:
             with sqlite3.connect(self.db) as conn:
                 cur = conn.cursor()
-                cur.execute(sql, tuple(user) + (start,) + (end,) + (top,))
+                cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
             print(e)
-    
+        
     def select_pnl(self, user: list, start: str, end: str):
-        sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, SUM("income") AS "sum" FROM "history"
-                WHERE "history"."user" IN ({})
-                    AND "history"."timestamp" >= ?
-                    AND "history"."timestamp" <= ?
-                GROUP BY date'''.format(','.join('?'*len(user)))
+        if 'ALL' in user:
+            sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, SUM("income") AS "sum" FROM "history"
+                    WHERE "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    GROUP BY date '''
+            sql_parameters = (start, end)
+        else:
+            sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, SUM("income") AS "sum" FROM "history"
+                    WHERE "history"."user" IN ({})
+                        AND "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    GROUP BY date'''.format(','.join('?'*len(user)))
+            sql_parameters = tuple(user) + (start, end)
         try:
             with sqlite3.connect(self.db) as conn:
                 cur = conn.cursor()
-                cur.execute(sql, tuple(user) + (start,) + (end,))
+                cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
             print(e)
     
     def select_income(self, user: list, start: str, end: str):
-        sql = '''SELECT "timestamp", "income" FROM "history"
-                WHERE "history"."user" IN ({})
-                    AND "history"."timestamp" >= ?
-                    AND "history"."timestamp" <= ?
-                ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
+        if 'ALL' in user:
+            sql = '''SELECT "timestamp", "income" FROM "history"
+                    WHERE "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    ORDER BY "timestamp" ASC '''
+            sql_parameters = (start, end)
+        else:
+            sql = '''SELECT "timestamp", "income" FROM "history"
+                    WHERE "history"."user" IN ({})
+                        AND "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
+            sql_parameters = tuple(user) + (start, end)
         try:
             with sqlite3.connect(self.db) as conn:
                 cur = conn.cursor()
-                cur.execute(sql, tuple(user) + (start,) + (end,))
+                cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
@@ -455,15 +481,23 @@ class Database():
     
     # select income grouped by symbol not sum
     def select_income_by_symbol(self, user: list, start: str, end: str):
-        sql = '''SELECT "timestamp", "symbol", "income" FROM "history"
-                WHERE "history"."user" IN ({})
-                    AND "history"."timestamp" >= ?
-                    AND "history"."timestamp" <= ?
-                ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
+        if 'ALL' in user:
+            sql = '''SELECT "timestamp", "symbol", "income" FROM "history"
+                    WHERE "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    ORDER BY "timestamp" ASC '''
+            sql_parameters = (start, end)
+        else:
+            sql = '''SELECT "timestamp", "symbol", "income" FROM "history"
+                    WHERE "history"."user" IN ({})
+                        AND "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
+            sql_parameters = tuple(user) + (start, end)
         try:
             with sqlite3.connect(self.db) as conn:
                 cur = conn.cursor()
-                cur.execute(sql, tuple(user) + (start,) + (end,))
+                cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
