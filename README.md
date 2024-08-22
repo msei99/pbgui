@@ -146,6 +146,9 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v1.11 (22-08-2024)
+- Dashboard: Added 'ALL' to user selections
+
 ## v1.1 (20-08-2024)
 - Dashboard: Added Dashboards for replacing the Live View in future versions of PBGui
 - Dashboard: Added a SQLite database for fast view of the dashboards
