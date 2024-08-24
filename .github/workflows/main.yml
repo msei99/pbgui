@@ -1,3 +1,5 @@
+on:
+  commit_comment:
   - name: Notify the commit on Telegram
     uses: EverythingSuckz/github-telegram-notify@main
     with:
