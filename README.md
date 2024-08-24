@@ -147,7 +147,7 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.11 (22-08-2024)
-- Dashboard: Added move panels
+- Dashboard: Added move panels 
 - Dashboard: Added 'ALL' to user selections
 
 ## v1.1 (20-08-2024)
