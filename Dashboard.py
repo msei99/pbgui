@@ -361,7 +361,7 @@ class Dashboard():
         st.markdown("#### :blue[Daily PNL]")
         col1, col2, col3 = st.columns([2,1,1])
         with col1:
-            st.multiselect('Users', users.list(), key=f"dashboard_pnl_users_{position}")
+            st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_pnl_users_{position}")
         with col2:
             st.selectbox('period', self.PERIOD, key=f"dashboard_pnl_period_{position}")
         with col3:
@@ -398,7 +398,7 @@ class Dashboard():
         st.markdown("#### :blue[Income]")
         col1, col2 = st.columns([3,1])
         with col1:
-            st.multiselect('Users', users.list(), key=f"dashboard_income_users_{position}")
+            st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_income_users_{position}")
         with col2:
             st.selectbox('period', self.PERIOD, key=f"dashboard_income_period_{position}")
         if st.session_state[f'dashboard_income_users_{position}']:
@@ -436,7 +436,7 @@ class Dashboard():
         st.markdown("#### :blue[Top Symbols]")
         col1, col2, col3 = st.columns([2,1,1])
         with col1:
-            st.multiselect('Users', users.list(), key=f"dashboard_top_symbols_users_{position}")
+            st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_top_symbols_users_{position}")
         with col2:
             st.selectbox('period', self.PERIOD, key=f"dashboard_top_symbols_period_{position}")
         with col3:
@@ -468,9 +468,13 @@ class Dashboard():
             if user:
                 st.session_state[f'dashboard_balance_users_{position}'] = user
         st.markdown("#### :blue[Balance]")
-        st.multiselect('Users', users.list(), key=f"dashboard_balance_users_{position}")
+        st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_balance_users_{position}")
         if st.session_state[f'dashboard_balance_users_{position}']:
-            balances = self.db.fetch_balances(st.session_state[f'dashboard_balance_users_{position}'])
+            if 'ALL' in st.session_state[f'dashboard_balance_users_{position}']:
+                users_selected = users.list()
+            else:
+                users_selected = st.session_state[f'dashboard_balance_users_{position}']
+            balances = self.db.fetch_balances(users_selected)
             df = pd.DataFrame(balances, columns=['Id', 'Date', 'Balance', 'User'])
             my_tz = datetime.now().astimezone().tzinfo
             df['Date'] = pd.to_datetime(df['Date'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(my_tz).dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -527,7 +531,7 @@ class Dashboard():
         st.markdown("#### :blue[Positions]")
         col1, col2 = st.columns([5,0.2], vertical_alignment="bottom")
         with col1:
-            st.multiselect('Users', users.list(), key=f"dashboard_positions_users_{position}")
+            st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_positions_users_{position}")
         with col2:
             if st.button(":material/refresh:", key=f"dashboard_positions_rerun_{position}"):
                 st.rerun(scope="fragment")
@@ -537,7 +541,11 @@ class Dashboard():
         if st.session_state[f'dashboard_positions_users_{position}']:
             all_positions = []
             users = st.session_state.users
-            for user in st.session_state[f'dashboard_positions_users_{position}']:
+            if 'ALL' in st.session_state[f'dashboard_positions_users_{position}']:
+                users_selected = users.list()
+            else:
+                users_selected = st.session_state[f'dashboard_positions_users_{position}']
+            for user in users_selected:
                 positions = self.db.fetch_positions(users.find_user(user))
                 prices = self.db.fetch_prices(users.find_user(user))
                 for pos in positions:
