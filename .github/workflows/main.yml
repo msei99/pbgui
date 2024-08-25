@@ -1,4 +1,4 @@
-name: test
+name: Telegram Bot
 on:
   push:
     branches:
