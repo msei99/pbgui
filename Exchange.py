@@ -215,6 +215,54 @@ class Exchange:
                 all.append(income)
         return all
 
+    def fetch_transactions(self, since: int = None):
+        if self.user.key == 'key':
+            return []
+        all_histories = []
+        all = []
+        if not self.instance: self.connect()
+        if self.id == "bybit":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 2 * 365 * day - day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            limit = 100
+            end = since + week
+            if self.instance.is_unified_enabled()[1]:
+                UTA = True
+            else:
+                UTA = False
+            while True:
+                if UTA:
+                    positions = self.instance.privateGetV5AccountTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end})
+                else:
+                    positions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end})
+                positions = positions["result"]["list"]
+                if positions:
+                    first_position = positions[0]
+                    last_position = positions[-1]
+                    all_histories = positions + all_histories
+                if len(positions) == limit:
+                    print(f'User:{self.user.name} Fetched', len(positions), 'positions from', self.instance.iso8601(first_position['timestamp']), 'till', self.instance.iso8601(last_position['timestamp']))
+                    end = positions[-1]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(positions), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = since + week
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+            for history in all_histories:
+                income = {}
+                income["symbol"] = history["symbol"]
+                income["timestamp"] = history["transactionTime"]
+                income["income"] = history["change"]
+                income["uniqueid"] = history["tradeId"]
+                all.append(income)
+        return all
+
     def fetch_history(self, since: int = None):
         if self.user.key == 'key':
             return []
@@ -253,6 +301,41 @@ class Exchange:
                 income["income"] = history["realizedPnl"]
                 income["uniqueid"] = history["info"]["orderId"]
                 all.append(income)
+        elif self.id == "kucoinfutures":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 1 * 365 * day - day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            limit = 50
+            end = since + day
+            while True:
+                # positions = self.instance.fetch_positions_history(since=since, limit=limit, params = {"until": end})
+                positions = self.instance.futuresPrivateGetTransactionHistory(params = {"maxCount": limit, "startAt": since, "endAt": end})
+                positions = positions["data"]["dataList"]
+                if positions:
+                    first_position = positions[0]
+                    last_position = positions[-1]
+                    all_histories = positions + all_histories
+                if len(positions) == limit:
+                    print(f'User:{self.user.name} Fetched', len(positions), 'income from', self.instance.iso8601(first_position['time']), 'till', self.instance.iso8601(last_position['time']))
+                    end = positions[-1]['time']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(positions), 'income from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = since + day
+                    end = since + day
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+            for history in all_histories:
+                if history["type"] == "RealisedPNL":
+                    income = {}
+                    income["symbol"] = history["remark"][0:-2]
+                    income["timestamp"] = history["time"]
+                    income["income"] = history["amount"]
+                    income["uniqueid"] = history["offset"]
+                    all.append(income)
         elif self.id == "okx":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -837,8 +920,11 @@ class Exchange:
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # exchange = Exchange("bybit", users.find_user("bybit_SPOT"))
+    # exchange = Exchange("kucoin", users.find_user("kucoin_DOTUSDT"))
     # spot = exchange.fetch_spot()
+    # print(exchange.fetch_positions())
+    # print(exchange.fetch_prices())
+    # print(exchange.fetch_balance("swap"))
     # print(spot)
 
 if __name__ == '__main__':

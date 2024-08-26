@@ -388,7 +388,10 @@ class Dashboard():
                 if st.session_state[f'dashboard_type_{row}_{col}'] == "POSITIONS":
                     dashboard_config[f'dashboard_positions_users_{row}_{col}'] = st.session_state[f'dashboard_positions_users_{row}_{col}']
                 if st.session_state[f'dashboard_type_{row}_{col}'] == "ORDERS":
-                    dashboard_config[f'dashboard_orders_{row}_{col}'] = st.session_state[f'dashboard_orders_{row}_{col}']
+                    if f'dashboard_orders_{row}_{col}' in st.session_state:
+                        dashboard_config[f'dashboard_orders_{row}_{col}'] = st.session_state[f'dashboard_orders_{row}_{col}']
+                    else:
+                        dashboard_config[f'dashboard_orders_{row}_{col}'] = None
                 if st.session_state[f'dashboard_type_{row}_{col}'] == "BALANCE":
                     dashboard_config[f'dashboard_balance_users_{row}_{col}'] = st.session_state[f'dashboard_balance_users_{row}_{col}']
         self.dashboard_config = dashboard_config
