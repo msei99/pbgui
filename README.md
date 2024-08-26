@@ -147,6 +147,7 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.11 (26-08-2024)
+- Dashboard: Kucoin added
 - Dashboard: Move panels added
 - Dashboard: Added 'ALL' to user selections
 
