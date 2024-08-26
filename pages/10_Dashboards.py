@@ -29,10 +29,12 @@ def dashboard():
                         st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
                         del st.session_state.edit_dashboard
                         st.session_state.dashboard.load(st.session_state.dashboard.name)
+                        st.rerun()
                     else:
                         error_popup("Name is empty")
                 elif "dashboard" in st.session_state:
                     st.session_state.dashboard.save()
+                    st.rerun()
         if "dashboard" in st.session_state:
             if st.button(":wastebasket:"):
                 st.session_state.dashboard.delete()
@@ -40,8 +42,9 @@ def dashboard():
                 del st.session_state.dashboard
                 info_popup("Dashboard deleted")
             if st.button("Edit"):
-                st.session_state.edit_dashboard = True
-                st.rerun()
+                if "edit_dashboard" not in st.session_state:
+                    st.session_state.edit_dashboard = True
+                    st.rerun()
         if st.button("Add"):
             if "dashboard" in st.session_state:
                 del st.session_state.dashboard
