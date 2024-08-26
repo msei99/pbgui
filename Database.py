@@ -517,12 +517,27 @@ class Database():
         except sqlite3.Error as e:
             print(e)
 
+    def fetch_history2(self, user: User):
+        exchange = Exchange(user.exchange, user)
+        return exchange.fetch_transactions(1724390528161)
+
+    def fetch_futures(self, user: User):
+        exchange = Exchange(user.exchange, user)
+        return exchange.fetch_futures(1724390528161)
+
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # user = users.find_user("bitget_CRASH")
-    # exchange = Exchange("bitget", user)
+    # user = users.find_user("bybit_CPTPro")
+    # user2 = users.find_user("bybit_CPT1")
+    # exchange = Exchange("bybit", user)
     # db = Database()
+    # exchange.connect()
+    # print(db.find_last_timestamp(user))
+    # history = db.fetch_history2(user)
+    # print(history)
+    # history = db.fetch_history2(user2)
+    # print(history)
     # balances = db.fetch_balance(['bitget_CRASH','binance_CPT'])
     # print(balances)
     # db.update_positions(user)
