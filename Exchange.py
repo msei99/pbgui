@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from time import sleep
 from datetime import datetime
+from pbgui_func import PBGDIR
 
 class Exchanges(Enum):
     BINANCE = 'binance'
@@ -215,53 +216,13 @@ class Exchange:
                 all.append(income)
         return all
 
-    def fetch_transactions(self, since: int = None):
-        if self.user.key == 'key':
-            return []
-        all_histories = []
-        all = []
-        if not self.instance: self.connect()
-        if self.id == "bybit":
-            day = 24 * 60 * 60 * 1000
-            week = 7 * day
-            max = 2 * 365 * day - day
-            now = self.instance.milliseconds()
-            if not since:
-                since = now - max
-            limit = 100
-            end = since + week
-            if self.instance.is_unified_enabled()[1]:
-                UTA = True
-            else:
-                UTA = False
-            while True:
-                if UTA:
-                    positions = self.instance.privateGetV5AccountTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end})
-                else:
-                    positions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end})
-                positions = positions["result"]["list"]
-                if positions:
-                    first_position = positions[0]
-                    last_position = positions[-1]
-                    all_histories = positions + all_histories
-                if len(positions) == limit:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'positions from', self.instance.iso8601(first_position['timestamp']), 'till', self.instance.iso8601(last_position['timestamp']))
-                    end = positions[-1]['timestamp']
-                else:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
-                    since = since + week
-                    end = since + week
-                if since > now:
-                    print(f'User:{self.user.name} Done')
-                    break
-            for history in all_histories:
-                income = {}
-                income["symbol"] = history["symbol"]
-                income["timestamp"] = history["transactionTime"]
-                income["income"] = history["change"]
-                income["uniqueid"] = history["tradeId"]
-                all.append(income)
-        return all
+    def save_income_other(self, history : list, exchange: str):
+        dest = Path(f'{PBGDIR}/data/logs')
+        if not dest.exists():
+            dest.mkdir(parents=True)
+        file = Path(f"{PBGDIR}/data/logs/income_other_{exchange}.json")
+        with open(file, 'a') as f:
+            json.dump(history, f, indent=4)
 
     def fetch_history(self, since: int = None):
         if self.user.key == 'key':
@@ -276,31 +237,43 @@ class Exchange:
             now = self.instance.milliseconds()
             if not since:
                 since = now - max
-            limit = 100
+            limit = 50
             end = since + week
+            if self.instance.is_unified_enabled()[1]:
+                UTA = True
+            else:
+                UTA = False
+            cursor = None
             while True:
-                positions = self.instance.fetch_positions_history(since=since, limit=limit, params = {"endTime": end})
+                if UTA:
+                    transactions = self.instance.privateGetV5AccountTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
+                else:
+                    transactions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
+                cursor = transactions["result"]["nextPageCursor"]
+                positions = transactions["result"]["list"]
                 if positions:
                     first_position = positions[0]
                     last_position = positions[-1]
                     all_histories = positions + all_histories
-                if len(positions) == limit:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'positions from', self.instance.iso8601(first_position['timestamp']), 'till', self.instance.iso8601(last_position['timestamp']))
-                    end = positions[-1]['timestamp']
+                if cursor:
+                    print(f'User:{self.user.name} Fetched', len(positions), 'transactions from', self.instance.iso8601(int(first_position['transactionTime'])), 'till', self.instance.iso8601(int(last_position['transactionTime'])))
                 else:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    print(f'User:{self.user.name} Fetched', len(positions), 'transactions from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
                     since = since + week
                     end = since + week
                 if since > now:
                     print(f'User:{self.user.name} Done')
                     break
             for history in all_histories:
-                income = {}
-                income["symbol"] = history["info"]["symbol"]
-                income["timestamp"] = history["timestamp"]
-                income["income"] = history["realizedPnl"]
-                income["uniqueid"] = history["info"]["orderId"]
-                all.append(income)
+                if history["type"] in ["TRADE","SETTLEMENT"]:
+                    income = {}
+                    income["symbol"] = history["symbol"]
+                    income["timestamp"] = history["transactionTime"]
+                    income["income"] = history["change"]
+                    income["uniqueid"] = history["tradeId"]
+                    all.append(income)
+                else: 
+                    self.save_income_other(history, self.user.name)
         elif self.id == "kucoinfutures":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -311,7 +284,6 @@ class Exchange:
             limit = 50
             end = since + day
             while True:
-                # positions = self.instance.fetch_positions_history(since=since, limit=limit, params = {"until": end})
                 positions = self.instance.futuresPrivateGetTransactionHistory(params = {"maxCount": limit, "startAt": since, "endAt": end})
                 positions = positions["data"]["dataList"]
                 if positions:
@@ -336,6 +308,8 @@ class Exchange:
                     income["income"] = history["amount"]
                     income["uniqueid"] = history["offset"]
                     all.append(income)
+                else: 
+                    self.save_income_other(history, self.user.name)
         elif self.id == "okx":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -355,7 +329,7 @@ class Exchange:
                     print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
                     end = ledgers[0]['timestamp']
                 else:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
                     since = since + week
                     end = since + week
                 if since > now:
@@ -363,12 +337,15 @@ class Exchange:
                     break
                 sleep(0.5)
             for history in all_histories:
-                income = {}
-                income["symbol"] = history["symbol"][0:-5].replace("/", "").replace("-", "")
-                income["timestamp"] = history["timestamp"]
-                income["income"] = history["amount"]
-                income["uniqueid"] = history["id"]
-                all.append(income)
+                if history["type"] in ["trade","fee"]:
+                    income = {}
+                    income["symbol"] = history["symbol"][0:-5].replace("/", "").replace("-", "")
+                    income["timestamp"] = history["timestamp"]
+                    income["income"] = history["amount"]
+                    income["uniqueid"] = history["id"]
+                    all.append(income)
+                else: 
+                    self.save_income_other(history, self.user.name)
         elif self.id == "bitget":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -388,7 +365,7 @@ class Exchange:
                     print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
                     end = ledgers[0]['timestamp']
                 else:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
                     since = since + week
                     end = since + week
                 if since > now:
@@ -396,12 +373,15 @@ class Exchange:
                     break
             for history in all_histories:
                 if history["info"]["symbol"] and history["info"]["amount"] != "0":
-                    income = {}
-                    income["symbol"] = history["info"]["symbol"]
-                    income["timestamp"] = history["timestamp"]
-                    income["income"] = history["info"]["amount"]
-                    income["uniqueid"] = history["info"]["billId"]
-                    all.append(income)
+                    if history["type"] in ["trade","fee"]:
+                        income = {}
+                        income["symbol"] = history["info"]["symbol"]
+                        income["timestamp"] = history["timestamp"]
+                        income["income"] = history["info"]["amount"]
+                        income["uniqueid"] = history["info"]["billId"]
+                        all.append(income)
+                    else: 
+                        self.save_income_other(history, self.user.name)
         elif self.id == "binance":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -441,6 +421,8 @@ class Exchange:
                     income["income"] = history["income"]
                     income["uniqueid"] = history["tradeId"]
                     all.append(income)
+                else: 
+                    self.save_income_other(history, self.user.name)
         return all
     
     def fetch_trades(self, symbol: str, market_type: str, since: int):
@@ -920,9 +902,10 @@ class Exchange:
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # exchange = Exchange("kucoin", users.find_user("kucoin_DOTUSDT"))
+    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
     # spot = exchange.fetch_spot()
-    # print(exchange.fetch_positions())
+    # print(exchange.fetch_history())
+    # print(exchange.fetch_history())
     # print(exchange.fetch_prices())
     # print(exchange.fetch_balance("swap"))
     # print(spot)
