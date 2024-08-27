@@ -146,7 +146,8 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v1.11 (26-08-2024)
+## v1.11 (27-08-2024)
+- Dashboard: Change Bybit Income from positions_history to transactions for more accurate income history
 - Dashboard: Kucoin added
 - Dashboard: Move panels added
 - Dashboard: Added 'ALL' to user selections

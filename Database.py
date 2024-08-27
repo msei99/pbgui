@@ -528,7 +528,7 @@ class Database():
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # user = users.find_user("kucoin_DOTUSDT")
+    # user = users.find_user("bybit_CPT1")
     # user2 = users.find_user("bybit_CPT1")
     # exchange = Exchange("bybit", user)
     # db = Database()
