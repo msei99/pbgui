@@ -98,6 +98,108 @@ class Dashboard():
         for key in dashboard_keys:
             del st.session_state[key]
 
+    def swap(self, from_row, to_row, from_col, to_col):
+        dashboard_type_1 = st.session_state[f'dashboard_type_{from_row}_{from_col}']
+        dashboard_type_2 = st.session_state[f'dashboard_type_{to_row}_{to_col}']
+        del st.session_state[f'dashboard_type_{from_row}_{from_col}']
+        del st.session_state[f'dashboard_type_{to_row}_{to_col}']
+        st.session_state[f'dashboard_type_{from_row}_{from_col}'] = dashboard_type_2
+        st.session_state[f'dashboard_type_{to_row}_{to_col}'] = dashboard_type_1
+        move_1 = {}
+        move_2 = {}
+        if dashboard_type_1 == "PNL":
+            pnl_users_1 = st.session_state[f'dashboard_pnl_users_{from_row}_{from_col}']
+            pnl_period_1 = st.session_state[f'dashboard_pnl_period_{from_row}_{from_col}']
+            pnl_mode_1 = st.session_state[f'dashboard_pnl_mode_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_pnl_users_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_pnl_period_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_pnl_mode_{from_row}_{from_col}']
+            move_1 = {"pnl_users_1": pnl_users_1, "pnl_period_1": pnl_period_1, "pnl_mode_1": pnl_mode_1}
+        if dashboard_type_1 == "INCOME":
+            income_users_1 = st.session_state[f'dashboard_income_users_{from_row}_{from_col}']
+            income_period_1 = st.session_state[f'dashboard_income_period_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_income_users_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_income_period_{from_row}_{from_col}']
+            move_1 = {"income_users_1": income_users_1, "income_period_1": income_period_1}
+        if dashboard_type_1 == "TOP":
+            top_symbols_users_1 = st.session_state[f'dashboard_top_symbols_users_{from_row}_{from_col}']
+            top_symbols_period_1 = st.session_state[f'dashboard_top_symbols_period_{from_row}_{from_col}']
+            top_symbols_top_1 = st.session_state[f'dashboard_top_symbols_top_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_top_symbols_users_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_top_symbols_period_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_top_symbols_top_{from_row}_{from_col}']
+            move_1 = {"top_symbols_users_1": top_symbols_users_1, "top_symbols_period_1": top_symbols_period_1, "top_symbols_top_1": top_symbols_top_1}
+        if dashboard_type_1 == "BALANCE":
+            balance_users_1 = st.session_state[f'dashboard_balance_users_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_balance_users_{from_row}_{from_col}']
+            move_1 = {"balance_users_1": balance_users_1}
+        if dashboard_type_1 == "POSITIONS":
+            positions_users_1 = st.session_state[f'dashboard_positions_users_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_positions_users_{from_row}_{from_col}']
+            move_1 = {"positions_users_1": positions_users_1}
+        if dashboard_type_1 == "ORDERS":
+            orders_1 = st.session_state[f'dashboard_orders_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_orders_{from_row}_{from_col}']
+            move_1 = {"orders_1": orders_1}
+        if dashboard_type_2 == "PNL":
+            pnl_users_2 = st.session_state[f'dashboard_pnl_users_{to_row}_{to_col}']
+            pnl_period_2 = st.session_state[f'dashboard_pnl_period_{to_row}_{to_col}']
+            pnl_mode_2 = st.session_state[f'dashboard_pnl_mode_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_pnl_users_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_pnl_period_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_pnl_mode_{to_row}_{to_col}']
+            move_2 = {"pnl_users_2": pnl_users_2, "pnl_period_2": pnl_period_2, "pnl_mode_2": pnl_mode_2}
+        if dashboard_type_2 == "INCOME":
+            income_users_2 = st.session_state[f'dashboard_income_users_{to_row}_{to_col}']
+            income_period_2 = st.session_state[f'dashboard_income_period_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_income_users_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_income_period_{to_row}_{to_col}']
+            move_2 = {"income_users_2": income_users_2, "income_period_2": income_period_2}
+        if dashboard_type_2 == "TOP":
+            top_symbols_users_2 = st.session_state[f'dashboard_top_symbols_users_{to_row}_{to_col}']
+            top_symbols_period_2 = st.session_state[f'dashboard_top_symbols_period_{to_row}_{to_col}']
+            top_symbols_top_2 = st.session_state[f'dashboard_top_symbols_top_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_top_symbols_users_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_top_symbols_period_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_top_symbols_top_{to_row}_{to_col}']
+            move_2 = {"top_symbols_users_2": top_symbols_users_2, "top_symbols_period_2": top_symbols_period_2, "top_symbols_top_2": top_symbols_top_2}
+        if dashboard_type_2 == "BALANCE":
+            balance_users_2 = st.session_state[f'dashboard_balance_users_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_balance_users_{to_row}_{to_col}']
+            move_2 = {"balance_users_2": balance_users_2}
+        if dashboard_type_2 == "POSITIONS":
+            positions_users_2 = st.session_state[f'dashboard_positions_users_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_positions_users_{to_row}_{to_col}']
+            move_2 = {"positions_users_2": positions_users_2}
+        if dashboard_type_2 == "ORDERS":
+            orders_2 = st.session_state[f'dashboard_orders_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_orders_{to_row}_{to_col}']
+            move_2 = {"orders_2": orders_2}
+        for key, val in move_1.items():
+            key_new = key.replace(f"_1", f"_{to_row}_{to_col}")
+            st.session_state[f'dashboard_{key_new}'] = val
+        for key, val in move_2.items():
+            key_new = key.replace(f"_2", f"_{from_row}_{from_col}")
+            st.session_state[f'dashboard_{key_new}'] = val
+        dashboard_orders = {key: val for key, val in st.session_state.items()
+            if key.startswith("dashboard_orders_")}
+        for key, val in dashboard_orders.items():
+            if val == f'view_orders_{from_row}_{from_col}':
+                if key in st.session_state:
+                    del st.session_state[key]
+                st.session_state[key] = f'view_orders_{to_row}_{to_col}'
+                order = st.session_state[f'view_orders_{from_row}_{from_col}']
+                del st.session_state[f'view_orders_{from_row}_{from_col}']
+                st.session_state[f'view_orders_{to_row}_{to_col}'] = order
+            if val == f'view_orders_{to_row}_{to_col}':
+                if key in st.session_state:
+                    del st.session_state[key]
+                st.session_state[key] = f'view_orders_{from_row}_{from_col}'
+                order = st.session_state[f'view_orders_{to_row}_{to_col}']
+                del st.session_state[f'view_orders_{to_row}_{to_col}']
+                st.session_state[f'view_orders_{from_row}_{from_col}'] = order
+        st.session_state.swap_rerun = True
+
     def create_dashboard(self):
         # Init session_state for keys
         if "dashboard_cols" in st.session_state:
@@ -124,6 +226,18 @@ class Dashboard():
             for row in range(1, self.rows + 1):
                 db_col1, db_col2 = st.columns([1,1])
                 with db_col1:
+                    bu_col1, bu_col2, bu_col_empty = st.columns([1,1,20])
+                    with bu_col1:
+                        if st.button(":material/arrow_right_alt:", key=f"swap_{row}_col1"):
+                            self.swap(row, row, 1, 2)
+                            # self.swap_col(row)
+                    with bu_col2:
+                        if row > 1:
+                            if st.button(":material/arrow_upward_alt:", key=f"swap_vert_{row}_col1"):
+                                self.swap(row, row -1, 1, 1)
+                        else:
+                            if st.button(":material/arrow_downward_alt:", key=f"swap_vert_{row}_col1"):
+                                self.swap(row, row +1, 1, 1)
                     if f'dashboard_type_{row}_1' in st.session_state:
                         index = self.DASHBOARD_TYPES.index(st.session_state[f'dashboard_type_{row}_1'])
                         del st.session_state[f'dashboard_type_{row}_1']
@@ -156,11 +270,22 @@ class Dashboard():
                         else:
                             self.view_orders(f'{row}_1', edit=True)
                     if st.session_state[f'dashboard_type_{row}_1'] == "BALANCE":
-                        if f'dashboard_balance_users_{row}_1' in self.dashboard_config and f'dashboard_balance_period_{row}_1' in self.dashboard_config:
-                            self.view_balance(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'], self.dashboard_config[f'dashboard_balance_period_{row}_1'])
+                        if f'dashboard_balance_users_{row}_1' in self.dashboard_config:
+                            self.view_balance(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'])
                         else:
                             self.view_balance(f'{row}_1')
                 with db_col2:
+                    bu_col1, bu_col2, bu_col_empty = st.columns([1,1,20])
+                    with bu_col1:
+                        if st.button(":material/arrow_left_alt:", key=f"swap_{row}_col2"):
+                            self.swap(row, row, 2, 1)
+                    with bu_col2:
+                        if row > 1:
+                            if st.button(":material/arrow_upward_alt:", key=f"swap_vert_{row}_col2"):
+                                self.swap(row, row -1, 2, 2)
+                        else:
+                            if st.button(":material/arrow_downward_alt:", key=f"swap_vert_{row}_col2"):
+                                self.swap(row, row +1, 2, 2)
                     if f'dashboard_type_{row}_2' in st.session_state:
                         index = self.DASHBOARD_TYPES.index(st.session_state[f'dashboard_type_{row}_2'])
                         del st.session_state[f'dashboard_type_{row}_2']
@@ -193,12 +318,15 @@ class Dashboard():
                         else:
                             self.view_orders(f'{row}_2', edit=True)
                     if st.session_state[f'dashboard_type_{row}_2'] == "BALANCE":
-                        if f'dashboard_balance_users_{row}_2' in self.dashboard_config and f'dashboard_balance_period_{row}_2' in self.dashboard_config:
-                            self.view_balance(f'{row}_2', self.dashboard_config[f'dashboard_balance_users_{row}_2'], self.dashboard_config[f'dashboard_balance_period_{row}_2'])
+                        if f'dashboard_balance_users_{row}_2' in self.dashboard_config:
+                            self.view_balance(f'{row}_2', self.dashboard_config[f'dashboard_balance_users_{row}_2'])
                         else:
                             self.view_balance(f'{row}_2')
         else:
             for row in range(1, self.rows + 1):
+                if row > 1:
+                    if st.button(":material/swap_vert:", key=f"swap_vert_{row}_col1"):
+                        self.swap(row, row -1, 1, 1)
                 if f'dashboard_type_{row}_1' in st.session_state:
                     index = self.DASHBOARD_TYPES.index(st.session_state[f'dashboard_type_{row}_1'])
                     del st.session_state[f'dashboard_type_{row}_1']
@@ -231,10 +359,13 @@ class Dashboard():
                     else:
                         self.view_orders(f'{row}_1', edit=True)
                 if st.session_state[f'dashboard_type_{row}_1'] == "BALANCE":
-                    if f'dashboard_balance_users_{row}_1' in self.dashboard_config and f'dashboard_balance_period_{row}_1' in self.dashboard_config:
-                        self.view_balance(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'], self.dashboard_config[f'dashboard_balance_period_{row}_1'])
+                    if f'dashboard_balance_users_{row}_1' in self.dashboard_config:
+                        self.view_balance(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'])
                     else:
                         self.view_balance(f'{row}_1')
+        if "swap_rerun" in st.session_state:
+            del st.session_state.swap_rerun
+            st.rerun()
 
     def save(self):
         dashboard_config = {}
@@ -257,7 +388,10 @@ class Dashboard():
                 if st.session_state[f'dashboard_type_{row}_{col}'] == "POSITIONS":
                     dashboard_config[f'dashboard_positions_users_{row}_{col}'] = st.session_state[f'dashboard_positions_users_{row}_{col}']
                 if st.session_state[f'dashboard_type_{row}_{col}'] == "ORDERS":
-                    dashboard_config[f'dashboard_orders_{row}_{col}'] = st.session_state[f'dashboard_orders_{row}_{col}']
+                    if f'dashboard_orders_{row}_{col}' in st.session_state:
+                        dashboard_config[f'dashboard_orders_{row}_{col}'] = st.session_state[f'dashboard_orders_{row}_{col}']
+                    else:
+                        dashboard_config[f'dashboard_orders_{row}_{col}'] = None
                 if st.session_state[f'dashboard_type_{row}_{col}'] == "BALANCE":
                     dashboard_config[f'dashboard_balance_users_{row}_{col}'] = st.session_state[f'dashboard_balance_users_{row}_{col}']
         self.dashboard_config = dashboard_config
