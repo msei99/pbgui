@@ -144,22 +144,24 @@ class BacktestMultiQueueItem():
 class BacktestMultiQueue:
     def __init__(self):
         self.items = []
-        self.pb_config = configparser.ConfigParser()
-        self.pb_config.read('pbgui.ini')
-        if not self.pb_config.has_section("backtest_multi"):
-            self.pb_config.add_section("backtest_multi")
-        if not self.pb_config.has_option("backtest_multi", "cpu"):
-            self.pb_config.set("backtest_multi", "autostart", "False")
-            self.pb_config.set("backtest_multi", "cpu", "1")
-        self._autostart = eval(self.pb_config.get("backtest_multi", "autostart"))
-        self._cpu = int(self.pb_config.get("backtest_multi", "cpu"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("backtest_multi"):
+            pb_config.add_section("backtest_multi")
+            pb_config.set("backtest_multi", "autostart", "False")
+            pb_config.set("backtest_multi", "cpu", "1")
+            with open('pbgui.ini', 'w') as f:
+                pb_config.write(f)
+        self._autostart = eval(pb_config.get("backtest_multi", "autostart"))
+        self._cpu = int(pb_config.get("backtest_multi", "cpu"))
         if self._autostart:
             self.run()
 
     @property
     def cpu(self):
-        self.pb_config.read('pbgui.ini')
-        self._cpu = int(self.pb_config.get("backtest_multi", "cpu"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self._cpu = int(pb_config.get("backtest_multi", "cpu"))
         if self._cpu > multiprocessing.cpu_count():
             self._cpu = multiprocessing.cpu_count()
         return self._cpu
@@ -167,9 +169,11 @@ class BacktestMultiQueue:
     @cpu.setter
     def cpu(self, new_cpu):
         self._cpu = new_cpu
-        self.pb_config.set("backtest_multi", "cpu", str(self._cpu))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("backtest_multi", "cpu", str(self._cpu))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
 
     @property
     def autostart(self):
@@ -178,9 +182,11 @@ class BacktestMultiQueue:
     @autostart.setter
     def autostart(self, new_autostart):
         self._autostart = new_autostart
-        self.pb_config.set("backtest_multi", "autostart", str(self._autostart))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("backtest_multi", "autostart", str(self._autostart))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
         if self._autostart:
             self.run()
         else:
@@ -1195,8 +1201,9 @@ def main():
                 time.sleep(5)
             while bt.downloading():
                 time.sleep(5)
-            bt.pb_config.read('pbgui.ini')
-            if not eval(bt.pb_config.get("backtest_multi", "autostart")):
+            pb_config = configparser.ConfigParser()
+            pb_config.read('pbgui.ini')
+            if not eval(pb_config.get("backtest_multi", "autostart")):
                 return
             if item.status() == "not started":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.filename} started')

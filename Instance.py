@@ -800,9 +800,10 @@ class Instance(Base):
         st.bokeh_chart(p, use_container_width=True)
 
     def view_grid(self, sb: float = None):
-        if self._config.type != "recursive_grid":
+        if self._config.type != "recursive_grid" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
             return
         self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+        print(self._symbol_ccxt)
         ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe="4h", limit=100)
         self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
@@ -823,6 +824,7 @@ class Instance(Base):
         except Exception as e:
             st.write("### Can not import grid functions from passivbot")
             return
+        print(self.symbol)
         symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults = self.exchange.fetch_symbol_info(self.symbol, self.market_type)
         # print(symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults)
         short = json.loads(self._config.config)["short"]

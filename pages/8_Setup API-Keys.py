@@ -57,7 +57,29 @@ def edit_user():
                 if not users.has_user(user):
                     users.users.append(user)
                 users.save()
-    col_1, col_2, col_3 = st.columns([1,1,1])
+    # Init session states for keys
+    if "api_wallet_address" in st.session_state:
+        if st.session_state.api_wallet_address != user.wallet_address:
+            user.wallet_address = st.session_state.api_wallet_address
+    if "api_private_key" in st.session_state:
+        if st.session_state.api_private_key != user.private_key:
+            user.private_key = st.session_state.api_private_key
+    if "api_is_vault" in st.session_state:
+        if st.session_state.api_is_vault != user.is_vault:
+            user.is_vault = st.session_state.api_is_vault
+    if "api_passphrase" in st.session_state:
+        if st.session_state.api_passphrase != user.passphrase:
+            user.passphrase = st.session_state.api_passphrase
+    if "api_secret" in st.session_state:
+        if st.session_state.api_secret != user.secret:
+            user.secret = st.session_state.api_secret
+    if "api_exchange" in st.session_state:
+        if st.session_state.api_exchange != user.exchange:
+            user.exchange = st.session_state.api_exchange
+    if "api_key" in st.session_state:
+        if st.session_state.api_key != user.key:
+            user.key = st.session_state.api_key
+    col_1, col_2, col_3 = st.columns([1,1,1],vertical_alignment="bottom")
     with col_1:
         new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)
         if new_name != user.name:
@@ -68,35 +90,36 @@ def edit_user():
                 if "error" in st.session_state:
                     del st.session_state.error
             st.rerun()
-        new_key = st.text_input("API-Key", value=user.key, type="default", help=None)
-        if new_key != user.key:
-            user.key = new_key
-            st.rerun()
     with col_2:
         if user.exchange:
             index_exc = Exchanges.list().index(user.exchange)
         else:
             index_exc = 0
-        new_exchange = st.selectbox('Exchange', Exchanges.list(), index=index_exc, disabled=in_use)
-        if new_exchange != user.exchange:
-            user.exchange = new_exchange
-            st.rerun()
-        new_secret = st.text_input("API-Secret", value=user.secret, type="password", help=None)
-        if new_secret != user.secret:
-            user.secret = new_secret
-            st.rerun()
+        st.selectbox('Exchange', Exchanges.list(), index=index_exc, key = "api_exchange", disabled=in_use)
     with col_3:
-        st.write("## ")
         if st.button("Test"):
             exchange = Exchange(user.exchange, user)
             balance_futures = exchange.fetch_balance('swap')
             if exchange.name in Spot.list():
                 balance_spot = exchange.fetch_balance('spot')
+
+    col_1, col_2, col_3 = st.columns([1,1,1],vertical_alignment="bottom")
+    with col_1:
+        if user.exchange == "hyperliquid":
+            st.text_input("Wallet Address", value=user.wallet_address, key="api_wallet_address", help=None)
+        else:
+            st.text_input("API-Key", value=user.key, type="default", key="api_key", help=None)
+    with col_2:
+        if user.exchange == "hyperliquid":
+            st.text_input("Private Key", value=user.private_key, type="password", key="api_private_key",help=None)
+        else:
+            st.text_input("API-Secret", value=user.secret, type="password", key="api_secret", help=None)
+    with col_3:
+        if user.exchange == "hyperliquid":
+            st.checkbox("Vault", value=user.is_vault, key="api_is_vault", help=None)
         if user.exchange in Passphrase.list():
-            new_passphrase = st.text_input("Passphrase", value=user.passphrase, type="password", help=None)
-            if new_passphrase != user.passphrase:
-                user.passphrase = new_passphrase
-                st.rerun()
+            st.text_input("Passphrase", value=user.passphrase, type="password", key="api_passphrase", help=None)
+    col_1, col_2, col_3 = st.columns([1,1,1],vertical_alignment="bottom")
     with col_1:
         st.markdown(f'### <center>Futures Wallet Balance</center>', unsafe_allow_html=True)
         if type(balance_futures) == float:

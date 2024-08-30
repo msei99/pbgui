@@ -11,6 +11,10 @@ class User:
         self._key = None
         self._secret = None
         self._passphrase = None
+        # Hyperliquid
+        self._wallet_address = None
+        self._private_key = None
+        self._is_vault = False
     
     @property
     def name(self): return self._name
@@ -22,6 +26,12 @@ class User:
     def passphrase(self): return self._passphrase
     @property
     def exchange(self): return self._exchange
+    @property
+    def wallet_address(self): return self._wallet_address
+    @property
+    def private_key(self): return self._private_key
+    @property
+    def is_vault(self): return self._is_vault
 
     @name.setter
     def name(self, new_name):
@@ -38,6 +48,15 @@ class User:
     @passphrase.setter
     def passphrase(self, new_passphrase):
         self._passphrase = new_passphrase
+    @wallet_address.setter
+    def wallet_address(self, new_wallet_address):
+        self._wallet_address = new_wallet_address
+    @private_key.setter
+    def private_key(self, new_private_key):
+        self._private_key = new_private_key
+    @is_vault.setter
+    def is_vault(self, new_is_vault):
+        self._is_vault = new_is_vault
 
 
 class Users:
@@ -63,6 +82,10 @@ class Users:
     
     def list(self):
         return list(map(lambda c: c.name, self.users))
+    
+    def list_single(self):
+        from Exchange import Single
+        return list(map(lambda c: c.name, filter(lambda c: c.exchange in Single.list(), self.users)))
 
     def default(self):
         if self.users:
@@ -115,6 +138,12 @@ class Users:
                     my_user.secret = users[user]["secret"]
                 if "passphrase" in users[user]:
                     my_user.passphrase = users[user]["passphrase"]
+                if "wallet_address" in users[user]:
+                    my_user.wallet_address = users[user]["wallet_address"]
+                if "private_key" in users[user]:
+                    my_user.private_key = users[user]["private_key"]
+                if "is_vault" in users[user]:
+                    my_user.is_vault = users[user]["is_vault"]
                 self.users.append(my_user)
         self.users.sort(key=lambda x: x.name)
 
@@ -122,12 +151,20 @@ class Users:
         save_users = {}
         for user in self.users:
             save_users[user.name] = ({
-                        "exchange": user.exchange,
-                        "key": user.key,
-                        "secret": user.secret
+                        "exchange": user.exchange
                     })
+            if user.key:
+                save_users[user.name]["key"] = user.key
+            if user.secret:
+                save_users[user.name]["secret"] = user.secret
             if user.passphrase:
                 save_users[user.name]["passphrase"] = user.passphrase
+            if user.wallet_address:
+                save_users[user.name]["wallet_address"] = user.wallet_address
+            if user.private_key:
+                save_users[user.name]["private_key"] = user.private_key
+            if user.exchange == "hyperliquid":
+                save_users[user.name]["is_vault"] = user.is_vault
         # Backup api-keys and save new version
         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         destination = Path(f'{self.api_backup}/api-keys_{date}.json')
