@@ -15,7 +15,6 @@ import configparser
 
 class PBData():
     def __init__(self):
-        self.pb_config = configparser.ConfigParser()
         self.piddir = Path(f'{PBGDIR}/data/pid')
         if not self.piddir.exists():
             self.piddir.mkdir(parents=True)
@@ -83,18 +82,20 @@ class PBData():
             f.write(str(self.my_pid))
     
     def load_fetch_users(self):
-        self.pb_config.read('pbgui.ini')
-        if self.pb_config.has_option("pbdata", "fetch_users"):
-            return eval(self.pb_config.get("pbdata", "fetch_users"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("pbdata", "fetch_users"):
+            return eval(pb_config.get("pbdata", "fetch_users"))
         return []
     
     def save_fetch_users(self):
-        self.pb_config.read('pbgui.ini')
-        if not self.pb_config.has_section("pbdata"):
-            self.pb_config.add_section("pbdata")
-        self.pb_config.set("pbdata", "fetch_users", f'{self.fetch_users}')
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("pbdata"):
+            pb_config.add_section("pbdata")
+        pb_config.set("pbdata", "fetch_users", f'{self.fetch_users}')
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
 
     def update_db(self):
         for user in self.users:

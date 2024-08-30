@@ -12,6 +12,7 @@ class Exchanges(Enum):
     BINANCE = 'binance'
     BYBIT = 'bybit'
     BITGET = 'bitget'
+    HYPERLIQUID = 'hyperliquid'
     OKX = 'okx'
     KUCOIN = 'kucoin'
     BINGX = 'bingx'
@@ -27,6 +28,17 @@ class Spot(Enum):
     @staticmethod
     def list():
         return list(map(lambda c: c.value, Spot))
+
+class Single(Enum):
+    BINANCE = 'binance'
+    BYBIT = 'bybit'
+    OKX = 'okx'
+    KUCOIN = 'kucoin'
+    BINGX = 'bingx'
+
+    @staticmethod
+    def list():
+        return list(map(lambda c: c.value, Single))
 
 class Passphrase(Enum):
     BITGET = 'bitget'
@@ -72,6 +84,8 @@ class Exchange:
             self.instance.apiKey = self.user.key
             self.instance.secret = self.user.secret
             self.instance.password = self.user.passphrase
+            self.instance.walletAddress = self.user.wallet_address
+            self.instance.privateKey = self.user.private_key
         try:
             self.instance.checkRequiredCredentials()
         except Exception as e:
@@ -135,6 +149,8 @@ class Exchange:
             balance = self.instance.fetch_balance(params = {"type": market_type})
         except Exception as e:
             return e
+        if self.id == "hyperliquid":
+            return float(balance["total"]["USDC"])
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
@@ -191,6 +207,7 @@ class Exchange:
             end = since + week
             while True:
                 trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {'type': 'spot', "endTime": end})
+                print(trades)
                 if trades:
                     first_trade = trades[0]
                     last_trade = trades[-1]
@@ -758,6 +775,8 @@ class Exchange:
                 if market_type == "swap":
                     if v["id"] == symbol and v["swap"]:
                         return v["symbol"]
+        elif self.id == 'hyperliquid':
+            return f'{symbol[0:-4]}/USDC:USDC'
         elif self.id == 'bitget':
             return f'{symbol[0:-4]}/USDT:USDT'
             # if symbol.endswith('USD'):
@@ -786,9 +805,11 @@ class Exchange:
         if market_type == "spot":
             symbol = f'{symbol[0:-4]}/USDT'
         else:
-            symbol = f'{symbol[0:-4]}/USDT:USDT'
+            if symbol[-4:] == 'USDC':
+                symbol = f'{symbol[0:-4]}/USDC:USDC'
+            else:
+                symbol = f'{symbol[0:-4]}/USDT:USDT'
         symbol_info = self._markets[symbol]
-        # print(symbol_info)
         if self.id == 'binance':
             if market_type == "futures":
                 min_costs = (
@@ -845,6 +866,9 @@ class Exchange:
         self.spot = []
         for (k,v) in list(self._markets.items()):
             if v["swap"] and v["active"] and v["linear"]:
+                if self.id == "hyperliquid":
+                    if v["symbol"].endswith('USDC'):
+                        self.swap.append(v["symbol"][0:-5].replace("/", "").replace("-", ""))
                 if self.id == "bitget":
                     # print(k,v)
                     # if v["id"][-6:] == '_UMCBL' or v["id"][-6:] == '_DMCBL':
@@ -902,7 +926,12 @@ class Exchange:
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
+    # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
+    # print(exchange.symbol_to_exchange_symbol("BTCUSDC", "swap"))
+    # print(exchange.fetch_balance("swap"))
+    # print(exchange.fetch_symbol_info("DOGEUSDC", "swap"))
+    # print(exchange.fetch_price("DOGE/USDC:USDC", "swap"))
+    # exchange.fetch_symbols()
     # spot = exchange.fetch_spot()
     # print(exchange.fetch_history())
     # print(exchange.fetch_history())

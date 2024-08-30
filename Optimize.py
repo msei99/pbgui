@@ -441,24 +441,26 @@ class OptimizeItem(Base):
 class OptimizeQueue:
     def __init__(self):
         self.items = []
-        self.pb_config = configparser.ConfigParser()
-        self.pb_config.read('pbgui.ini')
-        if not self.pb_config.has_section("optimize"):
-            self.pb_config.add_section("optimize")
-        if not self.pb_config.has_option("optimize", "cpu"):
-            self.pb_config.set("optimize", "cpu", str(multiprocessing.cpu_count()-2))
-        if not self.pb_config.has_option("optimize", "mode"):
-            self.pb_config.set("optimize", "mode", "linear")
-        if not self.pb_config.has_option("optimize", "backtest_best"):
-            self.pb_config.set("optimize", "backtest_best", "1")
-        if not self.pb_config.has_option("optimize", "backtest_sharp"):
-            self.pb_config.set("optimize", "backtest_sharp", "0")
-        if not self.pb_config.has_option("optimize", "backtest_adg"):
-            self.pb_config.set("optimize", "backtest_adg", "0")
-        if not self.pb_config.has_option("optimize", "backtest_drawdown"):
-            self.pb_config.set("optimize", "backtest_drawdown", "0")
-        if not self.pb_config.has_option("optimize", "backtest_stuck"):
-            self.pb_config.set("optimize", "backtest_stuck", "0")
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("optimize"):
+            pb_config.add_section("optimize")
+        if not pb_config.has_option("optimize", "cpu"):
+            pb_config.set("optimize", "cpu", str(multiprocessing.cpu_count()-2))
+        if not pb_config.has_option("optimize", "mode"):
+            pb_config.set("optimize", "mode", "linear")
+        if not pb_config.has_option("optimize", "backtest_best"):
+            pb_config.set("optimize", "backtest_best", "1")
+        if not pb_config.has_option("optimize", "backtest_sharp"):
+            pb_config.set("optimize", "backtest_sharp", "0")
+        if not pb_config.has_option("optimize", "backtest_adg"):
+            pb_config.set("optimize", "backtest_adg", "0")
+        if not pb_config.has_option("optimize", "backtest_drawdown"):
+            pb_config.set("optimize", "backtest_drawdown", "0")
+        if not pb_config.has_option("optimize", "backtest_stuck"):
+            pb_config.set("optimize", "backtest_stuck", "0")
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
         self.load_options()
         self.pbgdir = Path.cwd()
         self.dest = Path(f'{self.pbgdir}/data/opt_queue')
@@ -518,26 +520,30 @@ class OptimizeQueue:
             self.save_options()
 
     def load_options(self):
-        self._cpu = int(self.pb_config.get("optimize", "cpu"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self._cpu = int(pb_config.get("optimize", "cpu"))
         if self._cpu > multiprocessing.cpu_count():
             self.cpu = multiprocessing.cpu_count()
-        self._mode = str(self.pb_config.get("optimize", "mode"))
-        self._backtest_best = int(self.pb_config.get("optimize", "backtest_best"))
-        self._backtest_sharp = int(self.pb_config.get("optimize", "backtest_sharp"))
-        self._backtest_adg = int(self.pb_config.get("optimize", "backtest_adg"))
-        self._backtest_drawdown = int(self.pb_config.get("optimize", "backtest_drawdown"))
-        self._backtest_stuck = int(self.pb_config.get("optimize", "backtest_stuck"))
+        self._mode = str(pb_config.get("optimize", "mode"))
+        self._backtest_best = int(pb_config.get("optimize", "backtest_best"))
+        self._backtest_sharp = int(pb_config.get("optimize", "backtest_sharp"))
+        self._backtest_adg = int(pb_config.get("optimize", "backtest_adg"))
+        self._backtest_drawdown = int(pb_config.get("optimize", "backtest_drawdown"))
+        self._backtest_stuck = int(pb_config.get("optimize", "backtest_stuck"))
 
     def save_options(self):
-        self.pb_config.set("optimize", "cpu", str(self._cpu))
-        self.pb_config.set("optimize", "mode", str(self._mode))
-        self.pb_config.set("optimize", "backtest_best", str(self._backtest_best))
-        self.pb_config.set("optimize", "backtest_sharp", str(self._backtest_sharp))
-        self.pb_config.set("optimize", "backtest_adg", str(self._backtest_adg))
-        self.pb_config.set("optimize", "backtest_drawdown", str(self._backtest_drawdown))
-        self.pb_config.set("optimize", "backtest_stuck", str(self._backtest_stuck))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("optimize", "cpu", str(self._cpu))
+        pb_config.set("optimize", "mode", str(self._mode))
+        pb_config.set("optimize", "backtest_best", str(self._backtest_best))
+        pb_config.set("optimize", "backtest_sharp", str(self._backtest_sharp))
+        pb_config.set("optimize", "backtest_adg", str(self._backtest_adg))
+        pb_config.set("optimize", "backtest_drawdown", str(self._backtest_drawdown))
+        pb_config.set("optimize", "backtest_stuck", str(self._backtest_stuck))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
 
     def is_running(self):
         if self.pid():

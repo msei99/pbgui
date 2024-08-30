@@ -443,18 +443,18 @@ class PBRun():
         self.run_single = []
         self.index = 0
         self.pbgdir = Path.cwd()
-        self.pb_config = configparser.ConfigParser()
-        self.pb_config.read('pbgui.ini')
-        if self.pb_config.has_option("main", "pbname"):
-            self.name = self.pb_config.get("main", "pbname")
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("main", "pbname"):
+            self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
-        if self.pb_config.has_option("main", "activate_ts"):
-            self.activate_ts = int(self.pb_config.get("main", "activate_ts"))
+        if pb_config.has_option("main", "activate_ts"):
+            self.activate_ts = int(pb_config.get("main", "activate_ts"))
         else:
             self.activate_ts = 0
-        if self.pb_config.has_option("main", "activate_single_ts"):
-            self.activate_single_ts = int(self.pb_config.get("main", "activate_single_ts"))
+        if pb_config.has_option("main", "activate_single_ts"):
+            self.activate_single_ts = int(pb_config.get("main", "activate_single_ts"))
         else:
             self.activate_single_ts = 0
         self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
@@ -463,8 +463,8 @@ class PBRun():
         self.instances_status_single = InstancesStatus(f'{self.pbgdir}/data/cmd/status_single.json')
         self.instances_status_single.pbname = self.name
         self.instances_status_single.activate_ts = self.activate_single_ts
-        if self.pb_config.has_option("main", "pbdir"):
-            self.pbdir = self.pb_config.get("main", "pbdir")
+        if pb_config.has_option("main", "pbdir"):
+            self.pbdir = pb_config.get("main", "pbdir")
         else:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
             exit(1)
@@ -752,16 +752,20 @@ class PBRun():
     def update_activate(self):
         self.activate_ts = int(datetime.now().timestamp())
         self.instances_status.activate_ts = self.activate_ts
-        self.pb_config.set("main", "activate_ts", str(self.activate_ts))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("main", "activate_ts", str(self.activate_ts))
         with open('pbgui.ini', 'w') as pbgui_configfile:
-            self.pb_config.write(pbgui_configfile)
+            pb_config.write(pbgui_configfile)
 
     def update_activate_single(self):
         self.activate_single_ts = int(datetime.now().timestamp())
         self.instances_status_single.activate_ts = self.activate_single_ts
-        self.pb_config.set("main", "activate_single_ts", str(self.activate_single_ts))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("main", "activate_single_ts", str(self.activate_single_ts))
         with open('pbgui.ini', 'w') as pbgui_configfile:
-            self.pb_config.write(pbgui_configfile)
+            pb_config.write(pbgui_configfile)
 
     def load(self, instance: str): # Deprecated (Instances)
         file = Path(f'{instance}/instance.cfg')
