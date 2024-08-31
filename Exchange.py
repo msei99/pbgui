@@ -106,7 +106,24 @@ class Exchange:
 
     def fetch_prices(self, symbols: list, market_type: str):
         if not self.instance: self.connect()
-        prices = self.instance.fetch_tickers(symbols=symbols)
+        # Fix for Hyperliquid
+        if self.id == "hyperliquid":
+            fetched = self.instance.fetch(
+                "https://api.hyperliquid.xyz/info",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body=json.dumps({"type": "allMids"}),
+            )
+            prices = {}
+            for symbol in symbols:
+                sym = symbol[0:-10]
+                if sym in fetched:
+                    prices[symbol] = {
+                        "timestamp": int(datetime.now().timestamp() * 1000),
+                        "last": fetched[sym]
+                    }
+        else:
+            prices = self.instance.fetch_tickers(symbols=symbols)
         return prices
 
     def fetch_open_orders(self, symbol: str, market_type: str):
@@ -291,6 +308,78 @@ class Exchange:
                     all.append(income)
                 else: 
                     self.save_income_other(history, self.user.name)
+        elif self.id == "hyperliquid":
+            hour = 60 * 60 * 1000
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max = 365 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max
+            else:
+                # For make sure not to miss any funding or trading history
+                since -= hour
+            limit = 500
+            end = since + week
+            since_trades = since
+            end_trades = end
+            while True:
+                fundings = self.instance.fetch(
+                    "https://api.hyperliquid.xyz/info",
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                    body=json.dumps({"type": "userFunding", "user": self.user.wallet_address, "startTime": since, "endTime": end}),
+            )
+                if fundings:
+                    first_funding = fundings[0]
+                    last_funding = fundings[-1]
+                    all_histories = fundings + all_histories
+                if len(fundings) == limit:
+                    print(f'User:{self.user.name} Fetched', len(fundings), 'fundings from', self.instance.iso8601(first_funding['timestamp']), 'till', self.instance.iso8601(last_funding['timestamp']))
+                    since = fundings[-1]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(fundings), 'fundings from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = end
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+                sleep(1)
+            for history in all_histories:
+                income = {}
+                income["symbol"] = history["delta"]["coin"] + "USDC"
+                income["timestamp"] = history["time"]
+                income["income"] = history["delta"]["usdc"]
+                income["uniqueid"] = history["hash"]
+                all.append(income)
+            since = since_trades
+            end = end_trades
+            all_histories = []
+            while True:
+                trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {"endTime": end})
+                if trades:
+                    first_trade = trades[0]
+                    last_trade = trades[-1]
+                    all_histories = trades + all_histories
+                if len(trades) == limit:
+                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(first_trade['timestamp']), 'till', self.instance.iso8601(last_trade['timestamp']))
+                    since = trades[-1]['timestamp']
+                else:
+                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    since = end
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+                sleep(1)
+            for history in all_histories:
+                if history["side"] == "sell":
+                    income = {}
+                    income["symbol"] = history["info"]["coin"] + "USDC"
+                    income["timestamp"] = history["timestamp"]
+                    income["income"] = history["info"]["closedPnl"]
+                    income["uniqueid"] = history["info"]["tid"]
+                    all.append(income)
         elif self.id == "kucoinfutures":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -927,15 +1016,20 @@ def main():
     print("Don't Run this Class from CLI")
     # users = Users()
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
-    # print(exchange.symbol_to_exchange_symbol("BTCUSDC", "swap"))
+    # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
+    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
+    # print(exchange.fetch_positions())
+    # print(exchange.fetch_all_open_orders("DOGE/USDC:USDC"))
+    # print(exchange.fetch_prices(["DOGE/USDC:USDC"], "swap"))
+    # print(exchange.fetch_prices(["DOGE/USDT:USDT", "WIF/USDT:USDT"], "swap"))
     # print(exchange.fetch_balance("swap"))
+
+    # print(exchange.symbol_to_exchange_symbol("BTCUSDC", "swap"))
     # print(exchange.fetch_symbol_info("DOGEUSDC", "swap"))
     # print(exchange.fetch_price("DOGE/USDC:USDC", "swap"))
     # exchange.fetch_symbols()
     # spot = exchange.fetch_spot()
     # print(exchange.fetch_history())
-    # print(exchange.fetch_history())
-    # print(exchange.fetch_prices())
     # print(exchange.fetch_balance("swap"))
     # print(spot)
 
