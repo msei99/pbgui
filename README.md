@@ -146,7 +146,8 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v1.12 (30-08-2024)
+## v1.12 (31-08-2024)
+- Dashboard: Added Hyperliquid to PBData and Dashboard
 - Multi and API-Editor: Added Hyperliquid
 - Multi Added Button for Update Symbols from Exchange
 - Bugfix for configparser. Under certain circumstances, configuration from other sections was being lost.
