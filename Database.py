@@ -174,7 +174,10 @@ class Database():
         prices = {}
         for position in positions_db:
             symbol = position[1]
-            symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+            if symbol[-4:] == "USDT":
+                symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+            elif symbol[-4:] == "USDC":
+                symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
             symbols.append(symbol_ccxt)
         if symbols:
             market_type = "futures"
@@ -192,7 +195,10 @@ class Database():
                         self.remove_price(conn, symbol, user.name)
                 # Update prices
                 for symbol in symbols:
-                    symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+                    if symbol[-4:] == "USDT":
+                        symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+                    elif symbol[-4:] == "USDC":
+                        symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
                     timestamp = prices[symbol_ccxt]['timestamp']
                     if not timestamp:
                         timestamp = int(datetime.now().timestamp() * 1000)
