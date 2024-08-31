@@ -94,7 +94,12 @@ class Exchange:
 
     def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int):
         if not self.instance: self.connect()
-        ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
+        if self.id == "hyperliquid":
+            now = int(datetime.now().timestamp() * 1000)
+            since = now - 1000 * 60 * 60 * limit
+            ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=since, limit=limit)
+        else:
+            ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
         return ohlcv
 
     def fetch_price(self, symbol: str, market_type: str):
