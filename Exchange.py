@@ -32,6 +32,7 @@ class Spot(Enum):
 class Single(Enum):
     BINANCE = 'binance'
     BYBIT = 'bybit'
+    BITGET = 'bitget'
     OKX = 'okx'
     KUCOIN = 'kucoin'
     BINGX = 'bingx'

@@ -2,12 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized, info_popup, error_popup
 from Instance import Instances, Instance
 from Backtest import BacktestItem
-from PBRun import PBRun
-from PBStat import PBStat
-from PBRemote import PBRemote
 import pbgui_help
-import platform
-
 
 @st.dialog("Delete Instance?")
 def delete_instance(instance):
@@ -78,10 +73,6 @@ def select_instance():
             with st.spinner('Initializing Instances...'):
                 st.session_state.pbgui_instances = Instances()
             st.rerun()
-        if not platform.system() == "Windows":
-            if st.button("Import"):
-                st.session_state.import_instance = True
-                st.rerun()
     if not "ed_key" in st.session_state:
         st.session_state.ed_key = 0
     if f'editor_select_instance_{st.session_state.ed_key}' in st.session_state:
@@ -219,10 +210,6 @@ def edit_instance():
                 if st.session_state.edit_instance not in st.session_state.pbgui_instances.instances:
                     st.session_state.pbgui_instances.instances.append(st.session_state.edit_instance)
                 info_popup("Instance saved")
-                # PBStat().restart()
-                # PBRun().restart_pbrun()
-                # PBRemote().restart()
-#            st.rerun()
         if st.button("Activate"):
             pbremote.local_run.activate(f'{instance.user}_{instance.symbol}_{instance.market_type}', False)
         if st.button("Backtest"):
@@ -235,8 +222,6 @@ def edit_instance():
                 del st.session_state.bt_queue
             if "bt_compare" in st.session_state:
                 del st.session_state.bt_compare
-            if "bt_import" in st.session_state:
-                del st.session_state.bt_import
             st.switch_page("pages/3_Backtest.py")
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
         if not "error_config" in st.session_state and not instance.symbol == "Select Symbol" and instance._config.config:
@@ -267,20 +252,7 @@ def edit_instance():
             st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_instance_enabled_on")
     with col_2:
         st.number_input("config version", min_value=instance.version, value=instance.version, step=1, format="%.d", key="edit_instance_version", help=pbgui_help.config_version)
-    with col_3:
-        st.toggle("PBShare Grid", value=instance.pbshare_grid, help=pbgui_help.pbshare_grid, key="edit_instance_pbshare_grid")
     instance.view_log()
-
-def import_instance():
-    # Init instance
-    instances = st.session_state.pbgui_instances
-    # Navigation
-    with st.sidebar:
-        if st.button(":back:"):
-            del st.session_state.import_instance
-            del st.session_state.pbgui_instances
-            st.rerun()
-    instances.import_manager()
 
 set_page_config()
 
@@ -290,7 +262,5 @@ if is_session_state_initialized():
 
 if 'edit_instance' in st.session_state:
     edit_instance()
-elif 'import_instance' in st.session_state:
-    import_instance()
 else:
     select_instance()
