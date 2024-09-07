@@ -6,7 +6,6 @@ from User import Users, User
 from Exchange import Exchange
 from pbgui_func import PBDIR, PBGDIR, error_popup, info_popup
 import sqlite3
-import pandas as pd
 
 class Database():
     def __init__(self):
@@ -19,7 +18,7 @@ class Database():
                     id INTEGER PRIMARY KEY,
                     symbol TEXT NOT NULL,
                     timestamp INTEGER NOT NULL,
-                    income INTEGER NOT NULL,
+                    income REAL NOT NULL,
                     uniqueid text NOT NULL UNIQUE,
                     user TEXT NOT NULL
             );""",
@@ -538,7 +537,6 @@ class Database():
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # user = users.find_user("hl_manicpt")
     # user2 = users.find_user("bybit_CPT1")
     # exchange = Exchange("bybit", user)
     # db = Database()
