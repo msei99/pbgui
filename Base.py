@@ -111,7 +111,6 @@ class Base:
                 self.ohlcv = st.session_state.base_ohlcv
         col_1, col_2, col_3 = st.columns([1,1,1])
         with col_1:
-            print(self._users.list_single())
             st.selectbox('User',self._users.list_single(), key="base_user")
             st.session_state.placeholder = st.empty()
         with col_2:
