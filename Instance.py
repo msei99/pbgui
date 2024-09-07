@@ -29,7 +29,6 @@ class Instance(Base):
         self._multi = False
         self._enabled_on = "disabled"
         self._version = 0
-        self._pbshare_grid = False
         self._error = None # not saved
         self._symbol_ccxt = None
         self._assigned_balance = 0
@@ -70,8 +69,6 @@ class Instance(Base):
     def enabled_on(self): return self._enabled_on
     @property
     def version(self): return self._version
-    @property
-    def pbshare_grid(self): return self._pbshare_grid
     @property
     def preview_grid(self): return self._config.preview_grid
     @property
@@ -253,10 +250,6 @@ class Instance(Base):
     @version.setter
     def version(self, new_version):
         self._version = new_version
-
-    @pbshare_grid.setter
-    def pbshare_grid(self, new_pbshare_grid):
-        self._pbshare_grid = new_pbshare_grid
 
     @co.setter
     def co(self, new_co):
@@ -846,70 +839,6 @@ class Instance(Base):
                 p.line(x=self._ohlcv_df["timestamp"], y=entry[1], color="green", line_width=2, line_dash="dotted", legend_label=f"{entry[1]}: {entry[0]}")
         p.legend.location = "bottom_left"
         st.bokeh_chart(p, use_container_width=True)
-
-    def save_ohlcv(self):
-        ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe="1h", limit=100)
-        self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
-        w = (self._ohlcv_df["timestamp"][1] - self._ohlcv_df["timestamp"][0]) * 0.8
-        layout = go.Layout(title=f'{self.symbol} | {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")} UTC', title_font=dict(size=36), showlegend=True)
-        fig = go.Figure(data=[go.Candlestick(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
-               open=self._ohlcv_df["open"], high=self._ohlcv_df["high"],
-               low=self._ohlcv_df["low"], close=self._ohlcv_df["close"],
-               increasing_line_color='green', decreasing_line_color='red')],
-               layout=layout)
-        # remove legend from trace 0
-        fig.data[0].showlegend = False
-        fig.update_layout(yaxis=dict(title='USDT', title_font=dict(size=24)), xaxis_rangeslider_visible=False, width=1280, height=1024, xaxis_type='category')
-        fig.update_layout(xaxis_rangeslider_visible=False, width=1280, height=1024, xaxis_tickformat='%H:%M')
-        fig.update_xaxes(tickangle=-45, tickfont=dict(size=10), dtick='4')
-        fig.update_layout(xaxis_rangeslider_visible=False, width=1280, height=1024)
-        if self._status:
-            balance = self.balance
-            price = self.price
-            orders = self._status["orders"]
-            if self.market_type == "futures":
-                position = self._status["position"]
-            else: 
-                position = None
-                spot_balance = self._status["spot_balance"]
-        else:
-            balance = self.fetch_balance()
-            price = self.fetch_price()["last"]
-            orders = self.fetch_open_orders()
-            if self.market_type == "futures":
-                position = self.fetch_position()
-            else: 
-                position = None
-                spot_balance = self.fetch_spot_balance()
-        # price
-        color = "red" if price < self._ohlcv_df["open"].iloc[-1] else "green"
-        # add price line to candlestick
-        fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'), y=[price] * len(self._ohlcv_df), mode='lines', line=dict(color=color, width=1), name=f'price: {str(round(price,5))}'))
-        if position:
-            if position["entryPrice"]:
-                color = "red" if price < position["entryPrice"] else "green"
-                size = position["contractSize"]
-                qty = position["contracts"] * size
-                fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
-                                        y=[position["entryPrice"]] * len(self._ohlcv_df), mode='lines',
-                                        line=dict(color=color, width=1, dash = 'dash'),
-                                        name=f'position: {str(round(position["entryPrice"],5))} qty: {str(qty)}<br>Pnl: {str(round(position["unrealizedPnl"],5))}'))
-            else:
-                size = 1.0
-        else:
-            size = 1.0
-        orders = sorted(orders, key=lambda x: x["price"], reverse=True)
-        for order in orders:
-            color = "red" if order["side"] == "sell" else "green"
-            qty = order["amount"] * size
-            legend = f'close: {str(order["price"])} qty: {str(qty)}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(qty)}'
-            fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
-                                    y=[order["price"]] * len(self._ohlcv_df),
-                                    mode='lines',
-                                    line=dict(color=color, width=2, dash = 'dot'), name=legend))
-        fig.write_image(f'{self._instance_path}/grid_{self.user}_{self.symbol}.png', width=1280, height=1024, scale=2)
-        return
 
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):
