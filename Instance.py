@@ -4,7 +4,6 @@ import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
 from PBRun import PBRun, RunInstance
-# from PBRemote import PBRemote
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
@@ -25,8 +24,6 @@ class Instance(Base):
     def __init__(self, config: str = None):
         super().__init__()
         self._config = Config(config=config)
-    # def __init__(self):
-    #     super().__init__()
         self._instance_path = None
         self._enabled = False
         self._multi = False
@@ -35,7 +32,6 @@ class Instance(Base):
         self._pbshare_grid = False
         self._error = None # not saved
         self._symbol_ccxt = None
-        # self._config = Config() # not saved
         self._assigned_balance = 0
         self._co = -1
         self._leverage = 7
@@ -120,27 +116,27 @@ class Instance(Base):
             return self._status["balance"]
         else:
             return 0
-    @property
-    def we(self):
-        if not self.load_status(): return 0
-        if self.market_type == "spot": return 0
-        try:
-            if self._status["position"]:
-                if not self._status["position"]["entryPrice"]:
-                    return 0
-                entry = self._status["position"]["entryPrice"]
-                qty = self._status["position"]["contracts"]*self._status["position"]["contractSize"]
-                if self.balance == 0 or not qty:
-                    return 0
-                entry = float(entry)
-                qty = float(qty)
-                we = 100 / self.balance * entry * qty
-                return we
-            else:
-                return 0
-        except Exception as e:
-            print(f'Error calculating we: {self.user} {self.symbol} {self.market_type} {e}')
-            return 0
+    # @property
+    # def we(self):
+    #     if not self.load_status(): return 0
+    #     if self.market_type == "spot": return 0
+    #     try:
+    #         if self._status["position"]:
+    #             if not self._status["position"]["entryPrice"]:
+    #                 return 0
+    #             entry = self._status["position"]["entryPrice"]
+    #             qty = self._status["position"]["contracts"]*self._status["position"]["contractSize"]
+    #             if self.balance == 0 or not qty:
+    #                 return 0
+    #             entry = float(entry)
+    #             qty = float(qty)
+    #             we = 100 / self.balance * entry * qty
+    #             return we
+    #         else:
+    #             return 0
+    #     except Exception as e:
+    #         print(f'Error calculating we: {self.user} {self.symbol} {self.market_type} {e}')
+    #         return 0
     @property
     def upnl(self):
         if not self.load_status(): return 0
@@ -230,29 +226,20 @@ class Instance(Base):
         except Exception as e:
             print(f'Error calculating dca: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
-    @property
-    def entry(self):
-        if not self.load_status(): return 0
-        if self.market_type == "spot": return 0
-        try: 
-            if self._status["position"]:
-                entry = self._status["position"]["entryPrice"]
-                if not entry: return 0
-                return entry
-            else:
-                return 0
-        except Exception as e:
-            print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
-            return 0
-
-    # @enabled.setter
-    # def enabled(self, new_enabled):
-    #     self._enabled = new_enabled
-    #     self.save()
-    #     PBRun().update(self._instance_path, self._enabled)
-    #     if PBRemote().is_running():
-    #         PBRemote().stop()
-    #         PBRemote().run()
+    # @property
+    # def entry(self):
+    #     if not self.load_status(): return 0
+    #     if self.market_type == "spot": return 0
+    #     try: 
+    #         if self._status["position"]:
+    #             entry = self._status["position"]["entryPrice"]
+    #             if not entry: return 0
+    #             return entry
+    #         else:
+    #             return 0
+    #     except Exception as e:
+    #         print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
+    #         return 0
 
     @multi.setter
     def multi(self, new_multi):
@@ -696,47 +683,6 @@ class Instance(Base):
                     'symbol': trade["symbol"]
                 }
 
-    def fetch_fundings(self):
-        if self.market_type == "spot" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
-            return
-        file = Path(f'{self._instance_path}/fundings.json')
-        file_lff = Path(f'{self._instance_path}/last_fetch_fundings.json')
-        fundings = []
-        save = False
-        lfundings = 0
-        since = 1577840461000
-        if file_lff.exists():
-            try:
-                with open(file_lff, "r", encoding='utf-8') as f:
-                    since = json.load(f)
-            except Exception as e:
-                print(f'{str(file_lff)} is corrupted {e}')
-                file_lff.unlink()
-        if file.exists():
-            try:
-                with open(file, "r", encoding='utf-8') as f:
-                    fundings = json.load(f)
-                    lfundings = len(fundings)
-                if type(fundings[-1]["timestamp"]) == int:
-                    since = fundings[-1]["timestamp"]
-            except Exception as e:
-                print(f'{str(file)} is corrupted {e}')
-        now = self.fetch_timestamp()
-        new_fundings = self._exchange.fetch_fundings(self.symbol_ccxt, self._market_type, since)
-        if new_fundings:
-            for funding in new_fundings:
-                if not any(str(funding["id"]) in str(sub["id"]) for sub in fundings):
-                    fundings.append(funding)
-                    save = True
-        since = now
-        with open(file_lff, "w", encoding='utf-8') as f:
-            json.dump(since, f, indent=4)
-        if save:
-            sort_fundings = sorted(fundings, key=lambda d: d['timestamp'])
-            with open(file, "w", encoding='utf-8') as f:
-                json.dump(sort_fundings, f, indent=4)
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(fundings) - lfundings} fundings')
-
     def view_ohlcv(self):
         ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe=self.tf, limit=100)
         self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -968,7 +914,6 @@ class Instance(Base):
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):
             self.fetch_trades()
-            self.fetch_fundings()
             self._trades = self.trades_to_df()
         if self._trades is None:
             st.write("### No Trades available.")
