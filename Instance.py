@@ -113,27 +113,6 @@ class Instance(Base):
             return self._status["balance"]
         else:
             return 0
-    # @property
-    # def we(self):
-    #     if not self.load_status(): return 0
-    #     if self.market_type == "spot": return 0
-    #     try:
-    #         if self._status["position"]:
-    #             if not self._status["position"]["entryPrice"]:
-    #                 return 0
-    #             entry = self._status["position"]["entryPrice"]
-    #             qty = self._status["position"]["contracts"]*self._status["position"]["contractSize"]
-    #             if self.balance == 0 or not qty:
-    #                 return 0
-    #             entry = float(entry)
-    #             qty = float(qty)
-    #             we = 100 / self.balance * entry * qty
-    #             return we
-    #         else:
-    #             return 0
-    #     except Exception as e:
-    #         print(f'Error calculating we: {self.user} {self.symbol} {self.market_type} {e}')
-    #         return 0
     @property
     def upnl(self):
         if not self.load_status(): return 0
@@ -223,20 +202,6 @@ class Instance(Base):
         except Exception as e:
             print(f'Error calculating dca: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
-    # @property
-    # def entry(self):
-    #     if not self.load_status(): return 0
-    #     if self.market_type == "spot": return 0
-    #     try: 
-    #         if self._status["position"]:
-    #             entry = self._status["position"]["entryPrice"]
-    #             if not entry: return 0
-    #             return entry
-    #         else:
-    #             return 0
-    #     except Exception as e:
-    #         print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
-    #         return 0
 
     @multi.setter
     def multi(self, new_multi):
@@ -1181,65 +1146,6 @@ class Instances:
                 for line in reversed(log):
                     logr = logr+line
         stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
-
-    def import_manager(self):
-        managercfg = Path(f'{st.session_state.pbdir}/manager/config.yaml')
-        if not managercfg.exists():
-            st.write(f'{managercfg} not found')
-            return
-        sys.path.insert(0,st.session_state.pbdir)
-        sys.path.insert(0,f'{st.session_state.pbdir}/manager')
-        try:
-            manager = __import__("manager")
-            Manager = getattr(manager,"Manager")
-            pb_manager = Manager()
-            pb_instances = pb_manager.get_instances()
-        except Exception as e:
-            st.write("### No Instances configured in passivbot instance manager. We have nothing to import.")
-            return
-        d = []
-        select_all = st.checkbox('Select All',value=False, key="select_all")
-        column_config = {
-            "Import": st.column_config.CheckboxColumn('Import', default=False),
-            "id": None}
-        for id, instance in enumerate(pb_instances):
-            d.append({
-                'id': id,
-                'Import': select_all,
-                'User': instance.user,
-                'Symbol': instance.symbol,
-                'Running': instance.is_running(),
-            })
-        selected = st.data_editor(data=d, width=None, height=1024, use_container_width=True, key="editor_select_pbinstance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol'])
-        if st.button("Import"):
-            for line in selected:
-                if line["Import"]:
-                    instance = list(pb_instances)[line["id"]]
-                    if '-m' in instance.flags and instance.flags['-m'] == 'spot':
-                        market = 'spot'
-                    else:
-                        market = 'swap'
-                    inst = Instance()
-                    inst._config = Config(file_name = instance.config)
-                    inst._config.load_config()
-                    inst.user = instance.user
-                    inst.symbol = instance.symbol
-                    inst._market_type = market
-                    if '-lev' in instance.flags:
-                        inst._leverage = instance.flags['-lev']
-                    if '-oh' in instance.flags:
-                        if not instance.flags['-oh']:
-                            inst._ohlcv = False
-                    if '-ab' in instance.flags:
-                        inst._assigned_balance = instance.flags['-ab']
-                    if '-pt' in instance.flags:
-                        inst._price_distance_threshold = instance.flags['-pt']
-                    if '-pp' in instance.flags:
-                        inst._price_precision = instance.flags['-pp']
-                    if '-ps' in instance.flags:
-                        inst._price_step = instance.flags['-ps']
-                    inst.save()
-                    st.write(f'User: :green[{instance.user}] Symbol: :green[{instance.symbol}] imported. :red[Please verify the new Instance!]')
 
 def main():
     print("Don't Run this Class from CLI")
