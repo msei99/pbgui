@@ -73,16 +73,13 @@ class PBStat(Instances):
         self.fetch_status()
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch trades and funding fees')
         for instance in self.instances:
-#            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "bingx"]:
-            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "okx"]:
+            if instance.market_type == "spot":
                 instance.save_status()
                 instance.fetch_trades()
-                instance.fetch_fundings()
-
     def fetch_status(self):
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Fetch status')
         for instance in self.instances:
-            if instance.exchange.id in ["bybit", "bitget", "binance", "kucoinfutures", "okx"]:
+            if instance.market_type == "spot":
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Save Status {instance.user} {instance.symbol}')
                 instance.save_status()
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End Fetch status')
@@ -116,8 +113,7 @@ def main():
             else:
                 stat.fetch_status()
             trade_count += 1
-            if len(stat.instances) < 20:
-                sleep(60)
+            sleep(60)
             # Refresh Instances if there are some new or removed
             stat.instances = []
             stat.load()
