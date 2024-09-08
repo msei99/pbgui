@@ -3,7 +3,7 @@ from pathlib import Path
 import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
-from PBRun import PBRun, RunInstance
+# from PBRun import PBRun, RunInstance
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
@@ -1004,11 +1004,11 @@ class Instance(Base):
         st.button(':recycle: **passivbot logfile**')
         stx.scrollableTextbox(logr,height="300")
 
-    def is_running(self):
-        run_instance = RunInstance()
-        run_instance.user = self.user
-        run_instance.symbol = self.symbol
-        return run_instance.is_running()
+    # def is_running(self):
+    #     run_instance = RunInstance()
+    #     run_instance.user = self.user
+    #     run_instance.symbol = self.symbol
+    #     return run_instance.is_running()
 
 class Instances:
     def __init__(self, ipath: str = None):
