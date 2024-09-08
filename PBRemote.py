@@ -38,7 +38,6 @@ class RemoteServer():
         self._ts = None
         self._startts = 0
         self._rtd = None
-        # self._run = None
         self._edit = False
         self._path = path
         self._unique = []
@@ -65,8 +64,6 @@ class RemoteServer():
     def startts(self): return self._startts
     @property
     def rtd(self): return self._rtd
-    # @property
-    # def run(self): return self._run
     @property
     def edit(self): return self._edit
     @property
@@ -184,8 +181,6 @@ class RemoteServer():
                             self._startts = cfg["startts"]
                         if "api_md5" in cfg:
                             self._api_md5 = cfg["api_md5"]
-                        # if "run" in cfg:
-                        #     self._run = cfg["run"]
                         if "mem" in cfg:
                             self._mem = cfg["mem"]
                         if "swap" in cfg:
@@ -280,9 +275,7 @@ class PBRemote():
         self.remote_servers = []
         self.local_run = PBRun()
         self.index = 0
-        # self.api_md5 = None
         self.startts = None
-        # self.sync_downts = None
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -316,7 +309,6 @@ class PBRemote():
             return
         self.bucket_dir = f'{self.bucket}{self.bucket.split(":")[0]}'
         self.load_remote()
-        # self.load_local() # Load specific to instances (deprecated?)
 
     # api_md5
     @property
@@ -400,9 +392,6 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
-        # elif direction == 'down' and spath == 'instances':
-        #     cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,cmd_**,multi_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
-        #     self.sync_downts = round(datetime.now().timestamp())
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
             if logfile.stat().st_size >= 10485760:
@@ -428,8 +417,6 @@ class PBRemote():
     
     def sync_single_up(self):
         if self.local_run.instances_status_single.has_new_status():
-            # Update old run status (can be removed in next version)
-            # self.load_local()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
             status_ts = self.local_run.instances_status_single.status_ts
             self.local_run.instances_status_single.update_status()
@@ -466,25 +453,16 @@ class PBRemote():
         """
         timestamp = round(datetime.now().timestamp())
         cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
-        # run = []
-        # for instance in self.local_run:
-        #     inst = ({
-        #         "user": instance.user,
-        #         "symbol": instance.symbol
-        #     })
-        #     run.append(inst)
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_usage('/')
         cpu = psutil.cpu_percent()
         boot = psutil.boot_time()
-        # self.api_md5 = self.calculate_api_md5()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
             "name": self.name,
             "api_md5": self.api_md5,
-            # "run": run,
             "mem": mem,
             "swap": swap,
             "disk": disk,
@@ -527,10 +505,6 @@ class PBRemote():
             rserver.load()
             rserver.load_instances()
             self.add(rserver)
-
-    # def load_local(self):
-    #     self.local_run.load_all()
-    #     # self.api_md5 = self.calculate_api_md5()
 
     def run(self):
         """Starts PBRemote in unbuffered mode, and send an error message if it does not open every 10 secondes."""
@@ -633,7 +607,6 @@ def main():
     - Logs in pbgui/data/logs/PBRemote.log and creates a .old file if the file is >10MB.
     - 
     """
-    # print("Start PBRemote")
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
