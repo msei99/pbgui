@@ -842,7 +842,7 @@ class PBRun():
                     self.remove_single(run_single)
                     status.running = False
                     # if not self.is_old_instance(single_instance):
-                    #     run_single.stop()
+                    run_single.stop()
                 status.name = single_instance.split('/')[-1]
                 status.multi = run_single.multi
                 status.version = run_single.version
