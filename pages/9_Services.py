@@ -198,12 +198,12 @@ def pbremote_details():
                     'Name': multi.name,
                     'Version': multi.version
                 })
-        d_old = []
-        for old in server.run:
-            d_old.append({
-                'User': old["user"],
-                'Symbol': old["symbol"],
-            })
+        # d_old = []
+        # for old in server.run:
+        #     d_old.append({
+        #         'User': old["user"],
+        #         'Symbol': old["symbol"],
+        #     })
         st.header(f"Running Single Instances ({len(d_single)})")
         if d_single:
             st.dataframe(data=d_single, width=640, height=36+(len(d_single))*35)
@@ -214,9 +214,9 @@ def pbremote_details():
             st.dataframe(data=d_multi, width=640, height=36+(len(d_multi))*35)
         else:
             st.write("None")
-        if d_old:
-            st.header(f"Running old PBRun/PBRemote Single Instances ({len(d_old)})")
-            st.dataframe(data=d_old, width=640, height=36+(len(d_old))*35)
+        # if d_old:
+        #     st.header(f"Running old PBRun/PBRemote Single Instances ({len(d_old)})")
+        #     st.dataframe(data=d_old, width=640, height=36+(len(d_old))*35)
 
 
 def pbstat_details():
