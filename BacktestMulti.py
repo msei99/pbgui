@@ -998,6 +998,7 @@ class BacktestMultiResult:
         self.backtest_config = self.load_backtest_config()
         self.symbols = self.load_symbols()
         self.sd = self.backtest_config["start_date"]
+        self.ed = self.backtest_config["end_date"]
         self.drawdown_max = self.result["drawdown_max"]
         self.final_balance = self.result["final_balance"]
         self.starting_balance = self.result["starting_balance"]
@@ -1031,16 +1032,31 @@ class BacktestMultiResult:
             print(f'{str(r)} is corrupted {e}')
 
     def load_stats(self):
+        """
+        Load statistics from a CSV file.
+
+        This method reads the statistics from a CSV file located at `self.result_path/stats.csv`.
+        It calculates the start time based on the `self.ed` attribute and the 'minute' column in the CSV file.
+        The start time is calculated by subtracting the number of minutes in the last row of the CSV file from the timestamp of `self.ed`.
+        The 'time' column is then added to the loaded DataFrame, representing the actual time based on the calculated start time and the 'minute' column.
+
+        Returns:
+            None
+        """
         if self.stats is None:
             stats = f'{self.result_path}/stats.csv'
             self.stats = pd.read_csv(stats)
-            self.stats['time'] = datetime.datetime.strptime(self.sd, '%Y-%m-%d') + pd.TimedeltaIndex(self.stats['minute'], unit='m')
+            timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+            start_time = timestamp - (self.stats['minute'].iloc[-1] * 60)
+            self.stats['time'] = datetime.datetime.fromtimestamp(start_time) + pd.TimedeltaIndex(self.stats['minute'], unit='m')
 
     def load_fills(self):
         if self.fills is None:
             fills = f'{self.result_path}/fills.csv'
             self.fills = pd.read_csv(fills)
-            self.fills['time'] = datetime.datetime.strptime(self.sd, '%Y-%m-%d') + pd.TimedeltaIndex(self.fills['minute'], unit='m')
+            timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+            start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
+            self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.TimedeltaIndex(self.fills['minute'], unit='m')
 
     def view_plots(self):
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
