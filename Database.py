@@ -200,7 +200,7 @@ class Database():
                         symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
                     timestamp = prices[symbol_ccxt]['timestamp']
                     if not timestamp:
-                        timestamp = int(datetime.now().timestamp() * 1000)
+                        timestamp = exchange.fetch_timestamp()
                     price = [
                         timestamp,
                         prices[symbol_ccxt]['last'],
