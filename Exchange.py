@@ -808,6 +808,15 @@ class Exchange:
             c_mults = symbol_info["contractSize"]
         return symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults
 
+    def fetch_copytrading_symbols(self):
+        if not self.instance: self.connect()
+        # print(self.instance.__dir__())
+        symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
+        cpSymbols = []
+        for symbol in symbols["data"]:
+            cpSymbols.append(symbol["symbol"])
+        return cpSymbols
+
     def fetch_symbols(self):
         if not self.instance: self.connect()
         self._markets = self.instance.load_markets()
@@ -871,10 +880,11 @@ class Exchange:
 
 def main():
     print("Don't Run this Class from CLI")
-    # users = Users()
+    users = Users()
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
-    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
+    exchange = Exchange("binance", users.find_user("binance_CPT"))
+    print(exchange.fetch_copytrading_symbols())
     # print(exchange.fetch_positions())
     # print(exchange.fetch_all_open_orders("DOGE/USDC:USDC"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC"], "swap"))
