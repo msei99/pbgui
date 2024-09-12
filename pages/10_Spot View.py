@@ -40,46 +40,36 @@ def select_instance():
                 st.rerun()
     d = []
     wb = 0
-    we = 0
     total_upnl = 0
-    total_we = 0
     for id, instance in enumerate(instances):
-        if any(dic.get('User') == instance.user for dic in d):
-            balance = 0
-        else:
-            balance = instance.balance
-        if instance.we > we:
-            we = instance.we
-        d.append({
-            'id': id,
-            'View': False,
-            'History': False,
-            # 'Running': instance.is_running(),
-            'User': instance.user,
-            'Symbol': instance.symbol,
-            'Market_type': instance.market_type,
-            'Balance': f'${instance.balance:.2f}',
-            'uPnl': instance.upnl,
-            'Position': f'{instance.psize}',
-            'Price': f'{instance.price}',
-            'Entry': f'{instance.entry}',
-            'DCA': f'{instance.dca}',
-            'Next DCA': f'{instance.next_dca}',
-            'Next TP': f'{instance.next_tp}',
-            'Wallet Exposure': instance.we,
-        })
-        if type(balance) == float:
-            wb += balance
-        total_upnl += instance.upnl
-        total_we += instance.we
+        if instance.market_type == "spot":
+            if any(dic.get('User') == instance.user for dic in d):
+                balance = 0
+            else:
+                balance = instance.balance
+            if instance.we > we:
+                we = instance.we
+            d.append({
+                'id': id,
+                'View': False,
+                'History': False,
+                'User': instance.user,
+                'Symbol': instance.symbol,
+                'Balance': f'${instance.balance:.2f}',
+                'uPnl': instance.upnl,
+                'Position': f'{instance.psize}',
+                'Price': f'{instance.price}',
+                'DCA': f'{instance.dca}',
+                'Next DCA': f'{instance.next_dca}',
+                'Next TP': f'{instance.next_tp}',
+            })
+            if type(balance) == float:
+                wb += balance
+            total_upnl += instance.upnl
     if len(instances.instances) > 0:
-        total_we = total_we / len(instances.instances)
-        if we == 0:
-            we = 100
         column_config = {
             "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
             "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
-            "Wallet Exposure": st.column_config.ProgressColumn(f'Wallet Exposure: {total_we:.2f} %', format="%.2f %%", max_value=we),
             "id": None}
         df = pd.DataFrame(d)
         sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])

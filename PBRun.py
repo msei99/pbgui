@@ -24,153 +24,6 @@ import traceback
 import uuid
 from Status import InstanceStatus, InstancesStatus
 
-class RunInstance():
-    def __init__(self):
-        self._enabled = False
-        self._multi = False
-        self.enabled_on = "disabled"
-        self._user = None
-        self._symbol = None
-        self._parameter = None
-        self._path = None
-    
-    @property
-    def enabled(self): return self._enabled
-    @property
-    def multi(self): return self._multi
-    @property
-    def user(self): return self._user
-    @property
-    def symbol(self): return self._symbol
-    @property
-    def parameter(self): return self._parameter
-    @property
-    def path(self): return self._path
-
-    @enabled.setter
-    def enabled(self, new_enabled):
-        if self._enabled != new_enabled:
-            self._enabled = new_enabled
-    @multi.setter
-    def multi(self, new_multi):
-        if self._multi != new_multi:
-            self._multi = new_multi
-    @user.setter
-    def user(self, new_user):
-        if self._user != new_user:
-            self._user = new_user
-    @symbol.setter
-    def symbol(self, new_symbol):
-        if self._symbol != new_symbol:
-            self._symbol = new_symbol
-    @parameter.setter
-    def parameter(self, new_parameter):
-        if self._parameter != new_parameter:
-            self._parameter = new_parameter
-    @path.setter
-    def path(self, new_path):
-        if self._path != new_path:
-            self._path = new_path
-
-
-    def watch(self):
-        if not self.is_running():
-            self.start()
-
-    def is_running(self):
-        if self.pid():
-            return True
-        return False
-
-    def pid(self):
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except psutil.NoSuchProcess:
-                pass
-            except psutil.AccessDenied:
-                pass
-            if self.user in cmdline and self.symbol in cmdline and any("passivbot.py" in sub for sub in cmdline):
-                return process
-
-    def stop(self):
-        if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: Old Instance {self.user} {self.symbol}')
-            self.pid().kill()
-
-    def start(self):
-        if not self.is_running():
-            pb_config = configparser.ConfigParser()
-            pb_config.read('pbgui.ini')
-            if pb_config.has_option("main", "pbdir"):
-                pbdir = pb_config.get("main", "pbdir")
-                config = PurePath(f'{self.path}/config.json')
-                cmd = [sys.executable, '-u', PurePath(f'{pbdir}/passivbot.py')]
-                cmd_end = f'{self.parameter} {self.user} {self.symbol} '.lstrip(' ')
-                cmd.extend(shlex.split(cmd_end))
-                cmd.extend([config])
-                logfile = Path(f'{self.path}/passivbot.log')
-                log = open(logfile,"ab")
-                if platform.system() == "Windows":
-                    creationflags = subprocess.DETACHED_PROCESS
-                    creationflags |= subprocess.CREATE_NO_WINDOW
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, creationflags=creationflags)
-                else:
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir, text=True, start_new_session=True)
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: Old Instance {cmd_end}')
-
-    def clean_log(self):
-        logfile = Path(f'{self.path}/passivbot.log')
-        if logfile.exists():
-            if logfile.stat().st_size >= 10485760:
-                logfile_old = Path(f'{str(logfile)}.old')
-                copy(logfile,logfile_old)
-                with open(logfile,'r+') as file:
-                    file.truncate()
-
-    def load(self):
-        """Load the instance file with passivbot's parameters in self"""
-        file = Path(f'{self.path}/instance.cfg')
-        with open(file, "r", encoding='utf-8') as f:
-            instance_cfg = json.load(f)
-            if "_enabled" in instance_cfg:
-                self.enabled = instance_cfg["_enabled"]
-            if "_multi" in instance_cfg:
-                self.multi = instance_cfg["_multi"]
-            if "_enabled_on" in instance_cfg:
-                self.enabled_on = instance_cfg["_enabled_on"]
-            self.user = instance_cfg["_user"]
-            self.symbol = instance_cfg["_symbol"]
-            self.parameter = ""
-            if instance_cfg["_long_mode"] == "graceful_stop":
-                self.parameter = (self.parameter + f' -lm gs').lstrip(' ')
-            if instance_cfg["_long_mode"] == "panic":
-                self.parameter = (self.parameter + f' -lm p').lstrip(' ')
-            if instance_cfg["_long_mode"] == "tp_only":
-                self.parameter = (self.parameter + f' -lm t').lstrip(' ')
-            if instance_cfg["_short_mode"] == "graceful_stop":
-                self.parameter = (self.parameter + f' -sm gs').lstrip(' ')
-            if instance_cfg["_short_mode"] == "panic":
-                self.parameter = (self.parameter + f' -sm p').lstrip(' ')
-            if instance_cfg["_short_mode"] == "tp_only":
-                self.parameter = (self.parameter + f' -sm t').lstrip(' ')
-            if instance_cfg["_market_type"] != "swap":
-                self.parameter = (self.parameter + f' -m spot').lstrip(' ')
-            if not instance_cfg["_ohlcv"]:
-                self.parameter = (self.parameter + f' -oh n').lstrip(' ')
-            if instance_cfg["_co"] != -1:
-                self.parameter = (self.parameter + f' -co {instance_cfg["_co"]}').lstrip(' ')
-            if instance_cfg["_leverage"] != 7:
-                self.parameter = (self.parameter + f' -lev {instance_cfg["_leverage"]}').lstrip(' ')
-            if instance_cfg["_assigned_balance"] != 0:
-                self.parameter = (self.parameter + f' -ab {instance_cfg["_assigned_balance"]}').lstrip(' ')
-            if instance_cfg["_price_distance_threshold"] != 0.5:
-                self.parameter = (self.parameter + f' -pt {instance_cfg["_price_distance_threshold"]}').lstrip(' ')
-            if instance_cfg["_price_precision"] != 0.0:
-                self.parameter = (self.parameter + f' -pp {instance_cfg["_price_precision"]}').lstrip(' ')
-            if instance_cfg["_price_step"] != 0.0:
-                self.parameter = (self.parameter + f' -ps {instance_cfg["_price_step"]}').lstrip(' ')
-
 class RunSingle():
     def __init__(self):
         self.user = None
@@ -438,23 +291,23 @@ class PBRun():
     It does so with update_status_*.cmd, and activate_*.cmd. These files are created while using PBGui, and when PBRun receives activate_*.cmd, it creates the single of multi instances for passivbot, when it receives update_status_*.cmd, it inform on the status of this instances, so the bot specified in the status can start instances of passivbot.
     """
     def __init__(self):
-        self.run_instances = []
+        # self.run_instances = []
         self.run_multi = []
         self.run_single = []
         self.index = 0
         self.pbgdir = Path.cwd()
-        self.pb_config = configparser.ConfigParser()
-        self.pb_config.read('pbgui.ini')
-        if self.pb_config.has_option("main", "pbname"):
-            self.name = self.pb_config.get("main", "pbname")
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("main", "pbname"):
+            self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
-        if self.pb_config.has_option("main", "activate_ts"):
-            self.activate_ts = int(self.pb_config.get("main", "activate_ts"))
+        if pb_config.has_option("main", "activate_ts"):
+            self.activate_ts = int(pb_config.get("main", "activate_ts"))
         else:
             self.activate_ts = 0
-        if self.pb_config.has_option("main", "activate_single_ts"):
-            self.activate_single_ts = int(self.pb_config.get("main", "activate_single_ts"))
+        if pb_config.has_option("main", "activate_single_ts"):
+            self.activate_single_ts = int(pb_config.get("main", "activate_single_ts"))
         else:
             self.activate_single_ts = 0
         self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
@@ -463,8 +316,8 @@ class PBRun():
         self.instances_status_single = InstancesStatus(f'{self.pbgdir}/data/cmd/status_single.json')
         self.instances_status_single.pbname = self.name
         self.instances_status_single.activate_ts = self.activate_single_ts
-        if self.pb_config.has_option("main", "pbdir"):
-            self.pbdir = self.pb_config.get("main", "pbdir")
+        if pb_config.has_option("main", "pbdir"):
+            self.pbdir = pb_config.get("main", "pbdir")
         else:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
             exit(1)
@@ -479,27 +332,6 @@ class PBRun():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbrun.pid')
         self.my_pid = None
-
-    def __iter__(self):
-        return iter(self.run_instances)
-
-    def __next__(self):
-        if self.index > len(self.run_instances):
-            raise StopIteration
-        self.index += 1
-        return next(self)
-
-    def add(self, run_instance: RunInstance): # Deprecated (Instances)
-        if run_instance:
-            if run_instance.path:
-                for instance in self.run_instances:
-                    if instance.path == run_instance.path:
-                        return
-                self.run_instances.append(run_instance)
-
-    def remove(self, run_instance: RunInstance): # Deprecated (Instances)
-        if run_instance:
-            self.run_instances.remove(run_instance)
 
     def add_multi(self, run_multi: RunMulti):
         if run_multi:
@@ -538,25 +370,6 @@ class PBRun():
             with open(version_file, "r", encoding='utf-8') as f:
                 version = f.read()
         return int(version)
-
-    def stop_instance(self, instance):
-        self.change_enabled(instance, False)
-        ipath = f'{self.instances_path}/{instance}'
-        self.update(ipath, False)   # No function ? Deprecated?
-
-    def disable_instance(self, instance): # Can be removed with the removal of Instances from the code.
-        self.change_enabled(instance, False)
-
-    def change_enabled(self, instance : str, enabled : bool):
-        # May be useless if disable_instance and stop_instance are.
-        ipath = f'{self.instances_path}/{instance}'
-        ifile = Path(f'{ipath}/instance.cfg')
-        with open(ifile, "r", encoding='utf-8') as f:
-            inst = json.load(f)
-            inst["_enabled"] = enabled
-            f.close()
-        with open(ifile, "w", encoding='utf-8') as f:
-            json.dump(inst, f, indent=4)
 
     def update_status(self, status_file : str, rserver : str):
         """Function only called on PBRemote"""
@@ -752,49 +565,20 @@ class PBRun():
     def update_activate(self):
         self.activate_ts = int(datetime.now().timestamp())
         self.instances_status.activate_ts = self.activate_ts
-        self.pb_config.set("main", "activate_ts", str(self.activate_ts))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("main", "activate_ts", str(self.activate_ts))
         with open('pbgui.ini', 'w') as pbgui_configfile:
-            self.pb_config.write(pbgui_configfile)
+            pb_config.write(pbgui_configfile)
 
     def update_activate_single(self):
         self.activate_single_ts = int(datetime.now().timestamp())
         self.instances_status_single.activate_ts = self.activate_single_ts
-        self.pb_config.set("main", "activate_single_ts", str(self.activate_single_ts))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("main", "activate_single_ts", str(self.activate_single_ts))
         with open('pbgui.ini', 'w') as pbgui_configfile:
-            self.pb_config.write(pbgui_configfile)
-
-    def load(self, instance: str): # Deprecated (Instances)
-        file = Path(f'{instance}/instance.cfg')
-        if file.exists():
-            run_instance = RunInstance()
-            run_instance.path = instance
-            run_instance.load()
-            if run_instance.enabled and not run_instance.multi:
-                self.add(run_instance)
-            elif run_instance.enabled_on != self.name:
-                run_instance.stop()
-
-    def load_all(self): # Deprecated (Instances)
-        self.run_instances = []
-        p = str(Path(f'{self.instances_path}/*'))
-        instances = glob.glob(p)
-        for instance in instances:
-            self.load(instance)
-
-    # can be removed on a future version
-    def stop_old_instance(self, path: str):
-        for instance in self.run_instances:
-            if instance.path == path:
-                instance.stop()
-                self.disable_instance(instance.path.split('/')[-1])
-                self.remove(instance)
-    
-    # can be removed on a future version
-    def is_old_instance(self, path: str):
-        for instance in self.run_instances:
-            if instance.path == path:
-                return True
-        return False
+            pb_config.write(pbgui_configfile)
 
     def watch_single(self, single_instances : list = None):
         """Create of delete single instances and activate them or not depending on their status.
@@ -817,9 +601,6 @@ class PBRun():
                 run_single.pbdir = self.pbdir
                 run_single.pbgdir = self.pbgdir
                 if run_single.load():
-                    # Stop old instance if we start them as a new single instance (can be removed in a future version)
-                    if run_single.name != "disabled":
-                        self.stop_old_instance(single_instance)
                     if run_single.is_running():
                         running_version = self.find_running_version(single_instance)
                         if running_version < run_single.version:
@@ -832,13 +613,9 @@ class PBRun():
                     self.add_single(run_single)
                     status.running = True
                 else:
-                    # Stop old instance if started as a new single instance somewhere else
-                    if run_single.name != "disabled":
-                        self.stop_old_instance(single_instance)
                     self.remove_single(run_single)
                     status.running = False
-                    if not self.is_old_instance(single_instance):
-                        run_single.stop()
+                    run_single.stop()
                 status.name = single_instance.split('/')[-1]
                 status.multi = run_single.multi
                 status.version = run_single.version
@@ -973,7 +750,6 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
-    run.load_all() # Deprecated (Instances)
     run.watch_multi()
     run.watch_single()
     count = 0
@@ -986,15 +762,11 @@ def main():
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.has_activate()
             run.has_update_status()
-            for run_instance in run: # Deprecated (Instances)
-                run_instance.watch()
             for run_multi in run.run_multi:
                 run_multi.watch()
             for run_single in run.run_single:
                 run_single.watch()
             if count%2 == 0:
-                for run_instance in run:
-                    run_instance.clean_log()
                 for run_multi in run.run_multi:
                     run_multi.clean_log()
                 for run_single in run.run_single:
@@ -1004,7 +776,6 @@ def main():
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
             traceback.print_exc()
-#            exit()
 
 if __name__ == '__main__':
     main()
