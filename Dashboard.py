@@ -740,7 +740,10 @@ class Dashboard():
         user = users.find_user(position["User"])
         symbol = position["Symbol"]
         # symbol to ccxt_symbol
-        symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+        if symbol[-4:] == "USDT":
+            symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+        elif symbol[-4:] == "USDC":
+            symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
         exchange = Exchange(user.exchange, user)
         market_type = "futures"
         ohlcv = exchange.fetch_ohlcv(symbol_ccxt, market_type, timeframe="1h", limit=100)

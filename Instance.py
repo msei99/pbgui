@@ -3,8 +3,6 @@ from pathlib import Path
 import streamlit_scrollable_textbox as stx
 from Base import Base
 from Backtest import BacktestItem, BacktestResults
-from PBRun import PBRun, RunInstance
-# from PBRemote import PBRemote
 import pbgui_help
 from streamlit_autorefresh import st_autorefresh
 from Config import Config
@@ -12,7 +10,7 @@ import shutil
 import json
 import glob
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime
 from time import sleep
 from bokeh.plotting import figure
 import numpy as np
@@ -25,17 +23,13 @@ class Instance(Base):
     def __init__(self, config: str = None):
         super().__init__()
         self._config = Config(config=config)
-    # def __init__(self):
-    #     super().__init__()
         self._instance_path = None
         self._enabled = False
         self._multi = False
         self._enabled_on = "disabled"
         self._version = 0
-        self._pbshare_grid = False
         self._error = None # not saved
         self._symbol_ccxt = None
-        # self._config = Config() # not saved
         self._assigned_balance = 0
         self._co = -1
         self._leverage = 7
@@ -74,8 +68,6 @@ class Instance(Base):
     def enabled_on(self): return self._enabled_on
     @property
     def version(self): return self._version
-    @property
-    def pbshare_grid(self): return self._pbshare_grid
     @property
     def preview_grid(self): return self._config.preview_grid
     @property
@@ -119,27 +111,6 @@ class Instance(Base):
         if "balance" in self._status:
             return self._status["balance"]
         else:
-            return 0
-    @property
-    def we(self):
-        if not self.load_status(): return 0
-        if self.market_type == "spot": return 0
-        try:
-            if self._status["position"]:
-                if not self._status["position"]["entryPrice"]:
-                    return 0
-                entry = self._status["position"]["entryPrice"]
-                qty = self._status["position"]["contracts"]*self._status["position"]["contractSize"]
-                if self.balance == 0 or not qty:
-                    return 0
-                entry = float(entry)
-                qty = float(qty)
-                we = 100 / self.balance * entry * qty
-                return we
-            else:
-                return 0
-        except Exception as e:
-            print(f'Error calculating we: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
     @property
     def upnl(self):
@@ -230,29 +201,6 @@ class Instance(Base):
         except Exception as e:
             print(f'Error calculating dca: {self.user} {self.symbol} {self.market_type} {e}')
             return 0
-    @property
-    def entry(self):
-        if not self.load_status(): return 0
-        if self.market_type == "spot": return 0
-        try: 
-            if self._status["position"]:
-                entry = self._status["position"]["entryPrice"]
-                if not entry: return 0
-                return entry
-            else:
-                return 0
-        except Exception as e:
-            print(f'Error calculating entry: {self.user} {self.symbol} {self.market_type} {e}')
-            return 0
-
-    # @enabled.setter
-    # def enabled(self, new_enabled):
-    #     self._enabled = new_enabled
-    #     self.save()
-    #     PBRun().update(self._instance_path, self._enabled)
-    #     if PBRemote().is_running():
-    #         PBRemote().stop()
-    #         PBRemote().run()
 
     @multi.setter
     def multi(self, new_multi):
@@ -266,10 +214,6 @@ class Instance(Base):
     @version.setter
     def version(self, new_version):
         self._version = new_version
-
-    @pbshare_grid.setter
-    def pbshare_grid(self, new_pbshare_grid):
-        self._pbshare_grid = new_pbshare_grid
 
     @co.setter
     def co(self, new_co):
@@ -696,47 +640,6 @@ class Instance(Base):
                     'symbol': trade["symbol"]
                 }
 
-    def fetch_fundings(self):
-        if self.market_type == "spot" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
-            return
-        file = Path(f'{self._instance_path}/fundings.json')
-        file_lff = Path(f'{self._instance_path}/last_fetch_fundings.json')
-        fundings = []
-        save = False
-        lfundings = 0
-        since = 1577840461000
-        if file_lff.exists():
-            try:
-                with open(file_lff, "r", encoding='utf-8') as f:
-                    since = json.load(f)
-            except Exception as e:
-                print(f'{str(file_lff)} is corrupted {e}')
-                file_lff.unlink()
-        if file.exists():
-            try:
-                with open(file, "r", encoding='utf-8') as f:
-                    fundings = json.load(f)
-                    lfundings = len(fundings)
-                if type(fundings[-1]["timestamp"]) == int:
-                    since = fundings[-1]["timestamp"]
-            except Exception as e:
-                print(f'{str(file)} is corrupted {e}')
-        now = self.fetch_timestamp()
-        new_fundings = self._exchange.fetch_fundings(self.symbol_ccxt, self._market_type, since)
-        if new_fundings:
-            for funding in new_fundings:
-                if not any(str(funding["id"]) in str(sub["id"]) for sub in fundings):
-                    fundings.append(funding)
-                    save = True
-        since = now
-        with open(file_lff, "w", encoding='utf-8') as f:
-            json.dump(since, f, indent=4)
-        if save:
-            sort_fundings = sorted(fundings, key=lambda d: d['timestamp'])
-            with open(file, "w", encoding='utf-8') as f:
-                json.dump(sort_fundings, f, indent=4)
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(fundings) - lfundings} fundings')
-
     def view_ohlcv(self):
         ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe=self.tf, limit=100)
         self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -800,9 +703,10 @@ class Instance(Base):
         st.bokeh_chart(p, use_container_width=True)
 
     def view_grid(self, sb: float = None):
-        if self._config.type != "recursive_grid":
+        if self._config.type != "recursive_grid" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
             return
         self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
+        print(self._symbol_ccxt)
         ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe="4h", limit=100)
         self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
@@ -823,6 +727,7 @@ class Instance(Base):
         except Exception as e:
             st.write("### Can not import grid functions from passivbot")
             return
+        print(self.symbol)
         symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults = self.exchange.fetch_symbol_info(self.symbol, self.market_type)
         # print(symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults)
         short = json.loads(self._config.config)["short"]
@@ -899,74 +804,9 @@ class Instance(Base):
         p.legend.location = "bottom_left"
         st.bokeh_chart(p, use_container_width=True)
 
-    def save_ohlcv(self):
-        ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe="1h", limit=100)
-        self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
-        w = (self._ohlcv_df["timestamp"][1] - self._ohlcv_df["timestamp"][0]) * 0.8
-        layout = go.Layout(title=f'{self.symbol} | {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")} UTC', title_font=dict(size=36), showlegend=True)
-        fig = go.Figure(data=[go.Candlestick(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
-               open=self._ohlcv_df["open"], high=self._ohlcv_df["high"],
-               low=self._ohlcv_df["low"], close=self._ohlcv_df["close"],
-               increasing_line_color='green', decreasing_line_color='red')],
-               layout=layout)
-        # remove legend from trace 0
-        fig.data[0].showlegend = False
-        fig.update_layout(yaxis=dict(title='USDT', title_font=dict(size=24)), xaxis_rangeslider_visible=False, width=1280, height=1024, xaxis_type='category')
-        fig.update_layout(xaxis_rangeslider_visible=False, width=1280, height=1024, xaxis_tickformat='%H:%M')
-        fig.update_xaxes(tickangle=-45, tickfont=dict(size=10), dtick='4')
-        fig.update_layout(xaxis_rangeslider_visible=False, width=1280, height=1024)
-        if self._status:
-            balance = self.balance
-            price = self.price
-            orders = self._status["orders"]
-            if self.market_type == "futures":
-                position = self._status["position"]
-            else: 
-                position = None
-                spot_balance = self._status["spot_balance"]
-        else:
-            balance = self.fetch_balance()
-            price = self.fetch_price()["last"]
-            orders = self.fetch_open_orders()
-            if self.market_type == "futures":
-                position = self.fetch_position()
-            else: 
-                position = None
-                spot_balance = self.fetch_spot_balance()
-        # price
-        color = "red" if price < self._ohlcv_df["open"].iloc[-1] else "green"
-        # add price line to candlestick
-        fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'), y=[price] * len(self._ohlcv_df), mode='lines', line=dict(color=color, width=1), name=f'price: {str(round(price,5))}'))
-        if position:
-            if position["entryPrice"]:
-                color = "red" if price < position["entryPrice"] else "green"
-                size = position["contractSize"]
-                qty = position["contracts"] * size
-                fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
-                                        y=[position["entryPrice"]] * len(self._ohlcv_df), mode='lines',
-                                        line=dict(color=color, width=1, dash = 'dash'),
-                                        name=f'position: {str(round(position["entryPrice"],5))} qty: {str(qty)}<br>Pnl: {str(round(position["unrealizedPnl"],5))}'))
-            else:
-                size = 1.0
-        else:
-            size = 1.0
-        orders = sorted(orders, key=lambda x: x["price"], reverse=True)
-        for order in orders:
-            color = "red" if order["side"] == "sell" else "green"
-            qty = order["amount"] * size
-            legend = f'close: {str(order["price"])} qty: {str(qty)}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(qty)}'
-            fig.add_trace(go.Scatter(x=pd.to_datetime(self._ohlcv_df["timestamp"], unit='ms'),
-                                    y=[order["price"]] * len(self._ohlcv_df),
-                                    mode='lines',
-                                    line=dict(color=color, width=2, dash = 'dot'), name=legend))
-        fig.write_image(f'{self._instance_path}/grid_{self.user}_{self.symbol}.png', width=1280, height=1024, scale=2)
-        return
-
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):
             self.fetch_trades()
-            self.fetch_fundings()
             self._trades = self.trades_to_df()
         if self._trades is None:
             st.write("### No Trades available.")
@@ -1163,12 +1003,6 @@ class Instance(Base):
         st.button(':recycle: **passivbot logfile**')
         stx.scrollableTextbox(logr,height="300")
 
-    def is_running(self):
-        run_instance = RunInstance()
-        run_instance.user = self.user
-        run_instance.symbol = self.symbol
-        return run_instance.is_running()
-
 class Instances:
     def __init__(self, ipath: str = None):
         self.instances = []
@@ -1305,65 +1139,6 @@ class Instances:
                 for line in reversed(log):
                     logr = logr+line
         stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
-
-    def import_manager(self):
-        managercfg = Path(f'{st.session_state.pbdir}/manager/config.yaml')
-        if not managercfg.exists():
-            st.write(f'{managercfg} not found')
-            return
-        sys.path.insert(0,st.session_state.pbdir)
-        sys.path.insert(0,f'{st.session_state.pbdir}/manager')
-        try:
-            manager = __import__("manager")
-            Manager = getattr(manager,"Manager")
-            pb_manager = Manager()
-            pb_instances = pb_manager.get_instances()
-        except Exception as e:
-            st.write("### No Instances configured in passivbot instance manager. We have nothing to import.")
-            return
-        d = []
-        select_all = st.checkbox('Select All',value=False, key="select_all")
-        column_config = {
-            "Import": st.column_config.CheckboxColumn('Import', default=False),
-            "id": None}
-        for id, instance in enumerate(pb_instances):
-            d.append({
-                'id': id,
-                'Import': select_all,
-                'User': instance.user,
-                'Symbol': instance.symbol,
-                'Running': instance.is_running(),
-            })
-        selected = st.data_editor(data=d, width=None, height=1024, use_container_width=True, key="editor_select_pbinstance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol'])
-        if st.button("Import"):
-            for line in selected:
-                if line["Import"]:
-                    instance = list(pb_instances)[line["id"]]
-                    if '-m' in instance.flags and instance.flags['-m'] == 'spot':
-                        market = 'spot'
-                    else:
-                        market = 'swap'
-                    inst = Instance()
-                    inst._config = Config(file_name = instance.config)
-                    inst._config.load_config()
-                    inst.user = instance.user
-                    inst.symbol = instance.symbol
-                    inst._market_type = market
-                    if '-lev' in instance.flags:
-                        inst._leverage = instance.flags['-lev']
-                    if '-oh' in instance.flags:
-                        if not instance.flags['-oh']:
-                            inst._ohlcv = False
-                    if '-ab' in instance.flags:
-                        inst._assigned_balance = instance.flags['-ab']
-                    if '-pt' in instance.flags:
-                        inst._price_distance_threshold = instance.flags['-pt']
-                    if '-pp' in instance.flags:
-                        inst._price_precision = instance.flags['-pp']
-                    if '-ps' in instance.flags:
-                        inst._price_step = instance.flags['-ps']
-                    inst.save()
-                    st.write(f'User: :green[{instance.user}] Symbol: :green[{instance.symbol}] imported. :red[Please verify the new Instance!]')
 
 def main():
     print("Don't Run this Class from CLI")

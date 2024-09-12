@@ -6,6 +6,7 @@ import os
 from PBRemote import PBRemote
 from User import Users
 from Config import Config
+from Exchange import Exchange
 from pathlib import Path
 import hjson
 import glob
@@ -941,15 +942,22 @@ class MultiInstance():
                 st.empty()            
         # Display Symbols
         st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
-        # Add Symbol to aproved_symbols
-        for symbol in self._symbols:
+        # Remove unavailable symbols
+        for symbol in self._symbols.copy():
             if symbol not in self._available_symbols:
                 self._symbols.remove(symbol)
-        if st.button("Add All to approved_symbols", key="edit_multi_add_all_to_approved"):
-            for symbol in self._available_symbols:
-                if symbol not in self._symbols:
-                    self._symbols.append(symbol)
-            st.rerun()
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            if st.button("Add All to approved_symbols", key="edit_multi_add_all_to_approved"):
+                for symbol in self._available_symbols:
+                    if symbol not in self._symbols:
+                        self._symbols.append(symbol)
+                st.rerun()
+        with col2:
+            if st.button("Update Symbols from Exchange"):
+                exchange = self._users.find_exchange(self.user)
+                Exchange(exchange, self._users.find_user(self._user)).fetch_symbols()
+                st.rerun()
         st.multiselect('approved_symbols', self._available_symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
         # Add Symbol to ignored_symbols
         for symbol in self._ignored_symbols:
