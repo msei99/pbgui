@@ -133,13 +133,14 @@ class OptimizeMultiQueueItem():
 class OptimizeMultiQueue:
     def __init__(self):
         self.items = []
-        self.pb_config = configparser.ConfigParser()
-        self.pb_config.read('pbgui.ini')
-        if not self.pb_config.has_section("optimize_multi"):
-            self.pb_config.add_section("optimize_multi")
-        if not self.pb_config.has_option("optimize_multi", "autostart"):
-            self.pb_config.set("optimize_multi", "autostart", "False")
-        self._autostart = eval(self.pb_config.get("optimize_multi", "autostart"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("optimize_multi"):
+            pb_config.add_section("optimize_multi")
+            pb_config.set("optimize_multi", "autostart", "False")
+            with open('pbgui.ini', 'w') as f:
+                pb_config.write(f)
+        self._autostart = eval(pb_config.get("optimize_multi", "autostart"))
         if self._autostart:
             self.run()
 
@@ -150,9 +151,10 @@ class OptimizeMultiQueue:
     @autostart.setter
     def autostart(self, new_autostart):
         self._autostart = new_autostart
-        self.pb_config.set("optimize_multi", "autostart", str(self._autostart))
+        pb_config = configparser.ConfigParser()
+        pb_config.set("optimize_multi", "autostart", str(self._autostart))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
         if self._autostart:
             self.run()
         else:
@@ -886,8 +888,9 @@ def main():
         for item in opt.items:
             while opt.running():
                 time.sleep(5)
-            opt.pb_config.read('pbgui.ini')
-            if not eval(opt.pb_config.get("optimize_multi", "autostart")):
+            pb_config = configparser.ConfigParser()
+            pb_config.read('pbgui.ini')
+            if not eval(pb_config.get("optimize_multi", "autostart")):
                 return
             if item.status() == "not started":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')

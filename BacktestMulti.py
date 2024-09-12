@@ -144,22 +144,24 @@ class BacktestMultiQueueItem():
 class BacktestMultiQueue:
     def __init__(self):
         self.items = []
-        self.pb_config = configparser.ConfigParser()
-        self.pb_config.read('pbgui.ini')
-        if not self.pb_config.has_section("backtest_multi"):
-            self.pb_config.add_section("backtest_multi")
-        if not self.pb_config.has_option("backtest_multi", "cpu"):
-            self.pb_config.set("backtest_multi", "autostart", "False")
-            self.pb_config.set("backtest_multi", "cpu", "1")
-        self._autostart = eval(self.pb_config.get("backtest_multi", "autostart"))
-        self._cpu = int(self.pb_config.get("backtest_multi", "cpu"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("backtest_multi"):
+            pb_config.add_section("backtest_multi")
+            pb_config.set("backtest_multi", "autostart", "False")
+            pb_config.set("backtest_multi", "cpu", "1")
+            with open('pbgui.ini', 'w') as f:
+                pb_config.write(f)
+        self._autostart = eval(pb_config.get("backtest_multi", "autostart"))
+        self._cpu = int(pb_config.get("backtest_multi", "cpu"))
         if self._autostart:
             self.run()
 
     @property
     def cpu(self):
-        self.pb_config.read('pbgui.ini')
-        self._cpu = int(self.pb_config.get("backtest_multi", "cpu"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self._cpu = int(pb_config.get("backtest_multi", "cpu"))
         if self._cpu > multiprocessing.cpu_count():
             self._cpu = multiprocessing.cpu_count()
         return self._cpu
@@ -167,9 +169,11 @@ class BacktestMultiQueue:
     @cpu.setter
     def cpu(self, new_cpu):
         self._cpu = new_cpu
-        self.pb_config.set("backtest_multi", "cpu", str(self._cpu))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("backtest_multi", "cpu", str(self._cpu))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
 
     @property
     def autostart(self):
@@ -178,9 +182,11 @@ class BacktestMultiQueue:
     @autostart.setter
     def autostart(self, new_autostart):
         self._autostart = new_autostart
-        self.pb_config.set("backtest_multi", "autostart", str(self._autostart))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("backtest_multi", "autostart", str(self._autostart))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
         if self._autostart:
             self.run()
         else:
@@ -992,6 +998,7 @@ class BacktestMultiResult:
         self.backtest_config = self.load_backtest_config()
         self.symbols = self.load_symbols()
         self.sd = self.backtest_config["start_date"]
+        self.ed = self.backtest_config["end_date"]
         self.drawdown_max = self.result["drawdown_max"]
         self.final_balance = self.result["final_balance"]
         self.starting_balance = self.result["starting_balance"]
@@ -1025,16 +1032,31 @@ class BacktestMultiResult:
             print(f'{str(r)} is corrupted {e}')
 
     def load_stats(self):
+        """
+        Load statistics from a CSV file.
+
+        This method reads the statistics from a CSV file located at `self.result_path/stats.csv`.
+        It calculates the start time based on the `self.ed` attribute and the 'minute' column in the CSV file.
+        The start time is calculated by subtracting the number of minutes in the last row of the CSV file from the timestamp of `self.ed`.
+        The 'time' column is then added to the loaded DataFrame, representing the actual time based on the calculated start time and the 'minute' column.
+
+        Returns:
+            None
+        """
         if self.stats is None:
             stats = f'{self.result_path}/stats.csv'
             self.stats = pd.read_csv(stats)
-            self.stats['time'] = datetime.datetime.strptime(self.sd, '%Y-%m-%d') + pd.TimedeltaIndex(self.stats['minute'], unit='m')
+            timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+            start_time = timestamp - (self.stats['minute'].iloc[-1] * 60)
+            self.stats['time'] = datetime.datetime.fromtimestamp(start_time) + pd.TimedeltaIndex(self.stats['minute'], unit='m')
 
     def load_fills(self):
         if self.fills is None:
             fills = f'{self.result_path}/fills.csv'
             self.fills = pd.read_csv(fills)
-            self.fills['time'] = datetime.datetime.strptime(self.sd, '%Y-%m-%d') + pd.TimedeltaIndex(self.fills['minute'], unit='m')
+            timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+            start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
+            self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.TimedeltaIndex(self.fills['minute'], unit='m')
 
     def view_plots(self):
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
@@ -1195,8 +1217,9 @@ def main():
                 time.sleep(5)
             while bt.downloading():
                 time.sleep(5)
-            bt.pb_config.read('pbgui.ini')
-            if not eval(bt.pb_config.get("backtest_multi", "autostart")):
+            pb_config = configparser.ConfigParser()
+            pb_config.read('pbgui.ini')
+            if not eval(pb_config.get("backtest_multi", "autostart")):
                 return
             if item.status() == "not started":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.filename} started')

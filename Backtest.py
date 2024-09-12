@@ -313,22 +313,24 @@ class BacktestItem(Base):
 class BacktestQueue:
     def __init__(self):
         self.items = []
-        self.pb_config = configparser.ConfigParser()
-        self.pb_config.read('pbgui.ini')
-        if not self.pb_config.has_section("backtest"):
-            self.pb_config.add_section("backtest")
-        if not self.pb_config.has_option("backtest", "cpu"):
-            self.pb_config.set("backtest", "autostart", "False")
-            self.pb_config.set("backtest", "cpu", "1")
-        self._autostart = eval(self.pb_config.get("backtest", "autostart"))
-        self._cpu = int(self.pb_config.get("backtest", "cpu"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("backtest"):
+            pb_config.add_section("backtest")
+            pb_config.set("backtest", "autostart", "False")
+            pb_config.set("backtest", "cpu", "1")
+            with open('pbgui.ini', 'w') as f:
+                pb_config.write(f)
+        self._autostart = eval(pb_config.get("backtest", "autostart"))
+        self._cpu = int(pb_config.get("backtest", "cpu"))
         if self._autostart:
             self.run()
 
     @property
     def cpu(self):
-        self.pb_config.read('pbgui.ini')
-        self._cpu = int(self.pb_config.get("backtest", "cpu"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self._cpu = int(pb_config.get("backtest", "cpu"))
         if self._cpu > multiprocessing.cpu_count():
             self._cpu = multiprocessing.cpu_count()
         return self._cpu
@@ -336,9 +338,11 @@ class BacktestQueue:
     @cpu.setter
     def cpu(self, new_cpu):
         self._cpu = new_cpu
-        self.pb_config.set("backtest", "cpu", str(self._cpu))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("backtest", "cpu", str(self._cpu))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
 
     @property
     def autostart(self):
@@ -347,9 +351,11 @@ class BacktestQueue:
     @autostart.setter
     def autostart(self, new_autostart):
         self._autostart = new_autostart
-        self.pb_config.set("backtest", "autostart", str(self._autostart))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("backtest", "autostart", str(self._autostart))
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
         if self._autostart:
             self.run()
         else:
@@ -502,7 +508,6 @@ class BacktestResults:
     MODES = ['recursive_grid', 'neat_grid', 'clock']
     
     def __init__(self, backtest_path: str = None):
-        self.pb_config = configparser.ConfigParser()
         self.view_col = self.load_view_col()
         self.backtest_path = backtest_path
         self.backtests = []
@@ -519,18 +524,20 @@ class BacktestResults:
         self.backtests.remove(bt_result)
 
     def load_view_col(self):
-        self.pb_config.read('pbgui.ini')
-        if self.pb_config.has_option("backtest", "view_col"):
-            return eval(self.pb_config.get("backtest", "view_col"))
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("backtest", "view_col"):
+            return eval(pb_config.get("backtest", "view_col"))
         return []
 
     def save_view_col(self):
-        self.pb_config.read('pbgui.ini')
-        if not self.pb_config.has_section("backtest"):
-            self.pb_config.add_section("backtest")
-        self.pb_config.set("backtest", "view_col", f'{self.view_col}')
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("backtest"):
+            pb_config.add_section("backtest")
+        pb_config.set("backtest", "view_col", f'{self.view_col}')
         with open('pbgui.ini', 'w') as f:
-            self.pb_config.write(f)
+            pb_config.write(f)
 
     def setup_table(self):
         # Remove or add keys after selecting them
@@ -933,8 +940,9 @@ def main():
                 time.sleep(5)
             while bt.downloading():
                 time.sleep(5)
-            bt.pb_config.read('pbgui.ini')
-            if not eval(bt.pb_config.get("backtest", "autostart")):
+            pb_config = configparser.ConfigParser()
+            pb_config.read('pbgui.ini')
+            if not eval(pb_config.get("backtest", "autostart")):
                 return
             if item.status() == "not started":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.file} started')

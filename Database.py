@@ -6,7 +6,6 @@ from User import Users, User
 from Exchange import Exchange
 from pbgui_func import PBDIR, PBGDIR, error_popup, info_popup
 import sqlite3
-import pandas as pd
 
 class Database():
     def __init__(self):
@@ -19,7 +18,7 @@ class Database():
                     id INTEGER PRIMARY KEY,
                     symbol TEXT NOT NULL,
                     timestamp INTEGER NOT NULL,
-                    income INTEGER NOT NULL,
+                    income REAL NOT NULL,
                     uniqueid text NOT NULL UNIQUE,
                     user TEXT NOT NULL
             );""",
@@ -109,6 +108,9 @@ class Database():
                         position['symbol'][0:-5].replace("/", "").replace("-", ""),
                         user.name
                     ]
+                    # Use current timestamp if timestamp is None
+                    if not pos[0]:
+                        pos[0] = int(datetime.now().timestamp() * 1000)
                     if pos[4] in symbols_db:
                         print(f"Updating {pos[4]}")
                         self.update_position(conn, pos)
@@ -124,7 +126,8 @@ class Database():
         exchange = Exchange(user.exchange, user)
         all_orders = []
         for position in positions_db:
-            orders = exchange.fetch_all_open_orders(position[1][0:-4] + "/USDT:USDT")
+            stable_coin = position[1][-4:]
+            orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
             all_orders.extend(orders)
         ids_db = []
         for order in orders_db:
@@ -170,7 +173,10 @@ class Database():
         prices = {}
         for position in positions_db:
             symbol = position[1]
-            symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+            if symbol[-4:] == "USDT":
+                symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+            elif symbol[-4:] == "USDC":
+                symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
             symbols.append(symbol_ccxt)
         if symbols:
             market_type = "futures"
@@ -188,10 +194,13 @@ class Database():
                         self.remove_price(conn, symbol, user.name)
                 # Update prices
                 for symbol in symbols:
-                    symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+                    if symbol[-4:] == "USDT":
+                        symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+                    elif symbol[-4:] == "USDC":
+                        symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
                     timestamp = prices[symbol_ccxt]['timestamp']
                     if not timestamp:
-                        timestamp = int(datetime.now().timestamp() * 1000)
+                        timestamp = exchange.fetch_timestamp()
                     price = [
                         timestamp,
                         prices[symbol_ccxt]['last'],
@@ -528,15 +537,14 @@ class Database():
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # user = users.find_user("bybit_CPT1")
     # user2 = users.find_user("bybit_CPT1")
     # exchange = Exchange("bybit", user)
     # db = Database()
     # db.update_history(user)
     # db.update_positions(user)
+    # db.update_orders(user)
     # db.update_prices(user)
     # db.update_balances(user)
-    # db.update_orders(user)
     # exchange.connect()
     # print(db.find_last_timestamp(user))
     # history = db.fetch_history2(user)
