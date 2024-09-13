@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v1.13
+v1.14
 
 ## Migration to v0.95 Multi (Will be removed on next version)
 
@@ -145,6 +145,9 @@ rclone config create <name> imagekit endpoint=<url_endpoint> public_key=<public_
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.14 (13-09-2024)
+- Dashboard: Added Timeframe to Order View and move the time left/right
 
 ## v1.13 (11-09-2024)
 - Bugfix Multi Backtest Results, corrected time in View Results
