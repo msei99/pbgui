@@ -352,13 +352,16 @@ class Backtest:
     @property
     def base_dir(self): return self._base_dir
     @property
-    def end_date(self): return self._end_date
+    def end_date(self):
+        if self._end_date == "now":
+            return datetime.now().strftime("%Y-%m-%d")
+        return self._end_date
     @property
     def exchange(self): return self._exchange
     @property
     def start_date(self): return self._start_date
     @property
-    def starting_balance(self): return self._starting_balance
+    def starting_balance(self) return self._starting_balance
 
     @base_dir.setter
     def base_dir(self, new_base_dir):
