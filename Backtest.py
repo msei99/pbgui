@@ -298,7 +298,7 @@ class BacktestItem(Base):
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest.py')]
+            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PBDIR}/backtest.py')]
             cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
             cmd.extend(shlex.split(cmd_end))
             cmd.extend(['-bd', PurePath(f'{PBDIR}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
