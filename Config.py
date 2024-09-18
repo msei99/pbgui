@@ -355,7 +355,7 @@ class Backtest:
     @property
     def end_date(self):
         if self._end_date == "now":
-            return datetime.now().strftime("%Y-%m-%d")
+            return datetime.datetime.now().strftime("%Y-%m-%d")
         return self._end_date
     @property
     def exchange(self): return self._exchange
@@ -1170,7 +1170,10 @@ class Optimize:
     @property
     def mutation_probability(self): return self._mutation_probability
     @property
-    def n_cpus(self): return self._n_cpus
+    def n_cpus(self):
+        if self._n_cpus > multiprocessing.cpu_count():
+            self.n_cpus = multiprocessing.cpu_count()
+        return self._n_cpus
     @property
     def population_size(self): return self._population_size
     @property
@@ -1361,7 +1364,7 @@ class Bounds:
     ENTRY_TRAILING_THRESHOLD_PCT_ROUND = 2
     ENTRY_TRAILING_THRESHOLD_PCT_FORMAT = f'%.{ENTRY_TRAILING_THRESHOLD_PCT_ROUND}f'
 
-    N_POSITIONS_MIN = 1.0
+    N_POSITIONS_MIN = 0.0
     N_POSITIONS_MAX = 100.0
     N_POSITIONS_STEP = 1.0
     N_POSITIONS_ROUND = 0
