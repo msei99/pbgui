@@ -5,6 +5,7 @@ from pbgui_func import validateJSON, config_pretty_str
 import pbgui_help
 import traceback
 import multiprocessing
+import datetime
 
 class Config:
     def __init__(self, file_name = None, config = None):
@@ -361,7 +362,7 @@ class Backtest:
     @property
     def start_date(self): return self._start_date
     @property
-    def starting_balance(self) return self._starting_balance
+    def starting_balance(self): return self._starting_balance
 
     @base_dir.setter
     def base_dir(self, new_base_dir):
