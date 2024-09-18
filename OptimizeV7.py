@@ -534,6 +534,9 @@ class OptimizeV7Item:
             st.number_input("mutation_probability", min_value=0.0, max_value=1.0, value=self.config.optimize.mutation_probability, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
         with col4:
             st.empty()
+        for symbol in self.config.live.approved_coins:
+            if symbol not in self._available_symbols:
+                self.config.live.approved_coins.remove(symbol)
         st.multiselect('symbols', self._available_symbols, default=self.config.live.approved_coins, key="edit_opt_v7_approved_coins")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
