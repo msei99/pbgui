@@ -34,6 +34,7 @@ class RunSingle():
         self.multi = False
         self.version = None
         self.pbdir = None
+        self.pbvenv = None
         self.pbgdir = None
     
     def watch(self):
@@ -65,7 +66,7 @@ class RunSingle():
     def start(self):
         if not self.is_running():
             config = PurePath(f'{self.path}/config.json')
-            cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/passivbot.py')]
+            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot.py')]
             cmd_end = f'{self.parameters} {self.user} {self.symbol} '.lstrip(' ')
             cmd.extend(shlex.split(cmd_end))
             cmd.extend([config])
@@ -195,6 +196,7 @@ class RunMulti():
         self.name = None
         self.version = None
         self.pbdir = None
+        self.pbvenv = None
         self.pbgdir = None
     
     def watch(self):
@@ -224,8 +226,7 @@ class RunMulti():
 
     def start(self):
         if not self.is_running():
-            config = PurePath(f'{self.path}/config.json')
-            cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/passivbot_multi.py'), PurePath(f'{self.path}/multi_run.hjson')]
+            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot_multi.py'), PurePath(f'{self.path}/multi_run.hjson')]
             logfile = Path(f'{self.path}/passivbot.log')
             log = open(logfile,"ab")
             if platform.system() == "Windows":
@@ -320,6 +321,11 @@ class PBRun():
             self.pbdir = pb_config.get("main", "pbdir")
         else:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+            exit(1)
+        if pb_config.has_option("main", "pbvenv"):
+            self.pbvenv = pb_config.get("main", "pbvenv")
+        else:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot venv python interpreter configured in pbgui.ini')
             exit(1)
         self.instances_path = f'{self.pbgdir}/data/instances'
         self.multi_path = f'{self.pbgdir}/data/multi'
@@ -599,6 +605,7 @@ class PBRun():
                 run_single.path = single_instance
                 run_single.name = self.name
                 run_single.pbdir = self.pbdir
+                run_single.pbvenv = self.pbvenv
                 run_single.pbgdir = self.pbgdir
                 if run_single.load():
                     if run_single.is_running():
@@ -648,6 +655,7 @@ class PBRun():
                 status.name = run_multi.user
                 run_multi.name = self.name
                 run_multi.pbdir = self.pbdir
+                run_multi.pbvenv = self.pbvenv
                 run_multi.pbgdir = self.pbgdir
                 if run_multi.load():
                     if run_multi.is_running():

@@ -20,7 +20,38 @@ def load_pbdir():
 
 PBDIR = load_pbdir()
 
+def load_pb7dir():
+    if "pb7dir" not in st.session_state:
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("main", "pb7dir"):
+            st.session_state.pb7dir = pb_config.get("main", "pb7dir")
+        else:
+            st.session_state.pb7dir = ""
+    return st.session_state.pb7dir
+
+PB7DIR = load_pb7dir()
+
 PBGDIR = Path.cwd()
+
+def load_pb7venv():
+    if "pb7venv" not in st.session_state:
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option("main", "pb7venv"):
+            st.session_state.pb7venv = pb_config.get("main", "pb7venv")
+        else:
+            st.session_state.pb7venv = ""
+    return st.session_state.pb7venv
+
+def save_pb7venv():
+    pb_config = configparser.ConfigParser()
+    pb_config.read('pbgui.ini')
+    pb_config.set("main", "pb7venv", st.session_state.pb7venv)
+    with open('pbgui.ini', 'w') as pbgui_configfile:
+        pb_config.write(pbgui_configfile)
+
+PB7VENV = load_pb7venv()
 
 def check_password():
     """Returns `True` if the user had the correct password."""

@@ -126,11 +126,11 @@ class BacktestMultiQueueItem():
     def run(self):
         if not self.is_finish() and not self.is_running():
             if self.parameters:
-                cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py')]
+                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PBDIR}/backtest_multi.py')]
                 cmd.extend(shlex.split(self.parameters))
                 cmd.extend(['-bc', self.hjson])
             else:
-                cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', str(PurePath(f'{self.hjson}'))]
+                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS

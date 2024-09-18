@@ -119,7 +119,7 @@ class OptimizeMultiQueueItem():
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
+            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PBDIR}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -388,7 +388,7 @@ class OptimizeMultiResults:
                         st.switch_page("pages/6_Multi Backtest.py")
 
     def generate_analysis(self, result_file):
-        cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/tools/extract_best_multi_config.py'), str(result_file)]
+        cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PBDIR}/tools/extract_best_multi_config.py'), str(result_file)]
         if platform.system() == "Windows":
             creationflags = subprocess.CREATE_NO_WINDOW
             result = subprocess.run(cmd, capture_output=True, cwd=PBDIR, text=True, creationflags=creationflags)
