@@ -7,7 +7,7 @@ def opt_v7():
     opt_v7 = st.session_state.opt_v7
     # Navigation
     with st.sidebar:
-        if st.button(":top:"):
+        if st.button(":material/home:"):
             del st.session_state.opt_v7
             if "opt_v7_list" in st.session_state:
                 del st.session_state.opt_v7_list
@@ -97,7 +97,7 @@ def opt_v7_queue():
             if "ed_key" in st.session_state:
                 st.session_state.ed_key += 1
             st.rerun()
-        if st.button(":top:"):
+        if st.button(":material/home:"):
             del st.session_state.opt_v7_queue
             st.rerun()
         if st.button("Results"):
@@ -105,13 +105,13 @@ def opt_v7_queue():
             st.session_state.opt_v7_results = OptimizeV7Results()
             st.rerun()
         st.toggle("Autostart", value=opt_v7_queue.autostart, key="optimize_v7_autostart", help=None)
-        if st.button(":wastebasket: selected"):
+        if st.button(":material/delete: selected"):
             opt_v7_queue.remove_selected()
             st.rerun()
-        if st.button(":wastebasket: finished"):
+        if st.button(":material/delete: finished"):
             opt_v7_queue.remove_finish()
             st.rerun()
-        if st.button(":wastebasket: all"):
+        if st.button(":material/delete: all"):
             opt_v7_queue.remove_finish(all=True)
             st.rerun()
     st.title("Optimize V7 Queue")
