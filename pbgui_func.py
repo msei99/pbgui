@@ -6,7 +6,39 @@ import uuid
 import requests
 import configparser
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
+
+@st.dialog("Select file")
+def change_ini(section, parameter):
+    filename = st_file_selector(st, path=st.session_state[parameter], key = f'file_change_{parameter}', label = f'select {parameter}')
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button(":green[Yes]"):
+            filename = str(Path(filename).resolve())
+            st.session_state[parameter] = filename
+            save_ini(section, parameter)
+            st.rerun()
+    with col2:
+        if st.button(":red[No]"):
+            st.rerun()
+
+def save_ini(section : str, parameter : str):
+    pb_config = configparser.ConfigParser()
+    pb_config.read('pbgui.ini')
+    pb_config.set(section, parameter, st.session_state[parameter])
+    with open('pbgui.ini', 'w') as pbgui_configfile:
+        pb_config.write(pbgui_configfile)
+
+def load_ini(section : str, parameter : str):
+    if parameter not in st.session_state:
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if pb_config.has_option(section, parameter):
+            st.session_state[parameter] = pb_config.get(section, parameter)
+        else:
+            st.session_state.pbdir = ""
+    return st.session_state[parameter]
+
 
 def load_pbdir():
     if "pbdir" not in st.session_state:
@@ -30,7 +62,7 @@ def load_pb7dir():
             st.session_state.pb7dir = ""
     return st.session_state.pb7dir
 
-PB7DIR = load_pb7dir()
+def pb7dir(): return load_pb7dir()
 
 PBGDIR = Path.cwd()
 
@@ -50,8 +82,6 @@ def save_pb7venv():
     pb_config.set("main", "pb7venv", st.session_state.pb7venv)
     with open('pbgui.ini', 'w') as pbgui_configfile:
         pb_config.write(pbgui_configfile)
-
-PB7VENV = load_pb7venv()
 
 def check_password():
     """Returns `True` if the user had the correct password."""
