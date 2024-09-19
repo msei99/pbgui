@@ -14,7 +14,7 @@ def change_ini(section, parameter):
     col1, col2 = st.columns([1,1])
     with col1:
         if st.button(":green[Yes]"):
-            filename = str(Path(filename).resolve())
+            filename = str(Path(filename).absolute())
             st.session_state[parameter] = filename
             save_ini(section, parameter)
             st.rerun()

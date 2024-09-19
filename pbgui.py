@@ -38,6 +38,7 @@ with col1:
     st.text_input("Passivbot V6 path", value=st.session_state.pbdir, key='input_pbdir')
 with col2:
     if st.button("Browse", key='button_change_pbdir'):
+        del st.session_state.input_pbdir
         change_ini("main", "pbdir")
 col1, col2 = st.columns([5,1], vertical_alignment="bottom")
 with col1:
@@ -48,6 +49,7 @@ with col1:
     st.text_input("Passivbot V6 python interpreter (venv)", value=st.session_state.pbvenv, key='input_pbvenv')
 with col2:
     if st.button("Browse", key='button_change_pbvenv'):
+        del st.session_state.input_pbvenv
         change_ini("main", "pbvenv")
 col1, col2 = st.columns([5,1], vertical_alignment="bottom")
 with col1:
@@ -58,6 +60,7 @@ with col1:
     st.text_input("Passivbot V7 path", value=st.session_state.pb7dir, key='input_pb7dir')
 with col2:
     if st.button("Browse", key='button_change_pb7dir'):
+        del st.session_state.input_pb7dir
         change_ini("main", "pb7dir")
 col1, col2 = st.columns([5,1], vertical_alignment="bottom")
 with col1:
@@ -68,6 +71,7 @@ with col1:
     st.text_input("Passivbot V7 python interpreter (venv)", value=st.session_state.pb7venv, key='input_pb7venv')
 with col2:
     if st.button("Browse", key='button_change_pb7venv'):
+        del st.session_state.input_pb7venv
         change_ini("main", "pb7venv")
 
 if "input_pbname" in st.session_state:
