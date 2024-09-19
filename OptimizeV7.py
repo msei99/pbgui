@@ -10,7 +10,7 @@ import glob
 import configparser
 import time
 import multiprocessing
-from pbgui_func import PB7DIR, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pb7dir, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -118,17 +118,14 @@ class OptimizeV7QueueItem:
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            print(f"{PB7DIR}")
-            print(f"{st.session_state.pb7venv}")
-            cmd = [st.session_state.pb7venv, '-u', PurePath(f'{PB7DIR}/src/optimize.py'), str(PurePath(f'{self.json}'))]
-            print(cmd)
+            cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
                 creationflags |= subprocess.CREATE_NO_WINDOW
-                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PB7DIR, text=True, creationflags=creationflags)
+                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pb7dir(), text=True, creationflags=creationflags)
             else:
-                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PB7DIR, text=True, start_new_session=True)
+                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pb7dir(), text=True, start_new_session=True)
             self.pid = btm.pid
             self.save_pid()
 
@@ -309,8 +306,8 @@ class OptimizeV7Queue:
 
 class OptimizeV7Results:
     def __init__(self):
-        self.results_path = Path(f'{PB7DIR}/optimize_results')
-        self.analysis_path = Path(f'{PB7DIR}/optimize_results_analysis')
+        self.results_path = Path(f'{pb7dir()}/optimize_results')
+        self.analysis_path = Path(f'{pb7dir()}/optimize_results_analysis')
         self.results = []
         self.initialize()
     
@@ -390,12 +387,12 @@ class OptimizeV7Results:
                         st.switch_page("pages/6_Multi Backtest.py")
 
     def generate_analysis(self, result_file):
-        cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PB7DIR}/tools/extract_best_multi_config.py'), str(result_file)]
+        cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]
         if platform.system() == "Windows":
             creationflags = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(cmd, capture_output=True, cwd=PB7DIR, text=True, creationflags=creationflags)
+            result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, creationflags=creationflags)
         else:
-            result = subprocess.run(cmd, capture_output=True, cwd=PB7DIR, text=True, start_new_session=True)
+            result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
         if "error" in result.stdout:
             error_popup(result.stdout)
         else:
