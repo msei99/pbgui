@@ -146,7 +146,10 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v1.14 (13-09-2024)
+## v1.14 (19-09-2024)
+- Optimize V7: Added optimizer for passivbot v7
+- Add api-keys for passivbot version 7
+- check for installed passivbot versions
 - split venv pbgui and venv passivbot / Config Option for venv passivbot v6 and v7
 - Dashboard: Added Timeframe to Order View and move the time left/right
 

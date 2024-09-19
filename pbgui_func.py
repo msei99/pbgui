@@ -49,9 +49,7 @@ def is_pb_installed():
 def pb7dir(): return load_ini("main", "pb7dir")
 
 def is_pb7_installed():
-    print(Path(f"{pb7dir()}/src/passivbot.py"))
     if Path(f"{pb7dir()}/src/passivbot.py").exists():
-        print("exists")
         return True
     return False
 
