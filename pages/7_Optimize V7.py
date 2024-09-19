@@ -12,7 +12,7 @@ def opt_v7():
             if "opt_v7_list" in st.session_state:
                 del st.session_state.opt_v7_list
             st.rerun()
-        if st.button(":floppy_disk:"):
+        if st.button(":material/save:"):
             if opt_v7.name:
                 opt_v7.save()
             else:
@@ -44,7 +44,7 @@ def opt_v7_list():
     opt_v7_list = st.session_state.opt_v7_list
     # Navigation
     with st.sidebar:
-        if st.button(":recycle:"):
+        if st.button(":material/refresh:"):
             st.session_state.opt_v7_list = OptimizesV7()
             st.rerun()
         if st.button("Results"):
@@ -63,21 +63,21 @@ def opt_v7_results():
     opt_v7_results = st.session_state.opt_v7_results
     # Navigation
     with st.sidebar:
-        if st.button(":recycle:"):
+        if st.button(":material/refresh:"):
             opt_v7_results.results = []
             opt_v7_results.find_results()
             st.rerun()
-        if st.button(":top:"):
+        if st.button(":material/home:"):
             del st.session_state.opt_v7_results
             st.rerun()
         if st.button("Queue"):
             del st.session_state.opt_v7_results
             st.session_state.opt_v7_queue = OptimizeV7Queue()
             st.rerun()
-        if st.button(":wastebasket: selected"):
+        if st.button(":material/delete: selected"):
             opt_v7_results.remove_selected_results()
             st.rerun()
-        if st.button(":wastebasket: all"):
+        if st.button(":material/delete: all"):
             opt_v7_results.remove_all_results()
             st.rerun()
     st.title(f"Optimize V7 Results")
@@ -92,7 +92,7 @@ def opt_v7_queue():
             opt_v7_queue.autostart = st.session_state.optimize_v7_autostart
     # Navigation
     with st.sidebar:
-        if st.button(":recycle:"):
+        if st.button(":material/refresh:"):
             opt_v7_queue.items = []
             if "ed_key" in st.session_state:
                 st.session_state.ed_key += 1

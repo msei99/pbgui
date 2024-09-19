@@ -10,6 +10,7 @@ import glob
 import configparser
 import time
 import multiprocessing
+from Exchange import Exchange
 from pbgui_func import pb7dir, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from pathlib import Path, PurePath
@@ -534,7 +535,15 @@ class OptimizeV7Item:
         for symbol in self.config.live.approved_coins.copy():
             if symbol not in self._available_symbols:
                 self.config.live.approved_coins.remove(symbol)
-        st.multiselect('symbols', self._available_symbols, default=self.config.live.approved_coins, key="edit_opt_v7_approved_coins")
+        col1, col2 = st.columns([3,1], vertical_alignment="bottom")
+        with col1:
+            st.multiselect('symbols', self._available_symbols, default=self.config.live.approved_coins, key="edit_opt_v7_approved_coins")
+        with col2:
+            if st.button("Update Symbols", key="edit_opt_update_symbols"):
+                exchange = Exchange(self.config.backtest.exchange)
+                exchange.fetch_symbols()
+                self._available_symbols = exchange.swap
+                st.rerun()
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             # long_close_grid_markup_range
