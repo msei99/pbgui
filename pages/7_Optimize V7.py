@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup
+from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup, is_pb7_installed
 from OptimizeV7 import OptimizeV7Item, OptimizesV7, OptimizeV7Queue, OptimizeV7Results
 
 def opt_v7():
@@ -122,6 +122,11 @@ set_page_config("Optimize V7")
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
+# Check if PB7 is installed
+if not is_pb7_installed():
+    st.warning('Passivbot Version 7.x is not installed', icon="⚠️")
+    st.stop()
 
 if "opt_v7_results" in st.session_state:
     opt_v7_results()

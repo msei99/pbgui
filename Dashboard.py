@@ -6,7 +6,7 @@ from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta, MO
 import numpy as np
 from Exchange import Exchange
-from pbgui_func import PBDIR, PBGDIR, error_popup, info_popup
+from pbgui_func import PBGDIR
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go

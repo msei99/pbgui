@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup
+from pbgui_func import set_page_config, is_session_state_initialized, error_popup, is_pb_installed
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
 from Instance import Instances, Instance
@@ -165,6 +165,11 @@ set_page_config()
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
+# Check if PB6 is installed
+if not is_pb_installed():
+    st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
 
 if 'edit_multi_config' in st.session_state:
     edit_multi_config()

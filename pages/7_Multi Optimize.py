@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup
+from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup, is_pb_installed
 from OptimizeMulti import OptimizeMultiItem, OptimizesMulti, OptimizeMultiQueue, OptimizeMultiResults
 from Instance import Instance
 
@@ -123,6 +123,11 @@ set_page_config("Multi Optimize")
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
+# Check if PB6 is installed
+if not is_pb_installed():
+    st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
 
 if "opt_multi_results" in st.session_state:
     opt_multi_results()

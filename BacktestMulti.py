@@ -16,7 +16,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBDIR, PBGDIR, validateJSON, config_pretty_str
+from pbgui_func import PBGDIR, pbdir, validateJSON, config_pretty_str
 import uuid
 from Base import Base
 from Config import Config
@@ -126,18 +126,18 @@ class BacktestMultiQueueItem():
     def run(self):
         if not self.is_finish() and not self.is_running():
             if self.parameters:
-                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PBDIR}/backtest_multi.py')]
+                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/backtest_multi.py')]
                 cmd.extend(shlex.split(self.parameters))
                 cmd.extend(['-bc', self.hjson])
             else:
-                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{PBDIR}/backtest_multi.py'), '-bc', str(PurePath(f'{self.hjson}'))]
+                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/backtest_multi.py'), '-bc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
                 creationflags |= subprocess.CREATE_NO_WINDOW
-                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, creationflags=creationflags)
+                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, creationflags=creationflags)
             else:
-                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, start_new_session=True)
+                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, start_new_session=True)
             self.pid = btm.pid
             self.save_pid()
 
@@ -350,7 +350,6 @@ class BacktestMultiItem:
         self.path = backtest_path
         self.hjson = None
         self.log = None
-        self.pbdir = None
         self.users = Users()
         self.backtest_results = []
         self.initialize()
@@ -790,7 +789,7 @@ class BacktestMultiItem:
                 self.backtest_results.remove(result)
 
     def remove_all_results(self):
-        rmtree(f'{PBDIR}/backtests/pbgui_multi/{self.name}/multisymbol', ignore_errors=True)
+        rmtree(f'{pbdir()}/backtests/pbgui_multi/{self.name}/multisymbol', ignore_errors=True)
         self.backtest_results = []
 
     def view_results(self):
@@ -949,12 +948,12 @@ class BacktestMultiItem:
                 traceback.print_exc()
     
     def calculate_results(self):
-        p = str(Path(f'{PBDIR}/backtests/pbgui_multi/{self.name}/multisymbol/{self.exchange}/**/analysis.json'))
+        p = str(Path(f'{pbdir()}/backtests/pbgui_multi/{self.name}/multisymbol/{self.exchange}/**/analysis.json'))
         files = glob.glob(p, recursive=False)
         return len(files)
 
     def load_results(self):
-        p = str(Path(f'{PBDIR}/backtests/pbgui_multi/{self.name}/multisymbol/{self.exchange}/**/analysis.json'))
+        p = str(Path(f'{pbdir()}/backtests/pbgui_multi/{self.name}/multisymbol/{self.exchange}/**/analysis.json'))
         files = glob.glob(p, recursive=False)
         for file in files:
             result_path = PurePath(file).parent
