@@ -36,52 +36,26 @@ def load_ini(section : str, parameter : str):
         if pb_config.has_option(section, parameter):
             st.session_state[parameter] = pb_config.get(section, parameter)
         else:
-            st.session_state.pbdir = ""
+            st.session_state[parameter] = ""
     return st.session_state[parameter]
 
+def pbdir(): return load_ini("main", "pbdir")
 
-def load_pbdir():
-    if "pbdir" not in st.session_state:
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("main", "pbdir"):
-            st.session_state.pbdir = pb_config.get("main", "pbdir")
-        else:
-            st.session_state.pbdir = ""
-    return st.session_state.pbdir
+def is_pb_installed():
+    if Path(f"{pbdir()}/passivbot.py").exists():
+        return True
+    return False
 
-PBDIR = load_pbdir()
+def pb7dir(): return load_ini("main", "pb7dir")
 
-def load_pb7dir():
-    if "pb7dir" not in st.session_state:
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("main", "pb7dir"):
-            st.session_state.pb7dir = pb_config.get("main", "pb7dir")
-        else:
-            st.session_state.pb7dir = ""
-    return st.session_state.pb7dir
-
-def pb7dir(): return load_pb7dir()
+def is_pb7_installed():
+    print(Path(f"{pb7dir()}/src/passivbot.py"))
+    if Path(f"{pb7dir()}/src/passivbot.py").exists():
+        print("exists")
+        return True
+    return False
 
 PBGDIR = Path.cwd()
-
-def load_pb7venv():
-    if "pb7venv" not in st.session_state:
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("main", "pb7venv"):
-            st.session_state.pb7venv = pb_config.get("main", "pb7venv")
-        else:
-            st.session_state.pb7venv = ""
-    return st.session_state.pb7venv
-
-def save_pb7venv():
-    pb_config = configparser.ConfigParser()
-    pb_config.read('pbgui.ini')
-    pb_config.set("main", "pb7venv", st.session_state.pb7venv)
-    with open('pbgui.ini', 'w') as pbgui_configfile:
-        pb_config.write(pbgui_configfile)
 
 def check_password():
     """Returns `True` if the user had the correct password."""
@@ -128,7 +102,6 @@ def is_session_state_initialized():
     # Init Services
     if (
         'pbdir' not in st.session_state or
-        'pbgdir' not in st.session_state or
         'services' not in st.session_state or
         'pbgui_instances' not in st.session_state or
         'multi_instances' not in st.session_state or

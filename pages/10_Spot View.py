@@ -1,12 +1,12 @@
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, is_session_state_initialized
+from pbgui_func import set_page_config, is_session_state_initialized, is_pb_installed
 from Instance import Instances
 import pandas as pd
 
 
 def bgcolor_positive_or_negative(value):
-    bgcolor = "lightcoral" if value < 0 else "lightgreen"
+    bgcolor = "red" if value < 0 else "green"
     return f"background-color: {bgcolor};"
 
 #@st.cache_data(experimental_allow_widgets=True)
@@ -47,8 +47,6 @@ def select_instance():
                 balance = 0
             else:
                 balance = instance.balance
-            if instance.we > we:
-                we = instance.we
             d.append({
                 'id': id,
                 'View': False,
@@ -129,6 +127,11 @@ set_page_config()
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
+# Check if PB6 is installed
+if not is_pb_installed():
+    st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
 
 if 'view_history' in st.session_state:
     view_history()

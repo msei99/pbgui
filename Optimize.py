@@ -4,6 +4,7 @@ from Backtest import BacktestItem, BacktestResults
 from OptimizeConfig import OptimizeConfigs, OptimizeConfig
 from pathlib import Path, PurePath
 from shutil import rmtree
+from pbgui_func import pbdir, PBGDIR
 import json
 import glob
 import datetime
@@ -35,7 +36,6 @@ class OptimizeItem(Base):
         self.reruns = 1
         self.finish = 0
         self.position = None
-        self.pbdir = None
         self.results = []
         self.best_long = []
         self.best_short = []
@@ -60,10 +60,6 @@ class OptimizeItem(Base):
         self.backtest_adg = 0
         self.backtest_drawdown = 0
         self.backtest_stuck = 0
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("main", "pbdir"):
-            self.pbdir = pb_config.get("main", "pbdir")
    
     def is_finish(self):
         if self.finish < self.reruns:
@@ -108,24 +104,21 @@ class OptimizeItem(Base):
 
     def start(self, cpu: int):
         if not self.is_running():
-            pb_config = configparser.ConfigParser()
-            pb_config.read('pbgui.ini')
-            if self.pbdir:
-                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{self.pbdir}/optimize.py')]
-                cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.BOOLS[self.oc.do_long]} -se {self.BOOLS[self.oc.do_short]}'
-                cmd.extend(shlex.split(cmd_end))
-                cmd.extend(['-oc', str(PurePath(f'{self.oc.config_file}')), '-bd', str(PurePath(f'{self.pbdir}/backtests/pbgui'))])
-                log = open(self.log,"w")
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
-                if platform.system() == "Windows":
-                    creationflags = subprocess.CREATE_NO_WINDOW
-                    result = subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
-                else:
-                    result = subprocess.run(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True)
-                if result.returncode == 0:
-                    self.finish +=1
-                    self.save(self.position)
-                self.generate_backtest()
+            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/optimize.py')]
+            cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.BOOLS[self.oc.do_long]} -se {self.BOOLS[self.oc.do_short]}'
+            cmd.extend(shlex.split(cmd_end))
+            cmd.extend(['-oc', str(PurePath(f'{self.oc.config_file}')), '-bd', str(PurePath(f'{pbdir()}/backtests/pbgui'))])
+            log = open(self.log,"w")
+            print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                result = subprocess.run(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, creationflags=creationflags)
+            else:
+                result = subprocess.run(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True)
+            if result.returncode == 0:
+                self.finish +=1
+                self.save(self.position)
+            self.generate_backtest()
 
     def remove(self):
         self.file.unlink(missing_ok=True)
@@ -314,7 +307,7 @@ class OptimizeItem(Base):
 
     def load_results(self):
         fpath = self.fetch_results_fpath()
-        p = f'{self.pbdir}/{fpath}*_result_*.json'
+        p = f'{pbdir()}/{fpath}*_result_*.json'
         results = glob.glob(p, recursive=True)
         self.results = []
         for i, result in enumerate(results):
@@ -760,7 +753,6 @@ class OptimizeQueue:
 
 class OptimizeResults:
     def __init__(self):
-        self.pbdir = None
         self.layer = 1
         self.almo = None
         self.show_result = None
@@ -779,23 +771,19 @@ class OptimizeResults:
         self.initialize()
 
     def initialize(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("main", "pbdir"):
-            self.pbdir = pb_config.get("main", "pbdir")
         if "opt_bt_results" in st.session_state:
             self.bt_results = st.session_state.opt_bt_results
         else:     
-            st.session_state.opt_bt_results = BacktestResults(f'{st.session_state.pbdir}/backtests/pbgui')
+            st.session_state.opt_bt_results = BacktestResults(f'{pbdir()}/backtests/pbgui')
             self.bt_results = st.session_state.opt_bt_results
     
     def find_results_l1(self):
-        p_hs_rg = str(Path(f'{self.pbdir}/results_harmony_search_recursive_grid/**/*_result_*.json'))
-        p_hs_ng = str(Path(f'{self.pbdir}/results_harmony_search_neat_grid/**/*_result_*.json'))
-        p_hs_cl = str(Path(f'{self.pbdir}/results_harmony_search_clock/**/*_result_*.json'))
-        p_ps_rg = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_recursive_grid/**/*_result_*.json'))
-        p_ps_ng = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_neat_grid/**/*_result_*.json'))
-        p_ps_cl = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_clock/**/*_result_*.json'))
+        p_hs_rg = str(Path(f'{pbdir()}/results_harmony_search_recursive_grid/**/*_result_*.json'))
+        p_hs_ng = str(Path(f'{pbdir()}/results_harmony_search_neat_grid/**/*_result_*.json'))
+        p_hs_cl = str(Path(f'{pbdir()}/results_harmony_search_clock/**/*_result_*.json'))
+        p_ps_rg = str(Path(f'{pbdir()}/results_particle_swarm_optimization_recursive_grid/**/*_result_*.json'))
+        p_ps_ng = str(Path(f'{pbdir()}/results_particle_swarm_optimization_neat_grid/**/*_result_*.json'))
+        p_ps_cl = str(Path(f'{pbdir()}/results_particle_swarm_optimization_clock/**/*_result_*.json'))
         self.hs_rg = glob.glob(p_hs_rg, recursive=True)
         self.hs_ng = glob.glob(p_hs_ng, recursive=True)
         self.hs_cl = glob.glob(p_hs_cl, recursive=True)
@@ -822,17 +810,17 @@ class OptimizeResults:
 
     def find_results_l2(self):
         if self.almo == 0:
-            p = str(Path(f'{self.pbdir}/results_harmony_search_recursive_grid/*'))
+            p = str(Path(f'{pbdir()}/results_harmony_search_recursive_grid/*'))
         elif self.almo == 1:
-            p = str(Path(f'{self.pbdir}/results_harmony_search_neat_grid/*'))
+            p = str(Path(f'{pbdir()}/results_harmony_search_neat_grid/*'))
         elif self.almo == 2:
-            p = str(Path(f'{self.pbdir}/results_harmony_search_clock/*'))
+            p = str(Path(f'{pbdir()}/results_harmony_search_clock/*'))
         elif self.almo == 3:
-            p = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_recursive_grid/*'))
+            p = str(Path(f'{pbdir()}/results_particle_swarm_optimization_recursive_grid/*'))
         elif self.almo == 4:
-            p = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_neat_grid/*'))
+            p = str(Path(f'{pbdir()}/results_particle_swarm_optimization_neat_grid/*'))
         elif self.almo == 5:
-            p = str(Path(f'{self.pbdir}/results_particle_swarm_optimization_clock/*'))
+            p = str(Path(f'{pbdir()}/results_particle_swarm_optimization_clock/*'))
         self.l2_paths = glob.glob(p, recursive=True)
         self.l2_paths.sort(reverse=True)
 
@@ -902,17 +890,17 @@ class OptimizeResults:
                     st.rerun()
                 if "Remove" in ed["edited_rows"][row]:
                     if row == 0:
-                        self.remove_results(f'{self.pbdir}/results_harmony_search_recursive_grid')
+                        self.remove_results(f'{pbdir()}/results_harmony_search_recursive_grid')
                     elif row == 1:
-                        self.remove_results(f'{self.pbdir}/results_harmony_search_neat_grid')
+                        self.remove_results(f'{pbdir()}/results_harmony_search_neat_grid')
                     elif row == 2:
-                        self.remove_results(f'{self.pbdir}/results_harmony_search_clock')
+                        self.remove_results(f'{pbdir()}/results_harmony_search_clock')
                     elif row == 3:
-                        self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_recursive_grid')
+                        self.remove_results(f'{pbdir()}/results_particle_swarm_optimization_recursive_grid')
                     elif row == 4:
-                        self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_neat_grid')
+                        self.remove_results(f'{pbdir()}/results_particle_swarm_optimization_neat_grid')
                     elif row == 5:
-                        self.remove_results(f'{self.pbdir}/results_particle_swarm_optimization_clock')
+                        self.remove_results(f'{pbdir()}/results_particle_swarm_optimization_clock')
                     elif row > 5:
                         for result in self.symbols[list(self.symbols.keys())[row-6]]:
                             self.remove_results(str(PurePath(result).parent))

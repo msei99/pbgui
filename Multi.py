@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit_scrollable_textbox as stx
 import pbgui_help
-from pbgui_func import PBDIR, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
+from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
 import os
 from PBRemote import PBRemote
 from User import Users
@@ -279,7 +279,7 @@ class MultiInstance():
         if default_config.exists():
             self.default_config = Config(default_config)
         else:
-            default_config =  Path(f'{PBDIR}/configs/live/recursive_grid_mode.example.json')
+            default_config =  Path(f'{pbdir()}/configs/live/recursive_grid_mode.example.json')
             if default_config.exists():
                 self.default_config = Config(default_config)
             else:
@@ -970,7 +970,7 @@ class MultiInstance():
             st.rerun()
         st.multiselect('ignored_symbols', self._available_symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
         # Import configs
-        import_path = os.path.abspath(st_file_selector(st, path=PBDIR, key = 'multi_import_config', label = 'Import from directory'))
+        import_path = os.path.abspath(st_file_selector(st, path=pbdir(), key = 'multi_import_config', label = 'Import from directory'))
         if st.button("Import Configs"):
             self.import_configs(import_path)
         with st.container(border=True):
