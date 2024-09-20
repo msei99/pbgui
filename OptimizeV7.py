@@ -389,11 +389,12 @@ class OptimizeV7Results:
 
     def generate_analysis(self, result_file):
         cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]
-        if platform.system() == "Windows":
-            creationflags = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, creationflags=creationflags)
-        else:
-            result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
+        with st.spinner('Generating Result...'):
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, creationflags=creationflags)
+            else:
+                result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
         if "error" in result.stdout:
             error_popup(result.stdout)
         else:
