@@ -1,10 +1,8 @@
 from pathlib import Path
-from datetime import datetime, timezone
-from time import sleep
-from shutil import rmtree
+from datetime import datetime
 from User import Users, User
 from Exchange import Exchange
-from pbgui_func import PBDIR, PBGDIR, error_popup, info_popup
+from pbgui_func import PBGDIR
 import sqlite3
 
 class Database():

@@ -11,7 +11,7 @@ import glob
 import configparser
 import time
 import multiprocessing
-from pbgui_func import PBDIR, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -119,14 +119,14 @@ class OptimizeMultiQueueItem():
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
+            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
                 creationflags |= subprocess.CREATE_NO_WINDOW
-                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, creationflags=creationflags)
+                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, creationflags=creationflags)
             else:
-                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, start_new_session=True)
+                btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, start_new_session=True)
             self.pid = btm.pid
             self.save_pid()
 
@@ -307,8 +307,8 @@ class OptimizeMultiQueue:
 
 class OptimizeMultiResults:
     def __init__(self):
-        self.results_path = Path(f'{PBDIR}/results_multi')
-        self.analysis_path = Path(f'{PBDIR}/results_multi_analysis')
+        self.results_path = Path(f'{pbdir()}/results_multi')
+        self.analysis_path = Path(f'{pbdir()}/results_multi_analysis')
         self.results = []
         self.initialize()
     
@@ -388,12 +388,12 @@ class OptimizeMultiResults:
                         st.switch_page("pages/6_Multi Backtest.py")
 
     def generate_analysis(self, result_file):
-        cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/tools/extract_best_multi_config.py'), str(result_file)]
+        cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/tools/extract_best_multi_config.py'), str(result_file)]
         if platform.system() == "Windows":
             creationflags = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(cmd, capture_output=True, cwd=PBDIR, text=True, creationflags=creationflags)
+            result = subprocess.run(cmd, capture_output=True, cwd=pbdir(), text=True, creationflags=creationflags)
         else:
-            result = subprocess.run(cmd, capture_output=True, cwd=PBDIR, text=True, start_new_session=True)
+            result = subprocess.run(cmd, capture_output=True, cwd=pbdir(), text=True, start_new_session=True)
         if "error" in result.stdout:
             error_popup(result.stdout)
         else:

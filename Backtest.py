@@ -14,7 +14,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBDIR, PBGDIR, config_pretty_str
+from pbgui_func import pbdir, PBGDIR, config_pretty_str
 import uuid
 from Base import Base
 from Config import Config
@@ -298,17 +298,17 @@ class BacktestItem(Base):
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest.py')]
+            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/backtest.py')]
             cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
             cmd.extend(shlex.split(cmd_end))
-            cmd.extend(['-bd', PurePath(f'{PBDIR}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
+            cmd.extend(['-bd', PurePath(f'{pbdir()}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
                 creationflags |= subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, creationflags=creationflags)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, creationflags=creationflags)
             else:
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, start_new_session=True)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, start_new_session=True)
 
 class BacktestQueue:
     def __init__(self):
