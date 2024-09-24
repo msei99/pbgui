@@ -4,7 +4,7 @@ from Backtest import BacktestItem, BacktestResults
 from OptimizeConfig import OptimizeConfigs, OptimizeConfig
 from pathlib import Path, PurePath
 from shutil import rmtree
-from pbgui_func import pbdir, PBGDIR
+from pbgui_func import pbdir, pbvenv, PBGDIR
 import json
 import glob
 import datetime
@@ -20,6 +20,7 @@ import configparser
 import pbgui_help
 from time import sleep
 import traceback
+import logging
 
 class OptimizeItem(Base):
     BOOLS = ['n', 'y']
@@ -104,7 +105,7 @@ class OptimizeItem(Base):
 
     def start(self, cpu: int):
         if not self.is_running():
-            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/optimize.py')]
+            cmd = [pbvenv(), '-u', PurePath(f'{pbdir()}/optimize.py')]
             cmd_end = f'-u {self.user} -s {self.symbol} -i {self.oc.iters} -pm {self.oc.passivbot_mode} -a {self.oc.algorithm} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type} -oh {self.ohlcv} -c {cpu} -le {self.BOOLS[self.oc.do_long]} -se {self.BOOLS[self.oc.do_short]}'
             cmd.extend(shlex.split(cmd_end))
             cmd.extend(['-oc', str(PurePath(f'{self.oc.config_file}')), '-bd', str(PurePath(f'{pbdir()}/backtests/pbgui'))])
@@ -1086,6 +1087,9 @@ class OptimizeResults:
         self.bt_results.view(only=True)
 
 def main():
+    # Disable Streamlit Warnings when running directly
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeQueue()
     while True:
         for item in opt.items:

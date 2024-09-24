@@ -11,7 +11,7 @@ import glob
 import configparser
 import time
 import multiprocessing
-from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pbdir, pbvenv, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -19,6 +19,7 @@ from shutil import rmtree
 import datetime
 from MultiBounds import MultiBounds
 from BacktestMulti import BacktestMultiItem
+import logging
 
 class OptimizeMultiQueueItem():
     def __init__(self):
@@ -119,7 +120,7 @@ class OptimizeMultiQueueItem():
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
+            cmd = [pbvenv(), '-u', PurePath(f'{pbdir()}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -882,6 +883,9 @@ class OptimizesMulti:
                 self.optimizes.append(opt)
     
 def main():
+    # Disable Streamlit Warnings when running directly
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeMultiQueue()
     while True:
         opt.load()
