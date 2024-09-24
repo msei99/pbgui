@@ -2,7 +2,7 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 
-v1.14
+v1.15
 
 ## Migration to v0.95 Multi (Will be removed on next version)
 
@@ -145,6 +145,11 @@ rclone config create <name> imagekit endpoint=<url_endpoint> public_key=<public_
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.15 (24-09-2024)
+- Backtest V7: Added backtester for passivbot v7
+- Bugfix OPtimizer autostart
+- Optimizer V7: Added Name to results
 
 ## v1.14 (19-09-2024)
 - Optimize V7: Added optimizer for passivbot v7

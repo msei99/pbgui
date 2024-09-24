@@ -4,21 +4,21 @@ import json
 import psutil
 import sys
 import platform
-import traceback
 import subprocess
 import glob
 import configparser
 import time
 import multiprocessing
 from Exchange import Exchange
-from pbgui_func import pb7dir, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from pathlib import Path, PurePath
 from User import Users
 from shutil import rmtree
 import datetime
-from BacktestMulti import BacktestMultiItem
+from BacktestV7 import BacktestV7Item
 from Config import ConfigV7, Bounds
+import logging
 
 class OptimizeV7QueueItem:
     def __init__(self):
@@ -43,9 +43,12 @@ class OptimizeV7QueueItem:
                 with open(self.log, 'r', encoding='utf-8') as f:
                     return f.read()
 
+    @st.fragment
     def view_log(self):
         logfile = self.load_log()
         st.code(logfile)
+        if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
+            st.rerun()
 
     def status(self):
         if self.is_optimizing():
@@ -119,7 +122,7 @@ class OptimizeV7QueueItem:
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
+            cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -329,8 +332,16 @@ class OptimizeV7Results:
             p = str(self.results_path) + "/*.txt"
             self.results = glob.glob(p, recursive=False)
 
+    def find_result_name(self, result_file):
+        with open(result_file, "r", encoding='utf-8') as f:
+            first_line = f.readline()
+            config = json.loads(first_line)
+            backtest_name = config["config"]["backtest"]["base_dir"].split("/")[-1]
+            return backtest_name
+
     def view_analysis(self, analysis):
-        with open(analysis, "r", encoding='utf-8') as f:
+        file = Path(f'{self.analysis_path}/{analysis}.json')
+        with open(file, "r", encoding='utf-8') as f:
             config = json.load(f)
             st.code(json.dumps(config, indent=4))
 
@@ -341,13 +352,18 @@ class OptimizeV7Results:
         ed_key = st.session_state.ed_key
         d = []
         for id, opt in enumerate(self.results):
+            backtest_name = self.find_result_name(opt)
             analysis = PurePath(opt).stem[0:19]
             analysis = str(self.analysis_path) + f'/{analysis}*.json'
             analysis = glob.glob(analysis, recursive=False)
             analysis = analysis[0] if analysis else None
+            result = PurePath(opt).stem
+            if analysis:
+                analysis = PurePath(analysis).stem
             d.append({
                 'id': id,
-                'Result': opt,
+                'Name': backtest_name,
+                'Result': result,
                 'Analysis': analysis,
                 'view': False,
                 "generate": False,
@@ -372,20 +388,21 @@ class OptimizeV7Results:
                             self.view_analysis(d[row]["Analysis"])
                 if "generate" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["generate"]:
-                        self.generate_analysis(d[row]["Result"])
+                        result_name = PurePath(f'{self.results_path}/{d[row]["Result"]}.txt')
+                        self.generate_analysis(result_name)
                         st.session_state.ed_key += 1
                         # st.rerun()
                 if "backtest" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["backtest"]:
-                        st.session_state.bt_multi = BacktestMultiItem()
-                        st.session_state.bt_multi.create_from_multi_optimize(d[row]["Analysis"])
-                        if "bt_multi_queue" in st.session_state:
-                            del st.session_state.bt_multi_queue
-                        if "bt_multi_results" in st.session_state:
-                            del st.session_state.bt_multi_results
-                        if "bt_multi_edit_symbol" in st.session_state:
-                            del st.session_state.bt_multi_edit_symbol
-                        st.switch_page("pages/6_Multi Backtest.py")
+                        backtest_name = PurePath(f'{self.analysis_path}/{d[row]["Analysis"]}.json')
+                        st.session_state.bt_v7 = BacktestV7Item(backtest_name)
+                        if "bt_v7_queue" in st.session_state:
+                            del st.session_state.bt_v7_queue
+                        if "bt_v7_results" in st.session_state:
+                            del st.session_state.bt_v7_results
+                        if "bt_v7_edit_symbol" in st.session_state:
+                            del st.session_state.bt_v7_edit_symbol
+                        st.switch_page("pages/7_V7 Backtest.py")
 
     def generate_analysis(self, result_file):
         cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]
@@ -447,6 +464,7 @@ class OptimizeV7Item:
         if "edit_opt_v7_name" in st.session_state:
             if st.session_state.edit_opt_v7_name != self.name:
                 self.name = st.session_state.edit_opt_v7_name
+                self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         if "edit_opt_v7_sd" in st.session_state:
             if st.session_state.edit_opt_v7_sd.strftime("%Y-%m-%d") != self.config.backtest.start_date:
                 self.config.backtest.start_date = st.session_state.edit_opt_v7_sd.strftime("%Y-%m-%d")
@@ -1035,6 +1053,9 @@ class OptimizesV7:
                 self.optimizes.append(opt)
     
 def main():
+    # Disable Streamlit Warnings when running directly
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeV7Queue()
     while True:
         opt.load()
