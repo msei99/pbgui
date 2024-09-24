@@ -16,7 +16,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pbdir, validateJSON, config_pretty_str
+from pbgui_func import PBGDIR, pbvenv, pbdir, validateJSON, config_pretty_str
 import uuid
 from Base import Base
 from Config import Config
@@ -24,6 +24,7 @@ from pathlib import Path, PurePath
 from User import Users
 from shutil import rmtree
 import datetime
+import logging
 
 class BacktestMultiQueueItem():
     def __init__(self):
@@ -126,11 +127,11 @@ class BacktestMultiQueueItem():
     def run(self):
         if not self.is_finish() and not self.is_running():
             if self.parameters:
-                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/backtest_multi.py')]
+                cmd = [pbvenv(), '-u', PurePath(f'{pbdir()}/backtest_multi.py')]
                 cmd.extend(shlex.split(self.parameters))
                 cmd.extend(['-bc', self.hjson])
             else:
-                cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/backtest_multi.py'), '-bc', str(PurePath(f'{self.hjson}'))]
+                cmd = [pbvenv(), '-u', PurePath(f'{pbdir()}/backtest_multi.py'), '-bc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -1208,6 +1209,9 @@ class BacktestsMulti:
                 self.backtests.append(bt)
     
 def main():
+    # Disable Streamlit Warnings when running directly
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     bt = BacktestMultiQueue()
     while True:
         bt.load()

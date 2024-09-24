@@ -150,6 +150,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Backtest V7: Added backtester for passivbot v7
 - Bugfix OPtimizer autostart
 - Optimizer V7: Added Name to results
+- Bugfix venv for old passivbot
 
 ## v1.14 (19-09-2024)
 - Optimize V7: Added optimizer for passivbot v7
