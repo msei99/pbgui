@@ -41,12 +41,16 @@ def load_ini(section : str, parameter : str):
 
 def pbdir(): return load_ini("main", "pbdir")
 
+def pbvenv(): return load_ini("main", "pbvenv")
+
 def is_pb_installed():
     if Path(f"{pbdir()}/passivbot.py").exists():
         return True
     return False
 
 def pb7dir(): return load_ini("main", "pb7dir")
+
+def pb7venv(): return load_ini("main", "pb7venv")
 
 def is_pb7_installed():
     if Path(f"{pb7dir()}/src/passivbot.py").exists():
@@ -92,7 +96,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.14"
+            'About': "Passivbot GUI v1.15"
         }
     )
 

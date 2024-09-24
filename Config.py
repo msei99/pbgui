@@ -1,7 +1,7 @@
 import streamlit as st
 from pathlib import Path
 import json
-from pbgui_func import validateJSON, config_pretty_str
+from pbgui_func import validateJSON, config_pretty_str, error_popup
 import pbgui_help
 import traceback
 import multiprocessing
@@ -390,8 +390,8 @@ class Bot:
         self._long = Long()
         self._short = Short()
         self._bot = {
-            "long": self._long.long,
-            "short": self._short.short
+            "long": self._long._long,
+            "short": self._short._short
         }    
 
     def __repr__(self):
@@ -403,9 +403,9 @@ class Bot:
     def bot(self, new_bot):
         self._bot = new_bot
         if "long" in self._bot:
-            self._long.long = self._bot["long"]
+            self.long = self._bot["long"]
         if "short" in self._bot:
-            self._short.short = self._bot["short"]
+            self.short = self._bot["short"]
     
     @property
     def long(self): return self._long
@@ -420,6 +420,53 @@ class Bot:
     def short(self, new_short):
         self._short.short = new_short
         self._bot["short"] = self._short.short
+    
+    def edit(self):
+        # Init session_state for keys
+        if "edit_configv7_long_twe" in st.session_state:
+            if st.session_state.edit_configv7_long_twe != self.long.total_wallet_exposure_limit:
+                self.long.total_wallet_exposure_limit = round(st.session_state.edit_configv7_long_twe,2)
+                st.session_state.edit_configv7_long = json.dumps(self.bot["long"], indent=4)
+        if "edit_configv7_long_positions" in st.session_state:
+            if st.session_state.edit_configv7_long_positions != self.long.n_positions:
+                self.long.n_positions = round(st.session_state.edit_configv7_long_positions,0)
+                st.session_state.edit_configv7_long = json.dumps(self.bot["long"], indent=4)
+        if "edit_configv7_short_twe" in st.session_state:
+            if st.session_state.edit_configv7_short_twe != self.short.total_wallet_exposure_limit:
+                self.short.total_wallet_exposure_limit = round(st.session_state.edit_configv7_short_twe,2)
+                st.session_state.edit_configv7_short = json.dumps(self.bot["short"], indent=4)
+        if "edit_configv7_short_positions" in st.session_state:
+            if st.session_state.edit_configv7_short_positions != self.short.n_positions:
+                self.short.n_positions = round(st.session_state.edit_configv7_short_positions,0)
+                st.session_state.edit_configv7_short = json.dumps(self.bot["short"], indent=4)        
+        if "edit_configv7_long" in st.session_state:
+            if st.session_state.edit_configv7_long != json.dumps(self.bot["long"], indent=4):
+                try:
+                    self.long = json.loads(st.session_state.edit_configv7_long)
+                except:
+                    error_popup("Invalid JSON")
+            st.session_state.edit_configv7_long = json.dumps(self.bot["long"], indent=4)
+        if "edit_configv7_short" in st.session_state:
+            if st.session_state.edit_configv7_short != json.dumps(self.bot["short"], indent=4):
+                try:
+                    self.short = json.loads(st.session_state.edit_configv7_short)
+                except:
+                    error_popup("Invalid JSON")
+            st.session_state.edit_configv7_short = json.dumps(self.bot["short"], indent=4)
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.number_input("long twe", min_value=0.0, max_value=100.0, value=float(self.long.total_wallet_exposure_limit), step=0.05, format="%.2f", key="edit_configv7_long_twe", help=pbgui_help.total_wallet_exposure_limit)
+        with col2:
+            st.number_input("long positions", min_value=0.0, max_value=100.0, value=float(self.long.n_positions), step=1.0, format="%.2f", key="edit_configv7_long_positions", help=pbgui_help.n_positions)
+        with col3:
+            st.number_input("short twe", min_value=0.0, max_value=100.0, value=float(self.short.total_wallet_exposure_limit), step=0.05, format="%.2f", key="edit_configv7_short_twe", help=pbgui_help.total_wallet_exposure_limit)
+        with col4:
+            st.number_input("short positions", min_value=0.0, max_value=100.0, value=float(self.short.n_positions), step=1.0, format="%.2f", key="edit_configv7_short_positions", help=pbgui_help.n_positions)
+        col1, col2 = st.columns([1,1])
+        with col1:
+            st.text_area(f'long', json.dumps(self.bot["long"], indent=4), key="edit_configv7_long", height=600)
+        with col2:
+            st.text_area(f'short', json.dumps(self.bot["short"], indent=4), key="edit_configv7_short", height=600)
 
 class Long:
     def __init__(self):
@@ -479,53 +526,52 @@ class Long:
     def long(self): return self._long
     @long.setter
     def long(self, new_long):
-        self._long = new_long
-        if "close_grid_markup_range" in self._long:
-            self._close_grid_markup_range = self._long["close_grid_markup_range"]
-        if "close_grid_min_markup" in self._long:
-            self._close_grid_min_markup = self._long["close_grid_min_markup"]
-        if "close_grid_qty_pct" in self._long:
-            self._close_grid_qty_pct = self._long["close_grid_qty_pct"]
-        if "close_trailing_grid_ratio" in self._long:
-            self._close_trailing_grid_ratio = self._long["close_trailing_grid_ratio"]
-        if "close_trailing_qty_pct" in self._long:
-            self._close_trailing_qty_pct = self._long["close_trailing_qty_pct"]
-        if "close_trailing_retracement_pct" in self._long:
-            self._close_trailing_retracement_pct = self._long["close_trailing_retracement_pct"]
-        if "close_trailing_threshold_pct" in self._long:
-            self._close_trailing_threshold_pct = self._long["close_trailing_threshold_pct"]
-        if "ema_span_0" in self._long:
-            self._ema_span_0 = self._long["ema_span_0"]
-        if "ema_span_1" in self._long:
-            self._ema_span_1 = self._long["ema_span_1"]
-        if "entry_grid_double_down_factor" in self._long:
-            self._entry_grid_double_down_factor = self._long["entry_grid_double_down_factor"]
-        if "entry_grid_spacing_pct" in self._long:
-            self._entry_grid_spacing_pct = self._long["entry_grid_spacing_pct"]
-        if "entry_grid_spacing_weight" in self._long:
-            self._entry_grid_spacing_weight = self._long["entry_grid_spacing_weight"]
-        if "entry_initial_ema_dist" in self._long:
-            self._entry_initial_ema_dist = self._long["entry_initial_ema_dist"]
-        if "entry_initial_qty_pct" in self._long:
-            self._entry_initial_qty_pct = self._long["entry_initial_qty_pct"]
-        if "entry_trailing_grid_ratio" in self._long:
-            self._entry_trailing_grid_ratio = self._long["entry_trailing_grid_ratio"]
-        if "entry_trailing_retracement_pct" in self._long:
-            self._entry_trailing_retracement_pct = self._long["entry_trailing_retracement_pct"]
-        if "entry_trailing_threshold_pct" in self._long:
-            self._entry_trailing_threshold_pct = self._long["entry_trailing_threshold_pct"]
-        if "n_positions" in self._long:
-            self._n_positions = self._long["n_positions"]
-        if "total_wallet_exposure_limit" in self._long:
-            self._total_wallet_exposure_limit = self._long["total_wallet_exposure_limit"]
-        if "unstuck_close_pct" in self._long:
-            self._unstuck_close_pct = self._long["unstuck_close_pct"]
-        if "unstuck_ema_dist" in self._long:
-            self._unstuck_ema_dist = self._long["unstuck_ema_dist"]
-        if "unstuck_loss_allowance_pct" in self._long:
-            self._unstuck_loss_allowance_pct = self._long["unstuck_loss_allowance_pct"]
-        if "unstuck_threshold" in self._long:
-            self._unstuck_threshold = self._long["unstuck_threshold"]
+        if "close_grid_markup_range" in new_long:
+            self.close_grid_markup_range = new_long["close_grid_markup_range"]
+        if "close_grid_min_markup" in new_long:
+            self.close_grid_min_markup = new_long["close_grid_min_markup"]
+        if "close_grid_qty_pct" in new_long:
+            self.close_grid_qty_pct = new_long["close_grid_qty_pct"]
+        if "close_trailing_grid_ratio" in new_long:
+            self.close_trailing_grid_ratio = new_long["close_trailing_grid_ratio"]
+        if "close_trailing_qty_pct" in new_long:
+            self.close_trailing_qty_pct = new_long["close_trailing_qty_pct"]
+        if "close_trailing_retracement_pct" in new_long:
+            self.close_trailing_retracement_pct = new_long["close_trailing_retracement_pct"]
+        if "close_trailing_threshold_pct" in new_long:
+            self.close_trailing_threshold_pct = new_long["close_trailing_threshold_pct"]
+        if "ema_span_0" in new_long:
+            self.ema_span_0 = new_long["ema_span_0"]
+        if "ema_span_1" in new_long:
+            self.ema_span_1 = new_long["ema_span_1"]
+        if "entry_grid_double_down_factor" in new_long:
+            self.entry_grid_double_down_factor = new_long["entry_grid_double_down_factor"]
+        if "entry_grid_spacing_pct" in new_long:
+            self.entry_grid_spacing_pct = new_long["entry_grid_spacing_pct"]
+        if "entry_grid_spacing_weight" in new_long:
+            self.entry_grid_spacing_weight = new_long["entry_grid_spacing_weight"]
+        if "entry_initial_ema_dist" in new_long:
+            self.entry_initial_ema_dist = new_long["entry_initial_ema_dist"]
+        if "entry_initial_qty_pct" in new_long:
+            self.entry_initial_qty_pct = new_long["entry_initial_qty_pct"]
+        if "entry_trailing_grid_ratio" in new_long:
+            self.entry_trailing_grid_ratio = new_long["entry_trailing_grid_ratio"]
+        if "entry_trailing_retracement_pct" in new_long:
+            self.entry_trailing_retracement_pct = new_long["entry_trailing_retracement_pct"]
+        if "entry_trailing_threshold_pct" in new_long:
+            self.entry_trailing_threshold_pct = new_long["entry_trailing_threshold_pct"]
+        if "n_positions" in new_long:
+            self.n_positions = new_long["n_positions"]
+        if "total_wallet_exposure_limit" in new_long:
+            self.total_wallet_exposure_limit = new_long["total_wallet_exposure_limit"]
+        if "unstuck_close_pct" in new_long:
+            self.unstuck_close_pct = new_long["unstuck_close_pct"]
+        if "unstuck_ema_dist" in new_long:
+            self.unstuck_ema_dist = new_long["unstuck_ema_dist"]
+        if "unstuck_loss_allowance_pct" in new_long:
+            self.unstuck_loss_allowance_pct = new_long["unstuck_loss_allowance_pct"]
+        if "unstuck_threshold" in new_long:
+            self.unstuck_threshold = new_long["unstuck_threshold"]
 
     @property
     def close_grid_markup_range(self): return self._close_grid_markup_range
@@ -719,59 +765,58 @@ class Short:
         }
 
     def __repr__(self):
-        return f"Short({self._close_grid_markup_range}, {self._close_grid_min_markup}, {self._close_grid_qty_pct}, {self._close_trailing_grid_ratio}, {self._close_trailing_qty_pct}, {self._close_trailing_retracement_pct}, {self._close_trailing_threshold_pct}, {self._ema_span_0}, {self._ema_span_1}, {self._entry_grid_double_down_factor}, {self._entry_grid_spacing_pct}, {self._entry_grid_spacing_weight}, {self._entry_initial_ema_dist}, {self._entry_initial_qty_pct}, {self._entry_trailing_grid_ratio}, {self._entry_trailing_retracement_pct}, {self._entry_trailing_threshold_pct}, {self._n_positions}, {self._total_wallet_exposure_limit}, {self._unstuck_close_pct}, {self._unstuck_ema_dist}, {self._unstuck_loss_allowance_pct}, {self._unstuck_threshold})"
+        return str(self._short)
 
     @property
     def short(self): return self._short
     @short.setter
     def short(self, new_short):
-        self._short = new_short
-        if "close_grid_markup_range" in self._short:
-            self._close_grid_markup_range = self._short["close_grid_markup_range"]
-        if "close_grid_min_markup" in self._short:
-            self._close_grid_min_markup = self._short["close_grid_min_markup"]
-        if "close_grid_qty_pct" in self._short:
-            self._close_grid_qty_pct = self._short["close_grid_qty_pct"]
-        if "close_trailing_grid_ratio" in self._short:
-            self._close_trailing_grid_ratio = self._short["close_trailing_grid_ratio"]
-        if "close_trailing_qty_pct" in self._short:
-            self._close_trailing_qty_pct = self._short["close_trailing_qty_pct"]
-        if "close_trailing_retracement_pct" in self._short:
-            self._close_trailing_retracement_pct = self._short["close_trailing_retracement_pct"]
-        if "close_trailing_threshold_pct" in self._short:
-            self._close_trailing_threshold_pct = self._short["close_trailing_threshold_pct"]
-        if "ema_span_0" in self._short:
-            self._ema_span_0 = self._short["ema_span_0"]
-        if "ema_span_1" in self._short:
-            self._ema_span_1 = self._short["ema_span_1"]
-        if "entry_grid_double_down_factor" in self._short:
-            self._entry_grid_double_down_factor = self._short["entry_grid_double_down_factor"]
-        if "entry_grid_spacing_pct" in self._short:
-            self._entry_grid_spacing_pct = self._short["entry_grid_spacing_pct"]
-        if "entry_grid_spacing_weight" in self._short:
-            self._entry_grid_spacing_weight = self._short["entry_grid_spacing_weight"]
-        if "entry_initial_ema_dist" in self._short:
-            self._entry_initial_ema_dist = self._short["entry_initial_ema_dist"]
-        if "entry_initial_qty_pct" in self._short:
-            self._entry_initial_qty_pct = self._short["entry_initial_qty_pct"]
-        if "entry_trailing_grid_ratio" in self._short:
-            self._entry_trailing_grid_ratio = self._short["entry_trailing_grid_ratio"]
-        if "entry_trailing_retracement" in self._short:
-            self._entry_trailing_retracement_pct = self._short["entry_trailing_retracement_pct"]
-        if "entry_trailing_threshold_pct" in self._short:
-            self._entry_trailing_threshold_pct = self._short["entry_trailing_threshold_pct"]
-        if "n_positions" in self._short:
-            self._n_positions = self._short["n_positions"]
-        if "total_wallet_exposure_limit" in self._short:
-            self._total_wallet_exposure_limit = self._short["total_wallet_exposure_limit"]
-        if "unstuck_close_pct" in self._short:
-            self._unstuck_close_pct = self._short["unstuck_close_pct"]
-        if "unstuck_ema_dist" in self._short:
-            self._unstuck_ema_dist = self._short["unstuck_ema_dist"]
-        if "unstuck_loss_allowance_pct" in self._short:
-            self._unstuck_loss_allowance_pct = self._short["unstuck_loss_allowance_pct"]
-        if "unstuck_threshold" in self._short:
-            self._unstuck_threshold = self._short["unstuck_threshold"]
+        if "close_grid_markup_range" in new_short:
+            self.close_grid_markup_range = new_short["close_grid_markup_range"]
+        if "close_grid_min_markup" in new_short:
+            self.close_grid_min_markup = new_short["close_grid_min_markup"]
+        if "close_grid_qty_pct" in new_short:
+            self.close_grid_qty_pct = new_short["close_grid_qty_pct"]
+        if "close_trailing_grid_ratio" in new_short:
+            self.close_trailing_grid_ratio = new_short["close_trailing_grid_ratio"]
+        if "close_trailing_qty_pct" in new_short:
+            self.close_trailing_qty_pct = new_short["close_trailing_qty_pct"]
+        if "close_trailing_retracement_pct" in new_short:
+            self.close_trailing_retracement_pct = new_short["close_trailing_retracement_pct"]
+        if "close_trailing_threshold_pct" in new_short:
+            self.close_trailing_threshold_pct = new_short["close_trailing_threshold_pct"]
+        if "ema_span_0" in new_short:
+            self.ema_span_0 = new_short["ema_span_0"]
+        if "ema_span_1" in new_short:
+            self.ema_span_1 = new_short["ema_span_1"]
+        if "entry_grid_double_down_factor" in new_short:
+            self.entry_grid_double_down_factor = new_short["entry_grid_double_down_factor"]
+        if "entry_grid_spacing_pct" in new_short:
+            self.entry_grid_spacing_pct = new_short["entry_grid_spacing_pct"]
+        if "entry_grid_spacing_weight" in new_short:
+            self.entry_grid_spacing_weight = new_short["entry_grid_spacing_weight"]
+        if "entry_initial_ema_dist" in new_short:
+            self.entry_initial_ema_dist = new_short["entry_initial_ema_dist"]
+        if "entry_initial_qty_pct" in new_short:
+            self.entry_initial_qty_pct = new_short["entry_initial_qty_pct"]
+        if "entry_trailing_grid_ratio" in new_short:
+            self.entry_trailing_grid_ratio = new_short["entry_trailing_grid_ratio"]
+        if "entry_trailing_retracement" in new_short:
+            self.entry_trailing_retracement_pct = new_short["entry_trailing_retracement_pct"]
+        if "entry_trailing_threshold_pct" in new_short:
+            self.entry_trailing_threshold_pct = new_short["entry_trailing_threshold_pct"]
+        if "n_positions" in new_short:
+            self.n_positions = new_short["n_positions"]
+        if "total_wallet_exposure_limit" in new_short:
+            self.total_wallet_exposure_limit = new_short["total_wallet_exposure_limit"]
+        if "unstuck_close_pct" in new_short:
+            self.unstuck_close_pct = new_short["unstuck_close_pct"]
+        if "unstuck_ema_dist" in new_short:
+            self.unstuck_ema_dist = new_short["unstuck_ema_dist"]
+        if "unstuck_loss_allowance_pct" in new_short:
+            self.unstuck_loss_allowance_pct = new_short["unstuck_loss_allowance_pct"]
+        if "unstuck_threshold" in new_short:
+            self.unstuck_threshold = new_short["unstuck_threshold"]
 
     @property
     def close_grid_markup_range(self): return self._close_grid_markup_range
@@ -922,7 +967,7 @@ class Live:
         self._filter_by_min_effective_cost = True
         self._forced_mode_long = ""
         self._forced_mode_short = ""
-        self._ignored_coins = ["COIN1", "COIN2"]
+        self._ignored_coins = []
         self._leverage = 10.0
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3

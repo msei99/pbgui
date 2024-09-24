@@ -853,3 +853,22 @@ unstuck_threshold = """
     e.g. if a position size is $500 and max allowed position size is $1000, then position is 50% full.
     If unstuck_threshold==0.45, then unstuck the position until its size is $450.
     ```"""
+
+minimum_coin_age_days = """
+    ```
+    disallow coins younger than a given number of days
+    ```"""
+
+ohlcv_rolling_window = """
+    ```
+    number of minutes to look into the past to compute volume and noisiness,
+    used for dynamic coin selection in forager mode.
+        noisiness is normalized relative range of 1m ohlcvs: mean((high - low) / close)
+        in forager mode, bot will select coins with highest noisiness for opening positions
+    ```"""
+
+relative_volume_filter_clip_pct = """
+    ```
+    disapprove the lowest relative volume coins.
+    Default 0.1 == 10%. Set to zero to allow all.
+    ```"""
