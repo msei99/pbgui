@@ -51,7 +51,7 @@ streamlit run pbgui.py
 Open http://localhost:8501 with Browser\
 Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
-On First Run, you have to select your passivbot directory
+On First Run, you have to select your passivbot and venv directories
 
 ## PBRun Instance Manager
 To enable the PBGui instance manager in the GUI, you can follow these steps:
