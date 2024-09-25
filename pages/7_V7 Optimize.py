@@ -14,7 +14,10 @@ def opt_v7():
             st.rerun()
         if st.button(":material/save:"):
             if opt_v7.name:
-                opt_v7.save()
+                with st.spinner("Saving..."):
+                    opt_v7.save()
+                    if "opt_v7_list" in st.session_state:
+                        del st.session_state.opt_v7_list
             else:
                 info_popup("Name is empty")
         if st.button("Results"):
@@ -27,8 +30,14 @@ def opt_v7():
             st.rerun()
         if st.button("Add to Optimizer Queue"):
             if opt_v7.name and opt_v7.config.config_file:
-                opt_v7.save()
-                opt_v7.save_queue()
+                with st.spinner("Saving and adding to queue"):
+                    opt_v7.save()
+                    if "opt_v7_list" in st.session_state:
+                        del st.session_state.opt_v7_list
+                    opt_v7.save_queue()
+                    st.session_state.opt_v7_queue = OptimizeV7Queue()
+                    del st.session_state.opt_v7
+                    st.rerun()
             else:
                 if not opt_v7.name:
                     info_popup("Name is empty")
