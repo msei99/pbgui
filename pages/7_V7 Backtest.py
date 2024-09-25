@@ -16,7 +16,10 @@ def bt_v7():
             st.rerun()
         if st.button(":material/save:"):
             if bt_v7.name:
-                bt_v7.save()
+                with st.spinner("Saving..."):
+                    bt_v7.save()
+                    if "bt_v7_list" in st.session_state:
+                        del st.session_state.bt_v7_list
             else:
                 info_popup("Name is empty")
         if st.button("Results"):
@@ -28,49 +31,22 @@ def bt_v7():
             st.session_state.bt_v7_queue = BacktestV7Queue()
             st.rerun()
         if st.button("Add to Backtest Queue"):
-            if bt_v7.name and bt_v7.config.live.approved_coins:
-                bt_v7.save()
-                bt_v7.save_queue()
-                info_popup("Backtest added to Queue")
+            if bt_v7.name:
+                with st.spinner("Saving and adding to queue"):
+                    bt_v7.save()
+                    if "bt_v7_list" in st.session_state:
+                        del st.session_state.bt_v7_list
+                    bt_v7.save_queue()
+                    st.session_state.bt_v7_queue = BacktestV7Queue()
+                    del st.session_state.bt_v7
+                    st.rerun()
             else:
                 if not bt_v7.name:
                     info_popup("Name is empty")
-                elif not bt_v7.symbols:
-                    info_popup("No Symbols")
     st.title(f"Backtest v7: {bt_v7.name}")
     bt_v7.edit()
     # with st.expander("Optimize loss_allowance_pct, stuck_threshold and unstuck_close_pct", expanded=False):
     #     bt_v7.optimize()
-
-def bt_v7_edit_symbol():
-    # Init bt_v7
-    bt_v7 = st.session_state.bt_v7
-    symbol = st.session_state.bt_v7_edit_symbol
-    # Navigation
-    with st.sidebar:
-        if st.button(":back:"):
-            del st.session_state.bt_v7_edit_symbol
-            st.rerun()
-        if st.button(":floppy_disk:"):
-            bt_v7.symbols[symbol].save_config()
-    st.title(f"Backtest v7: {bt_v7.name} - Symbol: {symbol}")
-    bt_v7.symbols[symbol].edit_config()
-    if bt_v7.symbols[symbol].preview_grid:
-        if "preview_grid_instance" not in st.session_state:
-            st.session_state.preview_grid_instance = Instance()
-        instance = st.session_state.preview_grid_instance
-        instance.config = bt_v7.symbols[symbol].config
-        user = Users().find_exchange_user(bt_v7.exchange)
-        if user:
-            instance.user = user
-            instance.symbol = symbol
-            instance.market_type = "futures"
-            instance.view_grid(bt_v7.sb)
-        else:
-            error_popup(f"Can't preview grid. No User for Exchange {bt_v7.exchange} found")
-            if "config_preview_grid" in st.session_state:
-                del st.session_state.config_preview_grid
-                st.session_state.config_preview_grid = False
 
 def bt_v7_list():
     # Init bt_v7_list
@@ -166,8 +142,6 @@ if not is_pb7_installed():
 
 if "bt_v7_results" in st.session_state:
     bt_v7_results()
-elif "bt_v7_edit_symbol" in st.session_state:
-    bt_v7_edit_symbol()
 elif "bt_v7" in st.session_state:
     bt_v7()
 elif "bt_v7_queue" in st.session_state:
