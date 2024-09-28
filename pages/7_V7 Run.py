@@ -86,9 +86,9 @@ def select_instance():
                     delete_instance(instance)
     d = []
     for id, instance in enumerate(v7_instances):
-        # twe_str: str = (f"{ 'L=' + str( round(instance.TWE_long,2)) if instance.long_enabled else ''}"
-        #                 f"{' | ' if instance.long_enabled and instance.short_enabled else ''}"
-        #                 f"{ 'S=' + str( round(instance.TWE_short,2)) if instance.short_enabled else ''}")
+        twe_str: str = (f"{ 'L=' + str( round(instance.config.bot.long.total_wallet_exposure_limit,2)) if instance.config.bot.long.n_positions > 0 else ''}"
+                        f"{' | ' if instance.config.bot.long.n_positions > 0 and instance.config.bot.short.n_positions > 0 else ''}"
+                        f"{ 'S=' + str( round(instance.config.bot.short.total_wallet_exposure_limit,2)) if instance.config.bot.short.n_positions > 0 else ''}")
         running_on = instance.is_running_on()
         if instance.enabled_on in running_on and (instance.version == instance.running_version):
             remote_str = f'✅ Running {instance.is_running_on()}'
@@ -103,8 +103,7 @@ def select_instance():
             'Edit': False,
             'User': instance.config.live.user,
             'Enabled On': instance.config.pbgui.enabled_on,
-            # 'TWE': twe_str,
-            # 'AU': bool(instance.loss_allowance_pct > 0.0),
+            'TWE': twe_str,
             'Version': instance.config.pbgui.version,
             'Remote': remote_str,
             'Remote Version': instance.running_version,
