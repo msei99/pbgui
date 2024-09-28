@@ -151,6 +151,9 @@ class V7Instance():
         if "edit_run_v7_forced_mode_short" in st.session_state:
             if st.session_state.edit_run_v7_forced_mode_short != self.config.live.forced_mode_short:
                 self.config.live.forced_mode_short = st.session_state.edit_run_v7_forced_mode_short
+        if "edit_run_v7_time_in_force" in st.session_state:
+            if st.session_state.edit_run_v7_time_in_force != self.config.live.time_in_force:
+                self.config.live.time_in_force = st.session_state.edit_run_v7_time_in_force
         # Symbol config
         if "edit_run_v7_approved_coins" in st.session_state:
             if st.session_state.edit_run_v7_approved_coins != self.config.live.approved_coins:
@@ -210,6 +213,10 @@ class V7Instance():
                 st.selectbox('forced_mode_long',forced_mode, index = forced_mode.index(self.config.live.forced_mode_long), format_func=lambda x: mode_options.get(x), key="edit_run_v7_forced_mode_long", help=pbgui_help.forced_mode_long_short)
             with col4:
                 st.selectbox('forced_mode_short',forced_mode, index = forced_mode.index(self.config.live.forced_mode_short), format_func=lambda x: mode_options.get(x) , key="edit_run_v7_forced_mode_short", help=pbgui_help.forced_mode_long_short)
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                time_in_force = ['good_till_cancelled', 'post_only']
+                st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
         # symbol configuration
         for symbol in self.config.live.approved_coins.copy():
             if symbol not in self._available_symbols:

@@ -878,3 +878,10 @@ relative_volume_filter_clip_pct = """
     disapprove the lowest relative volume coins.
     Default 0.1 == 10%. Set to zero to allow all.
     ```"""
+
+time_in_force = """
+    ```
+    Time in force indicates how long your order will remain active before it is executed or expired.
+    GTC (good_till_cancelled: The order will last until it is completed or you cancel it.
+    PostOnly (post_only): If the order would be filled immediately when submitted, it will be cancelled.
+    ```"""
