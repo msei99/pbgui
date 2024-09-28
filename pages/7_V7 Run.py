@@ -89,15 +89,15 @@ def select_instance():
         # twe_str: str = (f"{ 'L=' + str( round(instance.TWE_long,2)) if instance.long_enabled else ''}"
         #                 f"{' | ' if instance.long_enabled and instance.short_enabled else ''}"
         #                 f"{ 'S=' + str( round(instance.TWE_short,2)) if instance.short_enabled else ''}")
-        # running_on = instance.is_running_on()
-        # if instance.enabled_on in running_on and (instance.version == instance.running_version):
-        #     remote_str = f'✅ Running {instance.is_running_on()}'
-        # elif running_on:
-        #     remote_str = f'🔄 Running {running_on}'
-        # elif instance.enabled_on != 'disabled':
-        #     remote_str = '🔄 Activation required'
-        # else:
-        #     remote_str = '❌'
+        running_on = instance.is_running_on()
+        if instance.enabled_on in running_on and (instance.version == instance.running_version):
+            remote_str = f'✅ Running {instance.is_running_on()}'
+        elif running_on:
+            remote_str = f'🔄 Running {running_on}'
+        elif instance.enabled_on != 'disabled':
+            remote_str = '🔄 Activation required'
+        else:
+            remote_str = '❌'
         d.append({
             'id': id,
             'Edit': False,
@@ -106,8 +106,8 @@ def select_instance():
             # 'TWE': twe_str,
             # 'AU': bool(instance.loss_allowance_pct > 0.0),
             'Version': instance.config.pbgui.version,
-            # 'Remote': remote_str,
-            # 'Remote Version': instance.running_version,
+            'Remote': remote_str,
+            'Remote Version': instance.running_version,
             'Delete': False,
         })
     column_config = {
