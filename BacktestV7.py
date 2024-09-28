@@ -17,7 +17,6 @@ from Base import Base
 from Exchange import Exchange
 from Config import Config, ConfigV7
 from pathlib import Path, PurePath
-from User import Users
 from shutil import rmtree
 import datetime
 import logging
@@ -341,7 +340,6 @@ class BacktestV7Item:
         # self.json = None
         self.config = ConfigV7()
         self.log = None
-        self.users = Users()
         self.backtest_results = []
         if backtest_path:
             self.config.config_file = backtest_path

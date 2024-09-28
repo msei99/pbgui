@@ -530,6 +530,7 @@ unstuck_close_pct = """
 
 execution_delay_seconds = """
     ```
+    wait x seconds after executing to exchange
     delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
     ```"""
 
@@ -540,7 +541,9 @@ price_distance_threshold = """
 
 auto_gs = """
     ```
-    set all non-specified symbols on graceful stop
+    automatically enable graceful stop for positions on disapproved coins
+    graceful stop means the bot will continue trading as normal, but not
+    open a new position after current position is fully closed.
     ```"""
 
 TWE_long_short = """
@@ -600,6 +603,7 @@ max_n_per_batch = """
 filter_by_min_effective_cost = """
     ```
     if true, will disallow symbols where balance * WE_limit * initial_qty_pct < min_effective_cost
+    e.g. if exchange's effective min cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
     ```"""
 
 forced_mode_long_short = """

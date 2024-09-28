@@ -5,6 +5,7 @@ import platform
 from pbgui_func import check_password, set_page_config, change_ini, load_ini, save_ini
 from Services import Services
 from Instance import Instances
+from RunV7 import V7Instances
 from Multi import MultiInstances
 from User import Users
 from pathlib import Path
@@ -92,6 +93,10 @@ if 'pbgui_instances' not in st.session_state:
 if 'multi_instances' not in st.session_state:
     with st.spinner('Initializing Multi Instances...'):
         st.session_state.multi_instances = MultiInstances()
+# Init V7 Instances
+if 'v7_instances' not in st.session_state:
+    with st.spinner('Initializing v7 Instances...'):
+        st.session_state.v7_instances = V7Instances()
 # Init Users
 if 'users' not in st.session_state:
     with st.spinner('Initializing Users...'):

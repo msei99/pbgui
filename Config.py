@@ -2299,6 +2299,42 @@ class Bounds:
         self._short_unstuck_threshold_1 = new_value
         self._bounds["short_unstuck_threshold"][1] = new_value
 
+class PBGui:
+    def __init__(self):
+        self._version = 0
+        self._enabled_on = "disabled"
+        self._pbgui = {
+            "version": self._version,
+            "enabled_on": self._enabled_on
+        }
+    
+    def __repr__(self):
+        return str(self._pbgui)
+    
+    @property
+    def pbgui(self): return self._pbgui
+    @pbgui.setter
+    def pbgui(self, new_pbgui):
+        self._pbgui = new_pbgui
+        if "version" in self._pbgui:
+            self._version = self._pbgui["version"]
+        if "enabled_on" in self._pbgui:
+            self._enabled_on = self._pbgui["enabled_on"]
+    
+    @property
+    def version(self): return self._version
+    @property
+    def enabled_on(self): return self._enabled_on
+
+    @version.setter
+    def version(self, new_version):
+        self._version = new_version
+        self._pbgui["version"] = self._version
+    @enabled_on.setter
+    def enabled_on(self, new_enabled_on):
+        self._enabled_on = new_enabled_on
+        self._pbgui["enabled_on"] = self._enabled_on
+
 class ConfigV7():
     def __init__(self, file_name = None):
         self._config_file = file_name
@@ -2306,12 +2342,14 @@ class ConfigV7():
         self._bot = Bot()
         self._live = Live()
         self._optimize = Optimize()
+        self._pbgui = PBGui()
 
         self._config = {
             "backtest": self._backtest._backtest,
             "bot": self._bot._bot,
             "live": self._live._live,
-            "optimize": self._optimize._optimize
+            "optimize": self._optimize._optimize,
+            "pbgui": self._pbgui._pbgui
         }
 
     @property
@@ -2349,6 +2387,13 @@ class ConfigV7():
         self._config["optimize"] = new_value
 
     @property
+    def pbgui(self): return self._pbgui
+    @pbgui.setter
+    def pbgui(self, new_value):
+        self._pbgui.pbgui = new_value
+        self._config["pbgui"] = new_value
+
+    @property
     def config(self): return self._config
     @config.setter
     def config(self, new_value):
@@ -2360,6 +2405,8 @@ class ConfigV7():
             self.live = new_value["live"]
         if "optimize" in new_value:
             self.optimize = new_value["optimize"]
+        if "pbgui" in new_value:
+            self.pbgui = new_value["pbgui"]
         
     
     def load_config(self):
@@ -2367,15 +2414,18 @@ class ConfigV7():
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
-                    config = f.read()
+                    # config = f.read()
+                    config = json.load(f)
                 if "backtest" in config:
-                    self.backtest = json.loads(config)["backtest"]
+                    self.backtest = config["backtest"]
                 if "bot" in config:
-                    self.bot = json.loads(config)["bot"]
+                    self.bot = config["bot"]
                 if "live" in config:
-                    self.live = json.loads(config)["live"]
+                    self.live = config["live"]
                 if "optimize" in config:
-                    self.optimize = json.loads(config)["optimize"]
+                    self.optimize = config["optimize"]
+                if "pbgui" in config:
+                    self.pbgui = config["pbgui"]
             except Exception as e:
                 print(f'Error loding v7 config: {e}')
                 traceback.print_exc()
@@ -2383,6 +2433,7 @@ class ConfigV7():
     def save_config(self):
         if self._config != None and self._config_file != None:
             file = Path(f'{self._config_file}')
+            file.parent.mkdir(parents=True, exist_ok=True)
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(self._config, f, indent=4)
     

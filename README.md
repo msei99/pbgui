@@ -146,6 +146,11 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v1.16 (28-09-2024)
+- Run V7: First Version that can run passivbot v7
+- PBRun: Can now start passivbot v7 instances
+- PBRemote: Sync v7 added
+
 ## v1.15 (24-09-2024)
 - Backtest V7: Added backtester for passivbot v7
 - Bugfix OPtimizer autostart
