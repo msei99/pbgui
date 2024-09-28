@@ -210,7 +210,7 @@ class RemoteServer():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_v7.json from: {self.name}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync v7 from: {self.name}')
             pbgdir = Path.cwd()
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/v7_{self.name}', PurePath(f'{pbgdir}/data/remote/v7_{self.name}')]
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
             log = open(logfile,"ab")
             if platform.system() == "Windows":
@@ -446,8 +446,8 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_single.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'status_v7':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
-        elif direction == 'up' and spath == 'v7':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{status_v7.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
+        elif direction == 'up' and spath == 'run_v7':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'multi':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
@@ -471,7 +471,7 @@ class PBRemote():
             self.local_run.instances_status_v7.update_status()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_v7 ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_v7.status_ts}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync v7 up: {self.name}')
-            self.sync('up', 'v7')
+            self.sync('up', 'run_v7')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status_v7.json up: {self.name}')
             self.sync('up', 'status_v7')
 
