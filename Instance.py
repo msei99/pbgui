@@ -17,7 +17,6 @@ import numpy as np
 from shutil import rmtree
 import sys
 import traceback
-import plotly.graph_objects as go
 
 class Instance(Base):
     def __init__(self, config: str = None):

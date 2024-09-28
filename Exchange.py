@@ -41,6 +41,17 @@ class Single(Enum):
     def list():
         return list(map(lambda c: c.value, Single))
 
+class V7(Enum):
+    BINANCE = 'binance'
+    BYBIT = 'bybit'
+    BITGET = 'bitget'
+    OKX = 'okx'
+    HYPERLIQUID = 'hyperliquid'
+
+    @staticmethod
+    def list():
+        return list(map(lambda c: c.value, V7))
+
 class Passphrase(Enum):
     BITGET = 'bitget'
     OKX = 'okx'
