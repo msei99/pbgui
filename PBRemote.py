@@ -151,25 +151,6 @@ class RemoteServer():
             return True
         return False
 
-    # def load_instances(self):
-    #     """Load instances for this server, checking by server's name."""
-    #     self._instances = []
-    #     p = str(Path(f'{self._path}/../instances_{self.name}/*'))
-    #     instances = glob.glob(p)
-    #     for instance in instances:
-    #         file = Path(f'{instance}/instance.cfg')
-    #         if file.exists():
-    #             try:
-    #                 with open(file, "r", encoding='utf-8') as f:
-    #                     config = json.load(f)
-    #                     inst = {
-    #                         "user": config["_user"],
-    #                         "symbol": config["_symbol"]
-    #                     }
-    #                     self._instances.append(inst)
-    #             except Exception as e:
-    #                 print(f'{str(file)} is corrupted {e}')
-
     def load(self):
         """
         Load the server's configuration.
@@ -340,7 +321,6 @@ class PBRemote():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
         if not self.pb7dir:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
-        # self.instances_path = f'{pbgdir}/data/instances'
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
@@ -581,7 +561,6 @@ class PBRemote():
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
-            # rserver.load_instances()
             self.add(rserver)
 
     def run(self):
@@ -690,8 +669,8 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBRemote.log')
-    # sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    # sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
     if remote.is_running():
