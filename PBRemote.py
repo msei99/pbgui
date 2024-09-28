@@ -577,6 +577,7 @@ class PBRemote():
         for remote in found_remote:
             rserver = RemoteServer(remote)
             rserver.pbdir = self.pbdir
+            rserver.pb7dir = self.pb7dir
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
