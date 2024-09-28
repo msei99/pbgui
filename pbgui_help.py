@@ -736,12 +736,14 @@ population_size = """
 
 crossover_probability = """
     ```
-    probability of crossover (I don't know what it is)
+    The probability of performing crossover between two individuals in the genetic algorithm.
+    It determines how often parents will exchange genetic information to create offspring.
     ```"""
 
 mutation_probability = """
     ```
-    probability of mutation (I don't know what it is)
+    The probability of performing crossover between two individuals in the genetic algorithm.
+    It determines how often parents will exchange genetic information to create offspring.
     ```"""
 
 scoring = """
