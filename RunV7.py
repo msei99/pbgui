@@ -30,11 +30,15 @@ class V7Instance():
             self._user = new_user
             self.initialize()
     @property
+    def version(self): return self.config.pbgui.version
+    @property
+    def enabled_on(self): return self.config.pbgui.enabled_on
+    @property
     def running_version(self):
         if self.enabled_on == self.remote.name:
-            version = self.remote.local_run.instances_status.find_version(self.user)
+            version = self.remote.local_run.instances_status_v7.find_version(self.user)
         elif self.enabled_on in self.remote.list():
-            version = self.remote.find_server(self.enabled_on).instances_status.find_version(self.user)
+            version = self.remote.find_server(self.enabled_on).instances_status_v7.find_version(self.user)
         else:
             version = 0
         return version
@@ -57,17 +61,17 @@ class V7Instance():
 
     def is_running(self):
         if self.enabled_on == self.remote.name:
-            return self.remote.local_run.instances_status.is_running(self.user)
+            return self.remote.local_run.instances_status_v7.is_running(self.user)
         elif self.enabled_on in self.remote.list():
-            return self.remote.find_server(self.enabled_on).instances_status.is_running(self.user)
+            return self.remote.find_server(self.enabled_on).instances_status_v7.is_running(self.user)
         return False
 
     def is_running_on(self):
         running_on = []
-        if self.remote.local_run.instances_status.is_running(self.user):
+        if self.remote.local_run.instances_status_v7.is_running(self.user):
             running_on.append(self.remote.name)
         for server in self.remote.list():
-            if self.remote.find_server(server).instances_status.is_running(self.user):
+            if self.remote.find_server(server).instances_status_v7.is_running(self.user):
                 running_on.append(server)
         return running_on
 
@@ -258,11 +262,11 @@ class V7Instances:
         for instance in self.instances:
             running_on = instance.is_running_on()
             if instance.enabled_on == 'disabled' and running_on:
-                instance.remote.local_run.activate(instance.user, True)
+                instance.remote.local_run.activate(instance.user, True, "7")
             elif instance.enabled_on not in running_on:
-                instance.remote.local_run.activate(instance.user, True)
+                instance.remote.local_run.activate(instance.user, True, "7")
             elif instance.is_running() and (instance.version != instance.running_version):
-                instance.remote.local_run.activate(instance.user, True)
+                instance.remote.local_run.activate(instance.user, True, "7")
 
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))
