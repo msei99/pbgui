@@ -565,7 +565,7 @@ class PBRun():
                         for item in items:
                             if item.endswith('.json'):
                                 Path(item).unlink(missing_ok=True)
-                        src = f'{self.pbgdir}/data/remote/v7_{rserver}/{instance.name}'
+                        src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
                         dest = f'{self.v7_path}/{instance.name}'
                         if Path(src).exists():
                             copytree(src, dest, dirs_exist_ok=True)
@@ -573,7 +573,7 @@ class PBRun():
                 else:
                     # Install new v7 instance
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New V7 Instance {instance.name} from {rserver} Version: {instance.version}')
-                    src = f'{self.pbgdir}/data/remote/v7_{rserver}/{instance.name}'
+                    src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
                     dest = f'{self.v7_path}/{instance.name}'
                     if Path(src).exists():
                         copytree(src, dest, dirs_exist_ok=True)
