@@ -270,7 +270,7 @@ class RemoteServer():
             if self.pbdir:
                 api_keys = Path(f'{self._pbdir}/api-keys.json')
                 self.update_api(api_file, api_keys, "v6")
-            elif self.pb7dir:
+            if self.pb7dir:
                 api_keys = Path(f'{self._pb7dir}/api-keys.json')
                 self.update_api(api_file, api_keys, "v7")
 
