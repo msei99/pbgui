@@ -149,9 +149,9 @@ Example pbgui.ini (replace parameters with your own correct settings).
 ```
 [main]
 pbdir = /home/mani/software/pb6
-pbvenv = /home/mani/software/venv_pb6
+pbvenv = /home/mani/software/venv_pb6/bin/python
 pb7dir = /home/mani/software/pb7
-pb7venv = /home/mani/software/venv_pb7
+pb7venv = /home/mani/software/venv_pb7/bin/python
 pbname = manibot50
 [pbremote]
 bucket = pbgui:
