@@ -44,12 +44,6 @@ class V7Instance():
     def initialize(self):
         # Init config
         self.config.live.user = self._user
-        # self.config.backtest.exchange = self._users.find_exchange(self.user)
-        # self.config.backtest.base_dir = f'backtests/pbgui/{self.user}'
-        # self.instance_path = Path(f'{PBGDIR}/data/run_v7/{self.user}')
-        # self.config.config_file = Path(f'{self.instance_path}/config.json') 
-        # self.config.load_config()
-        # Load available symbols
         self._available_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='swap')
         # Init PBremote
         if 'remote' not in st.session_state:
