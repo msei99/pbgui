@@ -18,6 +18,7 @@ from Exchange import Exchange
 from Config import Config, ConfigV7
 from pathlib import Path, PurePath
 from shutil import rmtree
+from RunV7 import V7Instance
 import datetime
 import logging
 
@@ -453,6 +454,7 @@ class BacktestV7Item:
                 'view': False,
                 'plot': False,
                 'fills': False,
+                'create_run': False,
                 'delete': False,
                 'adg': result.adg,
                 'drawdown_worst': result.drawdown_worst,
@@ -465,6 +467,7 @@ class BacktestV7Item:
             "view": st.column_config.CheckboxColumn(label="View Result"),
             "plot": st.column_config.CheckboxColumn(label="View be Plot"),
             "fills": st.column_config.CheckboxColumn(label="View Fills"),
+            "create_run": st.column_config.CheckboxColumn(label="Create Run"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
         #Display Backtests
@@ -487,6 +490,12 @@ class BacktestV7Item:
                 if "fills" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["fills"]:
                         self.backtest_results[row].view_fills()
+                if "create_run" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["create_run"]:
+                        st.session_state.edit_v7_instance = V7Instance()
+                        st.session_state.edit_v7_instance.config = self.backtest_results[row].config
+                        st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
+                        st.switch_page("pages/7_V7 Run.py")
 
     def calculate_results(self):
         p = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}/{self.config.backtest.exchange}/**/analysis.json'))
