@@ -17,6 +17,8 @@ def edit_v7_instance():
             st.rerun()
         if st.button(":material/save:"):
             v7_instance.save()
+        if st.button("Import"):
+            v7_instance.import_instance()
         if st.button("Activate"):
             v7_instance.activate()
         if st.button("Backtest"):
