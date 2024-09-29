@@ -216,7 +216,6 @@ class V7Instance():
                 time_in_force = ['good_till_cancelled', 'post_only']
                 st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
         # symbol configuration
-        print(self.config.live.approved_coins)
         for symbol in self.config.live.approved_coins.copy():
             if symbol not in self._available_symbols:
                 self.config.live.approved_coins.remove(symbol)
