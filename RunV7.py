@@ -2,23 +2,21 @@ import streamlit as st
 import streamlit_scrollable_textbox as stx
 import pbgui_help
 from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
-import os
 from PBRemote import PBRemote
 from User import Users
 from Config import Config, ConfigV7
 from Exchange import Exchange
 from pathlib import Path
-import hjson
 import glob
+import json
 from shutil import rmtree
-import traceback
-import shutil
 
 class V7Instance():
     def __init__(self):
         self.instance_path = None
         self._users = Users()
         self._user = self._users.list_v7()[0]
+        self.config = ConfigV7()
         self.initialize()
 
     # user
@@ -45,13 +43,12 @@ class V7Instance():
 
     def initialize(self):
         # Init config
-        self.config = ConfigV7()
         self.config.live.user = self._user
-        self.config.backtest.exchange = self._users.find_exchange(self.user)
-        self.config.backtest.base_dir = f'backtests/pbgui/{self.user}'
-        self.instance_path = Path(f'{PBGDIR}/data/run_v7/{self.user}')
-        self.config.config_file = Path(f'{self.instance_path}/config.json') 
-        self.config.load_config()
+        # self.config.backtest.exchange = self._users.find_exchange(self.user)
+        # self.config.backtest.base_dir = f'backtests/pbgui/{self.user}'
+        # self.instance_path = Path(f'{PBGDIR}/data/run_v7/{self.user}')
+        # self.config.config_file = Path(f'{self.instance_path}/config.json') 
+        # self.config.load_config()
         # Load available symbols
         self._available_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='swap')
         # Init PBremote
@@ -92,10 +89,17 @@ class V7Instance():
 
     def load(self, path: Path):
         self._user = path.split('/')[-1]
+        self.instance_path = Path(f'{PBGDIR}/data/run_v7/{self.user}')
+        self.config.config_file = Path(f'{self.instance_path}/config.json') 
+        self.config.load_config()
         self.initialize()
 
     def save(self):
         self.config.pbgui.version += 1
+        self.config.backtest.exchange = self._users.find_exchange(self.user)
+        self.config.backtest.base_dir = f'backtests/pbgui/{self.user}'
+        self.instance_path = Path(f'{PBGDIR}/data/run_v7/{self.user}')
+        self.config.config_file = Path(f'{self.instance_path}/config.json') 
         self.config.save_config()
         if "edit_run_v7_version" in st.session_state:
             del st.session_state.edit_run_v7_version
@@ -120,15 +124,15 @@ class V7Instance():
         if "edit_run_v7_minimum_coin_age_days" in st.session_state:
             if st.session_state.edit_run_v7_minimum_coin_age_days != self.config.live.minimum_coin_age_days:
                 self.config.live.minimum_coin_age_days = st.session_state.edit_run_v7_minimum_coin_age_days
-        if "relative_volume_filter_clip_pct" in st.session_state:
-            if st.session_state.relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
-                self.config.live.relative_volume_filter_clip_pct = st.session_state.relative_volume_filter_clip_pct
+        if "edit_run_v7_relative_volume_filter_clip_pct" in st.session_state:
+            if st.session_state.edit_run_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
+                self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_run_v7_relative_volume_filter_clip_pct
         if "edit_run_v7_ohlcv_rolling_window" in st.session_state:
             if st.session_state.edit_run_v7_ohlcv_rolling_window != self.config.live.ohlcv_rolling_window:
                 self.config.live.ohlcv_rolling_window = st.session_state.edit_run_v7_ohlcv_rolling_window
-        if "price_distance_threshold" in st.session_state:
-            if st.session_state.price_distance_threshold != self.config.live.price_distance_threshold:
-                self.config.live.price_distance_threshold = st.session_state.price_distance_threshold
+        if "edit_run_v7_price_distance_threshold" in st.session_state:
+            if st.session_state.edit_run_v7_price_distance_threshold != self.config.live.price_distance_threshold:
+                self.config.live.price_distance_threshold = st.session_state.edit_run_v7_price_distance_threshold
         if "edit_run_v7_execution_delay_seconds" in st.session_state:
             if st.session_state.edit_run_v7_execution_delay_seconds != self.config.live.execution_delay_seconds:
                 self.config.live.execution_delay_seconds = st.session_state.edit_run_v7_execution_delay_seconds
@@ -178,7 +182,7 @@ class V7Instance():
         with col1:
             st.number_input("minimum_coin_age_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.minimum_coin_age_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
         with col2:
-            st.number_input("relative_volume_filter_clip_pct", min_value=0.0, max_value=1.0, value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), step=0.1, format="%.2f", key="edit_multi_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
+            st.number_input("relative_volume_filter_clip_pct", min_value=0.0, max_value=1.0, value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), step=0.1, format="%.2f", key="edit_run_v7_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
         with col3:
             st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
         with col4:
@@ -218,6 +222,7 @@ class V7Instance():
                 time_in_force = ['good_till_cancelled', 'post_only']
                 st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
         # symbol configuration
+        print(self.config.live.approved_coins)
         for symbol in self.config.live.approved_coins.copy():
             if symbol not in self._available_symbols:
                 self.config.live.approved_coins.remove(symbol)
@@ -238,6 +243,53 @@ class V7Instance():
         self.config.bot.edit()
         # View log
         self.view_log()
+
+    @st.dialog("Paste config", width="large")
+    def import_instance(self):
+        # Init session_state for keys
+        if "import_run_v7_user" in st.session_state:
+            if st.session_state.import_run_v7_user != self.user:
+                self.user = st.session_state.import_run_v7_user
+                st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
+        if "import_run_v7_config" in st.session_state:
+            if st.session_state.import_run_v7_config != json.dumps(self.config.config, indent=4):
+                try:
+                    self.config.config = json.loads(st.session_state.import_run_v7_config)
+                except:
+                    error_popup("Invalid JSON")
+            st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
+            if self.config.live.user in self._users.list_v7():
+                self._user = self.config.live.user
+        # Display import
+        st.selectbox('User',self._users.list_v7(), index = self._users.list_v7().index(self.user), key="import_run_v7_user")
+        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_run_v7_config", height=1200)
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button("OK"):
+                self.initialize()
+                del st.session_state.edit_run_v7_user
+                del st.session_state.edit_run_v7_enabled_on
+                del st.session_state.edit_run_v7_version
+                del st.session_state.edit_run_v7_leverage
+                del st.session_state.edit_run_v7_pnls_max_lookback_days
+                del st.session_state.edit_run_v7_minimum_coin_age_days
+                del st.session_state.edit_run_v7_relative_volume_filter_clip_pct
+                del st.session_state.edit_run_v7_ohlcv_rolling_window
+                del st.session_state.edit_run_v7_price_distance_threshold
+                del st.session_state.edit_run_v7_execution_delay_seconds
+                del st.session_state.edit_run_v7_filter_by_min_effective_cost
+                del st.session_state.edit_run_v7_auto_gs
+                del st.session_state.edit_run_v7_max_n_cancellations_per_batch
+                del st.session_state.edit_run_v7_max_n_creations_per_batch
+                del st.session_state.edit_run_v7_forced_mode_long
+                del st.session_state.edit_run_v7_forced_mode_short
+                del st.session_state.edit_run_v7_time_in_force
+                del st.session_state.edit_run_v7_approved_coins
+                del st.session_state.edit_run_v7_ignored_coins
+                st.rerun()
+        with col2:
+            if st.button("Cancel"):
+                st.rerun()
 
     def activate(self):
         self.remote.local_run.activate(self.user, False, "7")
