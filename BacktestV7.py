@@ -11,7 +11,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup
 import uuid
 from Base import Base
 from Exchange import Exchange
@@ -382,9 +382,9 @@ class BacktestV7Item:
         if "edit_bt_v7_ohlcv_rolling_window" in st.session_state:
             if st.session_state.edit_bt_v7_ohlcv_rolling_window != self.config.live.ohlcv_rolling_window:
                 self.config.live.ohlcv_rolling_window = st.session_state.edit_bt_v7_ohlcv_rolling_window
-        if "edit_bt_v7_ohlcv_rolling_window" in st.session_state:
-            if st.session_state.edit_bt_v7_ohlcv_rolling_window != self.config.live.ohlcv_rolling_window:
-                self.config.live.ohlcv_rolling_window = st.session_state.edit_bt_v7_ohlcv_rolling_window
+        if "relative_volume_filter_clip_pct" in st.session_state:
+            if st.session_state.edit_bt_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
+                self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_bt_v7_relative_volume_filter_clip_pct
         if "edit_bt_v7_approved_coins" in st.session_state:
             if st.session_state.edit_bt_v7_approved_coins != self.config.live.approved_coins:
                 self.config.live.approved_coins = st.session_state.edit_bt_v7_approved_coins
@@ -536,6 +536,36 @@ class BacktestV7Item:
         self.remove_all_results()
         path = Path(self.path).parent
         rmtree(path, ignore_errors=True)
+
+    @st.dialog("Paste config", width="large")
+    def import_instance(self):
+        # Init session_state for keys
+        if "import_backtest_v7_config" in st.session_state:
+            if st.session_state.import_backtest_v7_config != json.dumps(self.config.config, indent=4):
+                try:
+                    self.config.config = json.loads(st.session_state.import_backtest_v7_config)
+                except:
+                    error_popup("Invalid JSON")
+            st.session_state.import_backtest_v7_config = json.dumps(self.config.config, indent=4)
+        # Display import
+        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_backtest_v7_config", height=1200)
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button("OK"):
+                del st.session_state.edit_bt_v7_exchange
+                del st.session_state.edit_bt_v7_name
+                del st.session_state.edit_bt_v7_sd
+                del st.session_state.edit_bt_v7_ed
+                del st.session_state.edit_bt_v7_sb
+                del st.session_state.edit_bt_v7_minimum_coin_age_days
+                del st.session_state.edit_bt_v7_ohlcv_rolling_window
+                del st.session_state.edit_bt_v7_relative_volume_filter_clip_pct
+                del st.session_state.edit_bt_v7_approved_coins
+                st.rerun()
+        with col2:
+            if st.button("Cancel"):
+                st.rerun()
+
 
 class BacktestV7Result:
     def __init__(self, result_path: str = None):

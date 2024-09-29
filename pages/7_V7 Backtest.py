@@ -22,6 +22,8 @@ def bt_v7():
                         del st.session_state.bt_v7_list
             else:
                 info_popup("Name is empty")
+        if st.button("Import"):
+            bt_v7.import_instance()
         if st.button("Results"):
             st.session_state.bt_v7_results = bt_v7
             del st.session_state.bt_v7
