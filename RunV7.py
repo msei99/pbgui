@@ -279,6 +279,12 @@ class V7Instance():
                 del st.session_state.edit_run_v7_time_in_force
                 del st.session_state.edit_run_v7_approved_coins
                 del st.session_state.edit_run_v7_ignored_coins
+                del st.session_state.edit_configv7_long_twe
+                del st.session_state.edit_configv7_short_twe
+                del st.session_state.edit_configv7_long_positions
+                del st.session_state.edit_configv7_short_positions
+                del st.session_state.edit_configv7_long
+                del st.session_state.edit_configv7_short
                 st.rerun()
         with col2:
             if st.button("Cancel"):

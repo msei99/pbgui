@@ -511,10 +511,12 @@ class BacktestV7Item:
             self.backtest_results.append(bt_result)
         
     def save(self):
+        self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         self.path = Path(f'{PBGDIR}/data/bt_v7/{self.name}')
         if not self.path.exists():
             self.path.mkdir(parents=True)
         self.config.config_file = Path(f'{self.path}/backtest.json')
+        
         self.config.save_config()
 
     def save_queue(self, parameters : str = None):
@@ -561,6 +563,12 @@ class BacktestV7Item:
                 del st.session_state.edit_bt_v7_ohlcv_rolling_window
                 del st.session_state.edit_bt_v7_relative_volume_filter_clip_pct
                 del st.session_state.edit_bt_v7_approved_coins
+                del st.session_state.edit_configv7_long_twe
+                del st.session_state.edit_configv7_short_twe
+                del st.session_state.edit_configv7_long_positions
+                del st.session_state.edit_configv7_short_positions
+                del st.session_state.edit_configv7_long
+                del st.session_state.edit_configv7_short
                 st.rerun()
         with col2:
             if st.button("Cancel"):
