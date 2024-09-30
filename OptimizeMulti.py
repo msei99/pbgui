@@ -207,6 +207,7 @@ class OptimizeMultiQueue:
         dest = Path(f'{PBGDIR}/data/opt_multi_queue')
         p = str(Path(f'{dest}/*.json'))
         items = glob.glob(p)
+        self.items = []
         for item in items:
             with open(item, "r", encoding='utf-8') as f:
                 config = json.load(f)
