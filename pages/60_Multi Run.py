@@ -56,7 +56,7 @@ def edit_multi_instance():
                 del st.session_state.bt_multi_results
             if "bt_multi_edit_symbol" in st.session_state:
                 del st.session_state.bt_multi_edit_symbol
-            st.switch_page("pages/6_Multi Backtest.py")
+            st.switch_page("pages/61_Multi Backtest.py")
     multi_instance.edit()
     if multi_instance.default_config.preview_grid:
         if "preview_grid_instance" not in st.session_state:

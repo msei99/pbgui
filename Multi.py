@@ -676,7 +676,7 @@ class MultiInstance():
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == self._symbols[row]:
                             st.session_state.edit_instance = instance
-                            st.switch_page("pages/1_Single.py")
+                            st.switch_page("pages/10_Single Run.py")
                     # Edit Symbol config without single instance
                     if not Path(self.instance_path).exists():
                         info_popup("You need to save the Multi config first, before editing a symbol")

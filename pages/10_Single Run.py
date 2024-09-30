@@ -222,7 +222,7 @@ def edit_instance():
                 del st.session_state.bt_queue
             if "bt_compare" in st.session_state:
                 del st.session_state.bt_compare
-            st.switch_page("pages/3_Backtest.py")
+            st.switch_page("pages/11_Backtest.py")
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
         if not "error_config" in st.session_state and not instance.symbol == "Select Symbol" and instance._config.config:
             if st.button("Upload"):

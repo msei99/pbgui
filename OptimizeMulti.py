@@ -388,7 +388,7 @@ class OptimizeMultiResults:
                             del st.session_state.bt_multi_results
                         if "bt_multi_edit_symbol" in st.session_state:
                             del st.session_state.bt_multi_edit_symbol
-                        st.switch_page("pages/6_Multi Backtest.py")
+                        st.switch_page("pages/61_Multi Backtest.py")
 
     def generate_analysis(self, result_file):
         cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/tools/extract_best_multi_config.py'), str(result_file)]

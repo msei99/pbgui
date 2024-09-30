@@ -84,7 +84,7 @@ def view_instance():
         if st.button("Edit"):
             st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
-            st.switch_page("pages/1_Single.py")
+            st.switch_page("pages/10_Single Run.py")
 #            st.rerun()
         if st.button("History"):
             st.session_state.view_history = True
@@ -116,7 +116,7 @@ def view_history():
             st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
             del st.session_state.view_history
-            st.switch_page("pages/1_Single.py")
+            st.switch_page("pages/10_Single Run.py")
         if st.button("View"):
             del st.session_state.view_history
             st.rerun()
