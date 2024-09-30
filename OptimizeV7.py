@@ -155,6 +155,7 @@ class OptimizeV7Queue:
     def autostart(self, new_autostart):
         self._autostart = new_autostart
         pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
         pb_config.set("optimize_v7", "autostart", str(self._autostart))
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
