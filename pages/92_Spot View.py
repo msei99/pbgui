@@ -1,12 +1,12 @@
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, is_session_state_initialized
+from pbgui_func import set_page_config, is_session_state_initialized, is_pb_installed
 from Instance import Instances
 import pandas as pd
 
 
 def bgcolor_positive_or_negative(value):
-    bgcolor = "lightcoral" if value < 0 else "lightgreen"
+    bgcolor = "red" if value < 0 else "green"
     return f"background-color: {bgcolor};"
 
 #@st.cache_data(experimental_allow_widgets=True)
@@ -26,13 +26,13 @@ def select_instance():
         ed = st.session_state["editor_select_instance"]
         for row in ed["edited_rows"]:
             if "View" in ed["edited_rows"][row]:
-                st.session_state.view_instance = instances.instances[row]
+                st.session_state.view_instance = instances.instances[st.session_state.spot_instances[row]["id"]]
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
                     del st.session_state.confirm_text
                 st.rerun()
             if "History" in ed["edited_rows"][row]:
-                st.session_state.view_instance = instances.instances[row]
+                st.session_state.view_instance = instances.instances[st.session_state.spot_instances[row]["id"]]
                 st.session_state.view_history = True
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
@@ -47,8 +47,6 @@ def select_instance():
                 balance = 0
             else:
                 balance = instance.balance
-            if instance.we > we:
-                we = instance.we
             d.append({
                 'id': id,
                 'View': False,
@@ -71,8 +69,9 @@ def select_instance():
             "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
             "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
             "id": None}
+        st.session_state.spot_instances = d
         df = pd.DataFrame(d)
-        sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
+        sdf = df.style.map(bgcolor_positive_or_negative, subset=['uPnl'])
         st.data_editor(data=sdf, width=None, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
 
 def view_instance():
@@ -86,7 +85,7 @@ def view_instance():
         if st.button("Edit"):
             st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
-            st.switch_page("pages/1_Single.py")
+            st.switch_page("pages/10_Single Run.py")
 #            st.rerun()
         if st.button("History"):
             st.session_state.view_history = True
@@ -118,7 +117,7 @@ def view_history():
             st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
             del st.session_state.view_history
-            st.switch_page("pages/1_Single.py")
+            st.switch_page("pages/10_Single Run.py")
         if st.button("View"):
             del st.session_state.view_history
             st.rerun()
@@ -129,6 +128,11 @@ set_page_config()
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
+# Check if PB6 is installed
+if not is_pb_installed():
+    st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
 
 if 'view_history' in st.session_state:
     view_history()

@@ -6,7 +6,7 @@ from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta, MO
 import numpy as np
 from Exchange import Exchange
-from pbgui_func import PBDIR, PBGDIR, error_popup, info_popup
+from pbgui_func import PBGDIR
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -643,7 +643,7 @@ class Dashboard():
                 "WE": st.column_config.ProgressColumn(f'TWE: {total_twe:.2f} %', format="%.2f %%", min_value=0, max_value=300)
             }
             df = df[['Id', 'User', 'Date', 'Balance', 'uPnl', 'WE']]
-            sdf = df.style.applymap(self.color_we, subset=['WE']).applymap(self.color_upnl, subset=['uPnl']).format({'Balance': "{:.2f}"})
+            sdf = df.style.map(self.color_we, subset=['WE']).map(self.color_upnl, subset=['uPnl']).format({'Balance': "{:.2f}"})
             st.dataframe(sdf, height=36+(len(df))*35, use_container_width=True, key=f"dashboard_balance_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
 
     def bgcolor_positive_or_negative(self, value):
@@ -709,7 +709,7 @@ class Dashboard():
             df = df.sort_values(by=['User', 'Symbol'])
             # Move User to second column
             df = df[['Id', 'User', 'Symbol', 'PosId', 'Size', 'uPnl', 'Entry', 'Price', 'DCA', 'Next DCA', 'Next TP']]
-            sdf = df.style.applymap(self.color_upnl, subset=['uPnl']).format({'Size': "{:.3f}"})
+            sdf = df.style.map(self.color_upnl, subset=['uPnl']).format({'Size': "{:.3f}"})
             st.session_state[f'dashboard_positions_sdf_{position}'] = df
             column_config = {
                 "Id": None,
@@ -718,7 +718,7 @@ class Dashboard():
             st.dataframe(sdf, height=36+(len(df))*35, use_container_width=True, key=f"dashboard_positions_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
 
     @st.fragment
-    def view_orders(self, pos : str, orders : str = None, edit : bool = False):
+    def view_orders(self, pos : str, orders : str = None, tf : str = "4h", edit : bool = False):
         position = None
         view_orders = {key: val for key, val in st.session_state.items()
             if key.startswith("view_orders_")}
@@ -733,21 +733,42 @@ class Dashboard():
                 index = list(view_orders.keys()).index(orders)
             selected_pos = st.selectbox('From Positions', view_orders, index=index, key=f"dashboard_orders_{pos}")
             position = st.session_state[f'{selected_pos}']
+        if f"dashboard_orders_tf_{pos}" not in st.session_state:
+            if tf:
+                st.session_state[f'dashboard_orders_tf_{pos}'] = tf
         st.markdown("#### :blue[Orders]")
         if position is None:
             return
+        # Init Exchange
         users = st.session_state.users
         user = users.find_user(position["User"])
+        exchange = Exchange(user.exchange, user)
+        market_type = "futures"
+        col1, col2, col3 = st.columns([1,1,8], vertical_alignment="bottom")
+        with col1:
+            st.selectbox('Timeframe',exchange.tf,index=exchange.tf.index(tf), key=f"dashboard_orders_tf_{pos}")
+        with col2:
+            since = None
+            if f'dashboard_orders_leftclick_{pos}' not in st.session_state:
+                st.session_state[f'dashboard_orders_leftclick_{pos}'] = 0
+            if st.button(":material/arrow_left:", key=f"dashboard_orders_left{pos}"):
+                since = st.session_state[f'dashboard_orders_since_{pos}'] - st.session_state[f'dashboard_orders_range_{pos}']
+                st.session_state[f'dashboard_orders_leftclick_{pos}'] += 1
+        with col3:
+            if st.session_state[f'dashboard_orders_leftclick_{pos}'] > 0:
+                if st.button(":material/arrow_right:", key=f"dashboard_orders_right{pos}"):
+                    since = st.session_state[f'dashboard_orders_since_{pos}'] + st.session_state[f'dashboard_orders_range_{pos}']
+                    st.session_state[f'dashboard_orders_leftclick_{pos}'] -= 1
         symbol = position["Symbol"]
         # symbol to ccxt_symbol
         if symbol[-4:] == "USDT":
             symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
         elif symbol[-4:] == "USDC":
             symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
-        exchange = Exchange(user.exchange, user)
-        market_type = "futures"
-        ohlcv = exchange.fetch_ohlcv(symbol_ccxt, market_type, timeframe="1h", limit=100)
+        ohlcv = exchange.fetch_ohlcv(symbol_ccxt, market_type, timeframe=st.session_state[f'dashboard_orders_tf_{pos}'], limit=100, since=since)
         ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        st.session_state[f'dashboard_orders_since_{pos}'] = int(ohlcv_df.iloc[0]["timestamp"])
+        st.session_state[f'dashboard_orders_range_{pos}'] = int(ohlcv_df.iloc[-1]["timestamp"] - ohlcv_df.iloc[0]["timestamp"])
         ohlcv_df["color"] = np.where(ohlcv_df["close"] > ohlcv_df["open"], "green", "red")
         # w = (ohlcv_df["timestamp"][1] - ohlcv_df["timestamp"][0]) * 0.8
         time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

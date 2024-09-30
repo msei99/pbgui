@@ -1,8 +1,8 @@
 import json
 from pathlib import Path, PurePath
 from datetime import datetime
+from pbgui_func import pbdir, pb7dir, PBGDIR, is_pb_installed, is_pb7_installed
 import shutil
-import configparser
 
 class User:
     def __init__(self):
@@ -63,12 +63,9 @@ class Users:
     def __init__(self):
         self.users = []
         self.index = 0
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        pbdir = pb_config.get("main", "pbdir")
-        self.api_path = f'{pbdir}/api-keys.json'
-        pbgdir = Path.cwd()
-        self.api_backup = Path(f'{pbgdir}/data/api-keys')
+        self.api_path = f'{pbdir()}/api-keys.json'
+        self.api7_path = f'{pb7dir()}/api-keys.json'
+        self.api_backup = Path(f'{PBGDIR}/data/api-keys')
         self.load()
     
     def __iter__(self):
@@ -86,6 +83,10 @@ class Users:
     def list_single(self):
         from Exchange import Single
         return list(map(lambda c: c.name, filter(lambda c: c.exchange in Single.list(), self.users)))
+
+    def list_v7(self):
+        from Exchange import V7
+        return list(map(lambda c: c.name, filter(lambda c: c.exchange in V7.list(), self.users)))
 
     def default(self):
         if self.users:
@@ -121,30 +122,36 @@ class Users:
                 return user.name
 
     def load(self):
+        users = ""
         try:
             with Path(self.api_path).open(encoding="UTF-8") as f:
                 users = json.load(f)
         except Exception as e:
             print(f'{self.api_path} is corrupted {e}')
-            return
+        try:
+            with Path(self.api7_path).open(encoding="UTF-8") as f:
+                users.update(json.load(f))
+        except Exception as e:
+            print(f'{self.api7_path} is corrupted {e}')
         for user in users:
             if "exchange" in users[user]:
                 my_user = User()
                 my_user.name = user
-                my_user.exchange = users[user]["exchange"]
-                if "key" in users[user]:
-                    my_user.key = users[user]["key"]
-                if "secret" in users[user]:
-                    my_user.secret = users[user]["secret"]
-                if "passphrase" in users[user]:
-                    my_user.passphrase = users[user]["passphrase"]
-                if "wallet_address" in users[user]:
-                    my_user.wallet_address = users[user]["wallet_address"]
-                if "private_key" in users[user]:
-                    my_user.private_key = users[user]["private_key"]
-                if "is_vault" in users[user]:
-                    my_user.is_vault = users[user]["is_vault"]
-                self.users.append(my_user)
+                if my_user.name not in self.users:
+                    my_user.exchange = users[user]["exchange"]
+                    if "key" in users[user]:
+                        my_user.key = users[user]["key"]
+                    if "secret" in users[user]:
+                        my_user.secret = users[user]["secret"]
+                    if "passphrase" in users[user]:
+                        my_user.passphrase = users[user]["passphrase"]
+                    if "wallet_address" in users[user]:
+                        my_user.wallet_address = users[user]["wallet_address"]
+                    if "private_key" in users[user]:
+                        my_user.private_key = users[user]["private_key"]
+                    if "is_vault" in users[user]:
+                        my_user.is_vault = users[user]["is_vault"]
+                    self.users.append(my_user)
         self.users.sort(key=lambda x: x.name)
 
     def save(self):
@@ -167,13 +174,21 @@ class Users:
                 save_users[user.name]["is_vault"] = user.is_vault
         # Backup api-keys and save new version
         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        destination = Path(f'{self.api_backup}/api-keys_{date}.json')
-        if not self.api_backup.exists():
-            self.api_backup.mkdir(parents=True)
-        if Path(self.api_path).exists():
-            shutil.copy(PurePath(self.api_path), destination)
-        with Path(f'{self.api_path}').open("w", encoding="UTF-8") as f:
-            json.dump(save_users, f, indent=4)
+        if is_pb_installed():
+            destination = Path(f'{self.api_backup}/api-keys_{date}.json')
+            if not self.api_backup.exists():
+                self.api_backup.mkdir(parents=True)
+            if Path(self.api_path).exists():
+                shutil.copy(PurePath(self.api_path), destination)
+            with Path(f'{self.api_path}').open("w", encoding="UTF-8") as f:
+                json.dump(save_users, f, indent=4)
+        # Backup api-keys7 and save new version
+        if is_pb7_installed():
+            destination = Path(f'{self.api_backup}/api-keys7_{date}.json')
+            if Path(self.api7_path).exists():
+                shutil.copy(PurePath(self.api7_path), destination)
+            with Path(f'{self.api7_path}').open("w", encoding="UTF-8") as f:
+                json.dump(save_users, f, indent=4)
 
 def main():
     print("Don't Run this Class from CLI")

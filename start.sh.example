@@ -8,4 +8,3 @@ python PBRun.py &
 python PBRemote.py &
 python PBStat.py &
 python PBData.py &
-python PBShare.py &

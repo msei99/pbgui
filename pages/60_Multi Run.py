@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup
+from pbgui_func import set_page_config, is_session_state_initialized, error_popup, is_pb_installed
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
 from Instance import Instances, Instance
@@ -56,7 +56,7 @@ def edit_multi_instance():
                 del st.session_state.bt_multi_results
             if "bt_multi_edit_symbol" in st.session_state:
                 del st.session_state.bt_multi_edit_symbol
-            st.switch_page("pages/6_Multi Backtest.py")
+            st.switch_page("pages/61_Multi Backtest.py")
     multi_instance.edit()
     if multi_instance.default_config.preview_grid:
         if "preview_grid_instance" not in st.session_state:
@@ -165,6 +165,11 @@ set_page_config()
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
+# Check if PB6 is installed
+if not is_pb_installed():
+    st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
 
 if 'edit_multi_config' in st.session_state:
     edit_multi_config()

@@ -6,19 +6,56 @@ import uuid
 import requests
 import configparser
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
 
-def load_pbdir():
-    if "pbdir" not in st.session_state:
+@st.dialog("Select file")
+def change_ini(section, parameter):
+    filename = st_file_selector(st, path=st.session_state[parameter], key = f'file_change_{parameter}', label = f'select {parameter}')
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button(":green[Yes]"):
+            filename = str(Path(filename).absolute())
+            st.session_state[parameter] = filename
+            save_ini(section, parameter)
+            st.rerun()
+    with col2:
+        if st.button(":red[No]"):
+            st.rerun()
+
+def save_ini(section : str, parameter : str):
+    pb_config = configparser.ConfigParser()
+    pb_config.read('pbgui.ini')
+    pb_config.set(section, parameter, st.session_state[parameter])
+    with open('pbgui.ini', 'w') as pbgui_configfile:
+        pb_config.write(pbgui_configfile)
+
+def load_ini(section : str, parameter : str):
+    if parameter not in st.session_state:
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
-        if pb_config.has_option("main", "pbdir"):
-            st.session_state.pbdir = pb_config.get("main", "pbdir")
+        if pb_config.has_option(section, parameter):
+            st.session_state[parameter] = pb_config.get(section, parameter)
         else:
-            st.session_state.pbdir = ""
-    return st.session_state.pbdir
+            st.session_state[parameter] = ""
+    return st.session_state[parameter]
 
-PBDIR = load_pbdir()
+def pbdir(): return load_ini("main", "pbdir")
+
+def pbvenv(): return load_ini("main", "pbvenv")
+
+def is_pb_installed():
+    if Path(f"{pbdir()}/passivbot.py").exists():
+        return True
+    return False
+
+def pb7dir(): return load_ini("main", "pb7dir")
+
+def pb7venv(): return load_ini("main", "pb7venv")
+
+def is_pb7_installed():
+    if Path(f"{pb7dir()}/src/passivbot.py").exists():
+        return True
+    return False
 
 PBGDIR = Path.cwd()
 
@@ -59,7 +96,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.13"
+            'About': "Passivbot GUI v1.16"
         }
     )
 
@@ -67,7 +104,6 @@ def is_session_state_initialized():
     # Init Services
     if (
         'pbdir' not in st.session_state or
-        'pbgdir' not in st.session_state or
         'services' not in st.session_state or
         'pbgui_instances' not in st.session_state or
         'multi_instances' not in st.session_state or

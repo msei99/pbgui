@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized, info_popup, error_popup
+from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized, info_popup, error_popup, is_pb_installed
 from Instance import Instances, Instance
 from Backtest import BacktestItem
 import pbgui_help
@@ -222,7 +222,7 @@ def edit_instance():
                 del st.session_state.bt_queue
             if "bt_compare" in st.session_state:
                 del st.session_state.bt_compare
-            st.switch_page("pages/3_Backtest.py")
+            st.switch_page("pages/11_Backtest.py")
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
         if not "error_config" in st.session_state and not instance.symbol == "Select Symbol" and instance._config.config:
             if st.button("Upload"):
@@ -259,6 +259,11 @@ set_page_config()
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
+
+# Check if PB6 is installed
+if not is_pb_installed():
+    st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
 
 if 'edit_instance' in st.session_state:
     edit_instance()

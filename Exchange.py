@@ -41,6 +41,17 @@ class Single(Enum):
     def list():
         return list(map(lambda c: c.value, Single))
 
+class V7(Enum):
+    BINANCE = 'binance'
+    BYBIT = 'bybit'
+    BITGET = 'bitget'
+    OKX = 'okx'
+    HYPERLIQUID = 'hyperliquid'
+
+    @staticmethod
+    def list():
+        return list(map(lambda c: c.value, V7))
+
 class Passphrase(Enum):
     BITGET = 'bitget'
     OKX = 'okx'
@@ -93,11 +104,22 @@ class Exchange:
             self.error = (str(e))
             return
 
-    def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int):
+    def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int, since : int = None):
         if not self.instance: self.connect()
-        if self.id == "hyperliquid":
+        if since:
+            ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=since, limit=limit)
+        elif self.id == "hyperliquid":
             now = int(datetime.now().timestamp() * 1000)
-            since = now - 1000 * 60 * 60 * limit
+            if timeframe[-1] == 'm':
+                since = now - 1000 * 60 * int(timeframe[0:-1]) * limit
+            elif timeframe[-1] == 'h':
+                since = now - 1000 * 60 * 60 *int(timeframe[0:-1]) * limit
+            elif timeframe[-1] == 'd':
+                since = now - 1000 * 60 * 60 * 24 * int(timeframe[0:-1]) * limit
+            elif timeframe[-1] == 'w':
+                since = now - 1000 * 60 * 60 * 24 * 7 * int(timeframe[0:-1]) * limit
+            elif timeframe[-1] == 'M':
+                since = now - 1000 * 60 * 60 * 24 * 30 * int(timeframe[0:-1]) * limit
             ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=since, limit=limit)
         else:
             ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
