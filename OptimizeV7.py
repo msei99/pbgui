@@ -404,7 +404,7 @@ class OptimizeV7Results:
                             del st.session_state.bt_v7_results
                         if "bt_v7_edit_symbol" in st.session_state:
                             del st.session_state.bt_v7_edit_symbol
-                        st.switch_page("pages/7_V7 Backtest.py")
+                        st.switch_page("pages/71_V7 Backtest.py")
 
     def generate_analysis(self, result_file):
         cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]

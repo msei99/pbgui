@@ -26,13 +26,13 @@ def select_instance():
         ed = st.session_state["editor_select_instance"]
         for row in ed["edited_rows"]:
             if "View" in ed["edited_rows"][row]:
-                st.session_state.view_instance = instances.instances[row]
+                st.session_state.view_instance = instances.instances[st.session_state.spot_instances[row]["id"]]
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
                     del st.session_state.confirm_text
                 st.rerun()
             if "History" in ed["edited_rows"][row]:
-                st.session_state.view_instance = instances.instances[row]
+                st.session_state.view_instance = instances.instances[st.session_state.spot_instances[row]["id"]]
                 st.session_state.view_history = True
                 if "confirm" in st.session_state:
                     del st.session_state.confirm
@@ -69,8 +69,9 @@ def select_instance():
             "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
             "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
             "id": None}
+        st.session_state.spot_instances = d
         df = pd.DataFrame(d)
-        sdf = df.style.applymap(bgcolor_positive_or_negative, subset=['uPnl'])
+        sdf = df.style.map(bgcolor_positive_or_negative, subset=['uPnl'])
         st.data_editor(data=sdf, width=None, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
 
 def view_instance():
