@@ -11,7 +11,7 @@ import glob
 import configparser
 import time
 import multiprocessing
-from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pbdir, pbvenv, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -19,6 +19,7 @@ from shutil import rmtree
 import datetime
 from MultiBounds import MultiBounds
 from BacktestMulti import BacktestMultiItem
+import logging
 
 class OptimizeMultiQueueItem():
     def __init__(self):
@@ -119,7 +120,7 @@ class OptimizeMultiQueueItem():
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
+            cmd = [pbvenv(), '-u', PurePath(f'{pbdir()}/optimize_multi.py'), '-oc', str(PurePath(f'{self.hjson}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -152,6 +153,7 @@ class OptimizeMultiQueue:
     def autostart(self, new_autostart):
         self._autostart = new_autostart
         pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
         pb_config.set("optimize_multi", "autostart", str(self._autostart))
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
@@ -206,6 +208,7 @@ class OptimizeMultiQueue:
         dest = Path(f'{PBGDIR}/data/opt_multi_queue')
         p = str(Path(f'{dest}/*.json'))
         items = glob.glob(p)
+        self.items = []
         for item in items:
             with open(item, "r", encoding='utf-8') as f:
                 config = json.load(f)
@@ -385,7 +388,7 @@ class OptimizeMultiResults:
                             del st.session_state.bt_multi_results
                         if "bt_multi_edit_symbol" in st.session_state:
                             del st.session_state.bt_multi_edit_symbol
-                        st.switch_page("pages/6_Multi Backtest.py")
+                        st.switch_page("pages/61_Multi Backtest.py")
 
     def generate_analysis(self, result_file):
         cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/tools/extract_best_multi_config.py'), str(result_file)]
@@ -882,6 +885,9 @@ class OptimizesMulti:
                 self.optimizes.append(opt)
     
 def main():
+    # Disable Streamlit Warnings when running directly
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeMultiQueue()
     while True:
         opt.load()

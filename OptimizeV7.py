@@ -4,21 +4,21 @@ import json
 import psutil
 import sys
 import platform
-import traceback
 import subprocess
 import glob
 import configparser
 import time
 import multiprocessing
 from Exchange import Exchange
-from pbgui_func import pb7dir, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup
 import uuid
 from pathlib import Path, PurePath
 from User import Users
 from shutil import rmtree
 import datetime
-from BacktestMulti import BacktestMultiItem
+from BacktestV7 import BacktestV7Item
 from Config import ConfigV7, Bounds
+import logging
 
 class OptimizeV7QueueItem:
     def __init__(self):
@@ -43,9 +43,12 @@ class OptimizeV7QueueItem:
                 with open(self.log, 'r', encoding='utf-8') as f:
                     return f.read()
 
+    @st.fragment
     def view_log(self):
         logfile = self.load_log()
         st.code(logfile)
+        if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
+            st.rerun()
 
     def status(self):
         if self.is_optimizing():
@@ -119,7 +122,7 @@ class OptimizeV7QueueItem:
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
+            cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -152,6 +155,7 @@ class OptimizeV7Queue:
     def autostart(self, new_autostart):
         self._autostart = new_autostart
         pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
         pb_config.set("optimize_v7", "autostart", str(self._autostart))
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
@@ -206,6 +210,7 @@ class OptimizeV7Queue:
         dest = Path(f'{PBGDIR}/data/opt_v7_queue')
         p = str(Path(f'{dest}/*.json'))
         items = glob.glob(p)
+        self.items = []
         for item in items:
             with open(item, "r", encoding='utf-8') as f:
                 config = json.load(f)
@@ -329,8 +334,16 @@ class OptimizeV7Results:
             p = str(self.results_path) + "/*.txt"
             self.results = glob.glob(p, recursive=False)
 
+    def find_result_name(self, result_file):
+        with open(result_file, "r", encoding='utf-8') as f:
+            first_line = f.readline()
+            config = json.loads(first_line)
+            backtest_name = config["config"]["backtest"]["base_dir"].split("/")[-1]
+            return backtest_name
+
     def view_analysis(self, analysis):
-        with open(analysis, "r", encoding='utf-8') as f:
+        file = Path(f'{self.analysis_path}/{analysis}.json')
+        with open(file, "r", encoding='utf-8') as f:
             config = json.load(f)
             st.code(json.dumps(config, indent=4))
 
@@ -341,13 +354,18 @@ class OptimizeV7Results:
         ed_key = st.session_state.ed_key
         d = []
         for id, opt in enumerate(self.results):
+            backtest_name = self.find_result_name(opt)
             analysis = PurePath(opt).stem[0:19]
             analysis = str(self.analysis_path) + f'/{analysis}*.json'
             analysis = glob.glob(analysis, recursive=False)
             analysis = analysis[0] if analysis else None
+            result = PurePath(opt).stem
+            if analysis:
+                analysis = PurePath(analysis).stem
             d.append({
                 'id': id,
-                'Result': opt,
+                'Name': backtest_name,
+                'Result': result,
                 'Analysis': analysis,
                 'view': False,
                 "generate": False,
@@ -372,20 +390,21 @@ class OptimizeV7Results:
                             self.view_analysis(d[row]["Analysis"])
                 if "generate" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["generate"]:
-                        self.generate_analysis(d[row]["Result"])
+                        result_name = PurePath(f'{self.results_path}/{d[row]["Result"]}.txt')
+                        self.generate_analysis(result_name)
                         st.session_state.ed_key += 1
                         # st.rerun()
                 if "backtest" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["backtest"]:
-                        st.session_state.bt_multi = BacktestMultiItem()
-                        st.session_state.bt_multi.create_from_multi_optimize(d[row]["Analysis"])
-                        if "bt_multi_queue" in st.session_state:
-                            del st.session_state.bt_multi_queue
-                        if "bt_multi_results" in st.session_state:
-                            del st.session_state.bt_multi_results
-                        if "bt_multi_edit_symbol" in st.session_state:
-                            del st.session_state.bt_multi_edit_symbol
-                        st.switch_page("pages/6_Multi Backtest.py")
+                        backtest_name = PurePath(f'{self.analysis_path}/{d[row]["Analysis"]}.json')
+                        st.session_state.bt_v7 = BacktestV7Item(backtest_name)
+                        if "bt_v7_queue" in st.session_state:
+                            del st.session_state.bt_v7_queue
+                        if "bt_v7_results" in st.session_state:
+                            del st.session_state.bt_v7_results
+                        if "bt_v7_edit_symbol" in st.session_state:
+                            del st.session_state.bt_v7_edit_symbol
+                        st.switch_page("pages/71_V7 Backtest.py")
 
     def generate_analysis(self, result_file):
         cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]
@@ -447,6 +466,7 @@ class OptimizeV7Item:
         if "edit_opt_v7_name" in st.session_state:
             if st.session_state.edit_opt_v7_name != self.name:
                 self.name = st.session_state.edit_opt_v7_name
+                self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         if "edit_opt_v7_sd" in st.session_state:
             if st.session_state.edit_opt_v7_sd.strftime("%Y-%m-%d") != self.config.backtest.start_date:
                 self.config.backtest.start_date = st.session_state.edit_opt_v7_sd.strftime("%Y-%m-%d")
@@ -935,11 +955,11 @@ class OptimizeV7Item:
             st.number_input("short_entry_trailing_retracement_pct min", min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
             st.number_input("short_entry_trailing_threshold_pct min", min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
             st.number_input("short_n_positions min", min_value=Bounds.N_POSITIONS_MIN, max_value=float(round(self.config.optimize.bounds.short_n_positions_1, Bounds.N_POSITIONS_ROUND)), value=float(round(self.config.optimize.bounds.short_n_positions_0, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_short_n_positions_0", help=pbgui_help.n_positions)
-            st.number_input("short_total_wallet_exposure_limit min", min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN, max_value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_1)), value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_0)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_short_total_wallet_exposure_limit_0", help=pbgui_help.total_wallet_exposure_limit)
-            st.number_input("short_unstuck_close_pct min", min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_1)), value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_0)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_close_pct_0", help=pbgui_help.unstuck_close_pct)
-            st.number_input("short_unstuck_ema_dist min", min_value=Bounds.UNSTUCK_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_1)), value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_0)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_short_unstuck_ema_dist_0", help=pbgui_help.unstuck_ema_dist)
-            st.number_input("short_unstuck_loss_allowance_pct min", min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1)), value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_loss_allowance_pct_0", help=pbgui_help.unstuck_loss_allowance_pct)
-            st.number_input("short_unstuck_threshold min", min_value=Bounds.UNSTUCK_THRESHOLD_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_threshold_1)), value=float(round(self.config.optimize.bounds.short_unstuck_threshold_0)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_short_unstuck_threshold_0", help=pbgui_help.unstuck_threshold)
+            st.number_input("short_total_wallet_exposure_limit min", min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN, max_value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_short_total_wallet_exposure_limit_0", help=pbgui_help.total_wallet_exposure_limit)
+            st.number_input("short_unstuck_close_pct min", min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_close_pct_0", help=pbgui_help.unstuck_close_pct)
+            st.number_input("short_unstuck_ema_dist min", min_value=Bounds.UNSTUCK_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_1)), value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_short_unstuck_ema_dist_0", help=pbgui_help.unstuck_ema_dist)
+            st.number_input("short_unstuck_loss_allowance_pct min", min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_loss_allowance_pct_0", help=pbgui_help.unstuck_loss_allowance_pct)
+            st.number_input("short_unstuck_threshold min", min_value=Bounds.UNSTUCK_THRESHOLD_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_short_unstuck_threshold_0", help=pbgui_help.unstuck_threshold)
         with col4:
             st.number_input("short_close_grid_markup_range max", min_value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_short_close_grid_markup_range_1", help=pbgui_help.close_grid_parameters)
             st.number_input("short_close_grid_min_markup max", min_value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_short_close_grid_min_markup_1", help=pbgui_help.close_grid_parameters)
@@ -1035,6 +1055,9 @@ class OptimizesV7:
                 self.optimizes.append(opt)
     
 def main():
+    # Disable Streamlit Warnings when running directly
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeV7Queue()
     while True:
         opt.load()

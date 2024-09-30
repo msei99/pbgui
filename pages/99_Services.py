@@ -198,12 +198,26 @@ def pbremote_details():
                     'Name': multi.name,
                     'Version': multi.version
                 })
+        d_v7 = []
+        server.instances_status.instances_v7 = []
+        server.instances_status_v7.load()
+        for v7 in server.instances_status_v7:
+            if v7.running:
+                d_v7.append({
+                    'Name': v7.name,
+                    'Version': v7.version
+                })
         # d_old = []
         # for old in server.run:
         #     d_old.append({
         #         'User': old["user"],
         #         'Symbol': old["symbol"],
         #     })
+        st.header(f"Running V7 Instances ({len(d_v7)})")
+        if d_v7:
+            st.dataframe(data=d_v7, width=640, height=36+(len(d_v7))*35)
+        else:
+            st.write("None")
         st.header(f"Running Single Instances ({len(d_single)})")
         if d_single:
             st.dataframe(data=d_single, width=640, height=36+(len(d_single))*35)

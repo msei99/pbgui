@@ -530,6 +530,7 @@ unstuck_close_pct = """
 
 execution_delay_seconds = """
     ```
+    wait x seconds after executing to exchange
     delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
     ```"""
 
@@ -540,7 +541,9 @@ price_distance_threshold = """
 
 auto_gs = """
     ```
-    set all non-specified symbols on graceful stop
+    automatically enable graceful stop for positions on disapproved coins
+    graceful stop means the bot will continue trading as normal, but not
+    open a new position after current position is fully closed.
     ```"""
 
 TWE_long_short = """
@@ -600,6 +603,7 @@ max_n_per_batch = """
 filter_by_min_effective_cost = """
     ```
     if true, will disallow symbols where balance * WE_limit * initial_qty_pct < min_effective_cost
+    e.g. if exchange's effective min cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
     ```"""
 
 forced_mode_long_short = """
@@ -732,12 +736,14 @@ population_size = """
 
 crossover_probability = """
     ```
-    probability of crossover (I don't know what it is)
+    The probability of performing crossover between two individuals in the genetic algorithm.
+    It determines how often parents will exchange genetic information to create offspring.
     ```"""
 
 mutation_probability = """
     ```
-    probability of mutation (I don't know what it is)
+    The probability of performing crossover between two individuals in the genetic algorithm.
+    It determines how often parents will exchange genetic information to create offspring.
     ```"""
 
 scoring = """
@@ -852,4 +858,30 @@ unstuck_threshold = """
     if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled
     e.g. if a position size is $500 and max allowed position size is $1000, then position is 50% full.
     If unstuck_threshold==0.45, then unstuck the position until its size is $450.
+    ```"""
+
+minimum_coin_age_days = """
+    ```
+    disallow coins younger than a given number of days
+    ```"""
+
+ohlcv_rolling_window = """
+    ```
+    number of minutes to look into the past to compute volume and noisiness,
+    used for dynamic coin selection in forager mode.
+        noisiness is normalized relative range of 1m ohlcvs: mean((high - low) / close)
+        in forager mode, bot will select coins with highest noisiness for opening positions
+    ```"""
+
+relative_volume_filter_clip_pct = """
+    ```
+    disapprove the lowest relative volume coins.
+    Default 0.1 == 10%. Set to zero to allow all.
+    ```"""
+
+time_in_force = """
+    ```
+    Time in force indicates how long your order will remain active before it is executed or expired.
+    GTC (good_till_cancelled: The order will last until it is completed or you cancel it.
+    PostOnly (post_only): If the order would be filled immediately when submitted, it will be cancelled.
     ```"""
