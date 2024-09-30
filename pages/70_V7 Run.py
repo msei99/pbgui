@@ -30,7 +30,7 @@ def edit_v7_instance():
                 del st.session_state.bt_v7_results
             if "bt_v7_edit_symbol" in st.session_state:
                 del st.session_state.bt_v7_edit_symbol
-            st.switch_page("pages/7_V7 Backtest.py")
+            st.switch_page("pages/71_V7 Backtest.py")
     v7_instance.edit()
 
 @st.dialog("Delete Instance?")

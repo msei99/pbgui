@@ -495,7 +495,7 @@ class BacktestV7Item:
                         st.session_state.edit_v7_instance = V7Instance()
                         st.session_state.edit_v7_instance.config = self.backtest_results[row].config
                         st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
-                        st.switch_page("pages/7_V7 Run.py")
+                        st.switch_page("pages/70_V7 Run.py")
 
     def calculate_results(self):
         p = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}/{self.config.backtest.exchange}/**/analysis.json'))
