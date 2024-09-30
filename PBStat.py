@@ -9,6 +9,7 @@ from datetime import datetime
 from Instance import Instances
 import platform
 import traceback
+import logging
 
 class PBStat(Instances):
     def __init__(self):
@@ -85,6 +86,7 @@ class PBStat(Instances):
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End Fetch status')
 
 def main():
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():

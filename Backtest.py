@@ -6,7 +6,6 @@ import json
 import psutil
 import sys
 import platform
-import traceback
 import subprocess
 import shlex
 import glob
@@ -14,7 +13,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBDIR, PBGDIR, config_pretty_str
+from pbgui_func import pbdir, pbvenv, PBGDIR, config_pretty_str
 import uuid
 from Base import Base
 from Config import Config
@@ -22,6 +21,7 @@ from pathlib import Path, PurePath
 from shutil import rmtree
 import requests
 import datetime
+import logging
 
 class BacktestItem(Base):
     def __init__(self, config: str = None):
@@ -298,17 +298,17 @@ class BacktestItem(Base):
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            cmd = [sys.executable, '-u', PurePath(f'{PBDIR}/backtest.py')]
+            cmd = [pbvenv(), '-u', PurePath(f'{pbdir()}/backtest.py')]
             cmd_end = f'-dp -u {self.user} -s {self.symbol} -sd {self.sd} -ed {self.ed} -sb {self.sb} -m {self.market_type}'
             cmd.extend(shlex.split(cmd_end))
-            cmd.extend(['-bd', PurePath(f'{PBDIR}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
+            cmd.extend(['-bd', PurePath(f'{pbdir()}/backtests/pbgui'), str(PurePath(f'{self._config.config_file}'))])
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
                 creationflags |= subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, creationflags=creationflags)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, creationflags=creationflags)
             else:
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBDIR, text=True, start_new_session=True)
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, start_new_session=True)
 
 class BacktestQueue:
     def __init__(self):
@@ -932,6 +932,9 @@ class BacktestResults:
 
 
 def main():
+    # Disable Streamlit Warnings when running directly
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     bt = BacktestQueue()
     while True:
         bt.load()

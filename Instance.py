@@ -17,7 +17,6 @@ import numpy as np
 from shutil import rmtree
 import sys
 import traceback
-import plotly.graph_objects as go
 
 class Instance(Base):
     def __init__(self, config: str = None):
@@ -726,6 +725,7 @@ class Instance(Base):
             # njit_funcs = __import__("njit_funcs")
         except Exception as e:
             st.write("### Can not import grid functions from passivbot")
+            traceback.print_exc()
             return
         print(self.symbol)
         symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults = self.exchange.fetch_symbol_info(self.symbol, self.market_type)

@@ -34,6 +34,7 @@ class RunSingle():
         self.multi = False
         self.version = None
         self.pbdir = None
+        self.pbvenv = None
         self.pbgdir = None
     
     def watch(self):
@@ -65,7 +66,7 @@ class RunSingle():
     def start(self):
         if not self.is_running():
             config = PurePath(f'{self.path}/config.json')
-            cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/passivbot.py')]
+            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot.py')]
             cmd_end = f'{self.parameters} {self.user} {self.symbol} '.lstrip(' ')
             cmd.extend(shlex.split(cmd_end))
             cmd.extend([config])
@@ -186,7 +187,6 @@ class RunSingle():
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
 
-
 class RunMulti():
     def __init__(self):
         self.user = None
@@ -195,6 +195,7 @@ class RunMulti():
         self.name = None
         self.version = None
         self.pbdir = None
+        self.pbvenv = None
         self.pbgdir = None
     
     def watch(self):
@@ -224,8 +225,7 @@ class RunMulti():
 
     def start(self):
         if not self.is_running():
-            config = PurePath(f'{self.path}/config.json')
-            cmd = [sys.executable, '-u', PurePath(f'{self.pbdir}/passivbot_multi.py'), PurePath(f'{self.path}/multi_run.hjson')]
+            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot_multi.py'), PurePath(f'{self.path}/multi_run.hjson')]
             logfile = Path(f'{self.path}/passivbot.log')
             log = open(logfile,"ab")
             if platform.system() == "Windows":
@@ -285,6 +285,88 @@ class RunMulti():
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
 
+class RunV7():
+    def __init__(self):
+        self.user = None
+        self.path = None
+        self._v7_config = {}
+        self.name = None
+        self.version = None
+        self.pbdir = None
+        self.pbvenv = None
+        self.pbgdir = None
+    
+    def watch(self):
+        if not self.is_running():
+            self.start()
+
+    def is_running(self):
+        if self.pid():
+            return True
+        return False
+
+    def pid(self):
+        for process in psutil.process_iter():
+            try:
+                cmdline = process.cmdline()
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.AccessDenied:
+                pass
+            if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
+                return process
+
+    def stop(self):
+        if self.is_running():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: passivbot v7 {self.path}/config.json')
+            self.pid().kill()
+
+    def start(self):
+        if not self.is_running():
+            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/src/main.py'), PurePath(f'{self.path}/config.json')]
+            logfile = Path(f'{self.path}/passivbot.log')
+            log = open(logfile,"ab")
+            if platform.system() == "Windows":
+                creationflags = subprocess.DETACHED_PROCESS
+                creationflags |= subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_v7 {self.path}/config.json')
+
+    def clean_log(self):
+        logfile = Path(f'{self.path}/passivbot.log')
+        if logfile.exists():
+            if logfile.stat().st_size >= 10485760:
+                logfile_old = Path(f'{str(logfile)}.old')
+                copy(logfile,logfile_old)
+                with open(logfile,'r+') as file:
+                    file.truncate()
+
+    def create_v7_running_version(self):
+        # Write running Version to file
+        version_file = Path(f'{self.path}/running_version.txt')
+        with open(version_file, "w", encoding='utf-8') as f:
+            f.write(str(self.version))
+
+    def load(self):
+        """Load version for PB v7."""
+        file = Path(f'{self.path}/config.json')
+        if file.exists():
+            try:
+                with open(file, "r", encoding='utf-8') as f:
+                    v7_config = f.read()
+                self._v7_config = json.loads(v7_config)
+                self.version = self._v7_config["pbgui"]["version"]
+                if self.name == self._v7_config["pbgui"]["enabled_on"]:
+                    return True
+                else:                        
+                    self.name = self._v7_config["pbgui"]["enabled_on"]
+                    return False
+            except Exception as e:
+                print(f'Something went wrong, but continue {e}')
+                traceback.print_exc()
+
 class PBRun():
     """PBRun links together PBRemote, PBGui and Passivbot, while being independant and can maintain passivbot working by itself.
 
@@ -294,10 +376,12 @@ class PBRun():
         # self.run_instances = []
         self.run_multi = []
         self.run_single = []
+        self.run_v7 = []
         self.index = 0
         self.pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
+        # Init activate_ts and pbname
         if pb_config.has_option("main", "pbname"):
             self.name = pb_config.get("main", "pbname")
         else:
@@ -310,28 +394,77 @@ class PBRun():
             self.activate_single_ts = int(pb_config.get("main", "activate_single_ts"))
         else:
             self.activate_single_ts = 0
+        if pb_config.has_option("main", "activate_v7_ts"):
+            self.activate_v7_ts = int(pb_config.get("main", "activate_v7_ts"))
+        else:
+            self.activate_v7_ts = 0
         self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
         self.instances_status.pbname = self.name
         self.instances_status.activate_ts = self.activate_ts
         self.instances_status_single = InstancesStatus(f'{self.pbgdir}/data/cmd/status_single.json')
         self.instances_status_single.pbname = self.name
         self.instances_status_single.activate_ts = self.activate_single_ts
+        self.instances_status_v7 = InstancesStatus(f'{self.pbgdir}/data/cmd/status_v7.json')
+        self.instances_status_v7.pbname = self.name
+        self.instances_status_v7.activate_ts = self.activate_v7_ts
+        # Init pbdirs
+        self.pbdir = None
+        self.pb7dir = None
         if pb_config.has_option("main", "pbdir"):
             self.pbdir = pb_config.get("main", "pbdir")
-        else:
+        if pb_config.has_option("main", "pb7dir"):
+            self.pb7dir = pb_config.get("main", "pb7dir")
+        if not any([self.pbdir, self.pb7dir]):
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
             exit(1)
-        self.instances_path = f'{self.pbgdir}/data/instances'
+        # Print Warning if only pbdir or pb7dir configured
+        if not self.pbdir:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+        if not self.pb7dir:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
+        # Init pbvenvs
+        self.pbvenv = None
+        self.pb7venv = None
+        if pb_config.has_option("main", "pbvenv"):
+            self.pbvenv = pb_config.get("main", "pbvenv")
+        if pb_config.has_option("main", "pb7venv"):
+            self.pb7venv = pb_config.get("main", "pb7venv")
+        if not any([self.pbvenv, self.pb7venv]):
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot venv python interpreter configured in pbgui.ini')
+            exit(1)
+        # Print Warning if only pbvenv or pb7venv configured
+        if not self.pbvenv:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot venv python interpreter configured in pbgui.ini')
+        if not self.pb7venv:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 venv python interpreter configured in pbgui.ini')
+        # Init paths
         self.multi_path = f'{self.pbgdir}/data/multi'
         self.single_path = f'{self.pbgdir}/data/instances'
+        self.v7_path = f'{self.pbgdir}/data/run_v7'
         self.cmd_path = f'{self.pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
+        # Init pid
         self.piddir = Path(f'{self.pbgdir}/data/pid')
         if not self.piddir.exists():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbrun.pid')
         self.my_pid = None
+
+    def add_v7(self, run_v7: RunV7):
+        if run_v7:
+            for v7 in self.run_v7:
+                if v7.path == run_v7.path:
+                    v7.version = run_v7.version
+                    return
+            self.run_v7.append(run_v7)
+    
+    def remove_v7(self, run_v7: RunV7):
+        if run_v7:
+            for v7 in self.run_v7:
+                if v7.path == run_v7.path:
+                    self.run_v7.remove(v7)
+                    return
 
     def add_multi(self, run_multi: RunMulti):
         if run_multi:
@@ -399,7 +532,78 @@ class PBRun():
                         self.update_from_status(status_file, rserver)
                     elif status_file.split('/')[-1] == 'status_single.json':
                         self.update_from_status_single(status_file, rserver)
+                    elif status_file.split('/')[-1] == 'status_v7.json':
+                        self.update_from_status_v7(status_file, rserver)
                 cfile.unlink(missing_ok=True)
+
+    def update_from_status_v7(self, status_file : str, rserver : str):
+        """Updates the v7 status based on the provided status file.
+
+        Notes:
+            - Compares the new coming status timestamp with the current one.
+            - Installs new v7 versions or instances if some.
+            - Removes old *.json configuration files.
+            - Removes instances not found in the new status.
+
+        Args:
+            status_file (str): Path to the status file.
+            rserver (str): Name of the remote server.
+        """
+        new_status = InstancesStatus(status_file)
+        if new_status.activate_ts > self.activate_v7_ts:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            for instance in new_status:
+                status = self.instances_status_v7.find_name(instance.name)
+                if status is not None:
+                    if instance.version > status.version:
+                        # Install new v7 version
+                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New V7 Version {instance.name} Old: {status.version} New: {instance.version}')
+                        # Remove old *.json configs
+                        dest = f'{self.v7_path}/{instance.name}'
+                        p = str(Path(f'{dest}/*'))
+                        items = glob.glob(p)
+                        for item in items:
+                            if item.endswith('.json'):
+                                Path(item).unlink(missing_ok=True)
+                        src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
+                        dest = f'{self.v7_path}/{instance.name}'
+                        if Path(src).exists():
+                            copytree(src, dest, dirs_exist_ok=True)
+                            self.watch_v7([f'{self.v7_path}/{instance.name}'])
+                else:
+                    # Install new v7 instance
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New V7 Instance {instance.name} from {rserver} Version: {instance.version}')
+                    src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
+                    dest = f'{self.v7_path}/{instance.name}'
+                    if Path(src).exists():
+                        copytree(src, dest, dirs_exist_ok=True)
+                        self.watch_v7([f'{self.v7_path}/{instance.name}'])
+            remove_instances = []
+            for instance in self.instances_status_v7:
+                status = new_status.find_name(instance.name)
+                if status is None:
+                    # Remove v7 instance
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: V7 Instance {instance.name}')
+                    if instance.running:
+                        for v7 in self.run_v7:
+                            name = v7.path.split('/')[-1]
+                            if name == instance.name:
+                                v7.stop()
+                                self.remove_v7(v7)
+                    source = f'{self.v7_path}/{instance.name}'
+                    if Path(source).exists():
+                        # Backup v7 config
+                        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{date}')
+                        if not destination.exists():
+                            destination.mkdir(parents=True)
+                        copytree(source, destination, dirs_exist_ok=True)
+                        rmtree(source, ignore_errors=True)
+                        remove_instances.append(instance)
+            if remove_instances:
+                for instance in remove_instances:
+                    self.instances_status_v7.remove(instance)
+                self.instances_status_v7.save()
 
     def update_from_status_single(self, status_file : str, rserver : str):
         """Updates the single status based on the provided status file.
@@ -531,19 +735,20 @@ class PBRun():
                     self.instances_status.remove(instance)
                 self.instances_status.save()
 
-    def activate(self, instance : str, multi : bool):
+    def activate(self, instance : str, multi : bool, version : int = None):
         unique = str(uuid.uuid4())
         cfile = Path(f'{self.cmd_path}/activate_{unique}.cmd')
         cfg = ({
             "instance": instance,
-            "multi": multi})
+            "multi": multi,
+            "version": version})
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
 
     def has_activate(self):
         """Checks for activation file
 
-        This method scans for activation files (activate_*.cmd) in the cmd directory. If an activation file exists, it reads the new configuration to activate and start it as a single or multi config. Depending on the configuration, it either create a single or multi config using their respective watch function.
+        This method scans for activation files (activate_*.cmd) in the cmd directory. If an activation file exists, it reads the new configuration to activate and start it as a single, multi or v7 config. Depending on the configuration, it either create a single, multi or v7 config using their respective watch function.
         """
         p = str(Path(f'{self.cmd_path}/activate_*.cmd'))
         activates = glob.glob(p)
@@ -554,7 +759,14 @@ class PBRun():
                     cfg = json.load(f)
                     instance = cfg["instance"]
                     multi = cfg["multi"]
-                    if multi:
+                    if "version" in cfg:
+                        version = cfg["version"]
+                    else:
+                        version = None
+                    if version == "7":
+                        self.update_activate_v7()
+                        self.watch_v7([f'{self.v7_path}/{instance}'])
+                    elif multi:
                         self.update_activate()
                         self.watch_multi([f'{self.multi_path}/{instance}'])
                     else:
@@ -562,6 +774,15 @@ class PBRun():
                         self.watch_single([f'{self.single_path}/{instance}'])
                 cfile.unlink(missing_ok=True)
     
+    def update_activate_v7(self):
+        self.activate_v7_ts = int(datetime.now().timestamp())
+        self.instances_status_v7.activate_ts = self.activate_v7_ts
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("main", "activate_v7_ts", str(self.activate_v7_ts))
+        with open('pbgui.ini', 'w') as pbgui_configfile:
+            pb_config.write(pbgui_configfile)
+
     def update_activate(self):
         self.activate_ts = int(datetime.now().timestamp())
         self.instances_status.activate_ts = self.activate_ts
@@ -580,8 +801,57 @@ class PBRun():
         with open('pbgui.ini', 'w') as pbgui_configfile:
             pb_config.write(pbgui_configfile)
 
+    def watch_v7(self, v7_instances : list = None):
+        """Create or delete v7 instances and activate them or not depending on their status.
+
+        Args:
+            v7_instances (list, optional): List of v7-instance paths. Defaults to None.
+        """
+        if not v7_instances:
+            p = str(Path(f'{self.v7_path}/*'))
+            v7_instances = glob.glob(p)
+            # Remove all existing instances from status
+            self.instances_status_v7.instances = []
+        for v7_instance in v7_instances:
+            file = Path(f'{v7_instance}/config.json')
+            if file.exists():
+                run_v7 = RunV7()
+                status = InstanceStatus()
+                run_v7.path = v7_instance
+                run_v7.user = v7_instance.split('/')[-1]
+                status.name = run_v7.user
+                run_v7.name = self.name
+                run_v7.pbdir = self.pb7dir
+                run_v7.pbvenv = self.pb7venv
+                run_v7.pbgdir = self.pbgdir
+                if run_v7.load():
+                    if run_v7.is_running():
+                        running_version = self.find_running_version(v7_instance)
+                        if running_version < run_v7.version:
+                            run_v7.stop()
+                            run_v7.create_v7_running_version()
+                            run_v7.start()
+                    else:
+                        run_v7.create_v7_running_version()
+                        run_v7.start()
+                    self.add_v7(run_v7)
+                    status.running = True
+                else:
+                    self.remove_v7(run_v7)
+                    status.running = False
+                    run_v7.stop()
+                status.version = run_v7.version
+                status.enabled_on = run_v7.name
+                self.instances_status_v7.add(status)
+        # Remove non existing instances from status
+        for instance in self.instances_status_v7:
+            instance_path = f'{self.pbgdir}/data/run_v7/{instance.name}'
+            if not Path(instance_path).exists():
+                self.instances_status_v7.remove(instance)
+        self.instances_status_v7.save()
+
     def watch_single(self, single_instances : list = None):
-        """Create of delete single instances and activate them or not depending on their status.
+        """Create or delete single instances and activate them or not depending on their status.
 
         Args:
             single_instances (list, optional): List of single-instance paths. Defaults to None.
@@ -599,6 +869,7 @@ class PBRun():
                 run_single.path = single_instance
                 run_single.name = self.name
                 run_single.pbdir = self.pbdir
+                run_single.pbvenv = self.pbvenv
                 run_single.pbgdir = self.pbgdir
                 if run_single.load():
                     if run_single.is_running():
@@ -629,7 +900,7 @@ class PBRun():
         self.instances_status_single.save()
 
     def watch_multi(self, multi_instances : list = None):
-        """Create of delete multi instances and activate them or not depending on their status.
+        """Create or delete multi instances and activate them or not depending on their status.
 
         Args:
             multi_instance (list, optional): List of muilti-instance paths. Defaults to None.
@@ -648,6 +919,7 @@ class PBRun():
                 status.name = run_multi.user
                 run_multi.name = self.name
                 run_multi.pbdir = self.pbdir
+                run_multi.pbvenv = self.pbvenv
                 run_multi.pbgdir = self.pbgdir
                 if run_multi.load():
                     if run_multi.is_running():
@@ -750,6 +1022,7 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
+    run.watch_v7()
     run.watch_multi()
     run.watch_single()
     count = 0
@@ -762,11 +1035,15 @@ def main():
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.has_activate()
             run.has_update_status()
+            for run_v7 in run.run_v7:
+                run_v7.watch()
             for run_multi in run.run_multi:
                 run_multi.watch()
             for run_single in run.run_single:
                 run_single.watch()
             if count%2 == 0:
+                for run_v7 in run.run_v7:
+                    run_v7.clean_log()
                 for run_multi in run.run_multi:
                     run_multi.clean_log()
                 for run_single in run.run_single:

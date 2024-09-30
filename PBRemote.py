@@ -43,8 +43,9 @@ class RemoteServer():
         self._unique = []
         self._api_md5 = None
         self._pbdir = None
+        self._pb7dir = None
         self._bucket = None
-        self._instances = []
+        # self._instances = []
         self._mem = []
         self._swap = []
         self._disk = []
@@ -55,6 +56,8 @@ class RemoteServer():
         self.instances_status.load()
         self.instances_status_single = InstancesStatus(f'{self.path}/status_single.json')
         self.instances_status_single.load()
+        self.instances_status_v7 = InstancesStatus(f'{self.path}/status_v7.json')
+        self.instances_status_v7.load()
 
     @property
     def name(self): return self._name
@@ -72,6 +75,8 @@ class RemoteServer():
     def api_md5(self): return self._api_md5
     @property
     def pbdir(self): return self._pbdir
+    @property
+    def pb7dir(self): return self._pb7dir
     @property
     def bucket(self): return self._bucket
     @property
@@ -109,6 +114,10 @@ class RemoteServer():
     def pbdir(self, new_pbdir):
         if self._pbdir != new_pbdir:
             self._pbdir = new_pbdir
+    @pb7dir.setter
+    def pb7dir(self, new_pb7dir):
+        if self._pb7dir != new_pb7dir:
+            self._pb7dir = new_pb7dir
     @bucket.setter
     def bucket(self, new_bucket):
         if self._bucket != new_bucket:
@@ -141,25 +150,6 @@ class RemoteServer():
         if self._rtd < 60:
             return True
         return False
-
-    def load_instances(self):
-        """Load instances for this server, checking by server's name."""
-        self._instances = []
-        p = str(Path(f'{self._path}/../instances_{self.name}/*'))
-        instances = glob.glob(p)
-        for instance in instances:
-            file = Path(f'{instance}/instance.cfg')
-            if file.exists():
-                try:
-                    with open(file, "r", encoding='utf-8') as f:
-                        config = json.load(f)
-                        inst = {
-                            "user": config["_user"],
-                            "symbol": config["_symbol"]
-                        }
-                        self._instances.append(inst)
-                except Exception as e:
-                    print(f'{str(file)} is corrupted {e}')
 
     def load(self):
         """
@@ -195,8 +185,27 @@ class RemoteServer():
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
 
+    def sync_v7_down(self):
+        """Sync the v7 configurations from the remote storage to the local machine."""
+        if self.instances_status_v7.has_new_status():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_v7.json from: {self.name}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync v7 from: {self.name}')
+            pbgdir = Path.cwd()
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
+            logfile = Path(f'{pbgdir}/data/logs/sync.log')
+            log = open(logfile,"ab")
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            PBRun().update_status(self.instances_status_v7.status_file, self.name)
+            status_ts = self.instances_status_v7.status_ts
+            self.instances_status_v7.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_v7 ts: {self.name} old: {status_ts} new: {self.instances_status_v7.status_ts}')
+
     def sync_multi_down(self):
-        """Sync the multi.hjson configurations from the local machine to the remote storage."""
+        """Sync the multi configurations from the remote storage to the local machine."""
         if self.instances_status.has_new_status():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi from: {self.name}')
@@ -215,7 +224,7 @@ class RemoteServer():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
 
     def sync_single_down(self):
-        """Sync the instance.cfg and config.json files from the local machine to the remote storage."""
+        """Sync the single configurations from the local machine to the remote storage."""
         if self.instances_status_single.has_new_status():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync single from: {self.name}')
@@ -235,24 +244,37 @@ class RemoteServer():
 
     def sync_api(self):
         """
-        Checks if the api-keys.json from pbgui (self._path) is different from api-keys.json from passivbot (self._pbdir).
-        If different, It creates a backup of the passivbot api-keys.json to pbgui/data/backup/api-keys, and then copy the new api-keys.json file to the passivbot directory.
+        Sync the API keys from the remote storage to the local machine.
         """
         api_file = Path(f'{self._path}/api-keys.json')
         if api_file.exists():
-            api_keys = Path(f'{self._pbdir}/api-keys.json')
-            if self.calculate_md5(api_file) != self.calculate_md5(api_keys):
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install new API Keys from: {self.name}')
-                # Backup api-keys
-                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                pbgdir = Path.cwd()
+            if self.pbdir:
+                api_keys = Path(f'{self._pbdir}/api-keys.json')
+                self.update_api(api_file, api_keys, "v6")
+            if self.pb7dir:
+                api_keys = Path(f'{self._pb7dir}/api-keys.json')
+                self.update_api(api_file, api_keys, "v7")
+
+    def update_api(self, api_file: Path, api_keys: Path, version : str):
+        """
+        Checks if the api-keys.json from pbgui (self._path) is different from api-keys.json from passivbot.
+        If different, It creates a backup of the passivbot api-keys.json to pbgui/data/backup, and then copy the new api-keys.json file to the passivbot directory.
+        """
+        if self.calculate_md5(api_file) != self.calculate_md5(api_keys):
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install new API Keys from: {self.name} to {api_keys}')
+            # Backup api-keys
+            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            pbgdir = Path.cwd()
+            if version == "v6":
                 destination = Path(f'{pbgdir}/data/backup/api-keys/{date}')
-                if not destination.exists():
-                    destination.mkdir(parents=True)
-                if api_keys.exists():
-                    shutil.copy(api_keys, destination)
-                # Copy new api-keys
-                shutil.copy(api_file, api_keys)
+            elif version == "v7":
+                destination = Path(f'{pbgdir}/data/backup/api-keys_v7/{date}')
+            if not destination.exists():
+                destination.mkdir(parents=True)
+            if api_keys.exists():
+                shutil.copy(api_keys, destination)
+            # Copy new api-keys
+            shutil.copy(api_file, api_keys)
 
     def calculate_md5(self, file: Path):
         """Checks if the two API files have the same hash using md5 protocol."""
@@ -279,12 +301,26 @@ class PBRemote():
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
+        # Init pbname
         if pb_config.has_option("main", "pbname"):
             self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
-        self.pbdir = pb_config.get("main", "pbdir")
-        self.instances_path = f'{pbgdir}/data/instances'
+        # Init pbdirs
+        self.pbdir = None
+        self.pb7dir = None
+        if pb_config.has_option("main", "pbdir"):
+            self.pbdir = pb_config.get("main", "pbdir")
+        if pb_config.has_option("main", "pb7dir"):
+            self.pb7dir = pb_config.get("main", "pb7dir")
+        if not any([self.pbdir, self.pb7dir]):
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+            exit(1)
+        # Print Warning if only pbdir or pb7dir configured
+        if not self.pbdir:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+        if not self.pb7dir:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
@@ -388,6 +424,10 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'status_single':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_single.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+        elif direction == 'up' and spath == 'status_v7':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+        elif direction == 'up' and spath == 'run_v7':
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'multi':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'cmd':
@@ -403,6 +443,17 @@ class PBRemote():
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
         else:
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+
+    def sync_v7_up(self):
+        if self.local_run.instances_status_v7.has_new_status():
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_v7.json from: {self.name}')
+            status_ts = self.local_run.instances_status_v7.status_ts
+            self.local_run.instances_status_v7.update_status()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_v7 ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_v7.status_ts}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync v7 up: {self.name}')
+            self.sync('up', 'run_v7')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status_v7.json up: {self.name}')
+            self.sync('up', 'status_v7')
 
     def sync_multi_up(self):
         if self.local_run.instances_status.has_new_status():
@@ -430,7 +481,10 @@ class PBRemote():
         """Takes the api-keys.json from passivbot folder to sync it to other remotes by putting it in data/cmd/api-keys.json."""
         pbgdir = Path.cwd()
         api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
-        source = Path(f'{self.pbdir}/api-keys.json')
+        if self.pb7dir:
+            source = Path(f'{self.pb7dir}/api-keys.json')
+        elif self.pbdir:
+            source = Path(f'{self.pbdir}/api-keys.json')
         if source.exists():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync api-keys.json to all remote servers')
             shutil.copy(source, api_file)
@@ -481,7 +535,10 @@ class PBRemote():
 
     def calculate_api_md5(self):
         """Makes a md5 hash from the api-keys.json in passivbot folder."""
-        file = Path(f'{self.pbdir}/api-keys.json')
+        if self.pb7dir:
+            file = Path(f'{self.pb7dir}/api-keys.json')
+        elif self.pbdir:
+            file = Path(f'{self.pbdir}/api-keys.json')
         if file.exists():
             with open(file, 'rb') as file_obj:
                 file_contents = file_obj.read()
@@ -500,10 +557,10 @@ class PBRemote():
         for remote in found_remote:
             rserver = RemoteServer(remote)
             rserver.pbdir = self.pbdir
+            rserver.pb7dir = self.pb7dir
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
-            rserver.load_instances()
             self.add(rserver)
 
     def run(self):
@@ -636,6 +693,7 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+            remote.sync_v7_up()
             remote.sync_multi_up()
             remote.sync_single_up()
             remote.check_if_api_synced()
@@ -643,6 +701,7 @@ def main():
             remote.sync('down', 'cmd')
             for server in remote.remote_servers:
                 server.load()
+                server.sync_v7_down()
                 server.sync_multi_down()
                 server.sync_single_down()
                 server.sync_api()
