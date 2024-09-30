@@ -10,6 +10,8 @@ def opt_multi():
     with st.sidebar:
         if st.button(":top:"):
             del st.session_state.opt_multi
+            if "opt_multi_list" in st.session_state:
+                del st.session_state.opt_multi_list
             st.rerun()
         if st.button(":floppy_disk:"):
             if opt_multi.name:
