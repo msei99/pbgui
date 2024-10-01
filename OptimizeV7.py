@@ -19,6 +19,7 @@ import datetime
 from BacktestV7 import BacktestV7Item
 from Config import ConfigV7, Bounds
 import logging
+import os
 
 class OptimizeV7QueueItem:
     def __init__(self):
@@ -122,6 +123,9 @@ class OptimizeV7QueueItem:
 
     def run(self):
         if not self.is_finish() and not self.is_running():
+            old_os_path = os.environ.get('PATH', '')
+            new_os_path = os.path.dirname(pb7venv()) + os.pathsep + old_os_path
+            os.environ['PATH'] = new_os_path
             cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
@@ -132,6 +136,7 @@ class OptimizeV7QueueItem:
                 btm = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=pb7dir(), text=True, start_new_session=True)
             self.pid = btm.pid
             self.save_pid()
+            os.environ['PATH'] = old_os_path
 
 class OptimizeV7Queue:
     def __init__(self):
@@ -407,7 +412,7 @@ class OptimizeV7Results:
                         st.switch_page("pages/71_V7 Backtest.py")
 
     def generate_analysis(self, result_file):
-        cmd = [st.session_state.pb7venv, '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]
+        cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]
         with st.spinner('Generating Result...'):
             if platform.system() == "Windows":
                 creationflags = subprocess.CREATE_NO_WINDOW
