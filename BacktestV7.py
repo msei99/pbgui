@@ -51,7 +51,7 @@ class BacktestV7QueueItem():
         logfile = self.load_log()
         st.code(logfile)
         if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
-            st.rerun()
+            st.rerun(scope="fragment")
 
     def status(self):
         if self.is_backtesting():
