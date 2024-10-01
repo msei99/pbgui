@@ -482,7 +482,7 @@ class BacktestV7Item:
                 if "view" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["view"]:
                         self.backtest_results[row].load_fills()
-                        # self.backtest_results[row].load_be()
+                        self.backtest_results[row].load_be()
                         self.backtest_results[row].view_chart_be()
                         self.backtest_results[row].view_chart_symbol()
                         self.backtest_results[row].view()
