@@ -124,13 +124,15 @@ class Users:
     def load(self):
         users = ""
         try:
-            with Path(self.api_path).open(encoding="UTF-8") as f:
-                users = json.load(f)
+            if Path(self.api_path).exists():
+                with Path(self.api_path).open(encoding="UTF-8") as f:
+                    users = json.load(f)
         except Exception as e:
             print(f'{self.api_path} is corrupted {e}')
         try:
-            with Path(self.api7_path).open(encoding="UTF-8") as f:
-                users.update(json.load(f))
+            if Path(self.api7_path).exists():
+                with Path(self.api7_path).open(encoding="UTF-8") as f:
+                    users.update(json.load(f))
         except Exception as e:
             print(f'{self.api7_path} is corrupted {e}')
         for user in users:
