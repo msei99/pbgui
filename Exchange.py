@@ -833,10 +833,18 @@ class Exchange:
     def fetch_copytrading_symbols(self):
         if not self.instance: self.connect()
         # print(self.instance.__dir__())
-        symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
-        cpSymbols = []
-        for symbol in symbols["data"]:
-            cpSymbols.append(symbol["symbol"])
+        if self.id == 'binance':
+            symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
+            cpSymbols = []
+            for symbol in symbols["data"]:
+                cpSymbols.append(symbol["symbol"])
+        elif self.id == 'bybit':
+            # print(self.instance.__dir__())
+            symbols = self.instance.publicGetContractV3PublicCopytradingSymbolList()
+            cpSymbols = []
+            for symbol in symbols["result"]["list"]:
+                cpSymbols.append(symbol["symbol"])
+        cpSymbols.sort()
         return cpSymbols
 
     def fetch_symbols(self):
@@ -844,6 +852,7 @@ class Exchange:
         self._markets = self.instance.load_markets()
         self.swap = []
         self.spot = []
+        self.cpt = []
         for (k,v) in list(self._markets.items()):
             if v["swap"] and v["active"] and v["linear"]:
                 if self.id == "hyperliquid":
@@ -857,10 +866,12 @@ class Exchange:
                         self.swap.append(v["id"][:len(v["id"])-1])
                 elif self.id == "okx":
                     if v["id"].split("-")[1] == 'USDT':
+                        print(v)
                         self.swap.append(''.join(v["id"].split("-")[0:2]))
                 elif self.id == "bybit":
                     if v["id"].endswith('USDT'):
-                        # print(v)
+                        if v["info"]["copyTrading"] == "both":
+                            self.cpt.append(v["id"])
                         self.swap.append(v["id"])
                 elif self.id == "binance":
                     if v["id"].endswith('USDT'):
@@ -873,8 +884,11 @@ class Exchange:
                 #     self.swap.append(v["id"])
             if v["spot"] and v["active"] and (self.id == "bybit" or self.id == "binance"):
                 self.spot.append(v["id"])
+        if self.id == "binance":
+            self.cpt = self.fetch_copytrading_symbols()
         self.spot.sort()
         self.swap.sort()
+        self.cpt.sort()
         # print(self.spot)
         # print(self.swap)
         self.save_symbols()
@@ -887,6 +901,8 @@ class Exchange:
         pb_config.set("exchanges", f'{self.id}.swap', f'{self.swap}')
         if self.spot:
             pb_config.set("exchanges", f'{self.id}.spot', f'{self.spot}')
+        if self.cpt:
+            pb_config.set("exchanges", f'{self.id}.cpt', f'{self.cpt}')
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
 
@@ -905,8 +921,15 @@ def main():
     users = Users()
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
-    exchange = Exchange("binance", users.find_user("binance_CPT"))
-    print(exchange.fetch_copytrading_symbols())
+    # exchange = Exchange("binance", users.find_user("binance_CPT"))
+    # exchange.fetch_symbols()
+    # print(exchange.fetch_copytrading_symbols())
+    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
+    # exchange.fetch_symbols()
+    exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
+    exchange.fetch_symbols()
+    # print(allowed_symbols)
+    # print(exchange.swap)
     # print(exchange.fetch_positions())
     # print(exchange.fetch_all_open_orders("DOGE/USDC:USDC"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC"], "swap"))
