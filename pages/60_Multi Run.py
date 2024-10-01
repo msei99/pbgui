@@ -149,6 +149,9 @@ def select_instance():
             'User': instance.user,
             'Enabled On': instance.enabled_on,
             'TWE': twe_str,
+            'lap': instance.loss_allowance_pct,
+            'ucp': instance.unstuck_close_pct,
+            'st': instance.stuck_threshold,
             'AU': bool(instance.loss_allowance_pct > 0.0),
             'Version': instance.version,
             'Remote': remote_str,
@@ -156,7 +159,13 @@ def select_instance():
             'Delete': False,
         })
     column_config = {
-        "id": None}
+        "id": None,
+        'TWE': st.column_config.Column(help='Total Wallet Exposure'),
+        'lap': st.column_config.Column(help='loss_allowance_pct'),
+        'ucp': st.column_config.Column(help='unstuck_close_pct'),
+        'st': st.column_config.Column(help='stuck_threshold'),
+        'AU': st.column_config.Column(help='Auto Unstuck'),
+        }
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_multi_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
     
 
