@@ -358,6 +358,8 @@ class MultiInstance():
             self._ignored_symbols = self._multi_config["ignored_symbols"]
         # Load available symbols
         self._available_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='swap')
+        # Load cpt allowed symbols
+        self._cpt_allowed_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='cpt')
         # Load instances from user
         for instance in st.session_state.pbgui_instances:
             if instance.user == self.user and instance.market_type == "futures" :
@@ -954,6 +956,12 @@ class MultiInstance():
                         self._symbols.append(symbol)
                 st.rerun()
         with col2:
+            if st.button("Add CPT allowed to approved_symbols", key="edit_multi_add_cpt_to_approved"):
+                for symbol in self._cpt_allowed_symbols:
+                    if symbol not in self._symbols:
+                        self._symbols.append(symbol)
+                st.rerun()
+        with col4:
             if st.button("Update Symbols from Exchange"):
                 exchange = self._users.find_exchange(self.user)
                 Exchange(exchange, self._users.find_user(self._user)).fetch_symbols()
