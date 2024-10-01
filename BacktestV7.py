@@ -460,10 +460,12 @@ class BacktestV7Item:
                 'drawdown_worst': result.drawdown_worst,
                 'sharpe_ratio': result.sharpe_ratio,
                 'starting_balance': result.starting_balance,
-                # 'final_balance': result.final_balance,
+                'final_balance': result.final_balance,
             })
         column_config = {
             "id": None,
+            'adg': st.column_config.NumberColumn(format="%.8f"),
+            'final_balance': st.column_config.NumberColumn(format="$ %.2f"),
             "view": st.column_config.CheckboxColumn(label="View Result"),
             "plot": st.column_config.CheckboxColumn(label="View be Plot"),
             "fills": st.column_config.CheckboxColumn(label="View Fills"),
@@ -480,7 +482,7 @@ class BacktestV7Item:
                 if "view" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["view"]:
                         self.backtest_results[row].load_fills()
-                        self.backtest_results[row].load_be()
+                        # self.backtest_results[row].load_be()
                         self.backtest_results[row].view_chart_be()
                         self.backtest_results[row].view_chart_symbol()
                         self.backtest_results[row].view()
@@ -593,6 +595,7 @@ class BacktestV7Result:
         # self.final_balance = self.result["final_balance"]
         self.starting_balance = self.config.backtest.starting_balance
         self.be = None
+        self.final_balance = self.load_final_balance()
         self.fills = None
     
     def remove(self):
@@ -613,6 +616,23 @@ class BacktestV7Result:
                 return f.read()
         except Exception as e:
             print(f'{str(r)} is corrupted {e}')
+
+    def load_final_balance(self):
+        balance = Path(f'{self.result_path}/balance_and_equity.csv')
+        if balance.exists():
+            with open(balance, "r", encoding='utf-8') as file:
+                end_of_file = file.seek(0, 2)
+                file.seek(end_of_file)
+                n = 0
+                for num in range(end_of_file+1):            
+                    file.seek(end_of_file - num)    
+                    last_line = file.read()
+                    if last_line.count('\n') == 1: 
+                        if len(last_line.split(',')) == 3:
+                            final_balance = last_line.split(',')[1]
+                            return final_balance
+                        else: last_line = None
+        return None
 
     def load_be(self):
         if self.be is None:
