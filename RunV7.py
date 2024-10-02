@@ -45,6 +45,7 @@ class V7Instance():
         # Init config
         self.config.live.user = self._user
         self._available_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='swap')
+        self._cpt_allowed_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='cpt')
         # Init PBremote
         if 'remote' not in st.session_state:
             st.session_state.remote = PBRemote()
@@ -156,6 +157,10 @@ class V7Instance():
         if "edit_run_v7_approved_coins" in st.session_state:
             if st.session_state.edit_run_v7_approved_coins != self.config.live.approved_coins:
                 self.config.live.approved_coins = st.session_state.edit_run_v7_approved_coins
+                if 'All' in self.config.live.approved_coins:
+                    self.config.live.approved_coins = self._available_symbols
+                elif 'CPT' in self.config.live.approved_coins:
+                    self.config.live.approved_coins = self._cpt_allowed_symbols
         if "edit_run_v7_ignored_coins" in st.session_state:
             if st.session_state.edit_run_v7_ignored_coins != self.config.live.ignored_coins:
                 self.config.live.ignored_coins = st.session_state.edit_run_v7_ignored_coins
@@ -219,7 +224,7 @@ class V7Instance():
         for symbol in self.config.live.approved_coins.copy():
             if symbol not in self._available_symbols:
                 self.config.live.approved_coins.remove(symbol)
-        st.multiselect('symbols', self._available_symbols, default=self.config.live.approved_coins, key="edit_run_v7_approved_coins")
+        st.multiselect('symbols', ['All', 'CPT'] + self._available_symbols, default=self.config.live.approved_coins, key="edit_run_v7_approved_coins")
         for symbol in self.config.live.ignored_coins.copy():
             if symbol not in self._available_symbols:
                 self.config.live.ignored_coins.remove(symbol)

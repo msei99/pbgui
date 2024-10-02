@@ -166,7 +166,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.17 (02-10-2024)
 - V7: Run optimizer from a backtest result with -t starting_config
-- Multi: Add only copy trading allowed symbols
+- Run V7 and Multi: Add All and Add CPT Sysmbols to approved_symbols
 - Multi: lap, ucp and st in the Overview of Multi Run
 - V7: Compile rust if needed
 - V7: Show final_balance in backtestests for easy sort them

@@ -614,9 +614,15 @@ class MultiInstance():
         if "edit_multi_approved_symbols" in st.session_state:
             if st.session_state.edit_multi_approved_symbols != self._symbols:
                 self._symbols = st.session_state.edit_multi_approved_symbols
+                if "All" in self._symbols:
+                    self._symbols = self._available_symbols
+                elif "CPT" in self._symbols:
+                    self._symbols = self._cpt_allowed_symbols
         if "edit_multi_ignored_symbols" in st.session_state:
             if st.session_state.edit_multi_ignored_symbols != self._ignored_symbols:
                 self._ignored_symbols = st.session_state.edit_multi_ignored_symbols
+                if "All" in self._ignored_symbols:
+                    self._ignored_symbols = self._available_symbols
         if "edit_multi_n_longs" in st.session_state:
             if st.session_state.edit_multi_n_longs != self.n_longs:
                 self.n_longs = st.session_state.edit_multi_n_longs
@@ -948,35 +954,19 @@ class MultiInstance():
         for symbol in self._symbols.copy():
             if symbol not in self._available_symbols:
                 self._symbols.remove(symbol)
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
-        with col1:
-            if st.button("Add All to approved_symbols", key="edit_multi_add_all_to_approved"):
-                for symbol in self._available_symbols:
-                    if symbol not in self._symbols:
-                        self._symbols.append(symbol)
-                st.rerun()
-        with col2:
-            if st.button("Add CPT allowed to approved_symbols", key="edit_multi_add_cpt_to_approved"):
-                for symbol in self._cpt_allowed_symbols:
-                    if symbol not in self._symbols:
-                        self._symbols.append(symbol)
-                st.rerun()
-        with col4:
-            if st.button("Update Symbols from Exchange"):
-                exchange = self._users.find_exchange(self.user)
-                Exchange(exchange, self._users.find_user(self._user)).fetch_symbols()
-                st.rerun()
-        st.multiselect('approved_symbols', self._available_symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
+        st.multiselect('approved_symbols', ['All', 'CPT'] + self._available_symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
         # Add Symbol to ignored_symbols
         for symbol in self._ignored_symbols:
             if symbol not in self._available_symbols:
                 self._ignored_symbols.remove(symbol)
-        if st.button("Add All to ignored_symbols", key="edit_multi_add_all_to_ignored"):
-            for symbol in self._available_symbols:
-                if symbol not in self._ignored_symbols:
-                    self._ignored_symbols.append(symbol)
-            st.rerun()
-        st.multiselect('ignored_symbols', self._available_symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
+        col1, col2 = st.columns([3,1], vertical_alignment="bottom")
+        with col1:
+            st.multiselect('ignored_symbols', ["All"] + self._available_symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
+        with col2:
+            if st.button("Update Symbols from Exchange"):
+                exchange = self._users.find_exchange(self.user)
+                Exchange(exchange, self._users.find_user(self._user)).fetch_symbols()
+                st.rerun()
         # Import configs
         import_path = os.path.abspath(st_file_selector(st, path=pbdir(), key = 'multi_import_config', label = 'Import from directory'))
         if st.button("Import Configs"):
