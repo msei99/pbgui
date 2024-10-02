@@ -19,6 +19,7 @@ from Config import Config, ConfigV7
 from pathlib import Path, PurePath
 from shutil import rmtree
 from RunV7 import V7Instance
+import OptimizeV7
 import datetime
 import logging
 import os
@@ -460,6 +461,7 @@ class BacktestV7Item:
                 'plot': False,
                 'fills': False,
                 'create_run': False,
+                'optimize': False,
                 'delete': False,
                 'adg': result.adg,
                 'drawdown_worst': result.drawdown_worst,
@@ -503,6 +505,21 @@ class BacktestV7Item:
                         st.session_state.edit_v7_instance.config = self.backtest_results[row].config
                         st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
                         st.switch_page("pages/70_V7 Run.py")
+                if "optimize" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["optimize"]:
+                        st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
+                        st.session_state.opt_v7.config = self.backtest_results[row].config
+                        st.session_state.opt_v7.name = self.name
+                        # st.session_state.opt_v7.save()
+                        st.session_state.opt_v7.save_queue(start = True)
+                        if "opt_v7_list" in st.session_state:
+                            del st.session_state.opt_v7_list
+                        if "opt_v7" in st.session_state:
+                            del st.session_state.opt_v7
+                        if "opt_v7_results" in st.session_state:    
+                            del st.session_state.opt_v7_results
+                        st.session_state.opt_v7_queue = OptimizeV7.OptimizeV7Queue()
+                        st.switch_page("pages/72_V7 Optimize.py")
 
     def calculate_results(self):
         p = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}/{self.config.backtest.exchange}/**/analysis.json'))

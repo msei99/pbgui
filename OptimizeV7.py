@@ -16,7 +16,7 @@ from pathlib import Path, PurePath
 from User import Users
 from shutil import rmtree
 import datetime
-from BacktestV7 import BacktestV7Item
+import BacktestV7
 from Config import ConfigV7, Bounds
 import logging
 import os
@@ -27,6 +27,7 @@ class OptimizeV7QueueItem:
         self.filename = None
         self.json = None
         self.exchange = None
+        self.starting_config = False
         self.log = None
         self.pid = None
         self.pidfile = None
@@ -126,7 +127,10 @@ class OptimizeV7QueueItem:
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(pb7venv()) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
-            cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
+            if self.starting_config:
+                cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), '-t', str(PurePath(f'{self.json}')), str(PurePath(f'{self.json}'))]
+            else:
+                cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -224,6 +228,8 @@ class OptimizeV7Queue:
                 qitem.filename = config["filename"]
                 qitem.json = config["json"]
                 qitem.exchange = config["exchange"]
+                if "start" in config:
+                    qitem.starting_config = config["start"]
                 qitem.log = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.log')
                 qitem.pidfile = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.pid')
                 self.add(qitem)
@@ -293,6 +299,7 @@ class OptimizeV7Queue:
                 'Status': opt.status(),
                 'log': False,
                 'delete': False,
+                'starting_config': opt.starting_config,
                 'name': opt.name,
                 'filename': opt.filename,
                 'exchange': opt.exchange,
@@ -307,7 +314,7 @@ class OptimizeV7Queue:
         #Display Queue
         height = 36+(len(d))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
+        st.data_editor(data=d, height=height, use_container_width=True, key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
         if f'view_opt_v7_queue_{ed_key}' in st.session_state:
             ed = st.session_state[f'view_opt_v7_queue_{ed_key}']
             for row in ed["edited_rows"]:
@@ -402,7 +409,7 @@ class OptimizeV7Results:
                 if "backtest" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["backtest"]:
                         backtest_name = PurePath(f'{self.analysis_path}/{d[row]["Analysis"]}.json')
-                        st.session_state.bt_v7 = BacktestV7Item(backtest_name)
+                        st.session_state.bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
                         if "bt_v7_queue" in st.session_state:
                             del st.session_state.bt_v7_queue
                         if "bt_v7_results" in st.session_state:
@@ -997,7 +1004,7 @@ class OptimizeV7Item:
         self.config.config_file = Path(f'{self.path}/{self.name}.json')
         self.config.save_config()
 
-    def save_queue(self):
+    def save_queue(self, start : bool = False):
         dest = Path(f'{PBGDIR}/data/opt_v7_queue')
         unique_filename = str(uuid.uuid4())
         file = Path(f'{dest}/{unique_filename}.json') 
@@ -1006,6 +1013,7 @@ class OptimizeV7Item:
             "filename": unique_filename,
             "json": str(self.config.config_file),
             "exchange": self.config.backtest.exchange,
+            "start": start,
         }
         dest.mkdir(parents=True, exist_ok=True)
         with open(file, "w", encoding='utf-8') as f:

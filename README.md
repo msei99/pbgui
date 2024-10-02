@@ -164,6 +164,14 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+## v1.17 (02-10-2024)
+- V7: Run optimizer from a backtest result with -t starting_config
+- Multi: Add only copy trading allowed symbols
+- Multi: lap, ucp and st in the Overview of Multi Run
+- V7: Compile rust if needed
+- V7: Show final_balance in backtestests for easy sort them
+- V7: refresh logfile fragment refresh for speed up
+
 ## v1.16 (28-09-2024)
 - Run V7: First Version that can run passivbot v7
 - PBRun: Can now start passivbot v7 instances
