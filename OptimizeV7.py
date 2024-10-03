@@ -49,7 +49,7 @@ class OptimizeV7QueueItem:
     def view_log(self):
         logfile = self.load_log()
         st.code(logfile)
-        if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
+        if st.button(":material/refresh:", key=f'refresh_view_log_{self.filename}'):
             st.rerun(scope="fragment")
 
     def status(self):
