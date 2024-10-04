@@ -801,7 +801,7 @@ class Short:
             self.entry_initial_qty_pct = new_short["entry_initial_qty_pct"]
         if "entry_trailing_grid_ratio" in new_short:
             self.entry_trailing_grid_ratio = new_short["entry_trailing_grid_ratio"]
-        if "entry_trailing_retracement" in new_short:
+        if "entry_trailing_retracement_pct" in new_short:
             self.entry_trailing_retracement_pct = new_short["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_short:
             self.entry_trailing_threshold_pct = new_short["entry_trailing_threshold_pct"]
