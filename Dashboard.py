@@ -587,8 +587,8 @@ class Dashboard():
             st.plotly_chart(fig, key=f"dashboard_top_symbols_plot_{position}")
 
     def color_we(self, value):
-        # bgcolor green < 10, yellow 100-200, red > 200
-        color = "green" if value < 100 else "yellow" if value < 200 else "red"
+        # bgcolor green < 10, orange 100-200, red > 200
+        color = "green" if value < 100 else "orange" if value < 200 else "red"
         return f"color: {color};"
 
     def color_upnl(self, value):
@@ -633,7 +633,7 @@ class Dashboard():
             total_balance = df['Balance'].sum()
             total_upnl = df['uPnl'].sum()
             total_twe = 100 / total_balance * all_pprices
-            color = "green" if total_twe < 100 else "yellow" if total_twe < 200 else "red"
+            color = "green" if total_twe < 100 else "orange" if total_twe < 200 else "red"
             color_upnl = "red" if total_upnl < 0 else "green"
             st.markdown(f"#### :blue[Total Balance:] :green[${total_balance:.2f} USDT]&emsp; :blue[Total uPnl:] :{color_upnl}[${total_upnl:.2f}]&emsp; :blue[Total TWE:] :{color}[{total_twe:.2f} %]")
             column_config = {
