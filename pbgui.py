@@ -22,7 +22,6 @@ st.header("Passivbot GUI")
 
 # Load pbgui.ini settings
 load_ini("main", "pbdir")
-load_ini("main", "pbdir")
 load_ini("main", "pbvenv")
 load_ini("main", "pb7dir")
 load_ini("main", "pb7venv")
