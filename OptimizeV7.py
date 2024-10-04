@@ -222,14 +222,14 @@ class OptimizeV7Queue:
         self.items = []
         for item in items:
             with open(item, "r", encoding='utf-8') as f:
-                config = json.load(f)
+                q_config = json.load(f)
                 qitem = OptimizeV7QueueItem()
-                qitem.name = config["name"]
-                qitem.filename = config["filename"]
-                qitem.json = config["json"]
-                qitem.exchange = config["exchange"]
-                if "start" in config:
-                    qitem.starting_config = config["start"]
+                qitem.name = q_config["name"]
+                qitem.filename = q_config["filename"]
+                qitem.json = q_config["json"]
+                config = OptimizeV7Item(qitem.json)
+                qitem.exchange = q_config["exchange"]
+                qitem.starting_config = config.config.pbgui.starting_config
                 qitem.log = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.log')
                 qitem.pidfile = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.pid')
                 self.add(qitem)
@@ -500,6 +500,9 @@ class OptimizeV7Item:
         if  "edit_opt_v7_n_cpu" in st.session_state:
             if st.session_state.edit_opt_v7_n_cpu != self.config.optimize.n_cpus:
                 self.config.optimize.n_cpus = st.session_state.edit_opt_v7_n_cpu
+        if "edit_opt_v7_starting_config" in st.session_state:
+            if st.session_state.edit_opt_v7_starting_config:
+                self.config.pbgui.starting_config = st.session_state.edit_opt_v7_starting_config
         if "edit_opt_v7_lower_bound_drawdown_worst" in st.session_state:
             if st.session_state.edit_opt_v7_lower_bound_drawdown_worst != self.config.optimize.limits.lower_bound_drawdown_worst:
                 self.config.optimize.limits.lower_bound_drawdown_worst = st.session_state.edit_opt_v7_lower_bound_drawdown_worst
@@ -552,8 +555,10 @@ class OptimizeV7Item:
         with col3:
             st.number_input('n_cpus',value=self.config.optimize.n_cpus, min_value=1, max_value=multiprocessing.cpu_count(), step=1, help=None, key="edit_opt_v7_n_cpu")
         with col4:
-            st.empty()
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+            st.checkbox("Start with config", value=self.config.pbgui.starting_config, key="edit_opt_v7_starting_config")
+        with st.expander("Editg Config", expanded=False):
+            self.config.bot.edit()
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
             st.number_input("lower_bound_drawdown_worst", min_value=0.0, max_value=1.0, value=self.config.optimize.limits.lower_bound_drawdown_worst, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_drawdown_worst", help=pbgui_help.limits_lower_bound_drawdown_worst)
         with col2:
@@ -1010,7 +1015,7 @@ class OptimizeV7Item:
         self.config.config_file = Path(f'{self.path}/{self.name}.json')
         self.config.save_config()
 
-    def save_queue(self, start : bool = False):
+    def save_queue(self):
         dest = Path(f'{PBGDIR}/data/opt_v7_queue')
         unique_filename = str(uuid.uuid4())
         file = Path(f'{dest}/{unique_filename}.json') 
@@ -1018,8 +1023,7 @@ class OptimizeV7Item:
             "name": self.name,
             "filename": unique_filename,
             "json": str(self.config.config_file),
-            "exchange": self.config.backtest.exchange,
-            "start": start,
+            "exchange": self.config.backtest.exchange
         }
         dest.mkdir(parents=True, exist_ok=True)
         with open(file, "w", encoding='utf-8') as f:
