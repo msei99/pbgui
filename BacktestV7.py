@@ -509,16 +509,14 @@ class BacktestV7Item:
                     if ed["edited_rows"][row]["optimize"]:
                         st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
                         st.session_state.opt_v7.config = self.backtest_results[row].config
+                        st.session_state.opt_v7.config.pbgui.starting_config = True
                         st.session_state.opt_v7.name = self.name
-                        # st.session_state.opt_v7.save()
-                        st.session_state.opt_v7.save_queue(start = True)
                         if "opt_v7_list" in st.session_state:
                             del st.session_state.opt_v7_list
-                        if "opt_v7" in st.session_state:
-                            del st.session_state.opt_v7
+                        if "opt_v7_queue" in st.session_state:
+                            del st.session_state.opt_v7_queue
                         if "opt_v7_results" in st.session_state:    
                             del st.session_state.opt_v7_results
-                        st.session_state.opt_v7_queue = OptimizeV7.OptimizeV7Queue()
                         st.switch_page("pages/72_V7 Optimize.py")
 
     def calculate_results(self):

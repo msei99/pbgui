@@ -2303,9 +2303,11 @@ class PBGui:
     def __init__(self):
         self._version = 0
         self._enabled_on = "disabled"
+        self._starting_config = False
         self._pbgui = {
             "version": self._version,
-            "enabled_on": self._enabled_on
+            "enabled_on": self._enabled_on,
+            "starting_config": self._starting_config
         }
     
     def __repr__(self):
@@ -2320,11 +2322,15 @@ class PBGui:
             self._version = self._pbgui["version"]
         if "enabled_on" in self._pbgui:
             self._enabled_on = self._pbgui["enabled_on"]
+        if "starting_config" in self._pbgui:
+            self._starting_config = self._pbgui["starting_config"]
     
     @property
     def version(self): return self._version
     @property
     def enabled_on(self): return self._enabled_on
+    @property
+    def starting_config(self): return self._starting_config
 
     @version.setter
     def version(self, new_version):
@@ -2334,6 +2340,10 @@ class PBGui:
     def enabled_on(self, new_enabled_on):
         self._enabled_on = new_enabled_on
         self._pbgui["enabled_on"] = self._enabled_on
+    @starting_config.setter
+    def starting_config(self, new_starting_config):
+        self._starting_config = new_starting_config
+        self._pbgui["starting_config"] = self._starting_config
 
 class ConfigV7():
     def __init__(self, file_name = None):
