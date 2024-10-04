@@ -415,8 +415,14 @@ class PBRun():
         if pb_config.has_option("main", "pb7dir"):
             self.pb7dir = pb_config.get("main", "pb7dir")
         if not any([self.pbdir, self.pb7dir]):
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
-            exit(1)
+            if __name__ == '__main__':
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+                exit(1)
+            else:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+                return
         # Print Warning if only pbdir or pb7dir configured
         if not self.pbdir:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
@@ -430,8 +436,14 @@ class PBRun():
         if pb_config.has_option("main", "pb7venv"):
             self.pb7venv = pb_config.get("main", "pb7venv")
         if not any([self.pbvenv, self.pb7venv]):
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot venv python interpreter configured in pbgui.ini')
-            exit(1)
+            if __name__ == '__main__':
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot venv python interpreter configured in pbgui.ini')
+                exit(1)
+            else:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot venv python interpreter configured in pbgui.ini')
+                return
         # Print Warning if only pbvenv or pb7venv configured
         if not self.pbvenv:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot venv python interpreter configured in pbgui.ini')

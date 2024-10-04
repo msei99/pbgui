@@ -314,8 +314,14 @@ class PBRemote():
         if pb_config.has_option("main", "pb7dir"):
             self.pb7dir = pb_config.get("main", "pb7dir")
         if not any([self.pbdir, self.pb7dir]):
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
-            exit(1)
+            if __name__ == '__main__':
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+                exit(1)
+            else:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+                return
         # Print Warning if only pbdir or pb7dir configured
         if not self.pbdir:
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
@@ -333,16 +339,34 @@ class PBRemote():
         self.bucket = None
         self.rclone_installed = self.is_rclone_installed()
         if not self.rclone_installed:
-            self.error = "rclone not installed"
-            return
+            if __name__ == '__main__':
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: rclone not installed')
+                exit(1)
+            else:
+                self.error = "rclone not installed"
+                return
         self.buckets = self.fetch_buckets()
         if not self.buckets:
-            self.error = "Rclone not configured. No buckets found."
-            return
+            if __name__ == '__main__':
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No buckets found')
+                exit(1)
+            else:
+                self.error = "Rclone not configured. No buckets found."
+                return
         self.load_config()
         if not self.bucket:
-            self.error = "bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:"
-            return
+            if __name__ == '__main__':
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:')
+                exit(1)
+            else:
+                self.error = "bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:"
+                return
         self.bucket_dir = f'{self.bucket}{self.bucket.split(":")[0]}'
         self.load_remote()
 
