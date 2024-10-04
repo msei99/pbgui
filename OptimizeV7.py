@@ -291,12 +291,17 @@ class OptimizeV7Queue:
                     st.session_state.opt_v7_results = opt
                     del st.session_state.opt_v7_queue
                     st.rerun()
+                if "edit" in ed["edited_rows"][row]:
+                    st.session_state.opt_v7 = OptimizeV7Item(f'{PBGDIR}/data/opt_v7/{self.items[row].name}')
+                    del st.session_state.opt_v7_queue
+                    st.rerun()
         d = []
         for id, opt in enumerate(self.items):
             d.append({
                 'id': id,
                 'run': False,
                 'Status': opt.status(),
+                'edit': False,
                 'log': False,
                 'delete': False,
                 'starting_config': opt.starting_config,
@@ -308,6 +313,7 @@ class OptimizeV7Queue:
         column_config = {
             # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
+            "edit": st.column_config.CheckboxColumn('Edit'),
             "log": st.column_config.CheckboxColumn(label="View Logfile"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
