@@ -25,6 +25,8 @@ def change_ini(section, parameter):
 def save_ini(section : str, parameter : str):
     pb_config = configparser.ConfigParser()
     pb_config.read('pbgui.ini')
+    if not pb_config.has_section(section):
+        pb_config.add_section(section)
     pb_config.set(section, parameter, st.session_state[parameter])
     with open('pbgui.ini', 'w') as pbgui_configfile:
         pb_config.write(pbgui_configfile)
