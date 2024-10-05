@@ -1,6 +1,6 @@
 import streamlit as st
 import platform
-from pbgui_func import check_password, set_page_config, change_ini, load_ini, save_ini
+from pbgui_func import check_password, set_page_config, change_ini, load_ini, save_ini, is_pb7_installed, is_pb_installed
 from Services import Services
 from Instance import Instances
 from RunV7 import V7Instances
@@ -78,10 +78,22 @@ if "input_pbname" in st.session_state:
         save_ini("main", "pbname")
 st.text_input("Bot Name", value=st.session_state.pbname, key="input_pbname", max_chars=32)
 
-# Init Services
-if 'services' not in st.session_state:
-    with st.spinner('Initializing Services...'):
-        st.session_state.services = Services()
+# Check if any passivbot is installed
+if not any([is_pb7_installed(), is_pb_installed()]):
+    st.warning('No Passivbot installed', icon="⚠️")
+    st.stop()
+# Check if any pb6 venv is configured
+if is_pb_installed() and not st.session_state.pbvenv:
+    st.warning('Passivbot V6 venv is not configured', icon="⚠️")
+    st.stop()
+# Check if any pb7 venv is configured
+if is_pb7_installed() and not st.session_state.pb7venv:
+    st.warning('Passivbot V7 venv is not configured', icon="⚠️")
+    st.stop()
+# Init Users
+if 'users' not in st.session_state:
+    with st.spinner('Initializing Users...'):
+        st.session_state.users = Users()
 # Init Instances
 if 'pbgui_instances' not in st.session_state:
     with st.spinner('Initializing Instances...'):
@@ -94,7 +106,11 @@ if 'multi_instances' not in st.session_state:
 if 'v7_instances' not in st.session_state:
     with st.spinner('Initializing v7 Instances...'):
         st.session_state.v7_instances = V7Instances()
-# Init Users
-if 'users' not in st.session_state:
-    with st.spinner('Initializing Users...'):
-        st.session_state.users = Users()
+# Check if any users are configured
+if not st.session_state.users.list():
+    st.warning('No users configured / Go to Setup API-Keys and configure your first user', icon="⚠️")
+    st.stop()
+# Init Services
+if 'services' not in st.session_state:
+    with st.spinner('Initializing Services...'):
+        st.session_state.services = Services()

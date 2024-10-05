@@ -9,7 +9,10 @@ class Base:
         self._symbol = None
         self._market_type = "swap"
         self._ohlcv = True
-        self._user = self._users.list()[0] # not saved
+        if len(self._users.list()):
+            self._user = self._users.list()[0] # not saved
+        else:
+            self._user = None # not saved
         self._market_types = ["futures"] # not saved
         self._exchange = None # not saved
         self._symbols = [] # not saved
