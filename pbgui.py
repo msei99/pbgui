@@ -106,11 +106,11 @@ if 'multi_instances' not in st.session_state:
 if 'v7_instances' not in st.session_state:
     with st.spinner('Initializing v7 Instances...'):
         st.session_state.v7_instances = V7Instances()
-# Check if any users are configured
-if not st.session_state.users.list():
-    st.warning('No users configured / Go to Setup API-Keys and configure your first user', icon="⚠️")
-    st.stop()
 # Init Services
 if 'services' not in st.session_state:
     with st.spinner('Initializing Services...'):
         st.session_state.services = Services()
+# Check if any users are configured
+if not st.session_state.users.list():
+    st.warning('No users configured / Go to Setup API-Keys and configure your first user', icon="⚠️")
+    st.stop()
