@@ -33,6 +33,8 @@ with col1:
         if st.session_state.input_pbdir != st.session_state.pbdir:
             st.session_state.pbdir = st.session_state.input_pbdir
             save_ini("main", "pbdir")
+        if "users" in st.session_state:
+            del st.session_state.users
     st.text_input("Passivbot V6 path", value=st.session_state.pbdir, key='input_pbdir')
 with col2:
     if st.button("Browse", key='button_change_pbdir'):
@@ -60,6 +62,8 @@ with col2:
     if st.button("Browse", key='button_change_pb7dir'):
         del st.session_state.input_pb7dir
         change_ini("main", "pb7dir")
+        if "users" in st.session_state:
+            del st.session_state.users
 col1, col2 = st.columns([5,1], vertical_alignment="bottom")
 with col1:
     if "input_pb7venv" in st.session_state:
