@@ -292,7 +292,7 @@ class OptimizeV7Queue:
                     del st.session_state.opt_v7_queue
                     st.rerun()
                 if "edit" in ed["edited_rows"][row]:
-                    st.session_state.opt_v7 = OptimizeV7Item(f'{PBGDIR}/data/opt_v7/{self.items[row].name}')
+                    st.session_state.opt_v7 = OptimizeV7Item(f'{PBGDIR}/data/opt_v7/{self.items[row].name}.json')
                     del st.session_state.opt_v7_queue
                     st.rerun()
         d = []

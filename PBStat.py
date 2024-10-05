@@ -33,7 +33,7 @@ class PBStat(Instances):
                 subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
             count = 0
             while True:
-                if count > 5:
+                if count > 10:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBStat')
                 sleep(1)
                 if self.is_running():
@@ -86,6 +86,7 @@ class PBStat(Instances):
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} End Fetch status')
 
 def main():
+    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
     logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     pbgdir = Path.cwd()
     dest = Path(f'{pbgdir}/data/logs')
