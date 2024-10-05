@@ -32,6 +32,9 @@ Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with 
 - Linux or Winodws (Windows not tested on passivbot v7)
 
 ## Installation
+
+### Linux
+
 Clone pbgui and passivbot v6 and v7
 ```
 git clone https://github.com/msei99/pbgui.git
@@ -68,6 +71,9 @@ cd pbgui
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
+### Docker (Any OS)
+Want to use **Docker** instead? Follow this [Quickstart guide](https://github.com/LeonSpors/passivbot-docker).
+
 ## Running
 ```
 streamlit run pbgui.py
