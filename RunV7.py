@@ -92,6 +92,8 @@ class V7Instance():
     def save(self):
         self.config.pbgui.version += 1
         self.config.backtest.exchange = self._users.find_exchange(self.user)
+        if self.config.backtest.exchange in ['bitget', 'okx','hyperliquid']:
+            self.config.backtest.exchange = 'binance'
         self.config.backtest.base_dir = f'backtests/pbgui/{self.user}'
         self.instance_path = Path(f'{PBGDIR}/data/run_v7/{self.user}')
         self.config.config_file = Path(f'{self.instance_path}/config.json') 
