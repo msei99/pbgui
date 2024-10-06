@@ -834,7 +834,10 @@ class Exchange:
         if not self.instance: self.connect()
         # print(self.instance.__dir__())
         if self.id == 'binance':
-            symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
+            try:
+                symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
+            except Exception as e:
+                return
             cpSymbols = []
             for symbol in symbols["data"]:
                 cpSymbols.append(symbol["symbol"])
@@ -880,16 +883,16 @@ class Exchange:
                 elif self.id == "bingx":
                     if v["id"].endswith('USDT'):
                         self.swap.append(''.join(v["id"].split("-")))
-                # else:
-                #     self.swap.append(v["id"])
             if v["spot"] and v["active"] and (self.id == "bybit" or self.id == "binance"):
                 self.spot.append(v["id"])
         if self.id == "binance":
             self.cpt = self.fetch_copytrading_symbols()
         self.spot.sort()
         self.swap.sort()
-        self.cpt.sort()
+        if self.cpt:
+            self.cpt.sort()
         # print(self.spot)
+        # print(self.swap)
         # print(self.swap)
         self.save_symbols()
 
@@ -921,13 +924,13 @@ def main():
     users = Users()
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
-    # exchange = Exchange("binance", users.find_user("binance_CPT"))
+    # exchange = Exchange("binance", users.find_user("binance_FORAGER"))
     # exchange.fetch_symbols()
     # print(exchange.fetch_copytrading_symbols())
-    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
+    # exchange = Exchange("bybit", users.find_user("noi"))
     # exchange.fetch_symbols()
-    exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
-    exchange.fetch_symbols()
+    # exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
+    # exchange.fetch_symbols()
     # print(allowed_symbols)
     # print(exchange.swap)
     # print(exchange.fetch_positions())
