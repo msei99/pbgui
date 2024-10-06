@@ -235,7 +235,7 @@ class V7Instance():
             st.multiselect('ignored_symbols', self._available_symbols, default=self.config.live.ignored_coins, key="edit_run_v7_ignored_coins")
         with col2:
             if st.button("Update Symbols", key="edit_run_update_symbols"):
-                exchange = Exchange(self.config.backtest.exchange)
+                exchange = Exchange(self.config.backtest.exchange, self._users.find_user(self.user))
                 exchange.fetch_symbols()
                 self._available_symbols = exchange.swap
                 st.rerun()

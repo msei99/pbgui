@@ -556,7 +556,7 @@ class OptimizeV7Item:
             st.number_input('n_cpus',value=self.config.optimize.n_cpus, min_value=1, max_value=multiprocessing.cpu_count(), step=1, help=None, key="edit_opt_v7_n_cpu")
         with col4:
             st.checkbox("Start with config", value=self.config.pbgui.starting_config, key="edit_opt_v7_starting_config")
-        with st.expander("Editg Config", expanded=False):
+        with st.expander("Edit Config", expanded=False):
             self.config.bot.edit()
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
