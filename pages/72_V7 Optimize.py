@@ -75,6 +75,8 @@ def opt_v7_results():
         if st.button(":material/refresh:"):
             opt_v7_results.results = []
             opt_v7_results.find_results()
+            if "opt_v7_results_d" in st.session_state:
+                del st.session_state.opt_v7_results_d
             st.rerun()
         if st.button(":material/home:"):
             del st.session_state.opt_v7_results

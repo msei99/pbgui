@@ -371,30 +371,33 @@ class OptimizeV7Results:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
-        d = []
-        for id, opt in enumerate(self.results):
-            backtest_name = self.find_result_name(opt)
-            analysis = PurePath(opt).stem[0:19]
-            analysis = str(self.analysis_path) + f'/{analysis}*.json'
-            analysis = glob.glob(analysis, recursive=False)
-            analysis = analysis[0] if analysis else None
-            result = PurePath(opt).stem
-            result_time = Path(opt).stat().st_mtime
-            if analysis:
-                analysis_time = Path(analysis).stat().st_mtime
-                analysis = PurePath(analysis).stem
-            d.append({
-                'id': id,
-                'Name': backtest_name,
-                'Result': result,
-                'Result Time': datetime.datetime.fromtimestamp(result_time),
-                'Analysis': analysis,
-                'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
-                'view': False,
-                "generate": False,
-                'backtest': False,
-                'delete' : False,
-            })
+        if not "opt_v7_results_d" in st.session_state:
+            d = []
+            for id, opt in enumerate(self.results):
+                backtest_name = self.find_result_name(opt)
+                analysis = PurePath(opt).stem[0:19]
+                analysis = str(self.analysis_path) + f'/{analysis}*.json'
+                analysis = glob.glob(analysis, recursive=False)
+                analysis = analysis[0] if analysis else None
+                result = PurePath(opt).stem
+                result_time = Path(opt).stat().st_mtime
+                if analysis:
+                    analysis_time = Path(analysis).stat().st_mtime
+                    analysis = PurePath(analysis).stem
+                d.append({
+                    'id': id,
+                    'Name': backtest_name,
+                    'Result': result,
+                    'Result Time': datetime.datetime.fromtimestamp(result_time),
+                    'Analysis': analysis,
+                    'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
+                    'view': False,
+                    "generate": False,
+                    'backtest': False,
+                    'delete' : False,
+                })
+            st.session_state.opt_v7_results_d = d
+        d = st.session_state.opt_v7_results_d
         column_config = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
@@ -418,6 +421,8 @@ class OptimizeV7Results:
                         result_name = PurePath(f'{self.results_path}/{d[row]["Result"]}.txt')
                         self.generate_analysis(result_name)
                         st.session_state.ed_key += 1
+                        if "opt_v7_results_d" in st.session_state:
+                            del st.session_state.opt_v7_results_d
                         # st.rerun()
                 if "backtest" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["backtest"]:
