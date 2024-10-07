@@ -85,7 +85,11 @@ class PBData():
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
         if pb_config.has_option("pbdata", "fetch_users"):
-            return eval(pb_config.get("pbdata", "fetch_users"))
+            users = eval(pb_config.get("pbdata", "fetch_users"))
+            for user in users.copy():
+                if user not in self.users.list():
+                    users.remove(user)
+            return users
         return []
     
     def save_fetch_users(self):
