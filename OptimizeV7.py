@@ -307,6 +307,7 @@ class OptimizeV7Queue:
                 'starting_config': opt.starting_config,
                 'name': opt.name,
                 'filename': opt.filename,
+                'Time': datetime.datetime.fromtimestamp(Path(f'{PBGDIR}/data/opt_v7_queue/{opt.filename}.json').stat().st_mtime),
                 'exchange': opt.exchange,
                 'finish': opt.is_finish(),
             })
@@ -378,13 +379,17 @@ class OptimizeV7Results:
             analysis = glob.glob(analysis, recursive=False)
             analysis = analysis[0] if analysis else None
             result = PurePath(opt).stem
+            result_time = Path(opt).stat().st_mtime
             if analysis:
+                analysis_time = Path(analysis).stat().st_mtime
                 analysis = PurePath(analysis).stem
             d.append({
                 'id': id,
                 'Name': backtest_name,
                 'Result': result,
+                'Result Time': datetime.datetime.fromtimestamp(result_time),
                 'Analysis': analysis,
+                'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
                 'view': False,
                 "generate": False,
                 'backtest': False,
@@ -396,6 +401,8 @@ class OptimizeV7Results:
             "view": st.column_config.CheckboxColumn(label="View Analysis"),
             "generate": st.column_config.CheckboxColumn(label="Generate Analysis"),
             "backtest": st.column_config.CheckboxColumn(label="Backtest"),
+            "Result Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Analysis Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
             }
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
