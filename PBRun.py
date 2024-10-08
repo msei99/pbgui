@@ -23,6 +23,7 @@ import os
 import traceback
 import uuid
 from Status import InstanceStatus, InstancesStatus
+import re
 
 class RunSingle():
     def __init__(self):
@@ -329,7 +330,8 @@ class RunV7():
             except psutil.AccessDenied:
                 pass
             if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
-                return process
+                if cmdline[-1].endswith(f'{self.user}/config.json') or cmdline[-1].endswith(f'{self.user}\config.json'):
+                    return process
 
     def stop(self):
         if self.is_running():
