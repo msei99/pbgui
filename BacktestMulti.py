@@ -1048,7 +1048,7 @@ class BacktestMultiResult:
             self.stats = pd.read_csv(stats)
             timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
             start_time = timestamp - (self.stats['minute'].iloc[-1] * 60)
-            self.stats['time'] = datetime.datetime.fromtimestamp(start_time) + pd.TimedeltaIndex(self.stats['minute'], unit='m')
+            self.stats['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.stats['minute'], unit='m')
 
     def load_fills(self):
         if self.fills is None:
@@ -1056,7 +1056,7 @@ class BacktestMultiResult:
             self.fills = pd.read_csv(fills)
             timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
             start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
-            self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.TimedeltaIndex(self.fills['minute'], unit='m')
+            self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
 
     def view_plots(self):
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
