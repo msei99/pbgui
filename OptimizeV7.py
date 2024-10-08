@@ -1072,6 +1072,7 @@ class OptimizesV7:
                 'id': id,
                 'edit': False,
                 'Name': opt.name,
+                'Exchange': opt.config.backtest.exchange,
                 'delete' : False,
             })
         column_config = {

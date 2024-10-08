@@ -320,6 +320,7 @@ class BacktestV7Queue:
                 'delete': False,
                 'name': bt.name,
                 'filename': bt.filename,
+                'Time': datetime.datetime.fromtimestamp(Path(f'{PBGDIR}/data/bt_v7_queue/{bt.filename}.json').stat().st_mtime),
                 'exchange': bt.exchange,
                 'finish': bt.is_finish(),
             })
@@ -463,6 +464,7 @@ class BacktestV7Item:
                 'create_run': False,
                 'optimize': False,
                 'delete': False,
+                'Time': result.time,
                 'adg': result.adg,
                 'drawdown_worst': result.drawdown_worst,
                 'sharpe_ratio': result.sharpe_ratio,
@@ -603,16 +605,15 @@ class BacktestV7Result:
         self.initialize()
     
     def initialize(self):
+        self.time = None
         self.result = self.load_result()
         self.config = ConfigV7(PurePath(f'{self.result_path}/config.json'))
         self.config.load_config()
         self.backtest_config = self.load_backtest_config()
-        # self.sd = self.backtest_config["start_date"]
         self.ed = self.config.backtest.end_date
         self.adg = self.result["adg"]
         self.drawdown_worst = self.result["drawdown_worst"]
         self.sharpe_ratio = self.result["sharpe_ratio"]
-        # self.final_balance = self.result["final_balance"]
         self.starting_balance = self.config.backtest.starting_balance
         self.be = None
         self.final_balance = self.load_final_balance()
@@ -624,6 +625,7 @@ class BacktestV7Result:
     def load_result(self):
         r = Path(f'{self.result_path}/analysis.json')
         try:
+            self.time = datetime.datetime.fromtimestamp(r.stat().st_mtime)
             with open(r, "r", encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
@@ -741,6 +743,7 @@ class BacktestsV7:
                 'id': id,
                 'edit': False,
                 'Name': bt.name,
+                'Exchange': bt.config.backtest.exchange,
                 'view': False,
                 'Backtests': bt.calculate_results(),
                 'delete' : False,
