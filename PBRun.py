@@ -11,12 +11,12 @@ import configparser
 import shlex
 import sys
 from pathlib import Path, PurePath
-from time import sleep
+from time import sleep, mktime
 import glob
 import json
 import hjson
 from io import TextIOWrapper
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import platform
 from shutil import copy, copytree, rmtree
 import os
@@ -295,7 +295,22 @@ class RunV7():
         self.pbdir = None
         self.pbvenv = None
         self.pbgdir = None
-    
+        self.log_lp = None
+        self.start_time = 0
+        self.log_error = None
+        self.log_info = None
+        self.log_traceback = None
+        self.log_watch_ts = 0
+        self.error_time = 0
+        self.errors_today = 0
+        self.errors_yesterday = 0
+        self.info_time = 0
+        self.infos_today = 0
+        self.infos_yesterday = 0
+        self.traceback_time = 0
+        self.tracebacks_today = 0
+        self.tracebacks_yesterday = 0
+
     def watch(self):
         if not self.is_running():
             self.start()
@@ -337,6 +352,7 @@ class RunV7():
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
             os.environ['PATH'] = old_os_path
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_v7 {self.path}/config.json')
+            self.start_time = int(datetime.now().timestamp())
 
     def clean_log(self):
         logfile = Path(f'{self.path}/passivbot.log')
@@ -346,6 +362,65 @@ class RunV7():
                 copy(logfile,logfile_old)
                 with open(logfile,'r+') as file:
                     file.truncate()
+
+    def watch_log(self):
+        logfile = Path(f'{self.path}/passivbot.log')
+        if logfile.exists():
+            if not self.log_lp:
+                self.log_lp = logfile.stat().st_size
+            current_position = logfile.stat().st_size
+            with open(logfile, "r") as f:
+                f.seek(self.log_lp)
+                new_content = f.read().splitlines()
+            self.last_lp = current_position
+            tb_found = False
+            today_ts = int(mktime(date.today().timetuple()))
+            if self.log_watch_ts != 0 and self.log_watch_ts < today_ts:
+                self.log_error = None
+                self.log_info = None
+                self.log_traceback = None
+                self.errors_yesterday = self.errors_today
+                self.errors_today = 0
+                self.infos_yesterday = self.infos_today
+                self.infos_today = 0
+                self.tracebacks_yesterday = self.tracebacks_today
+                self.tracebacks_today = 0
+            for line in new_content:
+                if tb_found:
+                    if not "ERROR" in line and not "INFO" in line and not "Traceback" in line:
+                        self.log_traceback.append(line)
+                    else:
+                        tb_found = False
+                        self.tracebacks_today += 1
+                if "ERROR" in line:
+                    self.log_error = line
+                    self.errors_today += 1
+                elif "INFO" in line:                 
+                    self.log_info = line
+                    self.infos_today += 1
+                elif "Traceback" in line:
+                    self.log_traceback = line
+                    tb_found = True
+            self.log_watch_ts = int(datetime.now().timestamp())
+            self.save_monitor()
+
+    def save_monitor(self):
+        monitor_file = Path(f'{self.path}/monitor.json')
+        monitor = ({
+            "user": self.user,
+            "start_time": self.start_time,
+            "log_info": self.log_info,
+            "log_infos_today": self.infos_today,
+            "log_infos_yesterday": self.infos_yesterday,
+            "log_error": self.log_error,
+            "log_errors_today": self.errors_today,
+            "log_errors_yesterday": self.errors_yesterday,
+            "log_traceback": self.log_traceback,
+            "log_tracebacks_today": self.tracebacks_today,
+            "log_tracebacks_yesterday": self.tracebacks_yesterday
+            })
+        with open(monitor_file, "w", encoding='utf-8') as f:
+            json.dump(monitor, f)
 
     def create_v7_running_version(self):
         # Write running Version to file
@@ -1053,6 +1128,7 @@ def main():
             run.has_update_status()
             for run_v7 in run.run_v7:
                 run_v7.watch()
+                run_v7.watch_log()
             for run_multi in run.run_multi:
                 run_multi.watch()
             for run_single in run.run_single:

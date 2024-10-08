@@ -72,8 +72,8 @@ class InstancesStatus():
                 return
 
     def is_running(self, name: str):
-        if self.has_new_status():
-            self.load()
+        # if self.has_new_status():
+        #     self.load()
         for instance in self.instances:
             if instance.name == name:
                 return instance.running
@@ -109,6 +109,7 @@ class InstancesStatus():
         if Path(self.status_file).exists():
             status_ts = Path(self.status_file).stat().st_mtime
             if self.status_ts < status_ts:
+                self.load()
                 return True
         return False
 

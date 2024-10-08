@@ -89,6 +89,8 @@ class RemoteServer():
     def cpu(self): return self._cpu
     @property
     def boot(self): return self._boot
+    @property
+    def monitor_v7(self): return self._monitor_v7
 
     @name.setter
     def name(self, new_name):
@@ -181,6 +183,8 @@ class RemoteServer():
                             self._cpu = cfg["cpu"]
                         if "boot" in cfg:
                             self._boot = cfg["boot"]
+                        if "monitor_v7" in cfg:
+                            self._monitor_v7 = cfg["monitor_v7"]
                         return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
@@ -524,6 +528,15 @@ class PBRemote():
             api_file.unlink(missing_ok=True)
         return True
 
+    def load_monitor(self, path: str):
+        monitor = []
+        for instance in self.local_run.instances_status_v7.instances:
+            if instance.running:
+                monitor_file = Path(f'{path}/{instance.name}/monitor.json')
+                with open(monitor_file, "r", encoding='utf-8') as f:
+                    monitor.append(json.load(f))
+        return monitor
+
     def alive(self):
         """
         Saves system informations like the name, memory, swaps, disk space and cpu usage to an alive file that is then synchronised with rclone from local to the remote storage.
@@ -536,6 +549,8 @@ class PBRemote():
         disk = psutil.disk_usage('/')
         cpu = psutil.cpu_percent()
         boot = psutil.boot_time()
+        pbgdir = Path.cwd()
+        monitor_v7 = self.load_monitor(PurePath(f'{pbgdir}/data/run_v7/'))
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
@@ -545,7 +560,8 @@ class PBRemote():
             "swap": swap,
             "disk": disk,
             "cpu": cpu,
-            "boot": boot
+            "boot": boot,
+            "monitor_v7": monitor_v7
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
