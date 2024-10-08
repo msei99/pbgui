@@ -399,7 +399,8 @@ class RunV7():
                     self.log_info = line
                     self.infos_today += 1
                 elif "Traceback" in line:
-                    self.log_traceback = line
+                    self.log_traceback = []
+                    self.log_traceback.append(line)
                     tb_found = True
             self.log_watch_ts = int(datetime.now().timestamp())
             self.save_monitor()
@@ -918,6 +919,8 @@ class PBRun():
                 if run_v7.load():
                     if run_v7.is_running():
                         running_version = self.find_running_version(v7_instance)
+                        print("running_version", running_version)
+                        print("run_v7.version", run_v7.version)
                         if running_version < run_v7.version:
                             run_v7.stop()
                             run_v7.create_v7_running_version()
