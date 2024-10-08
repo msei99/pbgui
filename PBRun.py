@@ -323,6 +323,9 @@ class RunV7():
 
     def start(self):
         if not self.is_running():
+            old_os_path = os.environ.get('PATH', '')
+            new_os_path = os.path.dirname(self.pbvenv) + os.pathsep + old_os_path
+            os.environ['PATH'] = new_os_path
             cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/src/main.py'), PurePath(f'{self.path}/config.json')]
             logfile = Path(f'{self.path}/passivbot.log')
             log = open(logfile,"ab")
@@ -332,6 +335,7 @@ class RunV7():
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
             else:
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+            os.environ['PATH'] = old_os_path
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_v7 {self.path}/config.json')
 
     def clean_log(self):
