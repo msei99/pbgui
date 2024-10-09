@@ -198,31 +198,31 @@ def pbremote_details():
                     'Name': multi.name,
                     'Version': multi.version
                 })
+        v7_selected = None
+        if f"pbremote_v7_select" in st.session_state:
+            v7_selected = st.session_state.pbremote_v7_select
         d_v7 = []
-        server.instances_status.instances_v7 = []
-        server.instances_status_v7.load()
-        for v7 in server.instances_status_v7:
-            if v7.running:
-                d_v7.append({
-                    'Name': v7.name,
-                    'Version': v7.version
-                })
+        # server.instances_status.instances_v7 = []
+        # server.instances_status_v7.load()
+        # for v7 in server.instances_status_v7:
+        #     if v7.running:
+        #         d_v7.append({
+        #             'Name': v7.name,
+        #             'Version': v7.version
+        #         })
         # d_old = []
         # for old in server.run:
         #     d_old.append({
         #         'User': old["user"],
         #         'Symbol': old["symbol"],
         #     })
-        st.header(f"Running V7 Instances ({len(d_v7)})")
-        if d_v7:
-            st.dataframe(data=d_v7, width=640, height=36+(len(d_v7))*35)
-        else:
-            st.write("None")
         if server.monitor_v7:
             for v7 in server.monitor_v7:
                 info = ({
                     'Name': v7["user"],
-                    'Start Time': v7["start_time"],
+                    'Start Time': datetime.fromtimestamp(v7["start_time"]),
+                    'Memory': v7["memory"][0]/1024/1024,
+                    'CPU': v7["cpu"],
                     'Last Info': v7["log_info"],
                     'Infos Today': v7["log_infos_today"],
                     'Infos Yesterday': v7["log_infos_yesterday"],
@@ -233,7 +233,26 @@ def pbremote_details():
                     'Tracebacks Today': v7["log_tracebacks_today"],
                     'Tracebacks Yesterday': v7["log_tracebacks_yesterday"]
                 })
-                st.write(info)
+                d_v7.append(info)
+        column_config = {
+            "Last Info": None,
+            "Last Error": None,
+            "Last Traceback": None,
+            "Memory": st.column_config.NumberColumn(format="%.2f MB"),
+            "CPU": st.column_config.NumberColumn(format="%.2f %%"),
+        }
+        st.header(f"Running V7 Instances ({len(d_v7)})")
+        if d_v7:
+            st.dataframe(data=d_v7, use_container_width=True, height=36+(len(d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
+            if v7_selected:
+                if v7_selected["selection"]["rows"]:
+                    row = v7_selected["selection"]["rows"][0]
+                    # st.subheader(f"{d_v7[row]['Name']}")
+                    st.markdown(f":green[Last Info: ] :blue[{d_v7[row]['Last Info']}]")
+                    st.markdown(f":orange[Last Error: ] :blue[{d_v7[row]['Last Error']}]")
+                    st.markdown(f":red[Last Traceback: ] :blue[{d_v7[row]['Last Traceback']}]")
+        else:
+            st.write("None")
         st.header(f"Running Single Instances ({len(d_single)})")
         if d_single:
             st.dataframe(data=d_single, width=640, height=36+(len(d_single))*35)
