@@ -298,6 +298,8 @@ class RunV7():
         self.pbgdir = None
         self.log_lp = None
         self.start_time = 0
+        self.memory = 0
+        self.cpu = 0
         self.log_error = None
         self.log_info = None
         self.log_traceback = None
@@ -331,6 +333,10 @@ class RunV7():
                 pass
             if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
                 if cmdline[-1].endswith(f'{self.user}/config.json') or cmdline[-1].endswith(f'{self.user}\config.json'):
+                    if self.start_time == 0:
+                        self.start_time = process.create_time()
+                    self.memory = process.memory_info()
+                    self.cpu = process.cpu_percent()
                     return process
 
     def stop(self):
@@ -354,7 +360,11 @@ class RunV7():
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
             os.environ['PATH'] = old_os_path
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_v7 {self.path}/config.json')
-            self.start_time = int(datetime.now().timestamp())
+        # wait until passivbot is running
+        for i in range(10):
+            if self.is_running():
+                break
+            sleep(1)
 
     def clean_log(self):
         logfile = Path(f'{self.path}/passivbot.log')
@@ -374,7 +384,7 @@ class RunV7():
             with open(logfile, "r") as f:
                 f.seek(self.log_lp)
                 new_content = f.read().splitlines()
-            self.last_lp = current_position
+            self.log_lp = current_position
             tb_found = False
             today_ts = int(mktime(date.today().timetuple()))
             if self.log_watch_ts != 0 and self.log_watch_ts < today_ts:
@@ -412,6 +422,8 @@ class RunV7():
         monitor = ({
             "user": self.user,
             "start_time": self.start_time,
+            "memory": self.memory,
+            "cpu": self.cpu,
             "log_info": self.log_info,
             "log_infos_today": self.infos_today,
             "log_infos_yesterday": self.infos_yesterday,
@@ -921,8 +933,6 @@ class PBRun():
                 if run_v7.load():
                     if run_v7.is_running():
                         running_version = self.find_running_version(v7_instance)
-                        print("running_version", running_version)
-                        print("run_v7.version", run_v7.version)
                         if running_version < run_v7.version:
                             run_v7.stop()
                             run_v7.create_v7_running_version()
