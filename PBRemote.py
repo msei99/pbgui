@@ -51,6 +51,7 @@ class RemoteServer():
         self._disk = []
         self._cpu = None
         self._boot = None
+        self._monitor_v7 = []
         self.pbname = None
         self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()

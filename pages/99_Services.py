@@ -218,6 +218,22 @@ def pbremote_details():
             st.dataframe(data=d_v7, width=640, height=36+(len(d_v7))*35)
         else:
             st.write("None")
+        if server.monitor_v7:
+            for v7 in server.monitor_v7:
+                info = ({
+                    'Name': v7["user"],
+                    'Start Time': v7["start_time"],
+                    'Last Info': v7["log_info"],
+                    'Infos Today': v7["log_infos_today"],
+                    'Infos Yesterday': v7["log_infos_yesterday"],
+                    'Last Error': v7["log_error"],
+                    'Errors Today': v7["log_errors_today"],
+                    'Errors Yesterday': v7["log_errors_yesterday"],
+                    'Last Traceback': v7["log_traceback"],
+                    'Tracebacks Today': v7["log_tracebacks_today"],
+                    'Tracebacks Yesterday': v7["log_tracebacks_yesterday"]
+                })
+                st.write(info)
         st.header(f"Running Single Instances ({len(d_single)})")
         if d_single:
             st.dataframe(data=d_single, width=640, height=36+(len(d_single))*35)
