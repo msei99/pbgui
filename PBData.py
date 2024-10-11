@@ -102,6 +102,7 @@ class PBData():
             pb_config.write(f)
 
     def update_db(self):
+        self.users.load()
         for user in self.users:
             if user.name in self.fetch_users:
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch history for {user.name}')
