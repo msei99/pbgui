@@ -333,8 +333,7 @@ class RunV7():
                 pass
             if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
                 if cmdline[-1].endswith(f'{self.user}/config.json') or cmdline[-1].endswith(f'{self.user}\config.json'):
-                    if self.start_time == 0:
-                        self.start_time = process.create_time()
+                    self.start_time = process.create_time()
                     self.memory = process.memory_info()
                     self.cpu = process.cpu_percent()
                     return process
