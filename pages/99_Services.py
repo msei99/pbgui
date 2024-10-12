@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized
+from pbgui_func import set_page_config, is_session_state_initialized, load_ini, save_ini
 import pbgui_help
 from datetime import datetime
 import pandas as pd
@@ -100,22 +100,125 @@ def pbrun_details():
     if st.checkbox("Show logfile", key="pbrun_log"):
         st.session_state.pbgui_instances.view_log("PBRun")
 
+def load_monitor_config():
+    st.session_state.mem_warning_v7 = load_ini("monitor", "mem_warning_v7")
+    if st.session_state.mem_warning_v7 == "":
+        st.session_state.mem_warning_v7 = 100
+    st.session_state.mem_error_v7 = load_ini("monitor", "mem_error_v7")
+    if st.session_state.mem_error_v7 == "":
+        st.session_state.mem_error_v7 = 200
+    st.session_state.cpu_warning_v7 = load_ini("monitor", "cpu_warning_v7")
+    if st.session_state.cpu_warning_v7 == "":
+        st.session_state.cpu_warning_v7 = 5
+    st.session_state.cpu_error_v7 = load_ini("monitor", "cpu_error_v7")
+    if st.session_state.cpu_error_v7 == "":
+        st.session_state.cpu_error_v7 = 10
+    st.session_state.error_warning_v7 = load_ini("monitor", "error_warning_v7")
+    if st.session_state.error_warning_v7 == "":
+        st.session_state.error_warning_v7 = 5
+    st.session_state.error_error_v7 = load_ini("monitor", "error_error_v7")
+    if st.session_state.error_error_v7 == "":
+        st.session_state.error_error_v7 = 10
+    st.session_state.traceback_warning_v7 = load_ini("monitor", "traceback_warning_v7")
+    if st.session_state.traceback_warning_v7 == "":
+        st.session_state.traceback_warning_v7 = 5
+    st.session_state.traceback_error_v7 = load_ini("monitor", "traceback_error_v7")
+    if st.session_state.traceback_error_v7 == "":
+        st.session_state.traceback_error_v7 = 10
+    
+
+def pbremote_edit():
+    pbremote = st.session_state.pbremote
+    # Load config
+    if "edit_mem_warning_v7" in st.session_state:
+        if st.session_state.mem_warning_v7 != st.session_state.edit_mem_warning_v7:
+            st.session_state.mem_warning_v7 = st.session_state.edit_mem_warning_v7
+    if "edit_mem_error_v7" in st.session_state:
+        if st.session_state.mem_error_v7 != st.session_state.edit_mem_error_v7:
+            st.session_state.mem_error_v7 = st.session_state.edit_mem_error_v7
+    if "edit_cpu_warning_v7" in st.session_state:
+        if st.session_state.cpu_warning_v7 != st.session_state.edit_cpu_warning_v7:
+            st.session_state.cpu_warning_v7 = st.session_state.edit_cpu_warning_v7
+    if "edit_cpu_error_v7" in st.session_state:
+        if st.session_state.cpu_error_v7 != st.session_state.edit_cpu_error_v7:
+            st.session_state.cpu_error_v7 = st.session_state.edit_cpu_error_v7
+    if "edit_error_warning_v7" in st.session_state:
+        if st.session_state.error_warning_v7 != st.session_state.edit_error_warning_v7:
+            st.session_state.error_warning_v7 = st.session_state.edit_error_warning_v7
+    if "edit_error_error_v7" in st.session_state:
+        if st.session_state.error_error_v7 != st.session_state.edit_error_error_v7:
+            st.session_state.error_error_v7 = st.session_state.edit_error_error_v7
+    if "edit_traceback_warning_v7" in st.session_state:
+        if st.session_state.traceback_warning_v7 != st.session_state.edit_traceback_warning_v7:
+            st.session_state.traceback_warning_v7 = st.session_state.edit_traceback_warning_v7
+    if "edit_traceback_error_v7" in st.session_state:
+        if st.session_state.traceback_error_v7 != st.session_state.edit_traceback_error_v7:
+            st.session_state.traceback_error_v7 = st.session_state.edit_traceback_error_v7
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/home:"):
+            del st.session_state.pbremote_edit
+            del st.session_state.mem_warning_v7
+            del st.session_state.mem_error_v7
+            del st.session_state.cpu_warning_v7
+            del st.session_state.cpu_error_v7
+            del st.session_state.error_warning_v7
+            del st.session_state.error_error_v7
+            del st.session_state.traceback_warning_v7
+            del st.session_state.traceback_error_v7
+            st.session_state.pbremote_details = True
+            st.rerun()
+        if st.button(":material/save:"):
+            save_ini("monitor", "mem_warning_v7", str(st.session_state.mem_warning_v7))
+            save_ini("monitor", "mem_error_v7", str(st.session_state.mem_error_v7))
+            save_ini("monitor", "cpu_warning_v7", str(st.session_state.cpu_warning_v7))
+            save_ini("monitor", "cpu_error_v7", str(st.session_state.cpu_error_v7))
+            save_ini("monitor", "error_warning_v7", str(st.session_state.error_warning_v7))
+            save_ini("monitor", "error_error_v7", str(st.session_state.error_error_v7))
+            save_ini("monitor", "traceback_warning_v7", str(st.session_state.traceback_warning_v7))
+            save_ini("monitor", "traceback_error_v7", str(st.session_state.traceback_error_v7))
+            st.session_state.pbremote_details = True
+            del st.session_state.pbremote_edit
+            st.rerun()
+    st.header("PBRemote Edit")
+    st.write("V7 Monitor Settings")
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
+        st.number_input('Memory Warning',value=int(st.session_state.mem_warning_v7),step=10, key="edit_mem_warning_v7")
+        st.number_input('Error Warning',value=int(st.session_state.error_warning_v7),step=1, key="edit_error_warning_v7")
+    with col2:
+        st.number_input('Memory Error',value=int(st.session_state.mem_error_v7),step=10, key="edit_mem_error_v7")
+        st.number_input('Error Error',value=int(st.session_state.error_error_v7),step=1, key="edit_error_error_v7")
+    with col3:
+        st.number_input('CPU Warning',value=int(st.session_state.cpu_warning_v7),step=1, key="edit_cpu_warning_v7")
+        st.number_input('Traceback Warning',value=int(st.session_state.traceback_warning_v7),step=1, key="edit_traceback_warning_v7")
+    with col4:
+        st.number_input('CPU Error',value=int(st.session_state.cpu_error_v7),step=1, key="edit_cpu_error_v7")
+        st.number_input('Traceback Error',value=int(st.session_state.traceback_error_v7),step=1, key="edit_traceback_error_v7")
+
 def pbremote_details():
     # Init PBRemote
     pbremote = st.session_state.pbremote
+    # Init Monitor defaults
+    if "mem_warning_v7" not in st.session_state:
+        load_monitor_config()
     # Init from session_state keys
     if "pbremote_bucket" in st.session_state:
         if st.session_state.pbremote_bucket != pbremote.bucket:
             pbremote.bucket = st.session_state.pbremote_bucket
     # Navigation
     with st.sidebar:
-        if st.button(":recycle:"):
+        if st.button(":material/refresh:"):
             st.rerun()
-        if st.button(":back:", key="button_pbremote_back"):
+        if st.button(":material/home:"):
             del st.session_state.pbremote_details
             st.rerun()
-        if st.button(":floppy_disk:"):
+        if st.button(":material/save:"):
             pbremote.save_config()
+        if st.button(":material/edit:"):
+            st.session_state.pbremote_edit = True
+            del st.session_state.pbremote_details
+            st.rerun()
         st.markdown("""---""")
         st.markdown("Remote Servers")
         api_sync = []
@@ -235,14 +338,15 @@ def pbremote_details():
         st.header(f"Running V7 Instances ({len(d_v7)})")
         if d_v7:
             df = pd.DataFrame(d_v7)
-            sdf = df.style.map(color_memory, subset=['Memory']).map(color_cpu, subset=['CPU'])
+            sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
             sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
-            sdf = sdf.map(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 10 else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
-            sdf = sdf.map(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 5 else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
             #PNLs green if > 0, orange if 0
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange', subset=['PNLs Today', 'PNLs Yesterday'])
             #PNL green if > 0, orange if 0 else red
@@ -267,17 +371,6 @@ def pbremote_details():
             st.dataframe(data=d_multi, width=640, height=36+(len(d_multi))*35)
         else:
             st.write("None")
-        # if d_old:
-        #     st.header(f"Running old PBRun/PBRemote Single Instances ({len(d_old)})")
-        #     st.dataframe(data=d_old, width=640, height=36+(len(d_old))*35)
-
-def color_cpu(value):
-    color = "green" if value < 5 else "orange" if value < 10 else "red"
-    return f"color: {color};"
-
-def color_memory(value):
-    color = "green" if value < 100 else "orange" if value < 200 else "red"
-    return f"color: {color};"
 
 def pbstat_details():
     # Navigation
@@ -323,5 +416,7 @@ elif 'pbstat_details' in st.session_state:
     pbstat_details()
 elif 'pbdata_details' in st.session_state:
     pbdata_details()
+elif 'pbremote_edit' in st.session_state:
+    pbremote_edit()
 else:
     overview()
