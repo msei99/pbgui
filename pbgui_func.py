@@ -22,12 +22,12 @@ def change_ini(section, parameter):
         if st.button(":red[No]"):
             st.rerun()
 
-def save_ini(section : str, parameter : str):
+def save_ini(section : str, parameter : str, value : str):
     pb_config = configparser.ConfigParser()
     pb_config.read('pbgui.ini')
     if not pb_config.has_section(section):
-        pb_config.add_section("optimize_v7")
-    pb_config.set(section, parameter, st.session_state[parameter])
+        pb_config.add_section(section)
+    pb_config.set(section, parameter, value)
     with open('pbgui.ini', 'w') as pbgui_configfile:
         pb_config.write(pbgui_configfile)
 

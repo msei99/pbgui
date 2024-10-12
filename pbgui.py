@@ -25,14 +25,14 @@ load_ini("main", "pb7dir")
 load_ini("main", "pb7venv")
 if not load_ini("main", "pbname"):
     st.session_state.pbname = platform.node()
-    save_ini("main", "pbname")
+    save_ini("main", "pbname", st.session_state.pbname)
 
 col1, col2 = st.columns([5,1], vertical_alignment="bottom")
 with col1:
     if "input_pbdir" in st.session_state:
         if st.session_state.input_pbdir != st.session_state.pbdir:
             st.session_state.pbdir = st.session_state.input_pbdir
-            save_ini("main", "pbdir")
+            save_ini("main", "pbdir", st.session_state.pbdir)
         if "users" in st.session_state:
             del st.session_state.users
     st.text_input("Passivbot V6 path", value=st.session_state.pbdir, key='input_pbdir')
@@ -45,7 +45,7 @@ with col1:
     if "input_pbvenv" in st.session_state:
         if st.session_state.input_pbvenv != st.session_state.pbvenv:
             st.session_state.pbvenv = st.session_state.input_pbvenv
-            save_ini("main", "pbvenv")
+            save_ini("main", "pbvenv", st.session_state.pbvenv)
     st.text_input("Passivbot V6 python interpreter (venv)", value=st.session_state.pbvenv, key='input_pbvenv')
 with col2:
     if st.button("Browse", key='button_change_pbvenv'):
@@ -56,7 +56,7 @@ with col1:
     if "input_pb7dir" in st.session_state:
         if st.session_state.input_pb7dir != st.session_state.pb7dir:
             st.session_state.pb7dir = st.session_state.input_pb7dir
-            save_ini("main", "pb7dir")
+            save_ini("main", "pb7dir", st.session_state.pb7dir)
     st.text_input("Passivbot V7 path", value=st.session_state.pb7dir, key='input_pb7dir')
 with col2:
     if st.button("Browse", key='button_change_pb7dir'):
@@ -69,7 +69,7 @@ with col1:
     if "input_pb7venv" in st.session_state:
         if st.session_state.input_pb7venv != st.session_state.pb7venv:
             st.session_state.pb7venv = st.session_state.input_pb7venv
-            save_ini("main", "pb7venv")
+            save_ini("main", "pb7venv", st.session_state.pb7venv)
     st.text_input("Passivbot V7 python interpreter (venv)", value=st.session_state.pb7venv, key='input_pb7venv')
 with col2:
     if st.button("Browse", key='button_change_pb7venv'):
@@ -79,7 +79,7 @@ with col2:
 if "input_pbname" in st.session_state:
     if st.session_state.input_pbname != st.session_state.pbname:
         st.session_state.pbname = st.session_state.input_pbname
-        save_ini("main", "pbname")
+        save_ini("main", "pbname", st.session_state.pbname)
 st.text_input("Bot Name", value=st.session_state.pbname, key="input_pbname", max_chars=32)
 
 # Check if any passivbot is installed
