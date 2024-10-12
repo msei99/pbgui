@@ -317,6 +317,7 @@ class RunV7():
         self.pnl_yesterday = 0
         self.pnl_counter_today = 0
         self.pnl_counter_yesterday = 0
+        self.init_found = False
 
     def watch(self):
         if not self.is_running():
@@ -443,6 +444,13 @@ class RunV7():
                     else:
                         self.log_info = line
                         self.infos_today += 1
+                    # Skip PNLs after restart bot
+                    if "initiating pnls" in line:
+                        self.init_found = True
+                    if "starting execution loop" in line:
+                        self.init_found = False
+                    if self.init_found:
+                        continue
                     if "new pnl" in line:
                         if len(elements) == 7:
                             if yesterday:
