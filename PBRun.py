@@ -313,6 +313,10 @@ class RunV7():
         self.traceback_time = 0
         self.tracebacks_today = 0
         self.tracebacks_yesterday = 0
+        self.pnl_today = 0
+        self.pnl_yesterday = 0
+        self.pnl_counter_today = 0
+        self.pnl_counter_yesterday = 0
 
     def watch(self):
         if not self.is_running():
@@ -377,8 +381,10 @@ class RunV7():
     def watch_log(self):
         logfile = Path(f'{self.path}/passivbot.log')
         if logfile.exists():
+            seek = False
             if not self.log_lp:
-                self.log_lp = logfile.stat().st_size
+                self.log_lp = 0
+                seek = True
             current_position = logfile.stat().st_size
             with open(logfile, "r") as f:
                 f.seek(self.log_lp)
@@ -386,6 +392,7 @@ class RunV7():
             self.log_lp = current_position
             tb_found = False
             today_ts = int(mktime(date.today().timetuple()))
+            yesterday_ts = today_ts - 86400
             if self.log_watch_ts != 0 and self.log_watch_ts < today_ts:
                 self.log_error = None
                 self.log_info = None
@@ -396,7 +403,28 @@ class RunV7():
                 self.infos_today = 0
                 self.tracebacks_yesterday = self.tracebacks_today
                 self.tracebacks_today = 0
+                self.pnl_yesterday = self.pnl_today
+                self.pnl_today = 0
+                self.pnl_counter_yesterday = self.pnl_counter_today
+                self.pnl_counter_today = 0
             for line in new_content:
+                elements = line.split()
+                if len(elements) > 1:
+                    if elements[1] == "ERROR" or elements[1] == "INFO":
+                        # check elements[0] for correct isoformat
+                        if len(elements[0]) == 19:
+                            if elements[0][4] == "-" and elements[0][7] == "-" and elements[0][10] == "T" and elements[0][13] == ":" and elements[0][16] == ":":
+                                ts = int(datetime.fromisoformat(elements[0]).timestamp())
+                                if ts < yesterday_ts:
+                                    continue
+                                else:
+                                    seek = False
+                                if ts < today_ts:
+                                    yesterday = True
+                                else:
+                                    yesterday = False
+                if seek:
+                    continue
                 if tb_found:
                     if not "ERROR" in line and not "INFO" in line and not "Traceback" in line:
                         self.log_traceback.append(line)
@@ -404,15 +432,32 @@ class RunV7():
                         tb_found = False
                         self.tracebacks_today += 1
                 if "ERROR" in line:
-                    self.log_error = line
-                    self.errors_today += 1
+                    if yesterday:
+                        self.errors_yesterday += 1
+                    else:
+                        self.log_error = line
+                        self.errors_today += 1
                 elif "INFO" in line:                 
-                    self.log_info = line
-                    self.infos_today += 1
+                    if yesterday:
+                        self.infos_yesterday += 1
+                    else:
+                        self.log_info = line
+                        self.infos_today += 1
+                    if "new pnl" in line:
+                        if len(elements) == 7:
+                            if yesterday:
+                                self.pnl_yesterday += float(elements[5])
+                                self.pnl_counter_yesterday += int(elements[2])
+                            else:
+                                self.pnl_today += float(elements[5])
+                                self.pnl_counter_today += int(elements[2])
                 elif "Traceback" in line:
-                    self.log_traceback = []
-                    self.log_traceback.append(line)
-                    tb_found = True
+                    if yesterday:
+                        self.tracebacks_yesterday += 1
+                    else:
+                        self.log_traceback = []
+                        self.log_traceback.append(line)
+                        tb_found = True
             self.log_watch_ts = int(datetime.now().timestamp())
             self.save_monitor()
 
@@ -431,7 +476,11 @@ class RunV7():
             "log_errors_yesterday": self.errors_yesterday,
             "log_traceback": self.log_traceback,
             "log_tracebacks_today": self.tracebacks_today,
-            "log_tracebacks_yesterday": self.tracebacks_yesterday
+            "log_tracebacks_yesterday": self.tracebacks_yesterday,
+            "pnls_today": self.pnl_today,
+            "pnls_yesterday": self.pnl_yesterday,
+            "pnl_counter_today": self.pnl_counter_today,
+            "pnl_counter_yesterday": self.pnl_counter_yesterday
             })
         with open(monitor_file, "w", encoding='utf-8') as f:
             json.dump(monitor, f)
