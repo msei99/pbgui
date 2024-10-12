@@ -210,6 +210,10 @@ def pbremote_details():
                     'Start Time': datetime.fromtimestamp(v7["start_time"]),
                     'Memory': v7["memory"][0]/1024/1024,
                     'CPU': v7["cpu"],
+                    'PNLs Today': v7["pnl_counter_today"],
+                    'PNL Today': v7["pnls_today"],
+                    'PNLs Yesterday': v7["pnl_counter_yesterday"],
+                    'PNL Yesterday': v7["pnls_yesterday"],
                     'Last Info': v7["log_info"],
                     'Infos Today': v7["log_infos_today"],
                     'Infos Yesterday': v7["log_infos_yesterday"],
@@ -234,11 +238,15 @@ def pbremote_details():
             sdf = df.style.map(color_memory, subset=['Memory']).map(color_cpu, subset=['CPU'])
             sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
-            sdf = sdf.applymap(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
-            sdf = sdf.applymap(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 10 else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 10 else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
-            sdf = sdf.applymap(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 5 else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 5 else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            #PNLs green if > 0, orange if 0
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange', subset=['PNLs Today', 'PNLs Yesterday'])
+            #PNL green if > 0, orange if 0 else red
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['PNL Today', 'PNL Yesterday'])
             st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if v7_selected:
                 if v7_selected["selection"]["rows"]:
