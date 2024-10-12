@@ -2,6 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_initialized
 import pbgui_help
 from datetime import datetime
+import pandas as pd
 
 
 def pbrun_overview():
@@ -202,20 +203,6 @@ def pbremote_details():
         if f"pbremote_v7_select" in st.session_state:
             v7_selected = st.session_state.pbremote_v7_select
         d_v7 = []
-        # server.instances_status.instances_v7 = []
-        # server.instances_status_v7.load()
-        # for v7 in server.instances_status_v7:
-        #     if v7.running:
-        #         d_v7.append({
-        #             'Name': v7.name,
-        #             'Version': v7.version
-        #         })
-        # d_old = []
-        # for old in server.run:
-        #     d_old.append({
-        #         'User': old["user"],
-        #         'Symbol': old["symbol"],
-        #     })
         if server.monitor_v7:
             for v7 in server.monitor_v7:
                 info = ({
@@ -243,7 +230,16 @@ def pbremote_details():
         }
         st.header(f"Running V7 Instances ({len(d_v7)})")
         if d_v7:
-            st.dataframe(data=d_v7, use_container_width=True, height=36+(len(d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
+            df = pd.DataFrame(d_v7)
+            sdf = df.style.map(color_memory, subset=['Memory']).map(color_cpu, subset=['CPU'])
+            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
+            #Infos green if > 0, orange if 0 and red if none
+            sdf = sdf.applymap(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
+            #Errors green if 0, orange if <10 else red
+            sdf = sdf.applymap(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 10 else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            #Tracebacks green if 0, orange if <5 else red
+            sdf = sdf.applymap(lambda x: 'color: green' if x == 0 else 'color: orange' if x < 5 else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if v7_selected:
                 if v7_selected["selection"]["rows"]:
                     row = v7_selected["selection"]["rows"][0]
@@ -267,6 +263,13 @@ def pbremote_details():
         #     st.header(f"Running old PBRun/PBRemote Single Instances ({len(d_old)})")
         #     st.dataframe(data=d_old, width=640, height=36+(len(d_old))*35)
 
+def color_cpu(value):
+    color = "green" if value < 5 else "orange" if value < 10 else "red"
+    return f"color: {color};"
+
+def color_memory(value):
+    color = "green" if value < 100 else "orange" if value < 200 else "red"
+    return f"color: {color};"
 
 def pbstat_details():
     # Navigation
