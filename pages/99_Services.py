@@ -309,23 +309,41 @@ def pbremote_details():
         if server.monitor_v7:
             for v7 in server.monitor_v7:
                 info = ({
-                    'Name': v7["user"],
-                    'Start Time': datetime.fromtimestamp(v7["start_time"]),
-                    'Memory': v7["memory"][0]/1024/1024,
-                    'CPU': v7["cpu"],
-                    'PNLs Today': v7["pnl_counter_today"],
-                    'PNL Today': v7["pnls_today"],
-                    'PNLs Yesterday': v7["pnl_counter_yesterday"],
-                    'PNL Yesterday': v7["pnls_yesterday"],
-                    'Last Info': v7["log_info"],
-                    'Infos Today': v7["log_infos_today"],
-                    'Infos Yesterday': v7["log_infos_yesterday"],
-                    'Last Error': v7["log_error"],
-                    'Errors Today': v7["log_errors_today"],
-                    'Errors Yesterday': v7["log_errors_yesterday"],
-                    'Last Traceback': v7["log_traceback"],
-                    'Tracebacks Today': v7["log_tracebacks_today"],
-                    'Tracebacks Yesterday': v7["log_tracebacks_yesterday"]
+                    # u = user
+                    # v = version
+                    # st = start_time
+                    # m = memory
+                    # c = cpu
+                    # i = info
+                    # it = infos_today
+                    # iy = infos_yesterday
+                    # e = error
+                    # et = errors_today
+                    # ey = errors_yesterday
+                    # t = traceback
+                    # tt = tracebacks_today
+                    # ty = tracebacks_yesterday
+                    # pt = pnl_today
+                    # py = pnl_yesterday
+                    # ct = pnl_counter_today
+                    # cy = pnl_counter_yesterday
+                    'Name': v7["u"],
+                    'Start Time': datetime.fromtimestamp(v7["st"]),
+                    'Memory': v7["m"][0]/1024/1024,
+                    'CPU': v7["c"],
+                    'PNLs Today': v7["ct"],
+                    'PNL Today': v7["pt"],
+                    'PNLs Yesterday': v7["cy"],
+                    'PNL Yesterday': v7["py"],
+                    'Last Info': v7["i"],
+                    'Infos Today': v7["it"],
+                    'Infos Yesterday': v7["iy"],
+                    'Last Error': v7["e"],
+                    'Errors Today': v7["et"],
+                    'Errors Yesterday': v7["ey"],
+                    'Last Traceback': v7["t"],
+                    'Tracebacks Today': v7["tt"],
+                    'Tracebacks Yesterday': v7["ty"]
                 })
                 d_v7.append(info)
         column_config = {
