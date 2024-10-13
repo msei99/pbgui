@@ -125,7 +125,57 @@ def load_monitor_config():
     st.session_state.traceback_error_v7 = load_ini("monitor", "traceback_error_v7")
     if st.session_state.traceback_error_v7 == "":
         st.session_state.traceback_error_v7 = 10
-    
+    # Multi
+    st.session_state.mem_warning_multi = load_ini("monitor", "mem_warning_multi")
+    if st.session_state.mem_warning_multi == "":
+        st.session_state.mem_warning_multi = 100
+    st.session_state.mem_error_multi = load_ini("monitor", "mem_error_multi")
+    if st.session_state.mem_error_multi == "":
+        st.session_state.mem_error_multi = 200
+    st.session_state.cpu_warning_multi = load_ini("monitor", "cpu_warning_multi")
+    if st.session_state.cpu_warning_multi == "":
+        st.session_state.cpu_warning_multi = 5
+    st.session_state.cpu_error_multi = load_ini("monitor", "cpu_error_multi")
+    if st.session_state.cpu_error_multi == "":
+        st.session_state.cpu_error_multi = 10
+    st.session_state.error_warning_multi = load_ini("monitor", "error_warning_multi")
+    if st.session_state.error_warning_multi == "":
+        st.session_state.error_warning_multi = 5
+    st.session_state.error_error_multi = load_ini("monitor", "error_error_multi")
+    if st.session_state.error_error_multi == "":
+        st.session_state.error_error_multi = 10
+    st.session_state.traceback_warning_multi = load_ini("monitor", "traceback_warning_multi")
+    if st.session_state.traceback_warning_multi == "":
+        st.session_state.traceback_warning_multi = 5
+    st.session_state.traceback_error_multi = load_ini("monitor", "traceback_error_multi")
+    if st.session_state.traceback_error_multi == "":
+        st.session_state.traceback_error_multi = 10
+    # Single
+    st.session_state.mem_warning_single = load_ini("monitor", "mem_warning_single")
+    if st.session_state.mem_warning_single == "":
+        st.session_state.mem_warning_single = 100
+    st.session_state.mem_error_single = load_ini("monitor", "mem_error_single")
+    if st.session_state.mem_error_single == "":
+        st.session_state.mem_error_single = 200
+    st.session_state.cpu_warning_single = load_ini("monitor", "cpu_warning_single")
+    if st.session_state.cpu_warning_single == "":
+        st.session_state.cpu_warning_single = 5
+    st.session_state.cpu_error_single = load_ini("monitor", "cpu_error_single")
+    if st.session_state.cpu_error_single == "":
+        st.session_state.cpu_error_single = 10
+    st.session_state.error_warning_single = load_ini("monitor", "error_warning_single")
+    if st.session_state.error_warning_single == "":
+        st.session_state.error_warning_single = 5
+    st.session_state.error_error_single = load_ini("monitor", "error_error_single")
+    if st.session_state.error_error_single == "":
+        st.session_state.error_error_single = 10
+    st.session_state.traceback_warning_single = load_ini("monitor", "traceback_warning_single")
+    if st.session_state.traceback_warning_single == "":
+        st.session_state.traceback_warning_single = 5
+    st.session_state.traceback_error_single = load_ini("monitor", "traceback_error_single")
+    if st.session_state.traceback_error_single == "":
+        st.session_state.traceback_error_single = 10
+
 
 def pbremote_edit():
     pbremote = st.session_state.pbremote
@@ -154,6 +204,56 @@ def pbremote_edit():
     if "edit_traceback_error_v7" in st.session_state:
         if st.session_state.traceback_error_v7 != st.session_state.edit_traceback_error_v7:
             st.session_state.traceback_error_v7 = st.session_state.edit_traceback_error_v7
+    # Multi
+    if "edit_mem_warning_multi" in st.session_state:
+        if st.session_state.mem_warning_multi != st.session_state.edit_mem_warning_multi:
+            st.session_state.mem_warning_multi = st.session_state.edit_mem_warning_multi
+    if "edit_mem_error_multi" in st.session_state:
+        if st.session_state.mem_error_multi != st.session_state.edit_mem_error_multi:
+            st.session_state.mem_error_multi = st.session_state.edit_mem_error_multi
+    if "edit_cpu_warning_multi" in st.session_state:
+        if st.session_state.cpu_warning_multi != st.session_state.edit_cpu_warning_multi:
+            st.session_state.cpu_warning_multi = st.session_state.edit_cpu_warning_multi
+    if "edit_cpu_error_multi" in st.session_state:
+        if st.session_state.cpu_error_multi != st.session_state.edit_cpu_error_multi:
+            st.session_state.cpu_error_multi = st.session_state.edit_cpu_error_multi
+    if "edit_error_warning_multi" in st.session_state:
+        if st.session_state.error_warning_multi != st.session_state.edit_error_warning_multi:
+            st.session_state.error_warning_multi = st.session_state.edit_error_warning_multi
+    if "edit_error_error_multi" in st.session_state:
+        if st.session_state.error_error_multi != st.session_state.edit_error_error_multi:
+            st.session_state.error_error_multi = st.session_state.edit_error_error_multi
+    if "edit_traceback_warning_multi" in st.session_state:
+        if st.session_state.traceback_warning_multi != st.session_state.edit_traceback_warning_multi:
+            st.session_state.traceback_warning_multi = st.session_state.edit_traceback_warning_multi
+    if "edit_traceback_error_multi" in st.session_state:
+        if st.session_state.traceback_error_multi != st.session_state.edit_traceback_error_multi:
+            st.session_state.traceback_error_multi = st.session_state.edit_traceback_error_multi
+    # Single
+    if "edit_mem_warning_single" in st.session_state:
+        if st.session_state.mem_warning_single != st.session_state.edit_mem_warning_single:
+            st.session_state.mem_warning_single = st.session_state.edit_mem_warning_single
+    if "edit_mem_error_single" in st.session_state:
+        if st.session_state.mem_error_single != st.session_state.edit_mem_error_single:
+            st.session_state.mem_error_single = st.session_state.edit_mem_error_single
+    if "edit_cpu_warning_single" in st.session_state:
+        if st.session_state.cpu_warning_single != st.session_state.edit_cpu_warning_single:
+            st.session_state.cpu_warning_single = st.session_state.edit_cpu_warning_single
+    if "edit_cpu_error_single" in st.session_state:
+        if st.session_state.cpu_error_single != st.session_state.edit_cpu_error_single:
+            st.session_state.cpu_error_single = st.session_state.edit_cpu_error_single
+    if "edit_error_warning_single" in st.session_state:
+        if st.session_state.error_warning_single != st.session_state.edit_error_warning_single:
+            st.session_state.error_warning_single = st.session_state.edit_error_warning_single
+    if "edit_error_error_single" in st.session_state:
+        if st.session_state.error_error_single != st.session_state.edit_error_error_single:
+            st.session_state.error_error_single = st.session_state.edit_error_error_single
+    if "edit_traceback_warning_single" in st.session_state:
+        if st.session_state.traceback_warning_single != st.session_state.edit_traceback_warning_single:
+            st.session_state.traceback_warning_single = st.session_state.edit_traceback_warning_single
+    if "edit_traceback_error_single" in st.session_state:
+        if st.session_state.traceback_error_single != st.session_state.edit_traceback_error_single:
+            st.session_state.traceback_error_single = st.session_state.edit_traceback_error_single
     # Navigation
     with st.sidebar:
         if st.button(":material/home:"):
@@ -166,6 +266,22 @@ def pbremote_edit():
             del st.session_state.error_error_v7
             del st.session_state.traceback_warning_v7
             del st.session_state.traceback_error_v7
+            del st.session_state.mem_warning_multi
+            del st.session_state.mem_error_multi
+            del st.session_state.cpu_warning_multi
+            del st.session_state.cpu_error_multi
+            del st.session_state.error_warning_multi
+            del st.session_state.error_error_multi
+            del st.session_state.traceback_warning_multi
+            del st.session_state.traceback_error_multi
+            del st.session_state.mem_warning_single
+            del st.session_state.mem_error_single
+            del st.session_state.cpu_warning_single
+            del st.session_state.cpu_error_single
+            del st.session_state.error_warning_single
+            del st.session_state.error_error_single
+            del st.session_state.traceback_warning_single
+            del st.session_state.traceback_error_single
             st.session_state.pbremote_details = True
             st.rerun()
         if st.button(":material/save:"):
@@ -177,11 +293,27 @@ def pbremote_edit():
             save_ini("monitor", "error_error_v7", str(st.session_state.error_error_v7))
             save_ini("monitor", "traceback_warning_v7", str(st.session_state.traceback_warning_v7))
             save_ini("monitor", "traceback_error_v7", str(st.session_state.traceback_error_v7))
+            save_ini("monitor", "mem_warning_multi", str(st.session_state.mem_warning_multi))
+            save_ini("monitor", "mem_error_multi", str(st.session_state.mem_error_multi))
+            save_ini("monitor", "cpu_warning_multi", str(st.session_state.cpu_warning_multi))
+            save_ini("monitor", "cpu_error_multi", str(st.session_state.cpu_error_multi))
+            save_ini("monitor", "error_warning_multi", str(st.session_state.error_warning_multi))
+            save_ini("monitor", "error_error_multi", str(st.session_state.error_error_multi))
+            save_ini("monitor", "traceback_warning_multi", str(st.session_state.traceback_warning_multi))
+            save_ini("monitor", "traceback_error_multi", str(st.session_state.traceback_error_multi))
+            save_ini("monitor", "mem_warning_single", str(st.session_state.mem_warning_single))
+            save_ini("monitor", "mem_error_single", str(st.session_state.mem_error_single))
+            save_ini("monitor", "cpu_warning_single", str(st.session_state.cpu_warning_single))
+            save_ini("monitor", "cpu_error_single", str(st.session_state.cpu_error_single))
+            save_ini("monitor", "error_warning_single", str(st.session_state.error_warning_single))
+            save_ini("monitor", "error_error_single", str(st.session_state.error_error_single))
+            save_ini("monitor", "traceback_warning_single", str(st.session_state.traceback_warning_single))
+            save_ini("monitor", "traceback_error_single", str(st.session_state.traceback_error_single))
             st.session_state.pbremote_details = True
             del st.session_state.pbremote_edit
             st.rerun()
     st.header("PBRemote Edit")
-    st.write("V7 Monitor Settings")
+    st.subheader("V7 Monitor Settings")
     col1, col2, col3, col4 = st.columns([1,1,1,1])
     with col1:
         st.number_input('Memory Warning',value=int(st.session_state.mem_warning_v7),step=10, key="edit_mem_warning_v7")
@@ -195,6 +327,34 @@ def pbremote_edit():
     with col4:
         st.number_input('CPU Error',value=int(st.session_state.cpu_error_v7),step=1, key="edit_cpu_error_v7")
         st.number_input('Traceback Error',value=int(st.session_state.traceback_error_v7),step=1, key="edit_traceback_error_v7")
+    st.subheader("Multi Monitor Settings")
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
+        st.number_input('Memory Warning',value=int(st.session_state.mem_warning_multi),step=10, key="edit_mem_warning_multi")
+        st.number_input('Error Warning',value=int(st.session_state.error_warning_multi),step=1, key="edit_error_warning_multi")
+    with col2:
+        st.number_input('Memory Error',value=int(st.session_state.mem_error_multi),step=10, key="edit_mem_error_multi")
+        st.number_input('Error Error',value=int(st.session_state.error_error_multi),step=1, key="edit_error_error_multi")
+    with col3:
+        st.number_input('CPU Warning',value=int(st.session_state.cpu_warning_multi),step=1, key="edit_cpu_warning_multi")
+        st.number_input('Traceback Warning',value=int(st.session_state.traceback_warning_multi),step=1, key="edit_traceback_warning_multi")
+    with col4:
+        st.number_input('CPU Error',value=int(st.session_state.cpu_error_multi),step=1, key="edit_cpu_error_multi")
+        st.number_input('Traceback Error',value=int(st.session_state.traceback_error_multi),step=1, key="edit_traceback_error_multi")
+    st.subheader("Single Monitor Settings")
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
+        st.number_input('Memory Warning',value=int(st.session_state.mem_warning_single),step=10, key="edit_mem_warning_single")
+        st.number_input('Error Warning',value=int(st.session_state.error_warning_single),step=1, key="edit_error_warning_single")
+    with col2:
+        st.number_input('Memory Error',value=int(st.session_state.mem_error_single),step=10, key="edit_mem_error_single")
+        st.number_input('Error Error',value=int(st.session_state.error_error_single),step=1, key="edit_error_error_single")
+    with col3:
+        st.number_input('CPU Warning',value=int(st.session_state.cpu_warning_single),step=1, key="edit_cpu_warning_single")
+        st.number_input('Traceback Warning',value=int(st.session_state.traceback_warning_single),step=1, key="edit_traceback_warning_single")
+    with col4:
+        st.number_input('CPU Error',value=int(st.session_state.cpu_error_single),step=1, key="edit_cpu_error_single")
+        st.number_input('Traceback Error',value=int(st.session_state.traceback_error_single),step=1, key="edit_traceback_error_single")
 
 def pbremote_details():
     # Init PBRemote
