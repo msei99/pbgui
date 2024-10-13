@@ -25,8 +25,179 @@ import uuid
 from Status import InstanceStatus, InstancesStatus
 import re
 
+class Monitor():
+    def __init__(self):
+        self.path = None
+        self.user = None
+        self.version = None
+        self.log_lp = None
+        self.start_time = 0
+        self.memory = 0
+        self.cpu = 0
+        self.log_error = None
+        self.log_info = None
+        self.log_traceback = None
+        self.log_watch_ts = 0
+        self.error_time = 0
+        self.errors_today = 0
+        self.errors_yesterday = 0
+        self.info_time = 0
+        self.infos_today = 0
+        self.infos_yesterday = 0
+        self.traceback_time = 0
+        self.tracebacks_today = 0
+        self.tracebacks_yesterday = 0
+        self.pnl_today = 0
+        self.pnl_yesterday = 0
+        self.pnl_counter_today = 0
+        self.pnl_counter_yesterday = 0
+        self.init_found = False
+
+    def watch_log(self):
+        logfile = Path(f'{self.path}/passivbot.log')
+        if logfile.exists():
+            seek = False
+            if not self.log_lp:
+                self.log_lp = 0
+                seek = True
+            current_position = logfile.stat().st_size
+            with open(logfile, "r") as f:
+                f.seek(self.log_lp)
+                new_content = f.read().splitlines()
+            self.log_lp = current_position
+            tb_found = False
+            today_ts = int(mktime(date.today().timetuple()))
+            yesterday_ts = today_ts - 86400
+            if self.log_watch_ts != 0 and self.log_watch_ts < today_ts:
+                self.log_error = None
+                self.log_info = None
+                self.log_traceback = None
+                self.errors_yesterday = self.errors_today
+                self.errors_today = 0
+                self.infos_yesterday = self.infos_today
+                self.infos_today = 0
+                self.tracebacks_yesterday = self.tracebacks_today
+                self.tracebacks_today = 0
+                self.pnl_yesterday = self.pnl_today
+                self.pnl_today = 0
+                self.pnl_counter_yesterday = self.pnl_counter_today
+                self.pnl_counter_today = 0
+            for line in new_content:
+                elements = line.split()
+                if len(elements) > 1:
+                    if elements[1] == "ERROR" or elements[1] == "INFO":
+                        # check elements[0] for correct isoformat
+                        if len(elements[0]) == 19:
+                            if elements[0][4] == "-" and elements[0][7] == "-" and elements[0][10] == "T" and elements[0][13] == ":" and elements[0][16] == ":":
+                                ts = int(datetime.fromisoformat(elements[0]).timestamp())
+                                if ts < yesterday_ts:
+                                    continue
+                                else:
+                                    seek = False
+                                if ts < today_ts:
+                                    yesterday = True
+                                else:
+                                    yesterday = False
+                if seek:
+                    continue
+                if tb_found:
+                    if not "ERROR" in line and not "INFO" in line and not "Traceback" in line:
+                        self.log_traceback.append(line)
+                    else:
+                        tb_found = False
+                        self.tracebacks_today += 1
+                if "ERROR" in line:
+                    if yesterday:
+                        self.errors_yesterday += 1
+                    else:
+                        self.log_error = line
+                        self.errors_today += 1
+                elif "INFO" in line:                 
+                    if yesterday:
+                        self.infos_yesterday += 1
+                    else:
+                        self.log_info = line
+                        self.infos_today += 1
+                    # Skip PNLs after restart bot
+                    if "initiating pnl" in line:
+                        self.init_found = True
+                    if "starting execution loop" in line or "done initiating bot" in line:
+                        self.init_found = False
+                    if self.init_found:
+                        continue
+                    if "new pnl" in line:
+                        if len(elements) == 7:
+                            if yesterday:
+                                self.pnl_yesterday += float(elements[5])
+                                self.pnl_counter_yesterday += int(elements[2])
+                            else:
+                                self.pnl_today += float(elements[5])
+                                self.pnl_counter_today += int(elements[2])
+                    if "balance" in line:
+                        if len(elements) == 6:
+                            if elements[4] == "->":
+                                if yesterday:
+                                    self.pnl_yesterday += (float(elements[5]) - float(elements[3]))
+                                    self.pnl_counter_yesterday += 1
+                                else:
+                                    self.pnl_today += (float(elements[5]) - float(elements[3]))
+                                    self.pnl_counter_today += 1
+                elif "Traceback" in line:
+                    if yesterday:
+                        self.tracebacks_yesterday += 1
+                    else:
+                        self.log_traceback = []
+                        self.log_traceback.append(line)
+                        tb_found = True
+            self.log_watch_ts = int(datetime.now().timestamp())
+            self.save_monitor()
+
+    def save_monitor(self):
+        monitor_file = Path(f'{self.path}/monitor.json')
+        monitor = ({
+            # u = user
+            # v = version
+            # st = start_time
+            # m = memory
+            # c = cpu
+            # i = info
+            # it = infos_today
+            # iy = infos_yesterday
+            # e = error
+            # et = errors_today
+            # ey = errors_yesterday
+            # t = traceback
+            # tt = tracebacks_today
+            # ty = tracebacks_yesterday
+            # pt = pnl_today
+            # py = pnl_yesterday
+            # ct = pnl_counter_today
+            # cy = pnl_counter_yesterday
+            "u": self.user,
+            "v": self.version,
+            "st": self.start_time,
+            "m": self.memory,
+            "c": self.cpu,
+            "i": self.log_info,
+            "it": self.infos_today,
+            "iy": self.infos_yesterday,
+            "e": self.log_error,
+            "et": self.errors_today,
+            "ey": self.errors_yesterday,
+            "t": self.log_traceback,
+            "tb": self.tracebacks_today,
+            "ty": self.tracebacks_yesterday,
+            "pt": self.pnl_today,
+            "py": self.pnl_yesterday,
+            "ct": self.pnl_counter_today,
+            "cy": self.pnl_counter_yesterday
+            })
+        with open(monitor_file, "w", encoding='utf-8') as f:
+            json.dump(monitor, f)
+
 class RunSingle():
     def __init__(self):
+        self.monitor = Monitor()
         self.user = None
         self.path = None
         self._single_config = {}
@@ -80,6 +251,11 @@ class RunSingle():
             else:
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Single: {cmd_end}')
+        # wait until passivbot is running
+        for i in range(10):
+            if self.is_running():
+                break
+            sleep(1)
 
     def clean_log(self):
         logfile = Path(f'{self.path}/passivbot.log')
@@ -156,6 +332,8 @@ class RunSingle():
 
     def load(self):
         file = Path(f'{self.path}/instance.cfg')
+        self.monitor.path = self.path
+        self.monitor.user = self.user
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
@@ -165,6 +343,7 @@ class RunSingle():
                     self.version = self._single_config["_version"]
                 else:
                     self.version = 0
+                self.monitor.version = self.version
                 # Load user from config
                 if "_user" in self._single_config:
                     self.user = self._single_config["_user"]
@@ -190,6 +369,7 @@ class RunSingle():
 
 class RunMulti():
     def __init__(self):
+        self.monitor = Monitor()
         self.user = None
         self.path = None
         self._multi_config = {}
@@ -236,6 +416,11 @@ class RunMulti():
             else:
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_multi.py {self.path}/multi_run.hjson')
+        # wait until passivbot is running
+        for i in range(10):
+            if self.is_running():
+                break
+            sleep(1)
 
     def clean_log(self):
         logfile = Path(f'{self.path}/passivbot.log')
@@ -267,6 +452,8 @@ class RunMulti():
     def load(self):
         """Load config for PB multi."""
         file = Path(f'{self.path}/multi.hjson')
+        self.monitor.path = self.path
+        self.monitor.user = self.user
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
@@ -274,6 +461,7 @@ class RunMulti():
                 self._multi_config = hjson.loads(multi_config)
                 if "version" in self._multi_config:
                     self.version = self._multi_config["version"]
+                    self.monitor.version = self.version
                 if "enabled_on" in self._multi_config:
                     if self.name == self._multi_config["enabled_on"]:
                         return True
@@ -288,6 +476,7 @@ class RunMulti():
 
 class RunV7():
     def __init__(self):
+        self.monitor = Monitor()
         self.user = None
         self.path = None
         self._v7_config = {}
@@ -296,28 +485,6 @@ class RunV7():
         self.pbdir = None
         self.pbvenv = None
         self.pbgdir = None
-        self.log_lp = None
-        self.start_time = 0
-        self.memory = 0
-        self.cpu = 0
-        self.log_error = None
-        self.log_info = None
-        self.log_traceback = None
-        self.log_watch_ts = 0
-        self.error_time = 0
-        self.errors_today = 0
-        self.errors_yesterday = 0
-        self.info_time = 0
-        self.infos_today = 0
-        self.infos_yesterday = 0
-        self.traceback_time = 0
-        self.tracebacks_today = 0
-        self.tracebacks_yesterday = 0
-        self.pnl_today = 0
-        self.pnl_yesterday = 0
-        self.pnl_counter_today = 0
-        self.pnl_counter_yesterday = 0
-        self.init_found = False
 
     def watch(self):
         if not self.is_running():
@@ -338,9 +505,9 @@ class RunV7():
                 pass
             if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
                 if cmdline[-1].endswith(f'{self.user}/config.json') or cmdline[-1].endswith(f'{self.user}\config.json'):
-                    self.start_time = process.create_time()
-                    self.memory = process.memory_info()
-                    self.cpu = process.cpu_percent()
+                    self.monitor.start_time = process.create_time()
+                    self.monitor.memory = process.memory_info()
+                    self.monitor.cpu = process.cpu_percent()
                     return process
 
     def stop(self):
@@ -379,120 +546,6 @@ class RunV7():
                 with open(logfile,'r+') as file:
                     file.truncate()
 
-    def watch_log(self):
-        logfile = Path(f'{self.path}/passivbot.log')
-        if logfile.exists():
-            seek = False
-            if not self.log_lp:
-                self.log_lp = 0
-                seek = True
-            current_position = logfile.stat().st_size
-            with open(logfile, "r") as f:
-                f.seek(self.log_lp)
-                new_content = f.read().splitlines()
-            self.log_lp = current_position
-            tb_found = False
-            today_ts = int(mktime(date.today().timetuple()))
-            yesterday_ts = today_ts - 86400
-            if self.log_watch_ts != 0 and self.log_watch_ts < today_ts:
-                self.log_error = None
-                self.log_info = None
-                self.log_traceback = None
-                self.errors_yesterday = self.errors_today
-                self.errors_today = 0
-                self.infos_yesterday = self.infos_today
-                self.infos_today = 0
-                self.tracebacks_yesterday = self.tracebacks_today
-                self.tracebacks_today = 0
-                self.pnl_yesterday = self.pnl_today
-                self.pnl_today = 0
-                self.pnl_counter_yesterday = self.pnl_counter_today
-                self.pnl_counter_today = 0
-            for line in new_content:
-                elements = line.split()
-                if len(elements) > 1:
-                    if elements[1] == "ERROR" or elements[1] == "INFO":
-                        # check elements[0] for correct isoformat
-                        if len(elements[0]) == 19:
-                            if elements[0][4] == "-" and elements[0][7] == "-" and elements[0][10] == "T" and elements[0][13] == ":" and elements[0][16] == ":":
-                                ts = int(datetime.fromisoformat(elements[0]).timestamp())
-                                if ts < yesterday_ts:
-                                    continue
-                                else:
-                                    seek = False
-                                if ts < today_ts:
-                                    yesterday = True
-                                else:
-                                    yesterday = False
-                if seek:
-                    continue
-                if tb_found:
-                    if not "ERROR" in line and not "INFO" in line and not "Traceback" in line:
-                        self.log_traceback.append(line)
-                    else:
-                        tb_found = False
-                        self.tracebacks_today += 1
-                if "ERROR" in line:
-                    if yesterday:
-                        self.errors_yesterday += 1
-                    else:
-                        self.log_error = line
-                        self.errors_today += 1
-                elif "INFO" in line:                 
-                    if yesterday:
-                        self.infos_yesterday += 1
-                    else:
-                        self.log_info = line
-                        self.infos_today += 1
-                    # Skip PNLs after restart bot
-                    if "initiating pnls" in line:
-                        self.init_found = True
-                    if "starting execution loop" in line:
-                        self.init_found = False
-                    if self.init_found:
-                        continue
-                    if "new pnl" in line:
-                        if len(elements) == 7:
-                            if yesterday:
-                                self.pnl_yesterday += float(elements[5])
-                                self.pnl_counter_yesterday += int(elements[2])
-                            else:
-                                self.pnl_today += float(elements[5])
-                                self.pnl_counter_today += int(elements[2])
-                elif "Traceback" in line:
-                    if yesterday:
-                        self.tracebacks_yesterday += 1
-                    else:
-                        self.log_traceback = []
-                        self.log_traceback.append(line)
-                        tb_found = True
-            self.log_watch_ts = int(datetime.now().timestamp())
-            self.save_monitor()
-
-    def save_monitor(self):
-        monitor_file = Path(f'{self.path}/monitor.json')
-        monitor = ({
-            "user": self.user,
-            "start_time": self.start_time,
-            "memory": self.memory,
-            "cpu": self.cpu,
-            "log_info": self.log_info,
-            "log_infos_today": self.infos_today,
-            "log_infos_yesterday": self.infos_yesterday,
-            "log_error": self.log_error,
-            "log_errors_today": self.errors_today,
-            "log_errors_yesterday": self.errors_yesterday,
-            "log_traceback": self.log_traceback,
-            "log_tracebacks_today": self.tracebacks_today,
-            "log_tracebacks_yesterday": self.tracebacks_yesterday,
-            "pnls_today": self.pnl_today,
-            "pnls_yesterday": self.pnl_yesterday,
-            "pnl_counter_today": self.pnl_counter_today,
-            "pnl_counter_yesterday": self.pnl_counter_yesterday
-            })
-        with open(monitor_file, "w", encoding='utf-8') as f:
-            json.dump(monitor, f)
-
     def create_v7_running_version(self):
         # Write running Version to file
         version_file = Path(f'{self.path}/running_version.txt')
@@ -502,12 +555,15 @@ class RunV7():
     def load(self):
         """Load version for PB v7."""
         file = Path(f'{self.path}/config.json')
+        self.monitor.path = self.path
+        self.monitor.user = self.user
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
                     v7_config = f.read()
                 self._v7_config = json.loads(v7_config)
                 self.version = self._v7_config["pbgui"]["version"]
+                self.monitor.version = self.version
                 if self.name == self._v7_config["pbgui"]["enabled_on"]:
                     return True
                 else:                        
@@ -1199,11 +1255,13 @@ def main():
             run.has_update_status()
             for run_v7 in run.run_v7:
                 run_v7.watch()
-                run_v7.watch_log()
+                run_v7.monitor.watch_log()
             for run_multi in run.run_multi:
                 run_multi.watch()
+                run_multi.monitor.watch_log()
             for run_single in run.run_single:
                 run_single.watch()
+                run_single.monitor.watch_log()
             if count%2 == 0:
                 for run_v7 in run.run_v7:
                     run_v7.clean_log()
