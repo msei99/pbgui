@@ -538,18 +538,21 @@ class PBRemote():
         for instance in self.local_run.instances_status.instances:
             if instance.running:
                 monitor_file = Path(f'{path_multi}/{instance.name}/monitor.json')
-                with open(monitor_file, "r", encoding='utf-8') as f:
-                    monitor.append(json.load(f))
+                if Path(monitor_file).exists():
+                    with open(monitor_file, "r", encoding='utf-8') as f:
+                        monitor.append(json.load(f))
         for instance in self.local_run.instances_status_single.instances:
             if instance.running:
                 monitor_file = Path(f'{path_single}/{instance.name}/monitor.json')
-                with open(monitor_file, "r", encoding='utf-8') as f:
-                    monitor.append(json.load(f))
+                if Path(monitor_file).exists():
+                    with open(monitor_file, "r", encoding='utf-8') as f:
+                        monitor.append(json.load(f))
         for instance in self.local_run.instances_status_v7.instances:
             if instance.running:
                 monitor_file = Path(f'{path_v7}/{instance.name}/monitor.json')
-                with open(monitor_file, "r", encoding='utf-8') as f:
-                    monitor.append(json.load(f))
+                if Path(monitor_file).exists():
+                    with open(monitor_file, "r", encoding='utf-8') as f:
+                        monitor.append(json.load(f))
         return monitor
 
     def alive(self):
