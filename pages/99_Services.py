@@ -284,27 +284,33 @@ def pbremote_details():
             else:
                 cpu_color = "yellow"
             st.markdown(f"##### CPU utilization: :{cpu_color}[{server.cpu}] %  |  System boot: :blue[{boot}]")
-        d_single = []
-        server.instances_status_single.instances = []
-        server.instances_status_single.load()
-        for single in server.instances_status_single:
-            if single.running:
-                d_single.append({
-                    'Name': single.name,
-                    'Version': single.version
-                })
-        d_multi = []
-        server.instances_status.instances = []
-        server.instances_status.load()
-        for multi in server.instances_status:
-            if multi.running:
-                d_multi.append({
-                    'Name': multi.name,
-                    'Version': multi.version
-                })
+        # d_single = []
+        # server.instances_status_single.instances = []
+        # server.instances_status_single.load()
+        # for single in server.instances_status_single:
+        #     if single.running:
+        #         d_single.append({
+        #             'Name': single.name,
+        #             'Version': single.version
+        #         })
+        # d_multi = []
+        # server.instances_status.instances = []
+        # server.instances_status.load()
+        # for multi in server.instances_status:
+        #     if multi.running:
+        #         d_multi.append({
+        #             'Name': multi.name,
+        #             'Version': multi.version
+        #         })
         v7_selected = None
         if f"pbremote_v7_select" in st.session_state:
             v7_selected = st.session_state.pbremote_v7_select
+        multi_selected = None
+        if f"pbremote_multi_select" in st.session_state:
+            multi_selected = st.session_state.pbremote_multi_select
+        single_selected = None
+        if f"pbremote_single_select" in st.session_state:
+            single_selected = st.session_state.pbremote_single_select
         d_v7 = []
         d_multi = []
         d_single = []
@@ -389,14 +395,56 @@ def pbremote_details():
                     st.markdown(f":red[Last Traceback: ] :blue[{d_v7[row]['Last Traceback']}]")
         else:
             st.write("None")
-        st.header(f"Running Single Instances ({len(d_single)})")
-        if d_single:
-            st.dataframe(data=d_single, width=640, height=36+(len(d_single))*35)
-        else:
-            st.write("None")
         st.header(f"Running Multi Instances ({len(d_multi)})")
         if d_multi:
-            st.dataframe(data=d_multi, width=640, height=36+(len(d_multi))*35)
+            df = pd.DataFrame(d_multi)
+            sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
+            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
+            #Infos green if > 0, orange if 0 and red if none
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
+            #Errors green if 0, orange if <10 else red
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            #Tracebacks green if 0, orange if <5 else red
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            #PNLs green if > 0, orange if 0
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange', subset=['PNLs Today', 'PNLs Yesterday'])
+            #PNL green if > 0, orange if 0 else red
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['PNL Today', 'PNL Yesterday'])
+            st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_multi))*35, key="pbremote_multi_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
+            if multi_selected:
+                if multi_selected["selection"]["rows"]:
+                    row = multi_selected["selection"]["rows"][0]
+                    # st.subheader(f"{d_v7[row]['Name']}")
+                    st.markdown(f":green[Last Info: ] :blue[{d_multi[row]['Last Info']}]")
+                    st.markdown(f":orange[Last Error: ] :blue[{d_multi[row]['Last Error']}]")
+                    st.markdown(f":red[Last Traceback: ] :blue[{d_multi[row]['Last Traceback']}]")
+        else:
+            st.write("None")
+        st.header(f"Running Single Instances ({len(d_single)})")
+        if d_single:
+            df = pd.DataFrame(d_single)
+            sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
+            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
+            #Infos green if > 0, orange if 0 and red if none
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
+            #Errors green if 0, orange if <10 else red
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            #Tracebacks green if 0, orange if <5 else red
+            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            #PNLs green if > 0, orange if 0
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange', subset=['PNLs Today', 'PNLs Yesterday'])
+            #PNL green if > 0, orange if 0 else red
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['PNL Today', 'PNL Yesterday'])
+            st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_single))*35, key="pbremote_single_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
+            if single_selected:
+                if single_selected["selection"]["rows"]:
+                    row = single_selected["selection"]["rows"][0]
+                    # st.subheader(f"{d_v7[row]['Name']}")
+                    st.markdown(f":green[Last Info: ] :blue[{d_single[row]['Last Info']}]")
+                    st.markdown(f":orange[Last Error: ] :blue[{d_single[row]['Last Error']}]")
+                    st.markdown(f":red[Last Traceback: ] :blue[{d_single[row]['Last Traceback']}]")
         else:
             st.write("None")
 
