@@ -306,8 +306,10 @@ def pbremote_details():
         if f"pbremote_v7_select" in st.session_state:
             v7_selected = st.session_state.pbremote_v7_select
         d_v7 = []
-        if server.monitor_v7:
-            for v7 in server.monitor_v7:
+        d_multi = []
+        d_single = []
+        if server.monitor:
+            for monitor in server.monitor:
                 info = ({
                     # u = user
                     # p = pb_version
@@ -328,27 +330,32 @@ def pbremote_details():
                     # py = pnl_yesterday
                     # ct = pnl_counter_today
                     # cy = pnl_counter_yesterday
-                    'Name': v7["u"],
-                    'PB Version': v7["p"],
-                    'Version': v7["v"],
-                    'Start Time': datetime.fromtimestamp(v7["st"]),
-                    'Memory': v7["m"][0]/1024/1024,
-                    'CPU': v7["c"],
-                    'PNLs Today': v7["ct"],
-                    'PNL Today': v7["pt"],
-                    'PNLs Yesterday': v7["cy"],
-                    'PNL Yesterday': v7["py"],
-                    'Last Info': v7["i"],
-                    'Infos Today': v7["it"],
-                    'Infos Yesterday': v7["iy"],
-                    'Last Error': v7["e"],
-                    'Errors Today': v7["et"],
-                    'Errors Yesterday': v7["ey"],
-                    'Last Traceback': v7["t"],
-                    'Tracebacks Today': v7["tt"],
-                    'Tracebacks Yesterday': v7["ty"]
+                    'Name': monitor["u"],
+                    'PB Version': monitor["p"],
+                    'Version': monitor["v"],
+                    'Start Time': datetime.fromtimestamp(monitor["st"]),
+                    'Memory': monitor["m"][0]/1024/1024,
+                    'CPU': monitor["c"],
+                    'PNLs Today': monitor["ct"],
+                    'PNL Today': monitor["pt"],
+                    'PNLs Yesterday': monitor["cy"],
+                    'PNL Yesterday': monitor["py"],
+                    'Last Info': monitor["i"],
+                    'Infos Today': monitor["it"],
+                    'Infos Yesterday': monitor["iy"],
+                    'Last Error': monitor["e"],
+                    'Errors Today': monitor["et"],
+                    'Errors Yesterday': monitor["ey"],
+                    'Last Traceback': monitor["t"],
+                    'Tracebacks Today': monitor["tt"],
+                    'Tracebacks Yesterday': monitor["ty"]
                 })
-                d_v7.append(info)
+                if info["PB Version"] == "7":
+                    d_v7.append(info)
+                elif info["PB Version"] == "6":
+                    d_multi.append(info)
+                elif info["PB Version"] == "s":
+                    d_single.append(info)
         column_config = {
             "Last Info": None,
             "Last Error": None,

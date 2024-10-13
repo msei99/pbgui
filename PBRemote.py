@@ -529,11 +529,25 @@ class PBRemote():
             api_file.unlink(missing_ok=True)
         return True
 
-    def load_monitor(self, path: str):
+    def load_monitor(self):
         monitor = []
+        pbgdir = Path.cwd()
+        path_v7 = PurePath(f'{pbgdir}/data/run_v7/')
+        path_multi = PurePath(f'{pbgdir}/data/multi/')
+        path_single = PurePath(f'{pbgdir}/data/instances/')
+        for instance in self.local_run.instances_status.instances:
+            if instance.running:
+                monitor_file = Path(f'{path_multi}/{instance.name}/monitor.json')
+                with open(monitor_file, "r", encoding='utf-8') as f:
+                    monitor.append(json.load(f))
+        for instance in self.local_run.instances_status_single.instances:
+            if instance.running:
+                monitor_file = Path(f'{path_single}/{instance.name}/monitor.json')
+                with open(monitor_file, "r", encoding='utf-8') as f:
+                    monitor.append(json.load(f))
         for instance in self.local_run.instances_status_v7.instances:
             if instance.running:
-                monitor_file = Path(f'{path}/{instance.name}/monitor.json')
+                monitor_file = Path(f'{path_v7}/{instance.name}/monitor.json')
                 with open(monitor_file, "r", encoding='utf-8') as f:
                     monitor.append(json.load(f))
         return monitor
@@ -550,8 +564,7 @@ class PBRemote():
         disk = psutil.disk_usage('/')
         cpu = psutil.cpu_percent()
         boot = psutil.boot_time()
-        pbgdir = Path.cwd()
-        monitor_v7 = self.load_monitor(PurePath(f'{pbgdir}/data/run_v7/'))
+        monitor = self.load_monitor()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
@@ -562,7 +575,7 @@ class PBRemote():
             "disk": disk,
             "cpu": cpu,
             "boot": boot,
-            "monitor_v7": monitor_v7
+            "monitor": monitor
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
