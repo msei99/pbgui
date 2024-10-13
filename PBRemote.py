@@ -51,7 +51,7 @@ class RemoteServer():
         self._disk = []
         self._cpu = None
         self._boot = None
-        self._monitor_v7 = []
+        self._monitor = []
         self.pbname = None
         self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()
@@ -91,7 +91,7 @@ class RemoteServer():
     @property
     def boot(self): return self._boot
     @property
-    def monitor_v7(self): return self._monitor_v7
+    def monitor(self): return self._monitor
 
     @name.setter
     def name(self, new_name):
@@ -184,8 +184,8 @@ class RemoteServer():
                             self._cpu = cfg["cpu"]
                         if "boot" in cfg:
                             self._boot = cfg["boot"]
-                        if "monitor_v7" in cfg:
-                            self._monitor_v7 = cfg["monitor_v7"]
+                        if "monitor" in cfg:
+                            self._monitor = cfg["monitor"]
                         return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
