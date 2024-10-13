@@ -3,7 +3,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.17
+# v1.18
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -169,6 +169,16 @@ Start PBRun.py and PBRemote using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.18 (13-10-2024)
+- Services: Show PNL Today, Yesterday from LogMonitor
+- Services: Show Logmonitor Information Memory, CPU, Infos, Erros, Tracesbacks
+- PBRun/PBRemote: Monitori passivbot logs and send infos to master
+- PBData: Reload User on every run for new added Users
+- PBRun: Recompile rust if new pb7 version is installed
+- PBData: Bugfix when removing User from API
+- V7: Add Exchange and Time informations
+- Bugfix: Update Symbols from Binance
 
 ## v1.17 (02-10-2024)
 - V7: Run optimizer from a backtest result with -t starting_config
