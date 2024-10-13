@@ -55,6 +55,7 @@ class Monitor():
         self.init_found = False
 
     def watch_log(self):
+        yesterday = True
         logfile = Path(f'{self.path}/passivbot.log')
         if logfile.exists():
             seek = False
