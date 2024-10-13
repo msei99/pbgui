@@ -339,7 +339,6 @@ class RunSingle():
     def load(self):
         file = Path(f'{self.path}/instance.cfg')
         self.monitor.path = self.path
-        self.monitor.user = self.user
         self.monitor.pb_version = "s"
         if file.exists():
             try:
@@ -354,6 +353,7 @@ class RunSingle():
                 # Load user from config
                 if "_user" in self._single_config:
                     self.user = self._single_config["_user"]
+                    self.monitor.user = self.user
                 # Load symbol from config
                 if "_symbol" in self._single_config:
                     self.symbol = self._single_config["_symbol"]

@@ -284,24 +284,6 @@ def pbremote_details():
             else:
                 cpu_color = "yellow"
             st.markdown(f"##### CPU utilization: :{cpu_color}[{server.cpu}] %  |  System boot: :blue[{boot}]")
-        # d_single = []
-        # server.instances_status_single.instances = []
-        # server.instances_status_single.load()
-        # for single in server.instances_status_single:
-        #     if single.running:
-        #         d_single.append({
-        #             'Name': single.name,
-        #             'Version': single.version
-        #         })
-        # d_multi = []
-        # server.instances_status.instances = []
-        # server.instances_status.load()
-        # for multi in server.instances_status:
-        #     if multi.running:
-        #         d_multi.append({
-        #             'Name': multi.name,
-        #             'Version': multi.version
-        #         })
         v7_selected = None
         if f"pbremote_v7_select" in st.session_state:
             v7_selected = st.session_state.pbremote_v7_select
@@ -363,6 +345,7 @@ def pbremote_details():
                 elif info["PB Version"] == "s":
                     d_single.append(info)
         column_config = {
+            "PB Version": None,
             "Last Info": None,
             "Last Error": None,
             "Last Traceback": None,
