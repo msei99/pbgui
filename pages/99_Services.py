@@ -310,6 +310,7 @@ def pbremote_details():
             for v7 in server.monitor_v7:
                 info = ({
                     # u = user
+                    # p = pb_version
                     # v = version
                     # st = start_time
                     # m = memory
@@ -328,6 +329,8 @@ def pbremote_details():
                     # ct = pnl_counter_today
                     # cy = pnl_counter_yesterday
                     'Name': v7["u"],
+                    'PB Version': v7["p"],
+                    'Version': v7["v"],
                     'Start Time': datetime.fromtimestamp(v7["st"]),
                     'Memory': v7["m"][0]/1024/1024,
                     'CPU': v7["c"],

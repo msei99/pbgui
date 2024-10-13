@@ -30,6 +30,7 @@ class Monitor():
         self.path = None
         self.user = None
         self.version = None
+        self.pb_version = None
         self.log_lp = None
         self.start_time = 0
         self.memory = 0
@@ -156,6 +157,7 @@ class Monitor():
         monitor_file = Path(f'{self.path}/monitor.json')
         monitor = ({
             # u = user
+            # p = pb_version
             # v = version
             # st = start_time
             # m = memory
@@ -174,6 +176,7 @@ class Monitor():
             # ct = pnl_counter_today
             # cy = pnl_counter_yesterday
             "u": self.user,
+            "p": self.pb_version,
             "v": self.version,
             "st": self.start_time,
             "m": self.memory,
@@ -185,7 +188,7 @@ class Monitor():
             "et": self.errors_today,
             "ey": self.errors_yesterday,
             "t": self.log_traceback,
-            "tb": self.tracebacks_today,
+            "tt": self.tracebacks_today,
             "ty": self.tracebacks_yesterday,
             "pt": self.pnl_today,
             "py": self.pnl_yesterday,
@@ -228,6 +231,9 @@ class RunSingle():
             except psutil.AccessDenied:
                 pass
             if self.user in cmdline and self.symbol in cmdline and any("passivbot.py" in sub for sub in cmdline):
+                self.monitor.start_time = process.create_time()
+                self.monitor.memory = process.memory_info()
+                self.monitor.cpu = process.cpu_percent()
                 return process
 
     def stop(self):
@@ -334,6 +340,7 @@ class RunSingle():
         file = Path(f'{self.path}/instance.cfg')
         self.monitor.path = self.path
         self.monitor.user = self.user
+        self.monitor.pb_version = "s"
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
@@ -397,6 +404,9 @@ class RunMulti():
             except psutil.AccessDenied:
                 pass
             if any(self.user in sub for sub in cmdline) and any("passivbot_multi.py" in sub for sub in cmdline):
+                self.monitor.start_time = process.create_time()
+                self.monitor.memory = process.memory_info()
+                self.monitor.cpu = process.cpu_percent()
                 return process
 
     def stop(self):
@@ -454,6 +464,7 @@ class RunMulti():
         file = Path(f'{self.path}/multi.hjson')
         self.monitor.path = self.path
         self.monitor.user = self.user
+        self.monitor.pb_version = "6"
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
@@ -557,6 +568,7 @@ class RunV7():
         file = Path(f'{self.path}/config.json')
         self.monitor.path = self.path
         self.monitor.user = self.user
+        self.monitor.pb_version = "7"
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
