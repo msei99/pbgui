@@ -106,32 +106,32 @@ def load_monitor_config():
         st.session_state.mem_warning_v7 = 100
     st.session_state.mem_error_v7 = load_ini("monitor", "mem_error_v7")
     if st.session_state.mem_error_v7 == "":
-        st.session_state.mem_error_v7 = 200
+        st.session_state.mem_error_v7 = 250
     st.session_state.cpu_warning_v7 = load_ini("monitor", "cpu_warning_v7")
     if st.session_state.cpu_warning_v7 == "":
-        st.session_state.cpu_warning_v7 = 5
+        st.session_state.cpu_warning_v7 = 10
     st.session_state.cpu_error_v7 = load_ini("monitor", "cpu_error_v7")
     if st.session_state.cpu_error_v7 == "":
-        st.session_state.cpu_error_v7 = 10
+        st.session_state.cpu_error_v7 = 15
     st.session_state.error_warning_v7 = load_ini("monitor", "error_warning_v7")
     if st.session_state.error_warning_v7 == "":
-        st.session_state.error_warning_v7 = 5
+        st.session_state.error_warning_v7 = 25
     st.session_state.error_error_v7 = load_ini("monitor", "error_error_v7")
     if st.session_state.error_error_v7 == "":
-        st.session_state.error_error_v7 = 10
+        st.session_state.error_error_v7 = 50
     st.session_state.traceback_warning_v7 = load_ini("monitor", "traceback_warning_v7")
     if st.session_state.traceback_warning_v7 == "":
-        st.session_state.traceback_warning_v7 = 5
+        st.session_state.traceback_warning_v7 = 25
     st.session_state.traceback_error_v7 = load_ini("monitor", "traceback_error_v7")
     if st.session_state.traceback_error_v7 == "":
-        st.session_state.traceback_error_v7 = 10
+        st.session_state.traceback_error_v7 = 50
     # Multi
     st.session_state.mem_warning_multi = load_ini("monitor", "mem_warning_multi")
     if st.session_state.mem_warning_multi == "":
-        st.session_state.mem_warning_multi = 100
+        st.session_state.mem_warning_multi = 50
     st.session_state.mem_error_multi = load_ini("monitor", "mem_error_multi")
     if st.session_state.mem_error_multi == "":
-        st.session_state.mem_error_multi = 200
+        st.session_state.mem_error_multi = 100
     st.session_state.cpu_warning_multi = load_ini("monitor", "cpu_warning_multi")
     if st.session_state.cpu_warning_multi == "":
         st.session_state.cpu_warning_multi = 5
@@ -140,23 +140,23 @@ def load_monitor_config():
         st.session_state.cpu_error_multi = 10
     st.session_state.error_warning_multi = load_ini("monitor", "error_warning_multi")
     if st.session_state.error_warning_multi == "":
-        st.session_state.error_warning_multi = 5
+        st.session_state.error_warning_multi = 25
     st.session_state.error_error_multi = load_ini("monitor", "error_error_multi")
     if st.session_state.error_error_multi == "":
-        st.session_state.error_error_multi = 10
+        st.session_state.error_error_multi = 50
     st.session_state.traceback_warning_multi = load_ini("monitor", "traceback_warning_multi")
     if st.session_state.traceback_warning_multi == "":
-        st.session_state.traceback_warning_multi = 5
+        st.session_state.traceback_warning_multi = 25
     st.session_state.traceback_error_multi = load_ini("monitor", "traceback_error_multi")
     if st.session_state.traceback_error_multi == "":
-        st.session_state.traceback_error_multi = 10
+        st.session_state.traceback_error_multi = 50
     # Single
     st.session_state.mem_warning_single = load_ini("monitor", "mem_warning_single")
     if st.session_state.mem_warning_single == "":
-        st.session_state.mem_warning_single = 100
+        st.session_state.mem_warning_single = 50
     st.session_state.mem_error_single = load_ini("monitor", "mem_error_single")
     if st.session_state.mem_error_single == "":
-        st.session_state.mem_error_single = 200
+        st.session_state.mem_error_single = 100
     st.session_state.cpu_warning_single = load_ini("monitor", "cpu_warning_single")
     if st.session_state.cpu_warning_single == "":
         st.session_state.cpu_warning_single = 5
@@ -165,16 +165,16 @@ def load_monitor_config():
         st.session_state.cpu_error_single = 10
     st.session_state.error_warning_single = load_ini("monitor", "error_warning_single")
     if st.session_state.error_warning_single == "":
-        st.session_state.error_warning_single = 5
+        st.session_state.error_warning_single = 25
     st.session_state.error_error_single = load_ini("monitor", "error_error_single")
     if st.session_state.error_error_single == "":
-        st.session_state.error_error_single = 10
+        st.session_state.error_error_single = 50
     st.session_state.traceback_warning_single = load_ini("monitor", "traceback_warning_single")
     if st.session_state.traceback_warning_single == "":
-        st.session_state.traceback_warning_single = 5
+        st.session_state.traceback_warning_single = 25
     st.session_state.traceback_error_single = load_ini("monitor", "traceback_error_single")
     if st.session_state.traceback_error_single == "":
-        st.session_state.traceback_error_single = 10
+        st.session_state.traceback_error_single = 50
 
 
 def pbremote_edit():
