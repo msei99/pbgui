@@ -172,8 +172,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.18 (13-10-2024)
 - Services: Show PNL Today, Yesterday from LogMonitor
-- Services: Show Logmonitor Information Memory, CPU, Infos, Erros, Tracesbacks
-- PBRun/PBRemote: Monitori passivbot logs and send infos to master
+- Services: Show Logmonitor Information Memory, CPU, Infos, Erros, Tracebacks
+- PBRun/PBRemote: Monitor passivbot logs and send infos to master
 - PBData: Reload User on every run for new added Users
 - PBRun: Recompile rust if new pb7 version is installed
 - PBData: Bugfix when removing User from API
