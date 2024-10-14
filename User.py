@@ -122,6 +122,7 @@ class Users:
                 return user.name
 
     def load(self):
+        self.users = []
         users = ""
         try:
             if Path(self.api_path).exists():
@@ -139,7 +140,7 @@ class Users:
             if "exchange" in users[user]:
                 my_user = User()
                 my_user.name = user
-                if my_user.name not in self.users:
+                if my_user.name not in self.list():
                     my_user.exchange = users[user]["exchange"]
                     if "key" in users[user]:
                         my_user.key = users[user]["key"]
