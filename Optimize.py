@@ -1019,7 +1019,7 @@ class OptimizeResults:
                                 del st.session_state.bt_compare
                             if "bt_import" in st.session_state:
                                 del st.session_state.bt_import
-                            st.switch_page("pages/11_Backtest.py")
+                            st.switch_page("pages/11_Single Backtest.py")
         column_config = {
             "View": st.column_config.CheckboxColumn('View', default=False),
             "path": None,
