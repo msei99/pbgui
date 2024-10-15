@@ -64,7 +64,7 @@ def select_instance():
             if type(balance) == float:
                 wb += balance
             total_upnl += instance.upnl
-    if len(instances.instances) > 0:
+    if len(d) > 0:
         column_config = {
             "Balance": st.column_config.TextColumn(f'Balance: ${wb:.2f}'),
             "uPnl": st.column_config.TextColumn(f'uPnl: ${total_upnl:.2f}'),
