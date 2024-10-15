@@ -109,8 +109,15 @@ class OptimizeV7QueueItem:
 
     def stop(self):
         if self.is_running():
-            p = psutil.Process(self.pid)
-            p.kill()
+            parent = psutil.Process(self.pid)
+            children = parent.children(recursive=True)
+            children.append(parent)
+            for p in children:
+                try:
+                    p.kill()
+                except psutil.NoSuchProcess:
+                    pass
+
 
     def load_pid(self):
         if self.pidfile.exists():
