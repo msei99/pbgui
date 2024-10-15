@@ -100,6 +100,8 @@ def select_instance():
     # Navigation
     with st.sidebar:
         if st.button(":recycle:"):
+            if "remote" in st.session_state:
+                del st.session_state.remote
             del st.session_state.pbgui_instances
             with st.spinner('Initializing Instances...'):
                 st.session_state.pbgui_instances = Instances()
