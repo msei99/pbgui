@@ -410,7 +410,7 @@ def pbremote_details():
             api_sync_list.append(api.name)
         st.header("API not in sync with remote servers:")
         st.write(f"{api_sync_list}")
-        if st.button(f'Sync API to all',key="sync_api"):
+        if st.button(f'Sync API-Keys to all',key="sync_api"):
             pbremote.sync_api_up()
     if "server" in st.session_state:
         server = st.session_state.server
