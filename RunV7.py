@@ -15,7 +15,11 @@ class V7Instance():
     def __init__(self):
         self.instance_path = None
         self._users = Users()
-        self._user = self._users.list_v7()[0]
+        v7_users = self._users.list_v7()
+        if v7_users:
+            self._user = v7_users[0]
+        else:
+            self._user = ""
         self.config = ConfigV7()
         self.initialize()
 
