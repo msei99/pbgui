@@ -177,10 +177,10 @@ class Users:
                 save_users[user.name]["is_vault"] = user.is_vault
         # Backup api-keys and save new version
         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        if not self.api_backup.exists():
+            self.api_backup.mkdir(parents=True)
         if is_pb_installed():
             destination = Path(f'{self.api_backup}/api-keys_{date}.json')
-            if not self.api_backup.exists():
-                self.api_backup.mkdir(parents=True)
             if Path(self.api_path).exists():
                 shutil.copy(PurePath(self.api_path), destination)
             with Path(f'{self.api_path}').open("w", encoding="UTF-8") as f:
