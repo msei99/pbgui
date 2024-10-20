@@ -1119,7 +1119,7 @@ class Instances:
             if inst.load(instance):
                 self.instances.append(inst)
         # sort instance by user and symbol
-        self.instances = sorted(self.instances, key=lambda d: d.symbol) 
+        self.instances = sorted(self.instances, key=lambda d: d.symbol)
         self.instances = sorted(self.instances, key=lambda d: d.user) 
 
     def view_log(self, log_filename: str):

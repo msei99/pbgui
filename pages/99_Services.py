@@ -65,9 +65,24 @@ def pbdata_overview():
         pbdata_icon = '❌'
     st.metric(label="PBData", value=pbdata_icon)
 
+def pbcoindata_overview():
+    pbcoindata = st.session_state.pbcoindata
+    pbcoindata_status = pbcoindata.is_running()
+    if "service_pbcoindata" in st.session_state:
+        if st.session_state.service_pbcoindata != pbcoindata_status:
+            pbcoindata_status = st.session_state.service_pbcoindata
+    st.toggle("PBCoinData", value=pbcoindata_status, key="service_pbcoindata", help=pbgui_help.pbcoindata)
+    if pbcoindata_status:
+        pbcoindata.run()
+        pbcoindata_icon = '✅'
+    else:
+        pbcoindata.stop()
+        pbcoindata_icon = '❌'
+    st.metric(label="PBCoinData", value=pbcoindata_icon)
+    
 def overview():
     st.header("Service Status")
-    col_1, col_2, col_3, col_4 = st.columns([1,1,1,1])
+    col_1, col_2, col_3, col_4, col_5 = st.columns([1,1,1,1,1])
     with col_1:
         pbrun_overview()
         if st.button("Show Details", key="button_pbrun_details"):
@@ -87,6 +102,11 @@ def overview():
         pbdata_overview()
         if st.button("Show Details", key="button_pbdata_details"):
             st.session_state.pbdata_details = True
+            st.rerun()
+    with col_5:
+        pbcoindata_overview()
+        if st.button("Show Details", key="button_pbcoindata_details"):
+            st.session_state.pbcoindata_details = True
             st.rerun()
 
 def pbrun_details():
@@ -175,7 +195,6 @@ def load_monitor_config():
     st.session_state.traceback_error_single = load_ini("monitor", "traceback_error_single")
     if st.session_state.traceback_error_single == "":
         st.session_state.traceback_error_single = 50
-
 
 def pbremote_edit():
     pbremote = st.session_state.pbremote
@@ -621,6 +640,19 @@ def pbdata_details():
     if st.checkbox("Show logfile", key="pbdata_log"):
         st.session_state.pbgui_instances.view_log("PBData")
 
+def pbcoindata_details():
+    pbcoindata = st.session_state.pbcoindata
+    # Navigation
+    with st.sidebar:
+        if st.button(":back:", key="button_pbcoindata_back"):
+            del st.session_state.pbcoindata_details
+            st.rerun()
+    st.header("PBCoinData Details")
+    pbcoindata_overview()
+    if st.checkbox("Show logfile", key="pbcoindata_log"):
+        st.session_state.pbgui_instances.view_log("PBCoinData")
+
+
 set_page_config()
 
 # Init session states
@@ -637,5 +669,7 @@ elif 'pbdata_details' in st.session_state:
     pbdata_details()
 elif 'pbremote_edit' in st.session_state:
     pbremote_edit()
+elif 'pbcoindata_details' in st.session_state:
+    pbcoindata_details()
 else:
     overview()
