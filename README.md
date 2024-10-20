@@ -172,7 +172,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.19 (20-10-2024)
 - CoinMarketCap integration
-- V7 Run and Optimize filters for marketcap and col/mcap added
+- V7 Run and Optimize filters for marketcap and vol/mcap added
 - New Service PBCoinData fetch data from CoinMarketCap
 
 ## v1.18 (13-10-2024)
