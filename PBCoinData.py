@@ -80,6 +80,7 @@ class CoinData:
         self.pidfile = Path(f'{self.piddir}/pbcoindata.pid')
         self.my_pid = None
         self._api_key = None
+        self.api_error = None
         self._fetch_limit = 5000
         self._fetch_interval = 24
         self.load_config()
@@ -232,6 +233,32 @@ class CoinData:
         with open('pbgui.ini', 'w') as pbgui_configfile:
             pb_config.write(pbgui_configfile)
 
+    def fetch_api_status(self):
+        url = 'https://pro-api.coinmarketcap.com/v1/key/info'
+        headers = {
+            'Accepts': 'application/json',
+            'X-CMC_PRO_API_KEY': self.api_key,
+        }
+        session = Session()
+        session.headers.update(headers)
+        try:
+            response = session.get(url)
+            if response.status_code == 200:
+                r = json.loads(response.text)
+                self.credit_limit_monthly = r["data"]["plan"]["credit_limit_monthly"]
+                self.credit_limit_monthly_reset = r["data"]["plan"]["credit_limit_monthly_reset"]
+                self.credit_limit_monthly_reset_timestamp = r["data"]["plan"]["credit_limit_monthly_reset_timestamp"]
+                self.credits_used_day = r["data"]["usage"]["current_day"]["credits_used"]
+                self.credits_used_month = r["data"]["usage"]["current_month"]["credits_used"]
+                self.credits_left = r["data"]["usage"]["current_month"]["credits_left"]
+                return True
+            else:
+                r = json.loads(response.text)
+                self.api_error = r["status"]["error_message"]
+                return False
+        except (ConnectionError, Timeout, TooManyRedirects) as e:
+            return
+
     def fetch_data(self):
         url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
         parameters = {
@@ -246,11 +273,16 @@ class CoinData:
         session.headers.update(headers)
         try:
             response = session.get(url, params=parameters)
-            self.data = json.loads(response.text)
+            if response.status_code == 200:
+                self.data = json.loads(response.text)
+            else:
+                self.data = None
         except (ConnectionError, Timeout, TooManyRedirects) as e:
             return e
     
     def save_data(self):
+        if not self.data:
+            return
         pbgdir = Path.cwd()
         coin_path = f'{pbgdir}/data/coindata'
         if not Path(coin_path).exists():
@@ -296,6 +328,8 @@ class CoinData:
     def list_symbols(self):
         if not self.data:
             self.load_data()
+        if not self.data:
+            return
         if "data" not in self.data:
             return
         self._symbols_data = []
@@ -323,7 +357,7 @@ class CoinData:
                         "symbol": symbol,
                         "name": coin_data["name"],
                         "price": coin_data["quote"]["USD"]["price"],
-                        "volume_24h": coin_data["quote"]["USD"]["volume_24h"],
+                        "volume_24h": int(coin_data["quote"]["USD"]["volume_24h"]),
                         "market_cap": int(market_cap),
                         "vol/mcap": coin_data["quote"]["USD"]["volume_24h"]/market_cap,
                         "link": f'https://coinmarketcap.com/currencies/{coin_data["slug"]}',
@@ -345,10 +379,6 @@ class CoinData:
                     self.approved_coins.append(symbol)
                 else:
                     self.ignored_coins.append(symbol)
-                # else:
-                #     self._symbols_data.append(symbol_data)
-                #     self.approved_coins.append(symbol)
-        # sort by market cap
         self._symbols_data = sorted(self._symbols_data, key=lambda x: x["market_cap"], reverse=True)
 
     def filter_by_market_cap(self, symbols: list, mc: int):
