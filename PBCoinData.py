@@ -83,6 +83,7 @@ class CoinData:
         self.api_error = None
         self._fetch_limit = 5000
         self._fetch_interval = 24
+        self.ini_ts = 0
         self.load_config()
         self.data = None
         self._exchange = Exchanges.list()[0]
@@ -212,15 +213,24 @@ class CoinData:
         with open(self.pidfile, 'w') as f:
             f.write(str(self.my_pid))
 
+    def has_new_config(self):
+        if Path('pbgui.ini').exists():
+            ini_ts = Path('pbgui.ini').stat().st_mtime
+            if self.ini_ts < ini_ts:
+                self.ini_ts = ini_ts
+                return True
+        return False
+
     def load_config(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("coinmarketcap", "api_key"):
-            self._api_key = pb_config.get("coinmarketcap", "api_key")
-        if pb_config.has_option("coinmarketcap", "fetch_limit"):
-            self._fetch_limit = int(pb_config.get("coinmarketcap", "fetch_limit"))
-        if pb_config.has_option("coinmarketcap", "fetch_interval"):
-            self._fetch_interval = int(pb_config.get("coinmarketcap", "fetch_interval"))
+        if self.has_new_config():
+            pb_config = configparser.ConfigParser()
+            pb_config.read('pbgui.ini')
+            if pb_config.has_option("coinmarketcap", "api_key"):
+                self._api_key = pb_config.get("coinmarketcap", "api_key")
+            if pb_config.has_option("coinmarketcap", "fetch_limit"):
+                self._fetch_limit = int(pb_config.get("coinmarketcap", "fetch_limit"))
+            if pb_config.has_option("coinmarketcap", "fetch_interval"):
+                self._fetch_interval = int(pb_config.get("coinmarketcap", "fetch_interval"))
     
     def save_config(self):
         pb_config = configparser.ConfigParser()
@@ -431,6 +441,7 @@ def main():
                 else:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data')
             sleep(60)
+            pbcoindata.load_config()
         except Exception as e:
             print(f'Something went wrong, but continue {e}')
             traceback.print_exc()
