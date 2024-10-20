@@ -659,18 +659,20 @@ class BacktestV7Result:
     def load_be(self):
         if self.be is None:
             be = f'{self.result_path}/balance_and_equity.csv'
-            self.be = pd.read_csv(be)
-            timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
-            start_time = timestamp - (self.be.iloc[:, 0].iloc[-1] * 60)
-            self.be['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.be.iloc[:, 0], unit='m')
+            if Path(be).exists():
+                self.be = pd.read_csv(be)
+                timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+                start_time = timestamp - (self.be.iloc[:, 0].iloc[-1] * 60)
+                self.be['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.be.iloc[:, 0], unit='m')
 
     def load_fills(self):
         if self.fills is None:
             fills = f'{self.result_path}/fills.csv'
-            self.fills = pd.read_csv(fills)
-            timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
-            start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
-            self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
+            if Path(fills).exists():
+                self.fills = pd.read_csv(fills)
+                timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+                start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
+                self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
 
     def view_plot(self):
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
@@ -692,25 +694,31 @@ class BacktestV7Result:
 
     # Create Chart with plotly
     def view_chart_be(self):
-        fig = go.Figure()
-        fig.update_layout(yaxis_title='Balance')
-        fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['equity'], name="equity", line=dict(width=0.75)))
-        fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['balance'], name="balance", line=dict(width=2.5)))
-        fig.update_layout(yaxis_title='Balance', height=800)
-        fig.update_xaxes(showgrid=True, griddash="dot")
-        st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_be")
+        if self.be is not None:
+            fig = go.Figure()
+            fig.update_layout(yaxis_title='Balance')
+            fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['equity'], name="equity", line=dict(width=0.75)))
+            fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['balance'], name="balance", line=dict(width=2.5)))
+            fig.update_layout(yaxis_title='Balance', height=800)
+            fig.update_xaxes(showgrid=True, griddash="dot")
+            st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_be")
+        else:
+            st.error("No balance and equity data found")
 
     # Create Symbol Chart with plotly
     def view_chart_symbol(self):
-        fig = go.Figure()
-        for symbol in self.fills['symbol'].unique():
-            symbol_df = self.fills[self.fills['symbol'] == symbol].copy()
-            symbol_df["sym_pnl"] = symbol_df["pnl"].cumsum()
-            fig.add_trace(go.Scatter(x=symbol_df['time'], y=symbol_df['sym_pnl'], name=symbol))
-        fig.update_layout(yaxis_title='PnL', height=800, )
-        fig['data'][0]['showlegend'] = True
-        fig.update_xaxes(showgrid=True, griddash="dot")
-        st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_symbols")
+        if self.fills is not None:
+            fig = go.Figure()
+            for symbol in self.fills['symbol'].unique():
+                symbol_df = self.fills[self.fills['symbol'] == symbol].copy()
+                symbol_df["sym_pnl"] = symbol_df["pnl"].cumsum()
+                fig.add_trace(go.Scatter(x=symbol_df['time'], y=symbol_df['sym_pnl'], name=symbol))
+            fig.update_layout(yaxis_title='PnL', height=800, )
+            fig['data'][0]['showlegend'] = True
+            fig.update_xaxes(showgrid=True, griddash="dot")
+            st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_symbols")
+        else:
+            st.error("No fills data found")
 
 class BacktestsV7:
     def __init__(self):
