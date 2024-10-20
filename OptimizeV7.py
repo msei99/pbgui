@@ -478,12 +478,10 @@ class OptimizeV7Item:
         self.config = ConfigV7()
         self.users = Users()
         self.backtest_results = []
-        self._available_symbols = []
         if optimize_file:
             self.name = PurePath(optimize_file).stem
             self.config.config_file = optimize_file
             self.config.load_config()
-            self._available_symbols = load_symbols_from_ini(exchange=self.config.backtest.exchange, market_type='swap')
         else:
             self.initialize()
 
@@ -491,15 +489,21 @@ class OptimizeV7Item:
         self.config.backtest.start_date = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.config.backtest.end_date = datetime.date.today().strftime("%Y-%m-%d")
         self.config.optimize.n_cpus = multiprocessing.cpu_count()
-        # Load available symbols
-        self._available_symbols = load_symbols_from_ini(exchange=self.config.backtest.exchange, market_type='swap')
 
     def edit(self):
+        # Init coindata
+        coindata = st.session_state.pbcoindata
+        if coindata.exchange != self.config.backtest.exchange:
+            coindata.exchange = self.config.backtest.exchange
+        if coindata.market_cap != self.config.pbgui.market_cap:
+            coindata.market_cap = self.config.pbgui.market_cap
+        if coindata.vol_mcap != self.config.pbgui.vol_mcap:
+            coindata.vol_mcap = self.config.pbgui.vol_mcap
         # Init session_state for keys
         if "edit_opt_v7_exchange" in st.session_state:
             if st.session_state.edit_opt_v7_exchange != self.config.backtest.exchange:
                 self.config.backtest.exchange = st.session_state.edit_opt_v7_exchange
-                self._available_symbols = load_symbols_from_ini(exchange=self.config.backtest.exchange, market_type='swap')
+                coindata.exchange = self.config.backtest.exchange
         if "edit_opt_v7_name" in st.session_state:
             if st.session_state.edit_opt_v7_name != self.name:
                 self.name = st.session_state.edit_opt_v7_name
@@ -531,9 +535,6 @@ class OptimizeV7Item:
         if "edit_opt_v7_lower_bound_loss_profit_ratio" in st.session_state:
             if st.session_state.edit_opt_v7_lower_bound_loss_profit_ratio != self.config.optimize.limits.lower_bound_loss_profit_ratio:
                 self.config.optimize.limits.lower_bound_loss_profit_ratio = st.session_state.edit_opt_v7_lower_bound_loss_profit_ratio
-        if "edit_opt_v7_approved_coins" in st.session_state:
-            if st.session_state.edit_opt_v7_approved_coins != self.config.live.approved_coins:
-                self.config.live.approved_coins = st.session_state.edit_opt_v7_approved_coins
         if "edit_opt_v7_population_size" in st.session_state:
             if st.session_state.edit_opt_v7_population_size != self.config.optimize.population_size:
                 self.config.optimize.population_size = st.session_state.edit_opt_v7_population_size
@@ -546,6 +547,23 @@ class OptimizeV7Item:
         if "edit_opt_v7_scoring" in st.session_state:
             if st.session_state.edit_opt_v7_scoring != self.config.optimize.scoring:
                 self.config.optimize.scoring = st.session_state.edit_opt_v7_scoring
+        # Filters
+        if "edit_opt_v7_market_cap" in st.session_state:
+            if st.session_state.edit_opt_v7_market_cap != self.config.pbgui.market_cap:
+                self.config.pbgui.market_cap = st.session_state.edit_opt_v7_market_cap
+                coindata.market_cap = self.config.pbgui.market_cap
+        if "edit_opt_v7_vol_mcap" in st.session_state:
+            if st.session_state.edit_opt_v7_vol_mcap != self.config.pbgui.vol_mcap:
+                self.config.pbgui.vol_mcap = st.session_state.edit_opt_v7_vol_mcap
+                coindata.vol_mcap = self.config.pbgui.vol_mcap
+        # Symbol config
+        if "edit_opt_v7_approved_coins" in st.session_state:
+            if st.session_state.edit_opt_v7_approved_coins != self.config.live.approved_coins:
+                self.config.live.approved_coins = st.session_state.edit_opt_v7_approved_coins
+                if 'All' in self.config.live.approved_coins:
+                    self.config.live.approved_coins = coindata.symbols.copy()
+                elif 'CPT' in self.config.live.approved_coins:
+                    self.config.live.approved_coins = coindata.symbols_cpt.copy()
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
@@ -595,17 +613,31 @@ class OptimizeV7Item:
             st.number_input("mutation_probability", min_value=0.0, max_value=1.0, value=self.config.optimize.mutation_probability, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
         with col4:
             st.empty()
-        for symbol in self.config.live.approved_coins.copy():
-            if symbol not in self._available_symbols:
+        # Filters
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_opt_v7_market_cap", help=pbgui_help.market_cap)
+        with col2:
+            st.number_input("vol/mcap", min_value=0.0, value=self.config.pbgui.vol_mcap, step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
+        # Apply filters
+        for symbol in coindata.ignored_coins:
+            if symbol in self.config.live.approved_coins:
                 self.config.live.approved_coins.remove(symbol)
+        # Remove unavailable symbols
+        for symbol in self.config.live.approved_coins.copy():
+            if symbol not in coindata.symbols:
+                self.config.live.approved_coins.remove(symbol)
+        # Correct Display of Symbols
+        if "edit_run_v7_approved_coins" in st.session_state:
+            st.session_state.edit_run_v7_approved_coins = self.config.live.approved_coins
         col1, col2 = st.columns([3,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('symbols', self._available_symbols, default=self.config.live.approved_coins, key="edit_opt_v7_approved_coins")
+            st.multiselect('symbols', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins, key="edit_opt_v7_approved_coins")
         with col2:
             if st.button("Update Symbols", key="edit_opt_update_symbols"):
                 exchange = Exchange(self.config.backtest.exchange)
                 exchange.fetch_symbols()
-                self._available_symbols = exchange.swap
+                coindata.load_symbols()
                 st.rerun()
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:

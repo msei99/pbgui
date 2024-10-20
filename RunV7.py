@@ -44,8 +44,6 @@ class V7Instance():
     def initialize(self):
         # Init config
         self.config.live.user = self._user
-        self._available_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='swap')
-        self._cpt_allowed_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='cpt')
         # Init PBremote
         if 'remote' not in st.session_state:
             st.session_state.remote = PBRemote()
@@ -102,10 +100,19 @@ class V7Instance():
             del st.session_state.edit_run_v7_version
 
     def edit(self):
+        # Init coindata
+        coindata = st.session_state.pbcoindata
+        if coindata.exchange != self._users.find_exchange(self.user):
+            coindata.exchange = self._users.find_exchange(self.user)
+        if coindata.market_cap != self.config.pbgui.market_cap:
+            coindata.market_cap = self.config.pbgui.market_cap
+        if coindata.vol_mcap != self.config.pbgui.vol_mcap:
+            coindata.vol_mcap = self.config.pbgui.vol_mcap
         # Init session_state for keys
         if "edit_run_v7_user" in st.session_state:
             if st.session_state.edit_run_v7_user != self.user:
                 self.user = st.session_state.edit_run_v7_user
+                coindata.exchange = self._users.find_exchange(self.user)
         if "edit_run_v7_enabled_on" in st.session_state:
             if st.session_state.edit_run_v7_enabled_on != self.config.pbgui.enabled_on:
                 self.config.pbgui.enabled_on = st.session_state.edit_run_v7_enabled_on
@@ -155,14 +162,23 @@ class V7Instance():
         if "edit_run_v7_time_in_force" in st.session_state:
             if st.session_state.edit_run_v7_time_in_force != self.config.live.time_in_force:
                 self.config.live.time_in_force = st.session_state.edit_run_v7_time_in_force
+        # Filters
+        if "edit_run_v7_market_cap" in st.session_state:
+            if st.session_state.edit_run_v7_market_cap != self.config.pbgui.market_cap:
+                self.config.pbgui.market_cap = st.session_state.edit_run_v7_market_cap
+                coindata.market_cap = self.config.pbgui.market_cap
+        if "edit_run_v7_vol_mcap" in st.session_state:
+            if st.session_state.edit_run_v7_vol_mcap != self.config.pbgui.vol_mcap:
+                self.config.pbgui.vol_mcap = st.session_state.edit_run_v7_vol_mcap
+                coindata.vol_mcap = self.config.pbgui.vol_mcap
         # Symbol config
         if "edit_run_v7_approved_coins" in st.session_state:
             if st.session_state.edit_run_v7_approved_coins != self.config.live.approved_coins:
                 self.config.live.approved_coins = st.session_state.edit_run_v7_approved_coins
                 if 'All' in self.config.live.approved_coins:
-                    self.config.live.approved_coins = self._available_symbols
+                    self.config.live.approved_coins = coindata.symbols.copy()
                 elif 'CPT' in self.config.live.approved_coins:
-                    self.config.live.approved_coins = self._cpt_allowed_symbols
+                    self.config.live.approved_coins = coindata.symbols_cpt.copy()
         if "edit_run_v7_ignored_coins" in st.session_state:
             if st.session_state.edit_run_v7_ignored_coins != self.config.live.ignored_coins:
                 self.config.live.ignored_coins = st.session_state.edit_run_v7_ignored_coins
@@ -222,22 +238,43 @@ class V7Instance():
             with col1:
                 time_in_force = ['good_till_cancelled', 'post_only']
                 st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
-        # symbol configuration
-        for symbol in self.config.live.approved_coins.copy():
-            if symbol not in self._available_symbols:
+        #Filters
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_run_v7_market_cap", help=pbgui_help.market_cap)
+        with col2:
+            st.number_input("vol/mcap", min_value=0.0, value=self.config.pbgui.vol_mcap, step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
+        # Apply filters
+        for symbol in coindata.ignored_coins:
+            if symbol not in self.config.live.ignored_coins:
+                self.config.live.ignored_coins.append(symbol)
+            if symbol in self.config.live.approved_coins:
                 self.config.live.approved_coins.remove(symbol)
-        st.multiselect('symbols', ['All', 'CPT'] + self._available_symbols, default=self.config.live.approved_coins, key="edit_run_v7_approved_coins")
+        # Remove unavailable symbols
+        for symbol in self.config.live.approved_coins.copy():
+            if symbol not in coindata.symbols:
+                self.config.live.approved_coins.remove(symbol)
         for symbol in self.config.live.ignored_coins.copy():
-            if symbol not in self._available_symbols:
+            if symbol not in coindata.symbols:
                 self.config.live.ignored_coins.remove(symbol)
+        # Remove from approved_coins when in ignored coins
+        for symbol in self.config.live.ignored_coins:
+            if symbol in self.config.live.approved_coins:
+                self.config.live.approved_coins.remove(symbol)
+        # Correct Display of Symbols
+        if "edit_run_v7_approved_coins" in st.session_state:
+            st.session_state.edit_run_v7_approved_coins = self.config.live.approved_coins
+        if "edit_run_v7_ignored_coins" in st.session_state:
+            st.session_state.edit_run_v7_ignored_coins = self.config.live.ignored_coins
+        st.multiselect('symbols', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins, key="edit_run_v7_approved_coins", help=pbgui_help.approved_coins)
         col1, col2 = st.columns([3,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('ignored_symbols', self._available_symbols, default=self.config.live.ignored_coins, key="edit_run_v7_ignored_coins")
+            st.multiselect('ignored_symbols', coindata.symbols, default=self.config.live.ignored_coins, key="edit_run_v7_ignored_coins", help=pbgui_help.ignored_coins)
         with col2:
             if st.button("Update Symbols", key="edit_run_update_symbols"):
                 exchange = Exchange(self.config.backtest.exchange, self._users.find_user(self.user))
                 exchange.fetch_symbols()
-                self._available_symbols = exchange.swap
+                coindata.load_symbols()
                 st.rerun()
         # Edit long / short
         self.config.bot.edit()

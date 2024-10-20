@@ -2304,10 +2304,13 @@ class PBGui:
         self._version = 0
         self._enabled_on = "disabled"
         self._starting_config = False
+        self._market_cap = 0
+        self._vol_mcap = 10.0
         self._pbgui = {
             "version": self._version,
             "enabled_on": self._enabled_on,
-            "starting_config": self._starting_config
+            "starting_config": self._starting_config,
+            "market_cap": self._market_cap,
         }
     
     def __repr__(self):
@@ -2324,6 +2327,10 @@ class PBGui:
             self._enabled_on = self._pbgui["enabled_on"]
         if "starting_config" in self._pbgui:
             self._starting_config = self._pbgui["starting_config"]
+        if "market_cap" in self._pbgui:
+            self._market_cap = self._pbgui["market_cap"]
+        if "vol_mcap" in self._pbgui:
+            self._vol_mcap = self._pbgui["vol_mcap"]
     
     @property
     def version(self): return self._version
@@ -2331,6 +2338,10 @@ class PBGui:
     def enabled_on(self): return self._enabled_on
     @property
     def starting_config(self): return self._starting_config
+    @property
+    def market_cap(self): return self._market_cap
+    @property
+    def vol_mcap(self): return self._vol_mcap
 
     @version.setter
     def version(self, new_version):
@@ -2344,6 +2355,14 @@ class PBGui:
     def starting_config(self, new_starting_config):
         self._starting_config = new_starting_config
         self._pbgui["starting_config"] = self._starting_config
+    @market_cap.setter
+    def market_cap(self, new_market_cap):
+        self._market_cap = new_market_cap
+        self._pbgui["market_cap"] = self._market_cap
+    @vol_mcap.setter
+    def vol_mcap(self, new_vol_mcap):
+        self._vol_mcap = new_vol_mcap
+        self._pbgui["vol_mcap"] = self._vol_mcap
 
 class ConfigV7():
     def __init__(self, file_name = None):

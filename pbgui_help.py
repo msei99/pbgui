@@ -156,6 +156,7 @@ pbrun = """
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
+    # python PBCoinData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -183,6 +184,7 @@ pbremote = """
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
+    # python PBCoinData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -211,6 +213,7 @@ pbstat = """
     python PBStat.py
     # python PBShare.py
     # python PBData.py
+    # python PBCoinData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -238,6 +241,7 @@ pbshare = """
     # python PBStat.py
     python PBShare.py
     # python PBData.py
+    # python PBCoinData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -266,6 +270,36 @@ pbdata = """
     # python PBStat.py
     # python PBShare.py
     python PBData.py
+    # python PBCoinData.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
+    ```"""
+
+pbcoindata = """
+    ```
+    This is the CoinData Manager from PBGUI.
+    It fetches coin data like marketcap from MarketCap and available coins from Exchanges.
+    Enable, to start fetching data.
+    To start the CoinData Manager after reboot your server, you have to
+    start PBCoinData.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    # python PBRun.py
+    # python PBRemote.py
+    # python PBStat.py
+    # python PBShare.py
+    # python PBData.py
+    python PBCoinData.py
 
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
@@ -884,4 +918,47 @@ time_in_force = """
     Time in force indicates how long your order will remain active before it is executed or expired.
     GTC (good_till_cancelled: The order will last until it is completed or you cancel it.
     PostOnly (post_only): If the order would be filled immediately when submitted, it will be cancelled.
+    ```"""
+
+market_cap = """
+    ```
+    minimum market capitalization in millions of USD (1 million = 1'000'000)
+    ```"""
+
+vol_mcap = """
+    ```
+    minimum volume to market cap ratio
+    ```"""
+
+coindata_api_key = """
+    ```
+    CoinMarketCap API key
+    https://coinmarketcap.com/api/pricing/
+    Basic Free is good enough.
+    ```"""
+
+coindata_fetch_limit = """
+    ```
+    limit of coins to fetch from CoinMarketCap
+    ```"""
+
+coindata_fetch_interval = """
+    ```
+    interval in hours to fetch coins from CoinMarketCap
+    Make sure to not exceed the Basic Plan limit of 10'000 api calls per month.
+    You need 1 credit for 200 coins. So count your coins and interval to not exceed the limit.
+    ```"""
+
+approved_coins = """
+    ```
+    list of approved coins to trade
+    You can not add coins here if they are in ignored_coins.
+    Select ALL for add all available coins, but respect filters.
+    Select CPT for add only coins that are allowed for CopyTrading, but respect filters.
+    ```"""
+
+ignored_coins = """
+    ```
+    list of coins to ignore
+    If you add coins here, they will be removed from approved_coins.
     ```"""
