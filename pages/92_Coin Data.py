@@ -1,6 +1,6 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_initialized, info_popup
+from pbgui_func import set_page_config, is_session_state_initialized, info_popup, error_popup
 from PBCoinData import CoinData
 from Exchange import Exchanges
 
@@ -46,6 +46,9 @@ def setup_coindata():
     coindata  = st.session_state.coindata
     # Navigation
     with st.sidebar:
+        if st.button(":material/refresh:"):
+            st.session_state.coindata = CoinData()
+            st.rerun()
         if st.button(":material/home:"):
             del st.session_state.setup_coindata
             st.rerun()
@@ -66,6 +69,16 @@ def setup_coindata():
     st.text_input("CoinMarketCap API_Key", value=coindata.api_key, type="password", key="edit_coindata_api_key", help=pbgui_help.coindata_api_key)
     st.number_input("Fetch Limit", min_value=200, max_value=5000, value=coindata.fetch_limit, step=200, format="%.d", key="edit_coindata_fetch_limit", help=pbgui_help.coindata_fetch_limit)
     st.number_input("Fetch Interval", min_value=1, max_value=24, value=coindata.fetch_interval, step=1, format="%.d", key="edit_coindata_fetch_interval", help=pbgui_help.coindata_fetch_interval)
+    if coindata.api_key:
+        if coindata.fetch_api_status():
+            st.success("API Key is valid", icon="✅")
+            st.write(f"API limit monthly: {coindata.credit_limit_monthly}")
+            st.write(f"Next API credits reset in: {coindata.credit_limit_monthly_reset} at: {coindata.credit_limit_monthly_reset_timestamp}")
+            st.write(f"API credits used today: {coindata.credits_used_day}")
+            st.write(f"API credits used monthly: {coindata.credits_used_month}")
+            st.write(f"API credits left: {coindata.credits_left}")
+        else:
+            st.error(coindata.api_error, icon="🚨")
 
 set_page_config("Coin Data")
 
