@@ -288,9 +288,10 @@ class CoinData:
         if pb_config.has_option("exchanges", f'{exchange}.swap'):
             self._symbols = eval(pb_config.get("exchanges", f'{exchange}.swap'))
         if self.exchange in ["binance", "bybit"]:
-            self._symbols_cpt = eval(pb_config.get("exchanges", f'{exchange}.cpt'))
-        else:
-            self._symbols_cpt = self._symbols
+            if pb_config.has_option("exchanges", f'{exchange}.cpt'):
+                self._symbols_cpt = eval(pb_config.get("exchanges", f'{exchange}.cpt'))
+                return
+        self._symbols_cpt = self._symbols
     
     def list_symbols(self):
         if not self.data:
