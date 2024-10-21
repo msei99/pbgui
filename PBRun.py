@@ -23,7 +23,7 @@ import os
 import traceback
 import uuid
 from Status import InstanceStatus, InstancesStatus
-import re
+from PBCoinData import CoinData
 
 class Monitor():
     def __init__(self):
@@ -198,6 +198,45 @@ class Monitor():
             })
         with open(monitor_file, "w", encoding='utf-8') as f:
             json.dump(monitor, f)
+
+class DynamicIgnore():
+    def __init__(self):
+        self.path = None
+        self.coindata = CoinData()
+        self.ignored_coins = []
+    
+    def watch(self):
+        if self.coindata.has_new_data():
+            self.coindata.list_symbols()
+        if self.ignored_coins != self.coindata.ignored_coins:
+            removed_coins = set(self.ignored_coins) - set(self.coindata.ignored_coins)
+            removed_coins = [*removed_coins]
+            added_coins = set(self.coindata.ignored_coins) - set(self.ignored_coins)
+            added_coins = [*added_coins]
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_symbols {self.path}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Removed: {removed_coins}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Added: {added_coins}')
+            self.ignored_coins = self.coindata.ignored_coins
+            self.save()
+            self.update_hjson()
+            return True
+        return False
+    
+    def save(self):
+        file = Path(f'{self.path}/ignored_coins.json')
+        with open(file, "w", encoding='utf-8') as f:
+            json.dump(self.ignored_coins, f)
+    
+    def update_hjson(self):
+        file = Path(f'{self.path}/multi_run.hjson')
+        with open(file, "r", encoding='utf-8') as f:
+            multi_config = f.read()
+        multi_config = hjson.loads(multi_config)
+        if "ignored_symbols" in multi_config:
+            if multi_config["ignored_symbols"] != self.ignored_coins:
+                multi_config["ignored_symbols"] = self.ignored_coins
+                with open(file, "w", encoding='utf-8') as f:
+                    f.write(hjson.dumps(multi_config))
 
 class RunSingle():
     def __init__(self):
@@ -386,10 +425,17 @@ class RunMulti():
         self.pbdir = None
         self.pbvenv = None
         self.pbgdir = None
+        self.dynamic_ignore = None
     
     def watch(self):
         if not self.is_running():
             self.start()
+
+    def watch_dynamic(self):
+        if self.dynamic_ignore is not None:
+            if self.dynamic_ignore.watch():
+                self.stop()
+                self.start()
 
     def is_running(self):
         if self.pid():
@@ -451,6 +497,12 @@ class RunMulti():
         # Generate clean multi_run.hjson file
         del self._multi_config["enabled_on"]
         del self._multi_config["version"]
+        if "market_cap" in self._multi_config:
+            del self._multi_config["market_cap"]
+        if "vol_mcap" in self._multi_config:
+            del self._multi_config["vol_mcap"]
+        if "dynamic_ignore" in self._multi_config:
+            del self._multi_config["dynamic_ignore"]
         self._multi_config["live_configs_dir"] = self.path
         if "default_config_path" in self._multi_config:
             if self._multi_config["default_config_path"] != "":
@@ -474,6 +526,20 @@ class RunMulti():
                 if "version" in self._multi_config:
                     self.version = self._multi_config["version"]
                     self.monitor.version = self.version
+                if "dynamic_ignore" in self._multi_config:
+                    self.dynamic_ignore = DynamicIgnore()
+                    self.dynamic_ignore.path = self.path
+                    self.dynamic_ignore.coindata.market_cap = self._multi_config["market_cap"]
+                    self.dynamic_ignore.coindata.vol_mcap = self._multi_config["vol_mcap"]
+                    if "ignored_symbols" in self._multi_config:
+                        self.dynamic_ignore.ignored_coins = self._multi_config["ignored_symbols"]
+                    # Find Exchange from User
+                    api_path = f'{self.pbdir}/api-keys.json'
+                    if Path(api_path).exists():
+                        with open(api_path, "r", encoding='utf-8') as f:
+                            api_keys = json.load(f)
+                        if self.user in api_keys:
+                            self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
                 if "enabled_on" in self._multi_config:
                     if self.name == self._multi_config["enabled_on"]:
                         return True
@@ -1271,6 +1337,7 @@ def main():
                 run_v7.monitor.watch_log()
             for run_multi in run.run_multi:
                 run_multi.watch()
+                run_multi.watch_dynamic()
                 run_multi.monitor.watch_log()
             for run_single in run.run_single:
                 run_single.watch()

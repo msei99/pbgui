@@ -165,10 +165,28 @@ bucket = pbgui:
 There is no need to install or run streamlit on your Remote Server.
 Start PBRun.py and PBRemote using the start.sh script.
 
+## PBCoinData CoinMarketCap Filters
+With PBCoinData, you can download CoinMarketCap data for symbols and use this data to maintain your ignored_symbols and ignored_coins. You can filter out low market cap symbols or use vol/mcap to detect possible rug pulls early.
+
+You need to configure the pbgui.ini file with a minimum of the following settings on your VPS. Here is an example of pbgui.ini (replace the parameters with your own correct settings):
+```
+[coinmarketcap]
+api_key = <your_api_key>
+fetch_limit = 1000
+fetch_interval = 4
+```
+With these settings, PBCoinData will fetch the top 1000 symbols every 4 hours. You will need around 930 credits per month with this configuration. A Basic Free Plan from CoinMarketCap provides 10,000 credits per month, allowing you to run 1 master and 9 VPS instances with the same API key.
+Start PBCoinData.py using the start.sh script.
+
 ## Running on Windows (Not tested with passivbot 7)
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.20 (21-10-2024)
+- Multi: Filters for marketcap and vol/mcap added
+- Multi: Dynamic filter for mcap and vol/mcap added
+- PBRun: Dynamic filter update ignored_symbols
 
 ## v1.19 (20-10-2024)
 - CoinMarketCap integration
