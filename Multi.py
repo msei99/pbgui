@@ -33,6 +33,9 @@ class MultiInstance():
             if "edit_multi_user" in st.session_state and "edit_multi_loss_allowance_pct" in st.session_state:
                 del st.session_state.edit_multi_enabled_on
                 del st.session_state.edit_multi_version
+                del st.session_state.edit_multi_market_cap
+                del st.session_state.edit_multi_vol_mcap
+                del st.session_state.edit_multi_dynamic_ignore
                 del st.session_state.edit_multi_leverage
                 del st.session_state.edit_multi_loss_allowance_pct
                 del st.session_state.edit_multi_pnls_max_lookback_days
@@ -78,6 +81,24 @@ class MultiInstance():
     @version.setter
     def version(self, new_version):
         self._version = new_version
+    # market_cap
+    @property
+    def market_cap(self): return self._market_cap
+    @market_cap.setter
+    def market_cap(self, new_market_cap):
+        self._market_cap = new_market_cap
+    # vol_mcap
+    @property
+    def vol_mcap(self): return self._vol_mcap
+    @vol_mcap.setter
+    def vol_mcap(self, new_vol_mcap):
+        self._vol_mcap = new_vol_mcap
+    # dynamic_ignore
+    @property
+    def dynamic_ignore(self): return self._dynamic_ignore
+    @dynamic_ignore.setter
+    def dynamic_ignore(self, new_dynamic_ignore):
+        self._dynamic_ignore = new_dynamic_ignore
     # leverage
     @property
     def leverage(self): return self._leverage
@@ -258,6 +279,9 @@ class MultiInstance():
         # Init defaults
         self._enabled_on = "disabled"
         self._version = 0
+        self._market_cap = 0
+        self._vol_mcap = 10.0
+        self._dynamic_ignore = False
         self._TWE_enabled = False
         self._leverage = 10.0
         self._loss_allowance_pct = 0.002
@@ -304,6 +328,12 @@ class MultiInstance():
             self._enabled_on = self._multi_config["enabled_on"]
         if "version" in self._multi_config:
             self._version = self._multi_config["version"]
+        if "market_cap" in self._multi_config:
+            self._market_cap = self._multi_config["market_cap"]
+        if "vol_mcap" in self._multi_config:
+            self._vol_mcap = float(self._multi_config["vol_mcap"])
+        if "dynamic_ignore" in self._multi_config:
+            self._dynamic_ignore = self._multi_config["dynamic_ignore"]
         if "leverage" in self._multi_config:
             self._leverage = float(self._multi_config["leverage"])
         if "loss_allowance_pct" in self._multi_config:
@@ -356,10 +386,10 @@ class MultiInstance():
             self._universal_live_config = hjson.dumps(self._multi_config["universal_live_config"],indent=2)
         if "ignored_symbols" in self._multi_config:
             self._ignored_symbols = self._multi_config["ignored_symbols"]
-        # Load available symbols
-        self._available_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='swap')
-        # Load cpt allowed symbols
-        self._cpt_allowed_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='cpt')
+        # # Load available symbols
+        # self._available_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='swap')
+        # # Load cpt allowed symbols
+        # self._cpt_allowed_symbols = load_symbols_from_ini(exchange=self._users.find_exchange(self.user), market_type='cpt')
         # Load instances from user
         for instance in st.session_state.pbgui_instances:
             if instance.user == self.user and instance.market_type == "futures" :
@@ -513,6 +543,9 @@ class MultiInstance():
             del st.session_state.edit_multi_version
         self._multi_config["version"] = self.version
         self._multi_config["enabled_on"] = self.enabled_on
+        self._multi_config["market_cap"] = self.market_cap
+        self._multi_config["vol_mcap"] = self.vol_mcap
+        self._multi_config["dynamic_ignore"] = self.dynamic_ignore
         self._multi_config["leverage"] = self.leverage
         self._multi_config["loss_allowance_pct"] = self.loss_allowance_pct
         self._multi_config["pnls_max_lookback_days"] = self.pnls_max_lookback_days
@@ -555,10 +588,19 @@ class MultiInstance():
         self.default_config.save_config()
 
     def edit(self):
+        # Init coindata
+        coindata = st.session_state.pbcoindata
+        if coindata.exchange != self._users.find_exchange(self.user):
+            coindata.exchange = self._users.find_exchange(self.user)
+        if coindata.market_cap != self.market_cap:
+            coindata.market_cap = self.market_cap
+        if coindata.vol_mcap != self.vol_mcap:
+            coindata.vol_mcap = self.vol_mcap
         # Init session_state for keys
         if "edit_multi_user" in st.session_state:
             if st.session_state.edit_multi_user != self.user:
                 self.user = st.session_state.edit_multi_user
+                coindata.exchange = self._users.find_exchange(self.user)
         if self._users.find_exchange(self.user) in ["kucoin","bingx"]:
             st.write("Exchnage not supported by passivbot_multi")
             return
@@ -568,6 +610,9 @@ class MultiInstance():
         if "edit_multi_version" in st.session_state:
             if st.session_state.edit_multi_version != self.version:
                 self.version = st.session_state.edit_multi_version
+        if "edit_multi_dynamic_ignore" in st.session_state:
+            if st.session_state.edit_multi_dynamic_ignore != self.dynamic_ignore:
+                self.dynamic_ignore = st.session_state.edit_multi_dynamic_ignore
         if "edit_multi_leverage" in st.session_state:
             if st.session_state.edit_multi_leverage != self.leverage:
                 self.leverage = st.session_state.edit_multi_leverage
@@ -615,14 +660,14 @@ class MultiInstance():
             if st.session_state.edit_multi_approved_symbols != self._symbols:
                 self._symbols = st.session_state.edit_multi_approved_symbols
                 if "All" in self._symbols:
-                    self._symbols = self._available_symbols
+                    self._symbols = coindata.symbols.copy()
                 elif "CPT" in self._symbols:
-                    self._symbols = self._cpt_allowed_symbols
+                    self._symbols = coindata.symbols_cpt.copy()
         if "edit_multi_ignored_symbols" in st.session_state:
             if st.session_state.edit_multi_ignored_symbols != self._ignored_symbols:
                 self._ignored_symbols = st.session_state.edit_multi_ignored_symbols
                 if "All" in self._ignored_symbols:
-                    self._ignored_symbols = self._available_symbols
+                    self._ignored_symbols = coindata.symbols.copy()
         if "edit_multi_n_longs" in st.session_state:
             if st.session_state.edit_multi_n_longs != self.n_longs:
                 self.n_longs = st.session_state.edit_multi_n_longs
@@ -656,6 +701,37 @@ class MultiInstance():
         if "edit_multi_filter_by_min_effective_cost" in st.session_state:
             if st.session_state.edit_multi_filter_by_min_effective_cost != self.filter_by_min_effective_cost:
                 self.filter_by_min_effective_cost = st.session_state.edit_multi_filter_by_min_effective_cost
+        # Filters
+        if "edit_multi_market_cap" in st.session_state:
+            if st.session_state.edit_multi_market_cap != self.market_cap:
+                self.market_cap = st.session_state.edit_multi_market_cap
+                coindata.market_cap = self.market_cap
+        if "edit_multi_vol_mcap" in st.session_state:
+            if st.session_state.edit_multi_vol_mcap != self.vol_mcap:
+                self.vol_mcap = st.session_state.edit_multi_vol_mcap
+                coindata.vol_mcap = self.vol_mcap
+        # Apply filters
+        for symbol in coindata.ignored_coins:
+            if symbol not in self._ignored_symbols:
+                self._ignored_symbols.append(symbol)
+            if symbol in self._symbols:
+                self._symbols.remove(symbol)
+        # Remove unavailable symbols
+        for symbol in self._symbols.copy():
+            if symbol not in coindata.symbols:
+                self._symbols.remove(symbol)
+        for symbol in self._ignored_symbols.copy():
+            if symbol not in coindata.symbols:
+                self._ignored_symbols.remove(symbol)
+        # Remove from approved_coins when in ignored coins
+        for symbol in self._ignored_symbols:
+            if symbol in self._symbols:
+                self._symbols.remove(symbol)
+        # Correct Display of Symbols
+        if "edit_multi_approved_symbols" in st.session_state:
+            st.session_state.edit_multi_approved_symbols = self._symbols
+        if "edit_multi_ignored_symbols" in st.session_state:
+            st.session_state.edit_multi_ignored_symbols = self._ignored_symbols
         # Init symbols
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
@@ -948,20 +1024,28 @@ class MultiInstance():
                 st.empty()
             with col4:
                 st.empty()            
+        #Filters
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        with col1:
+            st.number_input("market_cap", min_value=0, value=self.market_cap, step=50, format="%.d", key="edit_multi_market_cap", help=pbgui_help.market_cap)
+        with col2:
+            st.number_input("vol/mcap", min_value=0.0, value=self.vol_mcap, step=0.05, format="%.2f", key="edit_multi_vol_mcap", help=pbgui_help.vol_mcap)
+        with col3:
+            st.checkbox("dynamic_ignore", value=self.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_multi_dynamic_ignore")
         # Display Symbols
         st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
-        # Remove unavailable symbols
-        for symbol in self._symbols.copy():
-            if symbol not in self._available_symbols:
-                self._symbols.remove(symbol)
-        st.multiselect('approved_symbols', ['All', 'CPT'] + self._available_symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
-        # Add Symbol to ignored_symbols
-        for symbol in self._ignored_symbols:
-            if symbol not in self._available_symbols:
-                self._ignored_symbols.remove(symbol)
+        # # Remove unavailable symbols
+        # for symbol in self._symbols.copy():
+        #     if symbol not in self._available_symbols:
+        #         self._symbols.remove(symbol)
+        st.multiselect('approved_symbols', ['All', 'CPT'] + coindata.symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
+        # # Add Symbol to ignored_symbols
+        # for symbol in self._ignored_symbols:
+        #     if symbol not in self._available_symbols:
+        #         self._ignored_symbols.remove(symbol)
         col1, col2 = st.columns([3,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('ignored_symbols', ["All"] + self._available_symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
+            st.multiselect('ignored_symbols', ["All"] + coindata.symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
         with col2:
             if st.button("Update Symbols from Exchange"):
                 exchange = self._users.find_exchange(self.user)
