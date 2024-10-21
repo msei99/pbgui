@@ -320,6 +320,7 @@ class CoinData:
             if data_ts > now_ts - 3600*self.fetch_interval:
                 with Path(f'{coin_path}/coindata.json').open() as f:
                     self.data = json.load(f)
+                    self.data_ts = data_ts
                     return
         self.fetch_data()
         self.save_data()
