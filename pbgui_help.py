@@ -962,3 +962,12 @@ ignored_coins = """
     list of coins to ignore
     If you add coins here, they will be removed from approved_coins.
     ```"""
+
+dynamic_ignore = """
+    ```
+    If enabled, PBRun will dynamically maintain the ignored_coins list.
+    The list will created using the market_cap and vol_mcap filters.
+    Update interval is configured in PBCoinData.
+    On passivbot6 PBRun will restart the bot if needed.
+    On passivbot7 PBRun creat the ignored_coins.json file and pb7 will use this list as filter.
+    ```"""
