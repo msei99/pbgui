@@ -869,7 +869,7 @@ class Exchange:
                         self.swap.append(v["id"][:len(v["id"])-1])
                 elif self.id == "okx":
                     if v["id"].split("-")[1] == 'USDT':
-                        print(v)
+                        # print(v)
                         self.swap.append(''.join(v["id"].split("-")[0:2]))
                 elif self.id == "bybit":
                     if v["id"].endswith('USDT'):
