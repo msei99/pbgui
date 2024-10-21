@@ -533,6 +533,7 @@ class RunMulti():
                     self.dynamic_ignore.coindata.vol_mcap = self._multi_config["vol_mcap"]
                     if "ignored_symbols" in self._multi_config:
                         self.dynamic_ignore.ignored_coins = self._multi_config["ignored_symbols"]
+                        self.dynamic_ignore.save()
                     # Find Exchange from User
                     api_path = f'{self.pbdir}/api-keys.json'
                     if Path(api_path).exists():
