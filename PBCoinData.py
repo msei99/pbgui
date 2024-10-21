@@ -90,6 +90,7 @@ class CoinData:
         self._exchange = Exchanges.list()[0]
         self.exchanges = Exchanges.list()
         self.exchange_index = self.exchanges.index(self.exchange)
+        self.update_symbols_ts = 0
         self._symbols = []
         self._symbols_cpt = []
         self._symbols_data = []
@@ -333,6 +334,15 @@ class CoinData:
                 return True
         return
     
+    def update_symbols(self):
+        now_ts = datetime.now().timestamp()
+        if self.update_symbols_ts < now_ts - 3600*24:
+            for exchange in self.exchanges:
+                exc = Exchange(exchange)
+                exc.fetch_symbols()
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange}')
+            self.update_symbols_ts = now_ts
+
     def load_symbols(self):
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -348,6 +358,7 @@ class CoinData:
     def list_symbols(self):
         if self.has_new_data():
             self.load_data()
+            self.load_symbols()
         if not self.data:
             return
         if "data" not in self.data:
@@ -444,6 +455,7 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+            pbcoindata.update_symbols()
             if not pbcoindata.is_data_fresh():
                 pbcoindata.load_data()
                 if pbcoindata.is_data_fresh():
