@@ -86,6 +86,7 @@ class CoinData:
         self.ini_ts = 0
         self.load_config()
         self.data = None
+        self.data_ts = 0
         self._exchange = Exchanges.list()[0]
         self.exchanges = Exchanges.list()
         self.exchange_index = self.exchanges.index(self.exchange)
@@ -220,6 +221,15 @@ class CoinData:
                 self.ini_ts = ini_ts
                 return True
         return False
+    
+    def has_new_data(self):
+        pbgdir = Path.cwd()
+        coin_path = f'{pbgdir}/data/coindata'
+        if Path(f'{coin_path}/coindata.json').exists():
+            data_ts = Path(f'{coin_path}/coindata.json').stat().st_mtime
+            if data_ts > self.data_ts:
+                return True
+        return False
 
     def load_config(self):
         if self.has_new_config():
@@ -336,7 +346,7 @@ class CoinData:
         self._symbols_cpt = self._symbols
     
     def list_symbols(self):
-        if not self.data:
+        if self.has_new_data():
             self.load_data()
         if not self.data:
             return
