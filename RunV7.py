@@ -104,6 +104,9 @@ class V7Instance():
             del st.session_state.edit_run_v7_version
 
     def edit(self):
+        # Change ignored_coins back to empty list if we changed it to a path
+        if type(self.config.live.ignored_coins) == str:
+            self.config.live.ignored_coins = []
         # Init coindata
         coindata = st.session_state.pbcoindata
         if coindata.exchange != self._users.find_exchange(self.user):
@@ -135,9 +138,9 @@ class V7Instance():
         if "edit_run_v7_relative_volume_filter_clip_pct" in st.session_state:
             if st.session_state.edit_run_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
                 self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_run_v7_relative_volume_filter_clip_pct
-        if "edit_run_v7_ohlcv_rolling_window" in st.session_state:
-            if st.session_state.edit_run_v7_ohlcv_rolling_window != self.config.live.ohlcv_rolling_window:
-                self.config.live.ohlcv_rolling_window = st.session_state.edit_run_v7_ohlcv_rolling_window
+        # if "edit_run_v7_ohlcv_rolling_window" in st.session_state:
+        #     if st.session_state.edit_run_v7_ohlcv_rolling_window != self.config.live.ohlcv_rolling_window:
+        #         self.config.live.ohlcv_rolling_window = st.session_state.edit_run_v7_ohlcv_rolling_window
         if "edit_run_v7_price_distance_threshold" in st.session_state:
             if st.session_state.edit_run_v7_price_distance_threshold != self.config.live.price_distance_threshold:
                 self.config.live.price_distance_threshold = st.session_state.edit_run_v7_price_distance_threshold
@@ -163,6 +166,15 @@ class V7Instance():
         if "edit_run_v7_forced_mode_short" in st.session_state:
             if st.session_state.edit_run_v7_forced_mode_short != self.config.live.forced_mode_short:
                 self.config.live.forced_mode_short = st.session_state.edit_run_v7_forced_mode_short
+        if "edit_run_v7_max_n_restarts_per_day" in st.session_state:
+            if st.session_state.edit_run_v7_max_n_restarts_per_day != self.config.live.max_n_restarts_per_day:
+                self.config.live.max_n_restarts_per_day = st.session_state.edit_run_v7_max_n_restarts_per_day
+        if "edit_run_v7_ohlcvs_1m_rolling_window_days" in st.session_state:
+            if st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days != self.config.live.ohlcvs_1m_rolling_window_days:
+                self.config.live.ohlcvs_1m_rolling_window_days = st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days
+        if "edit_run_v7_ohlcvs_1m_update_after_minutes" in st.session_state:
+            if st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes != self.config.live.ohlcvs_1m_update_after_minutes:
+                self.config.live.ohlcvs_1m_update_after_minutes = st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes
         if "edit_run_v7_time_in_force" in st.session_state:
             if st.session_state.edit_run_v7_time_in_force != self.config.live.time_in_force:
                 self.config.live.time_in_force = st.session_state.edit_run_v7_time_in_force
@@ -209,9 +221,9 @@ class V7Instance():
             st.number_input("relative_volume_filter_clip_pct", min_value=0.0, max_value=1.0, value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), step=0.1, format="%.2f", key="edit_run_v7_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
         with col3:
             st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
-        with col4:
-            st.number_input("ohlcv_rolling_window", min_value=0, max_value=100, value=self.config.live.ohlcv_rolling_window, step=1, format="%.d", key="edit_run_v7_ohlcv_rolling_window", help=pbgui_help.ohlcv_rolling_window)
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        # with col4:
+        #     st.number_input("ohlcv_rolling_window", min_value=0, max_value=100, value=self.config.live.ohlcv_rolling_window, step=1, format="%.d", key="edit_run_v7_ohlcv_rolling_window", help=pbgui_help.ohlcv_rolling_window)
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
             st.number_input("price_distance_threshold", min_value=0.0, max_value=1.0, value=self.config.live.price_distance_threshold, step=0.001, format="%.3f", key="edit_run_v7_price_distance_threshold", help=pbgui_help.price_distance_threshold)
         with col2:
@@ -243,6 +255,12 @@ class V7Instance():
                 st.selectbox('forced_mode_short',forced_mode, index = forced_mode.index(self.config.live.forced_mode_short), format_func=lambda x: mode_options.get(x) , key="edit_run_v7_forced_mode_short", help=pbgui_help.forced_mode_long_short)
             col1, col2, col3, col4 = st.columns([1,1,1,1])
             with col1:
+                st.number_input("max_n_restarts_per_day", min_value=0, max_value=100, value=self.config.live.max_n_restarts_per_day, step=1, format="%.d", key="edit_run_v7_max_n_restarts_per_day", help=pbgui_help.max_n_restarts_per_day)
+            with col2:
+                st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, value=self.config.live.ohlcvs_1m_rolling_window_days, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
+            with col3:
+                st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, value=self.config.live.ohlcvs_1m_update_after_minutes, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
+            with col4:
                 time_in_force = ['good_till_cancelled', 'post_only']
                 st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
         #Filters
@@ -320,7 +338,7 @@ class V7Instance():
                 del st.session_state.edit_run_v7_pnls_max_lookback_days
                 del st.session_state.edit_run_v7_minimum_coin_age_days
                 del st.session_state.edit_run_v7_relative_volume_filter_clip_pct
-                del st.session_state.edit_run_v7_ohlcv_rolling_window
+                # del st.session_state.edit_run_v7_ohlcv_rolling_window
                 del st.session_state.edit_run_v7_price_distance_threshold
                 del st.session_state.edit_run_v7_execution_delay_seconds
                 del st.session_state.edit_run_v7_filter_by_min_effective_cost

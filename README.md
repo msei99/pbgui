@@ -3,7 +3,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.19
+# v1.20
 
 ## Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -183,11 +183,13 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v1.20 (21-10-2024)
+## v1.20 (22-10-2024)
+- V7: Added all latest config options to live and optimizer
 - V7 Run: Added Dynamic filter for mcap and vol/mcap
 - Multi: Filters for marketcap and vol/mcap added
 - Multi: Dynamic filter for mcap and vol/mcap added
 - PBRun: Dynamic filter update ignored_symbols
+- PBCoinData: Update on start and every 24h symbols from all exchanges
 
 ## v1.19 (20-10-2024)
 - CoinMarketCap integration

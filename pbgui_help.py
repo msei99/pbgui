@@ -634,6 +634,23 @@ max_n_per_batch = """
     how many executions in parallel per batch
     ```"""
 
+max_n_restarts_per_day = """
+    ```
+    If the bot crashes for any reason, restart the bot up to n times per day before stopping completely.
+    ```"""
+
+ohlcvs_1m_rolling_window_days = """
+    ```
+    How many days worth of OHLCVs for the bot to keep in memory.
+    Reduce this number if RAM consumption becomes an issue.
+    ```"""
+
+ohlcvs_1m_update_after_minutes = """
+    ```
+    How many minutes old OHLCVs for a coin may be before the bot will fetch fresh ones from the exchange.
+    Increase this number if rate limiting becomes an issue.
+    ```"""
+
 filter_by_min_effective_cost = """
     ```
     if true, will disallow symbols where balance * WE_limit * initial_qty_pct < min_effective_cost
@@ -851,6 +868,28 @@ entry_initial_ema_dist = """
 entry_initial_qty_pct = """
     ```
     initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct
+    ```"""
+
+filter_relative_volume_clip_pct = """
+    ```
+    Coins selected for trading are filtered by volume and noisiness.
+    First, filter coins by volume, dropping a percentage of the lowest volume coins.
+    Then, sort the eligible coins by noisiness and select the top noisiest coins for trading.
+
+    Volume filter; disapprove the lowest relative volume coins.
+    For example, filter_relative_volume_clip_pct = 0.1 drops the 10% lowest volume coins. Set to zero to allow all.
+    ```"""
+
+filter_rolling_window = """
+    ```
+    Coins selected for trading are filtered by volume and noisiness.
+    First, filter coins by volume, dropping a percentage of the lowest volume coins.
+    Then, sort the eligible coins by noisiness and select the top noisiest coins for trading.
+
+    Number of minutes to look into the past to compute volume and noisiness,
+    used for dynamic coin selection in forager mode.
+    Noisiness is normalized relative range of 1m OHLCVs: mean((high - low) / close).
+    In forager mode, the bot will select coins with highest noisiness for opening positions.
     ```"""
 
 n_positions = """

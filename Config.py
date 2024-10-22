@@ -190,58 +190,62 @@ class Config:
             color = "red"
         st.text_area(f':{color}[config]', self.config, key="config_instance_config", height=height)
 
-# config
+# config template
 # {"backtest": {"base_dir": "backtests",
 #               "end_date": "now",
 #               "exchange": "binance",
 #               "start_date": "2021-05-01",
 #               "starting_balance": 100000.0},
-#  "bot": {"long": {"close_grid_markup_range": 0.0015976,
-#                   "close_grid_min_markup": 0.012839,
-#                   "close_grid_qty_pct": 0.8195,
-#                   "close_trailing_grid_ratio": 0.042114,
-#                   "close_trailing_qty_pct": 1,
-#                   "close_trailing_retracement_pct": 0.066097,
-#                   "close_trailing_threshold_pct": 0.06726,
-#                   "ema_span_0": 469.02,
-#                   "ema_span_1": 1118.9,
-#                   "entry_grid_double_down_factor": 2.3738,
-#                   "entry_grid_spacing_pct": 0.052372,
-#                   "entry_grid_spacing_weight": 0.17715,
-#                   "entry_initial_ema_dist": -0.0060574,
-#                   "entry_initial_qty_pct": 0.019955,
-#                   "entry_trailing_grid_ratio": -0.28053,
-#                   "entry_trailing_retracement_pct": 0.0024762,
-#                   "entry_trailing_threshold_pct": 0.014956,
-#                   "n_positions": 9.6662,
-#                   "total_wallet_exposure_limit": 0.8536,
-#                   "unstuck_close_pct": 0.049593,
-#                   "unstuck_ema_dist": -0.051669,
-#                   "unstuck_loss_allowance_pct": 0.044329,
-#                   "unstuck_threshold": 0.46953},
-#          "short": {"close_grid_markup_range": 0.028266,
-#                    "close_grid_min_markup": 0.013899,
-#                    "close_grid_qty_pct": 0.63174,
-#                    "close_trailing_grid_ratio": 0.93658,
-#                    "close_trailing_qty_pct": 1,
-#                    "close_trailing_retracement_pct": 0.098179,
-#                    "close_trailing_threshold_pct": -0.059383,
-#                    "ema_span_0": 794.32,
-#                    "ema_span_1": 1176.7,
-#                    "entry_grid_double_down_factor": 2.1256,
-#                    "entry_grid_spacing_pct": 0.072906,
-#                    "entry_grid_spacing_weight": 0.98867,
-#                    "entry_initial_ema_dist": -0.060333,
-#                    "entry_initial_qty_pct": 0.066426,
-#                    "entry_trailing_grid_ratio": -0.026647,
-#                    "entry_trailing_retracement_pct": 0.016626,
-#                    "entry_trailing_threshold_pct": 0.052728,
-#                    "n_positions": 0.0,
-#                    "total_wallet_exposure_limit": 0.0,
-#                    "unstuck_close_pct": 0.052992,
-#                    "unstuck_ema_dist": -0.0465,
-#                    "unstuck_loss_allowance_pct": 0.045415,
-#                    "unstuck_threshold": 0.92228}},
+#  "bot": {"long": {"close_grid_markup_range": 0.0016219,
+#                   "close_grid_min_markup": 0.012842,
+#                   "close_grid_qty_pct": 0.7227,
+#                   "close_trailing_grid_ratio": 0.021647,
+#                   "close_trailing_qty_pct": 0.88442,
+#                   "close_trailing_retracement_pct": 0.028596,
+#                   "close_trailing_threshold_pct": 0.065293,
+#                   "ema_span_0": 465.26,
+#                   "ema_span_1": 1120.5,
+#                   "entry_grid_double_down_factor": 2.3744,
+#                   "entry_grid_spacing_pct": 0.052341,
+#                   "entry_grid_spacing_weight": 0.070299,
+#                   "entry_initial_ema_dist": -0.0059754,
+#                   "entry_initial_qty_pct": 0.029454,
+#                   "entry_trailing_grid_ratio": -0.28169,
+#                   "entry_trailing_retracement_pct": 0.0024724,
+#                   "entry_trailing_threshold_pct": -0.044654,
+#                   "filter_relative_volume_clip_pct": 0.51416,
+#                   "filter_rolling_window": 60.0,
+#                   "n_positions": 10.675,
+#                   "total_wallet_exposure_limit": 0.95749,
+#                   "unstuck_close_pct": 0.071741,
+#                   "unstuck_ema_dist": -0.053527,
+#                   "unstuck_loss_allowance_pct": 0.035633,
+#                   "unstuck_threshold": 0.49002},
+#          "short": {"close_grid_markup_range": 0.0049,
+#                    "close_grid_min_markup": 0.01341,
+#                    "close_grid_qty_pct": 0.6168,
+#                    "close_trailing_grid_ratio": 0.88877,
+#                    "close_trailing_qty_pct": 0.97708,
+#                    "close_trailing_retracement_pct": 0.095287,
+#                    "close_trailing_threshold_pct": -0.052408,
+#                    "ema_span_0": 819.1,
+#                    "ema_span_1": 345.78,
+#                    "entry_grid_double_down_factor": 2.3061,
+#                    "entry_grid_spacing_pct": 0.072015,
+#                    "entry_grid_spacing_weight": 1.4565,
+#                    "entry_initial_ema_dist": -0.072047,
+#                    "entry_initial_qty_pct": 0.072208,
+#                    "entry_trailing_grid_ratio": -0.023189,
+#                    "entry_trailing_retracement_pct": 0.017338,
+#                    "entry_trailing_threshold_pct": -0.085573,
+#                    "filter_relative_volume_clip_pct": 0.50001,
+#                    "filter_rolling_window": 68.072,
+#                    "n_positions": 1.1534,
+#                    "total_wallet_exposure_limit": 0.20901,
+#                    "unstuck_close_pct": 0.052695,
+#                    "unstuck_ema_dist": -0.02697,
+#                    "unstuck_loss_allowance_pct": 0.045985,
+#                    "unstuck_threshold": 0.58422}},
 #  "live": {"approved_coins": [],
 #           "auto_gs": true,
 #           "coin_flags": {},
@@ -253,11 +257,12 @@ class Config:
 #           "leverage": 10.0,
 #           "max_n_cancellations_per_batch": 5,
 #           "max_n_creations_per_batch": 3,
+#           "max_n_restarts_per_day": 10,
 #           "minimum_coin_age_days": 30.0,
-#           "ohlcv_rolling_window": 60,
+#           "ohlcvs_1m_rolling_window_days": 4.0,
+#           "ohlcvs_1m_update_after_minutes": 10.0,
 #           "pnls_max_lookback_days": 30.0,
 #           "price_distance_threshold": 0.002,
-#           "relative_volume_filter_clip_pct": 0.5,
 #           "time_in_force": "good_till_cancelled",
 #           "user": "bybit_01"},
 #  "optimize": {"bounds": {"long_close_grid_markup_range": [0.0, 0.03],
@@ -277,6 +282,8 @@ class Config:
 #                          "long_entry_trailing_grid_ratio": [-1.0, 1.0],
 #                          "long_entry_trailing_retracement_pct": [0.0, 0.1],
 #                          "long_entry_trailing_threshold_pct": [-0.1, 0.1],
+#                          "long_filter_relative_volume_clip_pct": [0.0, 1.0],
+#                          "long_filter_rolling_window": [10.0, 360.0],
 #                          "long_n_positions": [1.0, 20.0],
 #                          "long_total_wallet_exposure_limit": [0.0, 5.0],
 #                          "long_unstuck_close_pct": [0.001, 0.1],
@@ -300,6 +307,8 @@ class Config:
 #                          "short_entry_trailing_grid_ratio": [-1.0, 1.0],
 #                          "short_entry_trailing_retracement_pct": [0.0, 0.1],
 #                          "short_entry_trailing_threshold_pct": [-0.1, 0.1],
+#                          "short_filter_relative_volume_clip_pct": [0.0, 1.0],
+#                          "short_filter_rolling_window": [10.0, 360.0],
 #                          "short_n_positions": [1.0, 20.0],
 #                          "short_total_wallet_exposure_limit": [0.0, 5.0],
 #                          "short_unstuck_close_pct": [0.001, 0.1],
@@ -487,6 +496,8 @@ class Long:
         self._entry_trailing_grid_ratio = -0.28053
         self._entry_trailing_retracement_pct = 0.0024762
         self._entry_trailing_threshold_pct = 0.014956
+        self._filter_relative_volume_clip_pct = 0.51416
+        self._filter_rolling_window = 60.0
         self._n_positions = 9.6662
         self._total_wallet_exposure_limit = 0.8536
         self._unstuck_close_pct = 0.049593
@@ -511,6 +522,8 @@ class Long:
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
+            "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
+            "filter_rolling_window": self._filter_rolling_window,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -560,6 +573,10 @@ class Long:
             self.entry_trailing_retracement_pct = new_long["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_long:
             self.entry_trailing_threshold_pct = new_long["entry_trailing_threshold_pct"]
+        if "filter_relative_volume_clip_pct" in new_long:
+            self.filter_relative_volume_clip_pct = new_long["filter_relative_volume_clip_pct"]
+        if "filter_rolling_window" in new_long:
+            self.filter_rolling_window = new_long["filter_rolling_window"]
         if "n_positions" in new_long:
             self.n_positions = new_long["n_positions"]
         if "total_wallet_exposure_limit" in new_long:
@@ -607,6 +624,10 @@ class Long:
     def entry_trailing_retracement_pct(self): return self._entry_trailing_retracement_pct
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
+    @property
+    def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
+    @property
+    def filter_rolling_window(self): return self._filter_rolling_window
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -688,6 +709,14 @@ class Long:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._long["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
+    @filter_relative_volume_clip_pct.setter
+    def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
+        self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
+        self._long["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
+    @filter_rolling_window.setter
+    def filter_rolling_window(self, new_filter_rolling_window):
+        self._filter_rolling_window = new_filter_rolling_window
+        self._long["filter_rolling_window"] = self._filter_rolling_window
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -732,6 +761,8 @@ class Short:
         self._entry_trailing_grid_ratio = -0.026647
         self._entry_trailing_retracement_pct = 0.016626
         self._entry_trailing_threshold_pct = 0.052728
+        self._filter_relative_volume_clip_pct = 0.50001
+        self._filter_rolling_window = 68.072
         self._n_positions = 0.0
         self._total_wallet_exposure_limit = 0.0
         self._unstuck_close_pct = 0.052992
@@ -756,6 +787,8 @@ class Short:
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
+            "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
+            "filter_rolling_window": self._filter_rolling_window,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -805,6 +838,10 @@ class Short:
             self.entry_trailing_retracement_pct = new_short["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_short:
             self.entry_trailing_threshold_pct = new_short["entry_trailing_threshold_pct"]
+        if "filter_relative_volume_clip_pct" in new_short:
+            self.filter_relative_volume_clip_pct = new_short["filter_relative_volume_clip_pct"]
+        if "filter_rolling_window" in new_short:
+            self.filter_rolling_window = new_short["filter_rolling_window"]
         if "n_positions" in new_short:
             self.n_positions = new_short["n_positions"]
         if "total_wallet_exposure_limit" in new_short:
@@ -852,6 +889,10 @@ class Short:
     def entry_trailing_retracement_pct(self): return self._entry_trailing_retracement_pct
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
+    @property
+    def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
+    @property
+    def filter_rolling_window(self): return self._filter_rolling_window
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -933,6 +974,14 @@ class Short:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._short["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
+    @filter_relative_volume_clip_pct.setter
+    def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
+        self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
+        self._short["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
+    @filter_rolling_window.setter
+    def filter_rolling_window(self, new_filter_rolling_window):
+        self._filter_rolling_window = new_filter_rolling_window
+        self._short["filter_rolling_window"] = self._filter
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -971,8 +1020,11 @@ class Live:
         self._leverage = 10.0
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3
+        self._max_n_restarts_per_day = 10
         self._minimum_coin_age_days = 30.0
-        self._ohlcv_rolling_window = 60
+        self._ohlcvs_1m_rolling_window_days = 4.0
+        self._ohlcvs_1m_update_after_minutes = 10.0
+        # self._ohlcv_rolling_window = 60
         self._pnls_max_lookback_days = 30.0
         self._price_distance_threshold = 0.002
         self._relative_volume_filter_clip_pct = 0.5
@@ -991,8 +1043,11 @@ class Live:
             "leverage": self._leverage,
             "max_n_cancellations_per_batch": self._max_n_cancellations_per_batch,
             "max_n_creations_per_batch": self._max_n_creations_per_batch,
+            "max_n_restarts_per_day": self._max_n_restarts_per_day,
             "minimum_coin_age_days": self._minimum_coin_age_days,
-            "ohlcv_rolling_window": self._ohlcv_rolling_window,
+            "ohlcvs_1m_rolling_window_days": self._ohlcvs_1m_rolling_window_days,
+            "ohlcvs_1m_update_after_minutes": self._ohlcvs_1m_update_after_minutes,
+            # "ohlcv_rolling_window": self._ohlcv_rolling_window,
             "pnls_max_lookback_days": self._pnls_max_lookback_days,
             "price_distance_threshold": self._price_distance_threshold,
             "relative_volume_filter_clip_pct": self._relative_volume_filter_clip_pct,
@@ -1030,10 +1085,16 @@ class Live:
             self._max_n_cancellations_per_batch = self._live["max_n_cancellations_per_batch"]
         if "max_n_creations_per_batch" in self._live:
             self._max_n_creations_per_batch = self._live["max_n_creations_per_batch"]
+        if "max_n_restarts_per_day" in self._live:
+            self._max_n_restarts_per_day = self._live["max_n_restarts_per_day"]
         if "minimum_coin_age_days" in self._live:
             self._minimum_coin_age_days = self._live["minimum_coin_age_days"]
-        if "ohlcv_rolling_window" in self._live:
-            self._ohlcv_rolling_window = self._live["ohlcv_rolling_window"]
+        if "ohlcvs_1m_rolling_window_days" in self._live:
+            self._ohlcvs_1m_rolling_window_days = self._live["ohlcvs_1m_rolling_window_days"]
+        if "ohlcvs_1m_update_after_minutes" in self._live:
+            self._ohlcvs_1m_update_after_minutes = self._live["ohlcvs_1m_update_after_minutes"]
+        # if "ohlcv_rolling_window" in self._live:
+        #     self._ohlcv_rolling_window = self._live["ohlcv_rolling_window"]
         if "pnls_max_lookback_days" in self._live:
             self._pnls_max_lookback_days = self._live["pnls_max_lookback_days"]
         if "price_distance_threshold" in self._live:
@@ -1068,9 +1129,15 @@ class Live:
     @property
     def max_n_creations_per_batch(self): return self._max_n_creations_per_batch
     @property
+    def max_n_restarts_per_day(self): return self._max_n_restarts_per_day
+    @property
     def minimum_coin_age_days(self): return self._minimum_coin_age_days
     @property
-    def ohlcv_rolling_window(self): return self._ohlcv_rolling_window
+    def ohlcvs_1m_rolling_window_days(self): return self._ohlcvs_1m_rolling_window_days
+    @property
+    def ohlcvs_1m_update_after_minutes(self): return self._ohlcvs_1m_update_after_minutes
+    # @property
+    # def ohlcv_rolling_window(self): return self._ohlcv_rolling_window
     @property
     def pnls_max_lookback_days(self): return self._pnls_max_lookback_days
     @property
@@ -1126,14 +1193,26 @@ class Live:
     def max_n_creations_per_batch(self, new_max_n_creations_per_batch):
         self._max_n_creations_per_batch = new_max_n_creations_per_batch
         self._live["max_n_creations_per_batch"] = self._max_n_creations_per_batch
+    @max_n_restarts_per_day.setter
+    def max_n_restarts_per_day(self, new_max_n_restarts_per_day):
+        self._max_n_restarts_per_day = new_max_n_restarts_per_day
+        self._live["max_n_restarts_per_day"] = self._max_n_restarts_per_day
     @minimum_coin_age_days.setter
     def minimum_coin_age_days(self, new_minimum_coin_age_days):
         self._minimum_coin_age_days = new_minimum_coin_age_days
         self._live["minimum_coin_age_days"] = self._minimum_coin_age_days
-    @ohlcv_rolling_window.setter
-    def ohlcv_rolling_window(self, new_ohlcv_rolling_window):
-        self._ohlcv_rolling_window = new_ohlcv_rolling_window
-        self._live["ohlcv_rolling_window"] = self._ohlcv_rolling_window
+    @ohlcvs_1m_rolling_window_days.setter
+    def ohlcvs_1m_rolling_window_days(self, new_ohlcvs_1m_rolling_window_days):
+        self._ohlcvs_1m_rolling_window_days = new_ohlcvs_1m_rolling_window_days
+        self._live["ohlcvs_1m_rolling_window_days"] = self._ohlcvs_1m_rolling_window_days
+    @ohlcvs_1m_update_after_minutes.setter
+    def ohlcvs_1m_update_after_minutes(self, new_ohlcvs_1m_update_after_minutes):
+        self._ohlcvs_1m_update_after_minutes = new_ohlcvs_1m_update_after_minutes
+        self._live["ohlcvs_1m_update_after_minutes"] = self._ohlcvs_1m_update_after_minutes
+    # @ohlcv_rolling_window.setter
+    # def ohlcv_rolling_window(self, new_ohlcv_rolling_window):
+    #     self._ohlcv_rolling_window = new_ohlcv_rolling_window
+    #     self._live["ohlcv_rolling_window"] = self._ohlcv_rolling_window
     @pnls_max_lookback_days.setter
     def pnls_max_lookback_days(self, new_pnls_max_lookback_days):
         self._pnls_max_lookback_days = new_pnls_max_lookback_days
@@ -1409,9 +1488,21 @@ class Bounds:
     ENTRY_TRAILING_THRESHOLD_PCT_ROUND = 2
     ENTRY_TRAILING_THRESHOLD_PCT_FORMAT = f'%.{ENTRY_TRAILING_THRESHOLD_PCT_ROUND}f'
 
+    FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN = 0.0
+    FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX = 1.0
+    FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP = 0.01
+    FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND = 2
+    FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT = f'%.{FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND}f'
+
+    FILTER_ROLLING_WINDOW_MIN = 1.0
+    FILTER_ROLLING_WINDOW_MAX = 1440.0
+    FILTER_ROLLING_WINDOW_STEP = 1.0
+    FILTER_ROLLING_WINDOW_ROUND = 0
+    FILTER_ROLLING_WINDOW_FORMAT = f'%.{FILTER_ROLLING_WINDOW_ROUND}f'
+
     N_POSITIONS_MIN = 0.0
     N_POSITIONS_MAX = 100.0
-    N_POSITIONS_STEP = 1.0
+    N_POSITIONS_STEP = 0.0
     N_POSITIONS_ROUND = 0
     N_POSITIONS_FORMAT = f'%.{N_POSITIONS_ROUND}f'
 
@@ -1481,6 +1572,10 @@ class Bounds:
         self._long_entry_trailing_retracement_pct_1 = 0.1
         self._long_entry_trailing_threshold_pct_0 = -0.1
         self._long_entry_trailing_threshold_pct_1 = 0.1
+        self._long_filter_relative_volume_clip_pct_0 = 0.0
+        self._long_filter_relative_volume_clip_pct_1 = 1.0
+        self._long_filter_rolling_window_0 = 10.0
+        self._long_filter_rolling_window_1 = 360.0
         self._long_n_positions_0 = 1.0
         self._long_n_positions_1 = 20.0
         self._long_total_wallet_exposure_limit_0 = 0.0
@@ -1528,6 +1623,10 @@ class Bounds:
         self._short_entry_trailing_retracement_pct_1 = 0.1
         self._short_entry_trailing_threshold_pct_0 = -0.1
         self._short_entry_trailing_threshold_pct_1 = 0.1
+        self._short_filter_relative_volume_clip_pct_0 = 0.0
+        self._short_filter_relative_volume_clip_pct_1 = 1.0
+        self._short_filter_rolling_window_0 = 10.0
+        self._short_filter_rolling_window_1 = 360.0
         self._short_n_positions_0 = 1.0
         self._short_n_positions_1 = 20.0
         self._short_total_wallet_exposure_limit_0 = 0.0
@@ -1558,6 +1657,8 @@ class Bounds:
                 "long_entry_trailing_grid_ratio": [self._long_entry_trailing_grid_ratio_0, self._long_entry_trailing_grid_ratio_1],
                 "long_entry_trailing_retracement_pct": [self._long_entry_trailing_retracement_pct_0, self._long_entry_trailing_retracement_pct_1],
                 "long_entry_trailing_threshold_pct": [self._long_entry_trailing_threshold_pct_0, self._long_entry_trailing_threshold_pct_1],
+                "long_filter_relative_volume_clip_pct": [self._long_filter_relative_volume_clip_pct_0, self._long_filter_relative_volume_clip_pct_1],
+                "long_filter_rolling_window": [self._long_filter_rolling_window_0, self._long_filter_rolling_window_1],
                 "long_n_positions": [self._long_n_positions_0, self._long_n_positions_1],
                 "long_total_wallet_exposure_limit": [self._long_total_wallet_exposure_limit_0, self._long_total_wallet_exposure_limit_1],
                 "long_unstuck_close_pct": [self._long_unstuck_close_pct_0, self._long_unstuck_close_pct_1],
@@ -1581,6 +1682,8 @@ class Bounds:
                 "short_entry_trailing_grid_ratio": [self._short_entry_trailing_grid_ratio_0, self._short_entry_trailing_grid_ratio_1],
                 "short_entry_trailing_retracement_pct": [self._short_entry_trailing_retracement_pct_0, self._short_entry_trailing_retracement_pct_1],
                 "short_entry_trailing_threshold_pct": [self._short_entry_trailing_threshold_pct_0, self._short_entry_trailing_threshold_pct_1],
+                "short_filter_relative_volume_clip_pct": [self._short_filter_relative_volume_clip_pct_0, self._short_filter_relative_volume_clip_pct_1],
+                "short_filter_rolling_window": [self._short_filter_rolling_window_0, self._short_filter_rolling_window_1],
                 "short_n_positions": [self._short_n_positions_0, self._short_n_positions_1],
                 "short_total_wallet_exposure_limit": [self._short_total_wallet_exposure_limit_0, self._short_total_wallet_exposure_limit_1],
                 "short_unstuck_close_pct": [self._short_unstuck_close_pct_0, self._short_unstuck_close_pct_1],
@@ -1649,6 +1752,12 @@ class Bounds:
         if "long_entry_trailing_threshold_pct" in self._bounds:
             self._long_entry_trailing_threshold_pct_0 = self._bounds["long_entry_trailing_threshold_pct"][0]
             self._long_entry_trailing_threshold_pct_1 = self._bounds["long_entry_trailing_threshold_pct"][1]
+        if "long_filter_relative_volume_clip_pct" in self._bounds:
+            self._long_filter_relative_volume_clip_pct_0 = self._bounds["long_filter_relative_volume_clip_pct"][0]
+            self._long_filter_relative_volume_clip_pct_1 = self._bounds["long_filter_relative_volume_clip_pct"][1]
+        if "long_filter_rolling_window" in self._bounds:
+            self._long_filter_rolling_window_0 = self._bounds["long_filter_rolling_window"][0]
+            self._long_filter_rolling_window_1 = self._bounds["long_filter_rolling_window"][1]
         if "long_n_positions" in self._bounds:
             self._long_n_positions_0 = self._bounds["long_n_positions"][0]
             self._long_n_positions_1 = self._bounds["long_n_positions"][1]
@@ -1720,6 +1829,12 @@ class Bounds:
         if "short_entry_trailing_threshold_pct" in self._bounds:
             self._short_entry_trailing_threshold_pct_0 = self._bounds["short_entry_trailing_threshold_pct"][0]
             self._short_entry_trailing_threshold_pct_1 = self._bounds["short_entry_trailing_threshold_pct"][1]
+        if "short_filter_relative_volume_clip_pct" in self._bounds:
+            self._short_filter_relative_volume_clip_pct_0 = self._bounds["short_filter_relative_volume_clip_pct"][0]
+            self._short_filter_relative_volume_clip_pct_1 = self._bounds["short_filter_relative_volume_clip_pct"][1]
+        if "short_filter_rolling_window" in self._bounds:
+            self._short_filter_rolling_window_0 = self._bounds["short_filter_rolling_window"][0]
+            self._short_filter_rolling_window_1 = self._bounds["short_filter_rolling_window"][1]
         if "short_n_positions" in self._bounds:
             self._short_n_positions_0 = self._bounds["short_n_positions"][0]
             self._short_n_positions_1 = self._bounds["short_n_positions"][1]
@@ -1808,6 +1923,14 @@ class Bounds:
     def long_entry_trailing_threshold_pct_0(self): return self._long_entry_trailing_threshold_pct_0
     @property
     def long_entry_trailing_threshold_pct_1(self): return self._long_entry_trailing_threshold_pct_1
+    @property
+    def long_filter_relative_volume_clip_pct_0(self): return self._long_filter_relative_volume_clip_pct_0
+    @property
+    def long_filter_relative_volume_clip_pct_1(self): return self._long_filter_relative_volume_clip_pct_1
+    @property
+    def long_filter_rolling_window_0(self): return self._long_filter_rolling_window_0
+    @property
+    def long_filter_rolling_window_1(self): return self._long_filter_rolling_window_1
     @property
     def long_n_positions_0(self): return self._long_n_positions_0
     @property
@@ -1902,6 +2025,14 @@ class Bounds:
     def short_entry_trailing_threshold_pct_0(self): return self._short_entry_trailing_threshold_pct_0
     @property
     def short_entry_trailing_threshold_pct_1(self): return self._short_entry_trailing_threshold_pct_1
+    @property
+    def short_filter_relative_volume_clip_pct_0(self): return self._short_filter_relative_volume_clip_pct_0
+    @property
+    def short_filter_relative_volume_clip_pct_1(self): return self._short_filter_relative_volume_clip_pct_1
+    @property
+    def short_filter_rolling_window_0(self): return self._short_filter_rolling_window_0
+    @property
+    def short_filter_rolling_window_1(self): return self._short_filter_rolling_window_1
     @property
     def short_n_positions_0(self): return self._short_n_positions_0
     @property
@@ -2064,6 +2195,22 @@ class Bounds:
     def long_entry_trailing_threshold_pct_1(self, new_value):
         self._long_entry_trailing_threshold_pct_1 = new_value
         self._bounds["long_entry_trailing_threshold_pct"][1] = new_value
+    @long_filter_relative_volume_clip_pct_0.setter
+    def long_filter_relative_volume_clip_pct_0(self, new_value):
+        self._long_filter_relative_volume_clip_pct_0 = new_value
+        self._bounds["long_filter_relative_volume_clip_pct"][0] = new_value
+    @long_filter_relative_volume_clip_pct_1.setter
+    def long_filter_relative_volume_clip_pct_1(self, new_value):
+        self._long_filter_relative_volume_clip_pct_1 = new_value
+        self._bounds["long_filter_relative_volume_clip_pct"][1] = new_value
+    @long_filter_rolling_window_0.setter
+    def long_filter_rolling_window_0(self, new_value):
+        self._long_filter_rolling_window_0 = new_value
+        self._bounds["long_filter_rolling_window"][0] = new_value
+    @long_filter_rolling_window_1.setter
+    def long_filter_rolling_window_1(self, new_value):
+        self._long_filter_rolling_window_1 = new_value
+        self._bounds["long_filter_rolling_window"][1] = new_value
     @long_n_positions_0.setter
     def long_n_positions_0(self, new_value):
         self._long_n_positions_0 = new_value
@@ -2250,6 +2397,22 @@ class Bounds:
     def short_entry_trailing_threshold_pct_1(self, new_value):
         self._short_entry_trailing_threshold_pct_1 = new_value
         self._bounds["short_entry_trailing_threshold_pct"][1] = new_value
+    @short_filter_relative_volume_clip_pct_0.setter
+    def short_filter_relative_volume_clip_pct_0(self, new_value):
+        self._short_filter_relative_volume_clip_pct_0 = new_value
+        self._bounds["short_filter_relative_volume_clip_pct"][0] = new_value
+    @short_filter_relative_volume_clip_pct_1.setter
+    def short_filter_relative_volume_clip_pct_1(self, new_value):
+        self._short_filter_relative_volume_clip_pct_1 = new_value
+        self._bounds["short_filter_relative_volume_clip_pct"][1] = new_value
+    @short_filter_rolling_window_0.setter
+    def short_filter_rolling_window_0(self, new_value):
+        self._short_filter_rolling_window_0 = new_value
+        self._bounds["short_filter_rolling_window"][0] = new_value
+    @short_filter_rolling_window_1.setter
+    def short_filter_rolling_window_1(self, new_value):
+        self._short_filter_rolling_window_1 = new_value
+        self._bounds["short_filter_rolling_window"][1] = new_value
     @short_n_positions_0.setter
     def short_n_positions_0(self, new_value):
         self._short_n_positions_0 = new_value
