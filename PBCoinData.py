@@ -318,10 +318,17 @@ class CoinData:
             data_ts = Path(f'{coin_path}/coindata.json').stat().st_mtime
             now_ts = datetime.now().timestamp()
             if data_ts > now_ts - 3600*self.fetch_interval:
-                with Path(f'{coin_path}/coindata.json').open() as f:
-                    self.data = json.load(f)
-                    self.data_ts = data_ts
-                    return
+                retries = 3
+                while retries > 0:
+                    try:
+                        with Path(f'{coin_path}/coindata.json').open() as f:
+                            self.data = json.load(f)
+                            self.data_ts = data_ts
+                            return
+                    except Exception as e:
+                        print(f'Error loading coindata: {e}. Retrying in 5 seconds...')
+                        sleep(5)
+                        retries -= 1
         self.fetch_data()
         self.save_data()
     
