@@ -167,6 +167,9 @@ class V7Instance():
             if st.session_state.edit_run_v7_time_in_force != self.config.live.time_in_force:
                 self.config.live.time_in_force = st.session_state.edit_run_v7_time_in_force
         # Filters
+        if "edit_run_v7_dynamic_ignore" in st.session_state:
+            if st.session_state.edit_run_v7_dynamic_ignore != self.config.pbgui.dynamic_ignore:
+                self.config.pbgui.dynamic_ignore = st.session_state.edit_run_v7_dynamic_ignore
         if "edit_run_v7_market_cap" in st.session_state:
             if st.session_state.edit_run_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_run_v7_market_cap
@@ -243,11 +246,13 @@ class V7Instance():
                 time_in_force = ['good_till_cancelled', 'post_only']
                 st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
         #Filters
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
             st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_run_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
             st.number_input("vol/mcap", min_value=0.0, value=self.config.pbgui.vol_mcap, step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
+        with col3:
+            st.checkbox("dynamic_ignore", value=self.config.pbgui.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_run_v7_dynamic_ignore")
         # Apply filters
         for symbol in coindata.ignored_coins:
             if symbol not in self.config.live.ignored_coins:

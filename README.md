@@ -184,6 +184,7 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.20 (21-10-2024)
+- V7 Run: Added Dynamic filter for mcap and vol/mcap
 - Multi: Filters for marketcap and vol/mcap added
 - Multi: Dynamic filter for mcap and vol/mcap added
 - PBRun: Dynamic filter update ignored_symbols

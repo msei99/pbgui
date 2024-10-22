@@ -610,9 +610,6 @@ class MultiInstance():
         if "edit_multi_version" in st.session_state:
             if st.session_state.edit_multi_version != self.version:
                 self.version = st.session_state.edit_multi_version
-        if "edit_multi_dynamic_ignore" in st.session_state:
-            if st.session_state.edit_multi_dynamic_ignore != self.dynamic_ignore:
-                self.dynamic_ignore = st.session_state.edit_multi_dynamic_ignore
         if "edit_multi_leverage" in st.session_state:
             if st.session_state.edit_multi_leverage != self.leverage:
                 self.leverage = st.session_state.edit_multi_leverage
@@ -702,6 +699,9 @@ class MultiInstance():
             if st.session_state.edit_multi_filter_by_min_effective_cost != self.filter_by_min_effective_cost:
                 self.filter_by_min_effective_cost = st.session_state.edit_multi_filter_by_min_effective_cost
         # Filters
+        if "edit_multi_dynamic_ignore" in st.session_state:
+            if st.session_state.edit_multi_dynamic_ignore != self.dynamic_ignore:
+                self.dynamic_ignore = st.session_state.edit_multi_dynamic_ignore
         if "edit_multi_market_cap" in st.session_state:
             if st.session_state.edit_multi_market_cap != self.market_cap:
                 self.market_cap = st.session_state.edit_multi_market_cap
