@@ -467,7 +467,8 @@ def main():
             if not pbcoindata.is_data_fresh():
                 pbcoindata.load_data()
                 if pbcoindata.is_data_fresh():
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap data')
+                    pbcoindata.fetch_api_status()
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap data. Credits left this month: {pbcoindata.credits_left}')
                 else:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data')
             sleep(60)
