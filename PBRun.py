@@ -527,24 +527,25 @@ class RunMulti():
                 if "version" in self._multi_config:
                     self.version = self._multi_config["version"]
                     self.monitor.version = self.version
-                if "dynamic_ignore" in self._multi_config:
-                    if self._multi_config["dynamic_ignore"]:
-                        self.dynamic_ignore = DynamicIgnore()
-                        self.dynamic_ignore.path = self.path
-                        self.dynamic_ignore.coindata.market_cap = self._multi_config["market_cap"]
-                        self.dynamic_ignore.coindata.vol_mcap = self._multi_config["vol_mcap"]
-                        if "ignored_symbols" in self._multi_config:
-                            self.dynamic_ignore.ignored_coins = self._multi_config["ignored_symbols"]
-                            self.dynamic_ignore.save()
-                        # Find Exchange from User
-                        api_path = f'{self.pbdir}/api-keys.json'
-                        if Path(api_path).exists():
-                            with open(api_path, "r", encoding='utf-8') as f:
-                                api_keys = json.load(f)
-                            if self.user in api_keys:
-                                self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
                 if "enabled_on" in self._multi_config:
                     if self.name == self._multi_config["enabled_on"]:
+                        if "dynamic_ignore" in self._multi_config:
+                            if self._multi_config["dynamic_ignore"]:
+                                self.dynamic_ignore = DynamicIgnore()
+                                self.dynamic_ignore.path = self.path
+                                self.dynamic_ignore.coindata.market_cap = self._multi_config["market_cap"]
+                                self.dynamic_ignore.coindata.vol_mcap = self._multi_config["vol_mcap"]
+                                # if "ignored_symbols" in self._multi_config:
+                                #     self.dynamic_ignore.ignored_coins = self._multi_config["ignored_symbols"]
+                                #     self.dynamic_ignore.save()
+                                # Find Exchange from User
+                                api_path = f'{self.pbdir}/api-keys.json'
+                                if Path(api_path).exists():
+                                    with open(api_path, "r", encoding='utf-8') as f:
+                                        api_keys = json.load(f)
+                                    if self.user in api_keys:
+                                        self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
+                                        self.dynamic_ignore.watch()
                         return True
                     else:                        
                         self.name = self._multi_config["enabled_on"]
@@ -653,25 +654,24 @@ class RunV7():
                 self._v7_config = json.loads(v7_config)
                 self.version = self._v7_config["pbgui"]["version"]
                 self.monitor.version = self.version
-                if "dynamic_ignore" in self._v7_config["pbgui"]:
-                    if self._v7_config["pbgui"]["dynamic_ignore"]:
-                        self.dynamic_ignore = DynamicIgnore()
-                        self.dynamic_ignore.path = self.path
-                        self.dynamic_ignore.coindata.market_cap = self._v7_config["pbgui"]["market_cap"]
-                        self.dynamic_ignore.coindata.vol_mcap = self._v7_config["pbgui"]["vol_mcap"]
-                        if "ignored_coins" in self._v7_config["live"]:
+                if self.name == self._v7_config["pbgui"]["enabled_on"]:
+                    if "dynamic_ignore" in self._v7_config["pbgui"]:
+                        if self._v7_config["pbgui"]["dynamic_ignore"]:
+                            self.dynamic_ignore = DynamicIgnore()
+                            self.dynamic_ignore.path = self.path
+                            self.dynamic_ignore.coindata.market_cap = self._v7_config["pbgui"]["market_cap"]
+                            self.dynamic_ignore.coindata.vol_mcap = self._v7_config["pbgui"]["vol_mcap"]
                             self._v7_config["live"]["ignored_coins"] = str(PurePath(f'{self.path}/ignored_coins.json'))
                             with open(file, "w", encoding='utf-8') as f:
                                 json.dump(self._v7_config, f, indent=4)
-                        # Find Exchange from User
-                        api_path = f'{self.pbdir}/api-keys.json'
-                        if Path(api_path).exists():
-                            with open(api_path, "r", encoding='utf-8') as f:
-                                api_keys = json.load(f)
-                            if self.user in api_keys:
-                                self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
-                                self.dynamic_ignore.save()
-                if self.name == self._v7_config["pbgui"]["enabled_on"]:
+                            # Find Exchange from User
+                            api_path = f'{self.pbdir}/api-keys.json'
+                            if Path(api_path).exists():
+                                with open(api_path, "r", encoding='utf-8') as f:
+                                    api_keys = json.load(f)
+                                if self.user in api_keys:
+                                    self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
+                                    self.dynamic_ignore.watch()
                     return True
                 else:                        
                     self.name = self._v7_config["pbgui"]["enabled_on"]
