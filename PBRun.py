@@ -660,8 +660,6 @@ class RunV7():
                         self.dynamic_ignore.coindata.market_cap = self._v7_config["pbgui"]["market_cap"]
                         self.dynamic_ignore.coindata.vol_mcap = self._v7_config["pbgui"]["vol_mcap"]
                         if "ignored_coins" in self._v7_config["live"]:
-                            self.dynamic_ignore.ignored_coins = self._v7_config["live"]["ignored_coins"]
-                            self.dynamic_ignore.save()
                             self._v7_config["live"]["ignored_coins"] = str(PurePath(f'{self.path}/ignored_coins.json'))
                             with open(file, "w", encoding='utf-8') as f:
                                 json.dump(self._v7_config, f, indent=4)
@@ -672,6 +670,7 @@ class RunV7():
                                 api_keys = json.load(f)
                             if self.user in api_keys:
                                 self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
+                                self.dynamic_ignore.save()
                 if self.name == self._v7_config["pbgui"]["enabled_on"]:
                     return True
                 else:                        
