@@ -128,7 +128,6 @@ class CoinData:
     def exchange(self, new_exchange):
         self._exchange = new_exchange
         self.load_symbols()
-        self.load_data()
         self.list_symbols()
 
     @property
@@ -318,7 +317,7 @@ class CoinData:
         if Path(f'{coin_path}/coindata.json').exists():
             data_ts = Path(f'{coin_path}/coindata.json').stat().st_mtime
             now_ts = datetime.now().timestamp()
-            if data_ts > now_ts - 3600*self.fetch_interval:
+            if data_ts > now_ts - 3600*self.fetch_interval or not self.data:
                 retries = 3
                 while retries > 0:
                     try:
