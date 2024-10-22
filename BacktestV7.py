@@ -386,12 +386,6 @@ class BacktestV7Item:
         if "edit_bt_v7_minimum_coin_age_days" in st.session_state:
             if st.session_state.edit_bt_v7_minimum_coin_age_days != self.config.live.minimum_coin_age_days:
                 self.config.live.minimum_coin_age_days = st.session_state.edit_bt_v7_minimum_coin_age_days
-        if "edit_bt_v7_ohlcv_rolling_window" in st.session_state:
-            if st.session_state.edit_bt_v7_ohlcv_rolling_window != self.config.live.ohlcv_rolling_window:
-                self.config.live.ohlcv_rolling_window = st.session_state.edit_bt_v7_ohlcv_rolling_window
-        if "relative_volume_filter_clip_pct" in st.session_state:
-            if st.session_state.edit_bt_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
-                self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_bt_v7_relative_volume_filter_clip_pct
         if "edit_bt_v7_approved_coins" in st.session_state:
             if st.session_state.edit_bt_v7_approved_coins != self.config.live.approved_coins:
                 self.config.live.approved_coins = st.session_state.edit_bt_v7_approved_coins
@@ -416,11 +410,6 @@ class BacktestV7Item:
             st.number_input('STARTING_BALANCE',value=float(self.config.backtest.starting_balance),step=500.0, key="edit_bt_v7_sb")
         with col2:
             st.number_input("minimum_coin_age_days", value=float(round(self.config.live.minimum_coin_age_days, 1)), step=1.0, format="%.1f", key="edit_bt_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
-        with col3:
-            st.number_input("ohlcv_rolling_window", value=self.config.live.ohlcv_rolling_window, step=1, format="%.d", key="edit_bt_v7_ohlcv_rolling_window", help=pbgui_help.ohlcv_rolling_window)
-        with col4:
-            st.number_input("relative_volume_filter_clip_pct", value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_bt_v7_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
-        # symbol configuration
         for symbol in self.config.live.approved_coins.copy():
             if symbol not in self._available_symbols:
                 self.config.live.approved_coins.remove(symbol)

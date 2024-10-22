@@ -981,7 +981,7 @@ class Short:
     @filter_rolling_window.setter
     def filter_rolling_window(self, new_filter_rolling_window):
         self._filter_rolling_window = new_filter_rolling_window
-        self._short["filter_rolling_window"] = self._filter
+        self._short["filter_rolling_window"] = self._filter_rolling_window
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
