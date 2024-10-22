@@ -418,6 +418,9 @@ class CoinData:
                     self.approved_coins.append(symbol)
                 else:
                     self.ignored_coins.append(symbol)
+        #Sort approved and ignored coins and symbols_Data
+        self.approved_coins = sorted(self.approved_coins)
+        self.ignored_coins = sorted(self.ignored_coins)
         self._symbols_data = sorted(self._symbols_data, key=lambda x: x["market_cap"], reverse=True)
 
     def filter_by_market_cap(self, symbols: list, mc: int):
