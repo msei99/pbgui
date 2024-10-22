@@ -128,6 +128,7 @@ class CoinData:
     def exchange(self, new_exchange):
         self._exchange = new_exchange
         self.load_symbols()
+        self.load_data()
         self.list_symbols()
 
     @property
