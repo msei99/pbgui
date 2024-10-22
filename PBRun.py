@@ -211,8 +211,10 @@ class DynamicIgnore():
         if self.ignored_coins != self.coindata.ignored_coins:
             removed_coins = set(self.ignored_coins) - set(self.coindata.ignored_coins)
             removed_coins = [*removed_coins]
+            removed_coins.sort()
             added_coins = set(self.coindata.ignored_coins) - set(self.ignored_coins)
             added_coins = [*added_coins]
+            added_coins.sort()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_symbols {self.path}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Removed: {removed_coins}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Added: {added_coins}')
@@ -535,9 +537,6 @@ class RunMulti():
                                 self.dynamic_ignore.path = self.path
                                 self.dynamic_ignore.coindata.market_cap = self._multi_config["market_cap"]
                                 self.dynamic_ignore.coindata.vol_mcap = self._multi_config["vol_mcap"]
-                                # if "ignored_symbols" in self._multi_config:
-                                #     self.dynamic_ignore.ignored_coins = self._multi_config["ignored_symbols"]
-                                #     self.dynamic_ignore.save()
                                 # Find Exchange from User
                                 api_path = f'{self.pbdir}/api-keys.json'
                                 if Path(api_path).exists():
