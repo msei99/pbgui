@@ -679,6 +679,8 @@ class RunV7():
                     return False
             except Exception as e:
                 print(f'Something went wrong, but continue {e}')
+                print(f'Setting version of {self.user} to 0')
+                self.version = 0
                 traceback.print_exc()
 
 class PBRun():
