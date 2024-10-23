@@ -458,9 +458,9 @@ class BacktestV7Item:
                 self.config.live.approved_coins.remove(symbol)
         # Correct Display of Symbols
         if "edit_bt_v7_approved_coins" in st.session_state:
-            st.session_state.edit_run_v7_approved_coins = self.config.live.approved_coins
+            st.session_state.edit_bt_v7_approved_coins = self.config.live.approved_coins
         if "edit_bt_v7_ignored_coins" in st.session_state:
-            st.session_state.edit_run_v7_ignored_coins = self.config.live.ignored_coins
+            st.session_state.edit_bt_v7_ignored_coins = self.config.live.ignored_coins
         col1, col2 = st.columns([3,1], vertical_alignment="bottom")
         st.multiselect('symbols', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins, key="edit_bt_v7_approved_coins", help=pbgui_help.approved_coins)
         st.multiselect('ignored_symbols', coindata.symbols, default=self.config.live.ignored_coins, key="edit_bt_v7_ignored_coins", help=pbgui_help.ignored_coins)
