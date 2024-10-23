@@ -1,10 +1,11 @@
 #!/usr/bin/bash
-venv=~/software/pb_env          #Path to python venv
+venv=~/software/venv_pbgui      #Path to python venv
 pbgui=~/software/pbgui          #path to pbgui installation
 
 source ${venv}/bin/activate
 cd ${pbgui}
 python PBRun.py &
 python PBRemote.py &
+python PBCoinData.py &
 python PBStat.py &
 python PBData.py &
