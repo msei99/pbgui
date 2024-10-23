@@ -630,15 +630,7 @@ class OptimizeV7Item:
         # Correct Display of Symbols
         if "edit_run_v7_approved_coins" in st.session_state:
             st.session_state.edit_run_v7_approved_coins = self.config.live.approved_coins
-        col1, col2 = st.columns([3,1], vertical_alignment="bottom")
-        with col1:
-            st.multiselect('symbols', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins, key="edit_opt_v7_approved_coins")
-        with col2:
-            if st.button("Update Symbols", key="edit_opt_update_symbols"):
-                exchange = Exchange(self.config.backtest.exchange)
-                exchange.fetch_symbols()
-                coindata.load_symbols()
-                st.rerun()
+        st.multiselect('symbols', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins, key="edit_opt_v7_approved_coins")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             # long_close_grid_markup_range
