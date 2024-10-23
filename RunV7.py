@@ -254,9 +254,9 @@ class V7Instance():
             with col1:
                 st.number_input("max_n_restarts_per_day", min_value=0, max_value=100, value=self.config.live.max_n_restarts_per_day, step=1, format="%.d", key="edit_run_v7_max_n_restarts_per_day", help=pbgui_help.max_n_restarts_per_day)
             with col2:
-                st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, value=self.config.live.ohlcvs_1m_rolling_window_days, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
+                st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, value=round(float(self.config.live.ohlcvs_1m_rolling_window_days),1), step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
             with col3:
-                st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, value=self.config.live.ohlcvs_1m_update_after_minutes, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
+                st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, value=round(float(self.config.live.ohlcvs_1m_update_after_minutes),1), step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
             with col4:
                 time_in_force = ['good_till_cancelled', 'post_only']
                 st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
