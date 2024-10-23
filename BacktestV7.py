@@ -353,7 +353,6 @@ class BacktestV7Item:
             self.config.config_file = backtest_path
             self.config.load_config()
             self.name = self.config.backtest.base_dir.split('/')[-1]
-            self._available_symbols = load_symbols_from_ini(exchange=self.config.backtest.exchange, market_type='swap')
         else:
             self.initialize()
 
@@ -362,14 +361,21 @@ class BacktestV7Item:
         self.config.backtest.start_date = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.config.backtest.end_date = datetime.date.today().strftime("%Y-%m-%d")
         self.config.optimize.n_cpus = multiprocessing.cpu_count()
-        self._available_symbols = load_symbols_from_ini(exchange=self.config.backtest.exchange, market_type='swap')
 
     def edit(self):
+        # Init coindata
+        coindata = st.session_state.pbcoindata
+        if coindata.exchange != self.config.backtest.exchange:
+            coindata.exchange = self.config.backtest.exchange
+        if coindata.market_cap != self.config.pbgui.market_cap:
+            coindata.market_cap = self.config.pbgui.market_cap
+        if coindata.vol_mcap != self.config.pbgui.vol_mcap:
+            coindata.vol_mcap = self.config.pbgui.vol_mcap
         # Init session_state for keys
         if "edit_bt_v7_exchange" in st.session_state:
             if st.session_state.edit_bt_v7_exchange != self.config.backtest.exchange:
                 self.config.backtest.exchange = st.session_state.edit_bt_v7_exchange
-                self._available_symbols = load_symbols_from_ini(exchange=self.config.backtest.exchange, market_type='swap')
+                coindata.exchange = self.config.backtest.exchange
         if "edit_bt_v7_name" in st.session_state:
             if st.session_state.edit_bt_v7_name != self.name:
                 self.name = st.session_state.edit_bt_v7_name
@@ -386,9 +392,26 @@ class BacktestV7Item:
         if "edit_bt_v7_minimum_coin_age_days" in st.session_state:
             if st.session_state.edit_bt_v7_minimum_coin_age_days != self.config.live.minimum_coin_age_days:
                 self.config.live.minimum_coin_age_days = st.session_state.edit_bt_v7_minimum_coin_age_days
+        # Filters
+        if "edit_bt_v7_market_cap" in st.session_state:
+            if st.session_state.edit_bt_v7_market_cap != self.config.pbgui.market_cap:
+                self.config.pbgui.market_cap = st.session_state.edit_bt_v7_market_cap
+                coindata.market_cap = self.config.pbgui.market_cap
+        if "edit_bt_v7_vol_mcap" in st.session_state:
+            if st.session_state.edit_bt_v7_vol_mcap != self.config.pbgui.vol_mcap:
+                self.config.pbgui.vol_mcap = st.session_state.edit_bt_v7_vol_mcap
+                coindata.vol_mcap = self.config.pbgui.vol_mcap
+        # Symbol config
         if "edit_bt_v7_approved_coins" in st.session_state:
             if st.session_state.edit_bt_v7_approved_coins != self.config.live.approved_coins:
                 self.config.live.approved_coins = st.session_state.edit_bt_v7_approved_coins
+                if 'All' in self.config.live.approved_coins:
+                    self.config.live.approved_coins = coindata.symbols.copy()
+                elif 'CPT' in self.config.live.approved_coins:
+                    self.config.live.approved_coins = coindata.symbols_cpt.copy()
+        if "edit_run_v7_ignored_coins" in st.session_state:
+            if st.session_state.edit_bt_v7_ignored_coins != self.config.live.ignored_coins:
+                self.config.live.ignored_coins = st.session_state.edit_bt_v7_ignored_coins
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
@@ -410,18 +433,37 @@ class BacktestV7Item:
             st.number_input('STARTING_BALANCE',value=float(self.config.backtest.starting_balance),step=500.0, key="edit_bt_v7_sb")
         with col2:
             st.number_input("minimum_coin_age_days", value=float(round(self.config.live.minimum_coin_age_days, 1)), step=1.0, format="%.1f", key="edit_bt_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
-        for symbol in self.config.live.approved_coins.copy():
-            if symbol not in self._available_symbols:
-                self.config.live.approved_coins.remove(symbol)
-        col1, col2 = st.columns([3,1], vertical_alignment="bottom")
+        #Filters
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('symbols', self._available_symbols, default=self.config.live.approved_coins, key="edit_bt_v7_approved_coins")
+            st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_bt_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
-            if st.button("Update Symbols", key="edit_bt_update_symbols"):
-                exchange = Exchange(self.config.backtest.exchange)
-                exchange.fetch_symbols()
-                self._available_symbols = exchange.swap
-                st.rerun()
+            st.number_input("vol/mcap", min_value=0.0, value=self.config.pbgui.vol_mcap, step=0.05, format="%.2f", key="edit_bt_v7_vol_mcap", help=pbgui_help.vol_mcap)
+        # Apply filters
+        for symbol in coindata.ignored_coins:
+            if symbol not in self.config.live.ignored_coins:
+                self.config.live.ignored_coins.append(symbol)
+            if symbol in self.config.live.approved_coins:
+                self.config.live.approved_coins.remove(symbol)
+        # Remove unavailable symbols
+        for symbol in self.config.live.approved_coins.copy():
+            if symbol not in coindata.symbols:
+                self.config.live.approved_coins.remove(symbol)
+        for symbol in self.config.live.ignored_coins.copy():
+            if symbol not in coindata.symbols:
+                self.config.live.ignored_coins.remove(symbol)
+        # Remove from approved_coins when in ignored coins
+        for symbol in self.config.live.ignored_coins:
+            if symbol in self.config.live.approved_coins:
+                self.config.live.approved_coins.remove(symbol)
+        # Correct Display of Symbols
+        if "edit_bt_v7_approved_coins" in st.session_state:
+            st.session_state.edit_run_v7_approved_coins = self.config.live.approved_coins
+        if "edit_bt_v7_ignored_coins" in st.session_state:
+            st.session_state.edit_run_v7_ignored_coins = self.config.live.ignored_coins
+        col1, col2 = st.columns([3,1], vertical_alignment="bottom")
+        st.multiselect('symbols', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins, key="edit_bt_v7_approved_coins", help=pbgui_help.approved_coins)
+        st.multiselect('ignored_symbols', coindata.symbols, default=self.config.live.ignored_coins, key="edit_bt_v7_ignored_coins", help=pbgui_help.ignored_coins)
         self.config.bot.edit()
 
     def remove_selected_results(self):
