@@ -138,9 +138,6 @@ class V7Instance():
         if "edit_run_v7_relative_volume_filter_clip_pct" in st.session_state:
             if st.session_state.edit_run_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
                 self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_run_v7_relative_volume_filter_clip_pct
-        # if "edit_run_v7_ohlcv_rolling_window" in st.session_state:
-        #     if st.session_state.edit_run_v7_ohlcv_rolling_window != self.config.live.ohlcv_rolling_window:
-        #         self.config.live.ohlcv_rolling_window = st.session_state.edit_run_v7_ohlcv_rolling_window
         if "edit_run_v7_price_distance_threshold" in st.session_state:
             if st.session_state.edit_run_v7_price_distance_threshold != self.config.live.price_distance_threshold:
                 self.config.live.price_distance_threshold = st.session_state.edit_run_v7_price_distance_threshold
@@ -294,15 +291,7 @@ class V7Instance():
         if "edit_run_v7_ignored_coins" in st.session_state:
             st.session_state.edit_run_v7_ignored_coins = self.config.live.ignored_coins
         st.multiselect('symbols', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins, key="edit_run_v7_approved_coins", help=pbgui_help.approved_coins)
-        col1, col2 = st.columns([3,1], vertical_alignment="bottom")
-        with col1:
-            st.multiselect('ignored_symbols', coindata.symbols, default=self.config.live.ignored_coins, key="edit_run_v7_ignored_coins", help=pbgui_help.ignored_coins)
-        with col2:
-            if st.button("Update Symbols", key="edit_run_update_symbols"):
-                exchange = Exchange(self.config.backtest.exchange, self._users.find_user(self.user))
-                exchange.fetch_symbols()
-                coindata.load_symbols()
-                st.rerun()
+        st.multiselect('ignored_symbols', coindata.symbols, default=self.config.live.ignored_coins, key="edit_run_v7_ignored_coins", help=pbgui_help.ignored_coins)
         # Edit long / short
         self.config.bot.edit()
         # View log
