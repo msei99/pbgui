@@ -230,7 +230,9 @@ class CoinData:
             data_ts = Path(f'{coin_path}/coindata.json').stat().st_mtime
             if data_ts > self.data_ts:
                 return True
-        return False
+            else:
+                return False
+        return True
 
     def load_config(self):
         if self.has_new_config():
