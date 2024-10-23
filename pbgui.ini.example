@@ -1,0 +1,15 @@
+[main]
+pbname = <hostname>
+pbdir = /home/<username>/software/pb6
+pbvenv = /home/<username>/software/venv_pb6/bin/python
+pb7dir = /home/<username>/software/pb7
+pb7venv = /home/<username>/software/venv_pb7/bin/python
+
+[pbremote]
+bucket = <bucket_name:>
+
+[coinmarketcap]
+api_key = <api_key
+fetch_limit = 1000
+fetch_interval = 4
+
