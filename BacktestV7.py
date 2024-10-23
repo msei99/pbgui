@@ -409,7 +409,7 @@ class BacktestV7Item:
                     self.config.live.approved_coins = coindata.symbols.copy()
                 elif 'CPT' in self.config.live.approved_coins:
                     self.config.live.approved_coins = coindata.symbols_cpt.copy()
-        if "edit_run_v7_ignored_coins" in st.session_state:
+        if "edit_bt_v7_ignored_coins" in st.session_state:
             if st.session_state.edit_bt_v7_ignored_coins != self.config.live.ignored_coins:
                 self.config.live.ignored_coins = st.session_state.edit_bt_v7_ignored_coins
         # Display Editor
