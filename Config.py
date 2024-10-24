@@ -2627,7 +2627,7 @@ class ConfigV7():
                     if "ohlcvs_1m_rolling_window_days" not in config["live"]:
                         self.config["live"]["ohlcvs_1m_rolling_window_days"] = Live()._ohlcvs_1m_rolling_window_days
                     if "ohlcvs_1m_rolling_window_days" not in config["live"]:
-                        self.config["live"]["ohlcvs_1m_rolling_window_days"] = Live()._ohlcvs_1m_rolling_window_days
+                        self.config["live"]["ohlcvs_1m_update_after_minutes"] = Live()._ohlcvs_1m_update_after_minutes
                 if "optimize" in config:
                     self.optimize = config["optimize"]
                     # Fix for old optimizer configs
