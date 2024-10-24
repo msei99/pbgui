@@ -2624,8 +2624,21 @@ class ConfigV7():
                     self.bot = config["bot"]
                 if "live" in config:
                     self.live = config["live"]
+                    if "ohlcvs_1m_rolling_window_days" not in config["live"]:
+                        self.config["live"]["ohlcvs_1m_rolling_window_days"] = Live()._ohlcvs_1m_rolling_window_days
+                    if "ohlcvs_1m_rolling_window_days" not in config["live"]:
+                        self.config["live"]["ohlcvs_1m_rolling_window_days"] = Live()._ohlcvs_1m_rolling_window_days
                 if "optimize" in config:
                     self.optimize = config["optimize"]
+                    # Fix for old optimizer configs
+                    if "long_filter_relative_volume_clip_pct" not in config["optimize"]["bounds"]:
+                        self.config["optimize"]["bounds"]["long_filter_relative_volume_clip_pct"] = [Bounds()._long_filter_relative_volume_clip_pct_0, Bounds()._long_filter_relative_volume_clip_pct_1]
+                    if "short_filter_relative_volume_clip_pct" not in config["optimize"]["bounds"]:
+                        self.config["optimize"]["bounds"]["short_filter_relative_volume_clip_pct"] = [Bounds()._short_filter_relative_volume_clip_pct_0, Bounds()._short_filter_relative_volume_clip_pct_1]
+                    if "long_filter_rolling_window" not in config["optimize"]["bounds"]:
+                        self.config["optimize"]["bounds"]["long_filter_rolling_window"] = [Bounds()._long_filter_rolling_window_0, Bounds()._long_filter_rolling_window_1]
+                    if "short_filter_rolling_window" not in config["optimize"]["bounds"]:
+                        self.config["optimize"]["bounds"]["short_filter_rolling_window"] = [Bounds()._short_filter_rolling_window_0, Bounds()._short_filter_rolling_window_1]
                 if "pbgui" in config:
                     self.pbgui = config["pbgui"]
             except Exception as e:
