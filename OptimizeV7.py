@@ -524,7 +524,7 @@ class OptimizeV7Item:
             if st.session_state.edit_opt_v7_n_cpu != self.config.optimize.n_cpus:
                 self.config.optimize.n_cpus = st.session_state.edit_opt_v7_n_cpu
         if "edit_opt_v7_starting_config" in st.session_state:
-            if st.session_state.edit_opt_v7_starting_config:
+            if st.session_state.edit_opt_v7_starting_config != self.config.pbgui.starting_config:
                 self.config.pbgui.starting_config = st.session_state.edit_opt_v7_starting_config
         if "edit_opt_v7_lower_bound_drawdown_worst" in st.session_state:
             if st.session_state.edit_opt_v7_lower_bound_drawdown_worst != self.config.optimize.limits.lower_bound_drawdown_worst:
