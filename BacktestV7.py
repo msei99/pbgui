@@ -615,9 +615,10 @@ class BacktestV7Item:
                 del st.session_state.edit_bt_v7_ed
                 del st.session_state.edit_bt_v7_sb
                 del st.session_state.edit_bt_v7_minimum_coin_age_days
-                del st.session_state.edit_bt_v7_ohlcv_rolling_window
-                del st.session_state.edit_bt_v7_relative_volume_filter_clip_pct
+                del st.session_state.edit_bt_v7_market_cap
+                del st.session_state.edit_bt_v7_vol_mcap
                 del st.session_state.edit_bt_v7_approved_coins
+                del st.session_state.edit_bt_v7_ignored_coins
                 del st.session_state.edit_configv7_long_twe
                 del st.session_state.edit_configv7_short_twe
                 del st.session_state.edit_configv7_long_positions
