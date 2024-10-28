@@ -629,16 +629,17 @@ class PBRemote():
         p = str(Path(f'{pbgdir}/data/remote/cmd_*'))
         found_remote = glob.glob(p)
         for remote in found_remote:
-            remote_name = remote.split("_")[-1]
+            rserver = RemoteServer(remote)
+            rserver.pbdir = self.pbdir
+            rserver.pb7dir = self.pb7dir
+            rserver.bucket = self.bucket_dir
+            rserver.pbname = self.name
+            rserver.load()
             for server in self.remote_servers:
-                if remote_name != server.name:
-                    rserver = RemoteServer(remote)
-                    rserver.pbdir = self.pbdir
-                    rserver.pb7dir = self.pb7dir
-                    rserver.bucket = self.bucket_dir
-                    rserver.pbname = self.name
-                    rserver.load()
-                    self.add(rserver)
+                if rserver.name == server.name:
+                    return
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Add New Server: {rserver.name}')
+            self.add(rserver)
 
     def run(self):
         """Starts PBRemote in unbuffered mode, and send an error message if it does not open every 10 secondes."""
