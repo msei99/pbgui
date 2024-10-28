@@ -620,6 +620,26 @@ class PBRemote():
             rserver.load()
             self.add(rserver)
 
+    def update_remote_servers(self):
+        """
+        Loads every cmd files and create a new RemoteServer instance for each new possible instances, and tries to start instances with load_instances(). 
+        It then adds the RemoteServer to remote_servers if the RemoteServer exists.
+        """
+        pbgdir = Path.cwd()
+        p = str(Path(f'{pbgdir}/data/remote/cmd_*'))
+        found_remote = glob.glob(p)
+        for remote in found_remote:
+            remote_name = remote.split("_")[-1]
+            for server in self.remote_servers:
+                if remote_name != server.name:
+                    rserver = RemoteServer(remote)
+                    rserver.pbdir = self.pbdir
+                    rserver.pb7dir = self.pb7dir
+                    rserver.bucket = self.bucket_dir
+                    rserver.pbname = self.name
+                    rserver.load()
+                    self.add(rserver)
+
     def run(self):
         """Starts PBRemote in unbuffered mode, and send an error message if it does not open every 10 secondes."""
         if not self.is_running():
@@ -756,6 +776,7 @@ def main():
             remote.check_if_api_synced()
             remote.alive()
             remote.sync('down', 'cmd')
+            remote.update_remote_servers()
             for server in remote.remote_servers:
                 server.load()
                 server.sync_v7_down()
