@@ -135,9 +135,9 @@ class V7Instance():
         if "edit_run_v7_minimum_coin_age_days" in st.session_state:
             if st.session_state.edit_run_v7_minimum_coin_age_days != self.config.live.minimum_coin_age_days:
                 self.config.live.minimum_coin_age_days = st.session_state.edit_run_v7_minimum_coin_age_days
-        if "edit_run_v7_relative_volume_filter_clip_pct" in st.session_state:
-            if st.session_state.edit_run_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
-                self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_run_v7_relative_volume_filter_clip_pct
+        # if "edit_run_v7_relative_volume_filter_clip_pct" in st.session_state:
+        #     if st.session_state.edit_run_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
+        #         self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_run_v7_relative_volume_filter_clip_pct
         if "edit_run_v7_price_distance_threshold" in st.session_state:
             if st.session_state.edit_run_v7_price_distance_threshold != self.config.live.price_distance_threshold:
                 self.config.live.price_distance_threshold = st.session_state.edit_run_v7_price_distance_threshold
@@ -215,9 +215,10 @@ class V7Instance():
         with col1:
             st.number_input("minimum_coin_age_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.minimum_coin_age_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
         with col2:
-            st.number_input("relative_volume_filter_clip_pct", min_value=0.0, max_value=1.0, value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), step=0.1, format="%.2f", key="edit_run_v7_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
-        with col3:
             st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
+            # st.number_input("relative_volume_filter_clip_pct", min_value=0.0, max_value=1.0, value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), step=0.1, format="%.2f", key="edit_run_v7_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
+        # with col3:
+        #     st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
         # with col4:
         #     st.number_input("ohlcv_rolling_window", min_value=0, max_value=100, value=self.config.live.ohlcv_rolling_window, step=1, format="%.d", key="edit_run_v7_ohlcv_rolling_window", help=pbgui_help.ohlcv_rolling_window)
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
@@ -326,7 +327,7 @@ class V7Instance():
                 del st.session_state.edit_run_v7_leverage
                 del st.session_state.edit_run_v7_pnls_max_lookback_days
                 del st.session_state.edit_run_v7_minimum_coin_age_days
-                del st.session_state.edit_run_v7_relative_volume_filter_clip_pct
+                # del st.session_state.edit_run_v7_relative_volume_filter_clip_pct
                 # del st.session_state.edit_run_v7_ohlcv_rolling_window
                 del st.session_state.edit_run_v7_price_distance_threshold
                 del st.session_state.edit_run_v7_execution_delay_seconds
