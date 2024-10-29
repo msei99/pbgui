@@ -61,6 +61,8 @@ def select_instance():
     with st.sidebar:
         if st.button(":recycle:"):
             del st.session_state.v7_instances
+            if "remote" in st.session_state:
+                del st.session_state.remote
             with st.spinner('Initializing V7 Instances...'):
                 st.session_state.v7_instances = V7Instances()
                 v7_instances = st.session_state.v7_instances
