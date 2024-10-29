@@ -232,14 +232,15 @@ class DynamicIgnore():
     
     def update_hjson(self):
         file = Path(f'{self.path}/multi_run.hjson')
-        with open(file, "r", encoding='utf-8') as f:
-            multi_config = f.read()
-        multi_config = hjson.loads(multi_config)
-        if "ignored_symbols" in multi_config:
-            if multi_config["ignored_symbols"] != self.ignored_coins:
-                multi_config["ignored_symbols"] = self.ignored_coins
-                with open(file, "w", encoding='utf-8') as f:
-                    f.write(hjson.dumps(multi_config))
+        if file.exists():
+            with open(file, "r", encoding='utf-8') as f:
+                multi_config = f.read()
+            multi_config = hjson.loads(multi_config)
+            if "ignored_symbols" in multi_config:
+                if multi_config["ignored_symbols"] != self.ignored_coins:
+                    multi_config["ignored_symbols"] = self.ignored_coins
+                    with open(file, "w", encoding='utf-8') as f:
+                        f.write(hjson.dumps(multi_config))
 
 class RunSingle():
     def __init__(self):
