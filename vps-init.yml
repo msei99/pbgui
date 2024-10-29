@@ -1,0 +1,97 @@
+---
+# Initial Setup for VPS
+# Steps:
+# 1. Change hostname
+# 2. Create new user
+# 3. Change root password
+# 4. Disable root login
+# 5. Add ssh-key to new user
+
+- hosts: localhost
+  gather_facts: no
+
+  vars:
+    hostname: "{{ hostname }}"
+    ip: "{{ ip }}"
+
+  tasks:
+    - name: remove {{ip}} from known_hosts entries
+      known_hosts:
+        name: "{{ ip }}"
+        state: absent
+
+    - name: remove {{hostname}} from known_hosts entries
+      known_hosts:
+        name: "{{ hostname }}"
+        state: absent
+
+    - name: create ssh-key on localhost if not exists
+      openssh_keypair:
+        path: "{{ lookup('env', 'HOME') + '/.ssh/id_rsa' }}"
+
+- hosts: "{{ hostname }}"
+  remote_user: root
+  gather_facts: "{{ debug }}"
+
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_ssh_pass: "{{ initial_root_pw }}"
+    ansible_become_password: "{{ initial_root_pw }}"
+    new_root_pw: "{{ root_pw }}"
+    user: "{{ user }}"
+    user_pw: "{{ user_pw }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+    
+    - name: set hostname
+      hostname:
+        name: "{{ hostname }}"
+      become: yes
+
+    - name: create users
+      user:
+        name: "{{ user }}"
+        password: "{{ user_pw | password_hash('sha512') }}"
+        shell: /bin/bash
+        groups: sudo
+      become: yes
+    
+    - name: change root password
+      user:
+        name: root
+        password: "{{ new_root_pw | password_hash('sha512') }}"
+      become: yes
+    
+    - name: Disable root login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^PermitRootLogin"
+        line: "PermitRootLogin no"
+        backup: yes
+      become: yes
+      notify: restart sshd
+
+  handlers:
+    - name: restart sshd
+      service:
+        name: ssh
+        state: restarted
+
+- hosts: "{{ hostname }}"
+  gather_facts: no
+
+  vars:
+    ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    user_pw: "{{ user_pw }}"
+  
+  tasks:
+    - name: add ssh-key to new user
+      authorized_key:
+        user: "{{ lookup('env', 'USER') }}"
+        key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_rsa.pub') }}"
