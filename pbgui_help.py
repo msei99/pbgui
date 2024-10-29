@@ -1010,3 +1010,45 @@ dynamic_ignore = """
     On passivbot6 PBRun will restart the bot if needed.
     On passivbot7 PBRun creat the ignored_coins.json file and pb7 will use this list as filter.
     ```"""
+
+vps_swap = """
+    ```
+    recommended swap size for VPS
+    2GB for VPS with 1GB RAM and 10GB SSD
+    5GB for VPS with 2GB RAM and 25GB SSD
+    8GB for VPS with 4GB RAM and 50GB SSD
+    ```"""
+
+vps_ip = """
+    ```
+    IP of your VPS (Example: 193.123.150.99)
+    ```"""
+
+vps_hostname = """
+    ```
+    New Hostname of your VPS (Example: mypassivbot01)
+    ```"""
+vps_initial_root_pw = """
+    ```
+    The initial root password of your VPS
+    ```"""
+
+vps_root_pw = """
+    ```
+    The new root password of your VPS
+    This password will be set after the installation
+    ```"""
+
+vps_user = """
+    ```
+    Your linux username
+    Use the same user on local and all vps, for easy ssh to your vps
+    The installer will add your public ssh key to the vps user
+    ```"""
+
+vps_user_pw = """
+    ```
+    Your user password on your vps.
+    This will be set when run init.
+    Will be used for sudo when run setup.
+    ```"""

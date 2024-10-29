@@ -1,0 +1,276 @@
+---
+# Setup for VPS
+# Steps:
+# 1. Get local home
+# 2. Get remote home and install_dir
+# 3. Update Server
+# 4. Reboot if required
+# 5. Create swapfile
+# 6. Install git, python3.10, rustc, cargo
+# 7. Clone pbgui repository
+# 8. Clone passivbot repository for pb6
+# 9. Clone passivbot repository for pb7
+# 10. Create python3.10 venv for pbgui
+# 11. Create python3.10 venv for pb6
+# 12. Create python3.10 venv for pb7
+# 13. Build passivbot-rust with maturin
+# 14. Setup pbgui
+# 15. Restart PBRun, PBRemote and PBCoinData
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    user_pw: "{{ user_pw }}"
+    swap_size: "{{ swap_size }}"
+    bucket_name: "{{ bucket }}"
+    api_key: "{{ coinmarketcap_api_key }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: get local_home
+      set_fact:
+        local_home: "{{ lookup('env', 'HOME') }}"
+      delegate_to: localhost
+    
+    - name: print local home
+      debug:
+        var: local_home
+      tags: debug,never
+
+    - name: get remote_home and install_dir
+      set_fact:
+        remote_home: "{{ lookup('env', 'HOME') }}"
+        install_dir: "{{ lookup('env', 'HOME') + '/software' }}"
+    
+    - name: print install_dir
+      debug:
+        var: install_dir
+      tags: debug,never
+
+    - name: update server
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+        autoremove: yes
+        autoclean: yes
+        force_apt_get: yes
+      become: yes
+      register: update_result
+
+    - name: print update result
+      debug:
+        var: update_result.stdout_lines
+
+    - name: Check if reboot required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Reboot if required
+      reboot:
+        msg: "Rebooting machine in 5 seconds"
+      when: reboot_required_file.stat.exists == true
+      become: yes
+  
+    - name: check if swapfile exists
+      stat:
+        path: /swapfile
+      register: swapfile_status
+
+    - name: print swapfile status
+      debug:
+        var: swapfile_status.stat.exists
+      tags: debug,never
+
+    - name: create swapfile block
+      block:
+        - name: create swapfile if it does not exist
+          command: fallocate -l {{ swap_size }} /swapfile
+        
+        - name: Set permissions on swapfile
+          command: chmod 600 /swapfile
+
+        - name: Make swapfile
+          command: mkswap /swapfile
+        
+        - name: Enable swapfile
+          command: swapon /swapfile
+        
+        - name: Add swapfile to fstab
+          mount:
+            name: /swapfile
+            src: /swapfile
+            fstype: swap
+            opts: sw
+            state: present
+        
+        - name: swappiness
+          sysctl:
+            name: vm.swappiness
+            value: 10
+            state: present
+        
+        - name: vfs_cache_pressure
+          sysctl:
+            name: vm.vfs_cache_pressure
+            value: 50
+            state: present
+      become: yes
+      when: swapfile_status.stat.exists == false
+      
+    - name: Add deadsnakes/ppa for installing python3.10
+      apt_repository:
+        repo: ppa:deadsnakes/ppa
+      become: yes
+
+    - name: Install git, python3.10, rclone, rustc, cargo
+      apt:
+        pkg:
+        - git
+        - python3.10-venv
+        - rclone
+        - rustc
+        - cargo
+      become: yes
+
+    - name: clone pbgui repository
+      git:
+        repo: https://github.com/msei99/pbgui.git
+        dest: "{{ install_dir }}/pbgui"
+        version: main
+        update: yes
+
+    - name: clone passivbot repository for pb6
+      git:
+        repo: https://github.com/enarjord/passivbot.git
+        dest: "{{ install_dir }}/pb6"
+        version: v6.1.4b
+        update: yes
+
+    - name: clone passivbot repository for pb7
+      git:
+        repo: https://github.com/enarjord/passivbot.git
+        dest: "{{ install_dir }}/pb7"
+        version: master
+        update: yes
+
+    - name: create python3.10 venv for pbgui
+      pip:
+        virtualenv_command: python3.10 -m venv
+        virtualenv: "{{ install_dir }}/venv_pbgui"
+        requirements: "{{ install_dir }}/pbgui/requirements.txt"
+        extra_args: --upgrade pip
+
+    - name: create python3.10 venv for pb6
+      pip:
+        virtualenv_command: python3.10 -m venv
+        virtualenv: "{{ install_dir }}/venv_pb6"
+        requirements: "{{ install_dir }}/pb6/requirements.txt"
+        extra_args: --upgrade pip
+
+    - name: create python3.10 venv for pb7
+      pip:
+        virtualenv_command: python3.10 -m venv
+        virtualenv: "{{ install_dir }}/venv_pb7"
+        requirements: "{{ install_dir }}/pb7/requirements.txt"
+        extra_args: --upgrade pip
+    
+    - name: Get files in a folder
+      find:
+        paths: "{{ install_dir }}/pb7/passivbot-rust/src"
+      register: found_files
+
+    - name: Get latest src file
+      set_fact:
+        latest_file: "{{ found_files.files | sort(attribute='mtime',reverse=true) | first }}"
+    
+    - name: print latest_file src file
+      debug:
+        var: latest_file
+      tags: debug,never
+
+    - name: get mtime of libpassivbot_rust.so
+      stat:
+        path: "{{ install_dir }}/pb7/passivbot-rust/target/release/libpassivbot_rust.so"
+      register: libpassivbot
+
+    - name: Check if rust build is required
+      set_fact:
+        rust_build: "{{ libpassivbot.stat.mtime > latest_file.mtime }}"
+      when: libpassivbot.stat.exists == true
+
+    - name: Build passivbot-rust with maturin
+      shell: |
+        source "{{ install_dir }}/venv_pb7/bin/activate"
+        maturin develop --release
+      args:
+        chdir: "{{ install_dir }}/pb7/passivbot-rust"
+        executable: /bin/bash
+      register: maturin_result
+      when: libpassivbot.stat.exists == false or rust_build == false
+
+    - name: print maturin result
+      debug:
+        var: maturin_result
+      tags: debug,never
+
+    - name: pbgui copy start.sh.example -> start.sh
+      command: cp "{{ install_dir }}/pbgui/start.sh.example" "{{ install_dir }}/pbgui/start.sh"
+    
+    - name: comment out PBStat.py and PBData.py in start.sh
+      replace:
+        path: "{{ install_dir }}/pbgui/start.sh"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '^python PBStat', replace: '# python PBStat' }
+        - { regexp: '^python PBData', replace: '# python PBData' }
+    
+    - name: create crontab for pbgui
+      cron:
+        name: "pbgui"
+        job: "{{ install_dir }}/pbgui/start.sh"
+        special_time: reboot
+    
+    - name: pbgui copy pbgui.ini.example -> pbgui.ini
+      command: cp "{{ install_dir }}/pbgui/pbgui.ini.example" "{{ install_dir }}/pbgui/pbgui.ini"
+    
+    - name: edit pbgui.ini
+      replace:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '<hostname>', replace: "{{ hostname }}" }
+        - { regexp: '<username>', replace: "{{ user }}" }
+        - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
+        - { regexp: '<api_key>', replace: "{{ api_key }}" }
+    
+    - name: copy rclone config from local to remote
+      copy:
+        src: "{{ local_home }}/.config/rclone/"
+        dest: "{{ remote_home }}/.config/rclone/"
+    
+    - name: Start or Restart PBRun, PBRemote and PBCoinData
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      register: starter_result
+
+    - name: print starter result
+      debug:
+        var: starter_result
+      tags: debug,never

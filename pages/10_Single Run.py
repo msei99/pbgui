@@ -2,6 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized, info_popup, error_popup, is_pb_installed
 from Instance import Instances, Instance
 from Backtest import BacktestItem
+from PBRemote import PBRemote
 import pbgui_help
 
 @st.dialog("Delete Instance?")
@@ -39,6 +40,9 @@ def select_instance():
     # Navigation
     with st.sidebar:
         if st.button(":recycle:"):
+            if "pbremote" in st.session_state:
+                del st.session_state.pbremote
+                st.session_state.pbremote = PBRemote()
             st.rerun()
         if st.button("Add"):
             st.session_state.edit_instance = Instance()

@@ -402,6 +402,7 @@ def pbremote_details():
         st.markdown("Remote Servers")
         api_sync = []
         for rserver in pbremote.remote_servers:
+            print(rserver.__dict__)
             if rserver.is_online():
                 color = "green"
                 if not rserver.is_api_md5_same(pbremote.api_md5):
