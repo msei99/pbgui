@@ -253,7 +253,7 @@ class VPSManager:
                 'user_pw': shlex.quote(vps.user_pw),
                 'debug': debug
             },
-            # quiet=True,
+            quiet=True,
             tags=tags,
             verbosity=1,
             private_data_dir=vps.privat_data_dir,
