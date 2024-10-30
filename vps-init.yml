@@ -42,6 +42,11 @@
     user_pw: "{{ user_pw }}"
 
   tasks:
+    - name: print user
+      debug:
+        var: user
+      tags: debug,never
+
     - name: display facts
       debug:
         var: ansible_facts
