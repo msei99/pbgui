@@ -86,9 +86,7 @@
 
   vars:
     ansible_ssh_pass: "{{ user_pw }}"
-    ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
-    user_pw: "{{ user_pw }}"
   
   tasks:
     - name: add ssh-key to new user
