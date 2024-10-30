@@ -1,7 +1,7 @@
 import json
 from pathlib import Path, PurePath
 from datetime import datetime
-from pbgui_func import pbdir, pb7dir, PBGDIR, is_pb_installed, is_pb7_installed
+from pbgui_purefunc import pbdir, pb7dir, PBGDIR, is_pb_installed, is_pb7_installed
 import shutil
 
 class User:
