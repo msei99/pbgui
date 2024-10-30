@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from time import sleep
 from datetime import datetime
-from pbgui_func import PBGDIR
+from pbgui_purefunc import PBGDIR
 
 class Exchanges(Enum):
     BINANCE = 'binance'
