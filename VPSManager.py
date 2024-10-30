@@ -9,7 +9,6 @@ import re
 import getpass
 import shutil
 import socket
-import shlex
 
 
 PBGDIR = Path.cwd()
@@ -24,7 +23,7 @@ class VPS:
         self.initial_root_pw = None
         self.user = getpass.getuser()
         self.user_pw = None
-        self.swap = None
+        self.swap = "2.5G"
         self.last_init = None
         self.last_setup = None
         self.init_status = None
@@ -247,10 +246,10 @@ class VPSManager:
             extravars={
                 'hostname': vps.hostname,
                 'ip': vps.ip,
-                'initial_root_pw': shlex.quote(vps.initial_root_pw),
-                'root_pw': shlex.quote(vps.root_pw),
+                'initial_root_pw': vps.initial_root_pw,
+                'root_pw': vps.root_pw,
                 'user': vps.user,
-                'user_pw': shlex.quote(vps.user_pw),
+                'user_pw': vps.user_pw,
                 'debug': debug
             },
             quiet=True,
@@ -276,7 +275,7 @@ class VPSManager:
             extravars={
                 'hostname': vps.hostname,
                 'user': vps.user,
-                'user_pw': shlex.quote(vps.user_pw),
+                'user_pw': vps.user_pw,
                 'swap_size': vps.swap,
                 'bucket': vps.bucket,
                 'coinmarketcap_api_key': vps.coinmarketcap_api_key,

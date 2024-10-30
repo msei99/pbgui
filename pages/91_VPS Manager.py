@@ -1,9 +1,7 @@
 import streamlit as st
 import pbgui_help
 from pbgui_func import set_page_config, is_session_state_initialized, info_popup, error_popup
-from pathlib import Path, PurePath
 from VPSManager import VPSManager, VPS
-import re
 
 
 def list_vps():
@@ -87,7 +85,7 @@ def manage_vps():
     with col1:
         st.text_input("VPS user password", value=vps.user_pw, type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)        
     with col2:
-        swap_index = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"].index(vps.swap)
+        swap_index = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"].index(vps.swap or "0")
         st.selectbox("Swap size", options=["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"], key="vps_swap", index=swap_index, help=pbgui_help.vps_swap)
     with col3:
         if pbremote.bucket:
