@@ -102,7 +102,7 @@
   tasks:
     - name: print user
       debug:
-        var: "{{ lookup('env', 'USER') }}"
+        var: "{{ user }}"
       tags: debug,never
     
     - name: print key
@@ -112,5 +112,5 @@
 
     - name: add ssh-key to new user
       authorized_key:
-        user: "{{ lookup('env', 'USER') }}"
+        user: "{{ user }}"
         key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_rsa.pub') }}"
