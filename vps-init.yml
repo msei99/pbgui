@@ -59,6 +59,12 @@
         shell: /bin/bash
         groups: sudo
       become: yes
+      register: user_created
+    
+    - name: print user_created
+      debug:
+        var: user_created
+      tags: debug,never
     
     - name: change root password
       user:
