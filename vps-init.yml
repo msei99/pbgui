@@ -28,7 +28,7 @@
     - name: create ssh-key on localhost if not exists
       openssh_keypair:
         path: "{{ lookup('env', 'HOME') + '/.ssh/id_rsa' }}"
-      when: not lookup('file', lookup('env', 'HOME') + '/.ssh/id_rsa.pub')
+      when: not lookup('file', "{{ lookup('env', 'HOME') }}/.ssh/id_rsa.pub")
 
 - hosts: "{{ hostname }}"
   remote_user: root
