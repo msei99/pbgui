@@ -5,31 +5,38 @@
 
 # v1.21
 
-## Overview
+### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
 
-![Alt text](docs/images/multi1.png)
-![Alt text](docs/images/multi2.png)
-![Alt text](docs/images/dashboard1.png)
-![Alt text](docs/images/live01.png)
-![Alt text](docs/images/live02.png)
-![Alt text](docs/images/live1.png)
-![Alt text](docs/images/live2.png)
-![Alt text](docs/images/pbconfigdb.png)
-![Alt text](docs/images/backtest_multi1.png)
-![Alt text](docs/images/backtest.png)
-![Alt text](docs/images/backtest2.png)
-![Alt text](docs/images/optimize1.png)
-![Alt text](docs/images/optimize2.png)
-![Alt text](docs/images/optimize3.png)
-![Alt text](docs/images/api-editor.png)
-![Alt text](docs/images/remote.png)
-![Alt text](docs/images/remote2.png)
+It has the following functions:
+- Running, backtesting, and optimization Passivbot v7 and v6 (single and multi).
+- Installing Passivbot configurations on your VPS.
+- Starting and stopping Passivbot instances on your VPS.
+- Moving instances between your VPS.
+- Monitoring your instances and restarting them if they crash.
+- A dashboard for viewing trading performance.
+- An interface to CoinMarketCap for selecting and filtering coins.
+- Installing and updating your VPS with just a few clicks.
+- And much more to easily manage Passivbot.
 
-## Requirements
+### Requirements
 - Python 3.10
 - Streamlit 1.38.0
 - Linux or Winodws (Windows not tested on passivbot v7)
+
+### Recommendation
+
+- Master Server: Linux with 32GB of memory and 8 CPUs.
+- VPS for Running Passivbot: Minimum specifications of 1 CPU, 1GB Memory, and 10GB SSD.
+
+I recommend the provider IONOS, as their smallest VPS plan is available for only 1 Euro.
+I have been using their services for over a year without any outages.
+Please use my [referral link](https://aklam.io/esMFvG) to obtain a VPS from IONOS.
+
+### Support:
+If you like to support pbgui, please join one of my copytradings:\
+If you don't have an bybit account, please use my Referral Code: XZAJLZ https://www.bybit.com/invite?ref=XZAJLZ \
+Here are all my copytradings and statistics of them: https://manicpt.streamlit.app/
 
 ## Installation
 
@@ -83,6 +90,8 @@ Open http://localhost:8501 with Browser\
 Password = PBGui$Bot!\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot and venv directories
+For the venv you have to enter the full path to python.
+Example path for venv_pb7: /home/mani/software/venv_pb7/bin/python
 
 ## PBRun Instance Manager
 To enable the PBGui instance manager in the GUI, you can follow these steps:
@@ -277,7 +286,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Passivbot https://www.passivbot.com/en/latest/
 - Streamlit https://streamlit.io/
 
-## Support:
-If you like to support pbgui, please join one of my copytradings:\
-If you don't have an bybit account, please use my Referral Code: XZAJLZ https://www.bybit.com/invite?ref=XZAJLZ \
-Here are all my copytradings and statistics of them: https://manicpt.streamlit.app/
+## Screenshots
+![Alt text](docs/images/dashboard.png)
+![Alt text](docs/images/run.png)
+![Alt text](docs/images/backtest.png)
+![Alt text](docs/images/optimize.png)
