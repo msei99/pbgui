@@ -32,7 +32,10 @@ class VPS:
         self.setup_log = ""
         self.bucket = None
         self.coinmarketcap_api_key = None
-    
+        self.firewall = True
+        self.firewall_ssh_port = 22
+        self.firewall_ssh_ips = ""
+
     @property
     def hostname(self):
         return self._hostname
@@ -61,6 +64,12 @@ class VPS:
                 self.setup_status = config["setup_status"]
             if "init_status" in config:
                 self.init_status = config["init_status"]
+            if "firewall" in config:
+                self.firewall = config["firewall"]
+            if "firewall_ssh_port" in config:
+                self.firewall_ssh_port = config["firewall_ssh_port"]
+            if "firewall_ssh_ips" in config:
+                self.firewall_ssh_ips = config["firewall_ssh_ips"]
 
     def is_vps_in_hosts(self):
         # open /etc/hosts and check if the ip and hostname is in there
@@ -207,7 +216,10 @@ class VPS:
                 "last_setup": self.last_setup,
                 "last_init": self.last_init,
                 "setup_status": self.setup_status,
-                "init_status": self.init_status
+                "init_status": self.init_status,
+                "firewall": self.firewall,
+                "firewall_ssh_port": self.firewall_ssh_port,
+                "firewall_ssh_ips": self.firewall_ssh_ips
             }
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
@@ -273,13 +285,16 @@ class VPSManager:
             playbook=str(PurePath(f'{PBGDIR}/vps-setup.yml')),
             inventory=vps.hostname,
             extravars={
-                'hostname': vps.hostname,
-                'user': vps.user,
-                'user_pw': vps.user_pw,
-                'swap_size': vps.swap,
-                'bucket': vps.bucket,
-                'coinmarketcap_api_key': vps.coinmarketcap_api_key,
-                'debug': debug
+            'hostname': vps.hostname,
+            'user': vps.user,
+            'user_pw': vps.user_pw,
+            'swap_size': vps.swap,
+            'bucket': vps.bucket,
+            'coinmarketcap_api_key': vps.coinmarketcap_api_key,
+            'firewall': vps.firewall,
+            'firewall_ssh_port': vps.firewall_ssh_port,
+            'firewall_ssh_ips': vps.firewall_ssh_ips.split(','),
+            'debug': debug
             },
             quiet=True,
             tags=tags,
