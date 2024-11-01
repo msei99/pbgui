@@ -3,19 +3,20 @@
 # Steps:
 # 1. Get local home
 # 2. Get remote home and install_dir
-# 3. Update Server
-# 4. Reboot if required
-# 5. Create swapfile
-# 6. Install git, python3.10, rustc, cargo
-# 7. Clone pbgui repository
-# 8. Clone passivbot repository for pb6
-# 9. Clone passivbot repository for pb7
-# 10. Create python3.10 venv for pbgui
-# 11. Create python3.10 venv for pb6
-# 12. Create python3.10 venv for pb7
-# 13. Build passivbot-rust with maturin
-# 14. Setup pbgui
-# 15. Restart PBRun, PBRemote and PBCoinData
+# 3. Configure Firewall
+# 4. Update Server
+# 5. Reboot if required
+# 6. Create swapfile
+# 7. Install git, python3.10, rustc, cargo
+# 8. Clone pbgui repository
+# 9. Clone passivbot repository for pb6
+# 10. Clone passivbot repository for pb7
+# 11. Create python3.10 venv for pbgui
+# 12. Create python3.10 venv for pb6
+# 13. Create python3.10 venv for pb7
+# 14. Build passivbot-rust with maturin
+# 15. Setup pbgui
+# 16. Restart PBRun, PBRemote and PBCoinData
 
 - hosts: "{{ hostname }}"
   gather_facts: "{{ debug }}"
@@ -29,6 +30,9 @@
     swap_size: "{{ swap_size }}"
     bucket_name: "{{ bucket }}"
     api_key: "{{ coinmarketcap_api_key }}"
+    firewall: "{{ firewall }}"
+    firewall_ssh_port: "{{ firewall_ssh_port }}"
+    firewall_ssh_ips: "{{ firewall_ssh_ips }}"
 
   tasks:
     - name: display facts
@@ -55,6 +59,51 @@
       debug:
         var: install_dir
       tags: debug,never
+
+    - name: configure Firewall
+      block:
+        - name: Disable IPv6
+          lineinfile:
+            dest: /etc/default/ufw
+            regexp: '^IPV6='
+            line: "IPV6=no"
+            state: present
+
+        - name: reset ufw to default
+          ufw:
+            state: reset
+
+        - name: allow ssh from any ipv4
+          ufw:
+            rule: allow
+            port: "{{ firewall_ssh_port }}"
+            proto: tcp
+            direction: in
+            state: enabled
+            log: yes
+            from: "0.0.0.0/0"
+            to: "0.0.0.0/0"
+          when: firewall_ssh_ips == ""
+        
+        - name: allow ssh from specific IPs
+          ufw:
+            rule: allow
+            port: "{{ firewall_ssh_port }}"
+            proto: tcp
+            direction: in
+            state: enabled
+            log: yes
+            from_ip: "{{ item }}"
+          loop: "{{ firewall_ssh_ips }}"
+          when: firewall_ssh_ips != ""
+      become: yes
+      when: firewall
+
+    - name: disable ufw
+      ufw:
+        state: disabled
+      become: yes
+      when: not firewall
 
     - name: update server
       apt:

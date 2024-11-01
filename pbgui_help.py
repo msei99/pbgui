@@ -1052,3 +1052,19 @@ vps_user_pw = """
     This will be set when run init.
     Will be used for sudo when run setup.
     ```"""
+
+vps_firewall = """
+    ```
+    Enable to install and configure ufw firewall on your vps
+    ```"""
+
+vps_firewall_ssh_port = """
+    ```
+    The ssh port on your vps
+    ```"""
+
+vps_firewall_ssh_ips = """
+    ```
+    List of allowed IPs for ssh, separated by comma, empty for all
+    Example: 10.20.10.11, 10.21.22.33
+    ```"""

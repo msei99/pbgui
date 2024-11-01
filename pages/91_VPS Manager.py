@@ -2,6 +2,7 @@ import streamlit as st
 import pbgui_help
 from pbgui_func import set_page_config, is_session_state_initialized, info_popup, error_popup
 from VPSManager import VPSManager, VPS
+import re
 
 
 def list_vps():
@@ -63,6 +64,21 @@ def manage_vps():
     if "vps_swap" in st.session_state:
         if st.session_state.vps_swap != vps.swap:
             vps.swap = st.session_state.vps_swap
+    if "vps_firewall" in st.session_state:
+        if st.session_state.vps_firewall != vps.firewall:
+            vps.firewall = st.session_state.vps_firewall
+    if "vps_firewall_ssh_port" in st.session_state:
+        if st.session_state.vps_firewall_ssh_port != vps.firewall_ssh_port:
+            vps.firewall_ssh_port = st.session_state.vps_firewall_ssh_port
+    if "vps_firewall_ssh_ips" in st.session_state:
+        if st.session_state.vps_firewall_ssh_ips != vps.firewall_ssh_ips:
+            # regex for ip check: "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+            if all([re.match(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$", ip) for ip in st.session_state.vps_firewall_ssh_ips.split(",")]):
+                vps.firewall_ssh_ips = st.session_state.vps_firewall_ssh_ips
+            elif st.session_state.vps_firewall_ssh_ips == "":
+                vps.firewall_ssh_ips = st.session_state.vps_firewall_ssh_ips
+            else:
+                st.session_state.vps_firewall_ssh_ips = vps.firewall_ssh_ips
     # Init Status
     if pbremote.bucket:
         rclone_ok = f' ✅'
@@ -83,7 +99,7 @@ def manage_vps():
     )
     col1, col2, col3, col4 = st.columns([1,1,1,1])
     with col1:
-        st.text_input("VPS user password", value=vps.user_pw, type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)        
+        st.text_input("VPS user password", value=vps.user_pw, type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)
     with col2:
         swap_index = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"].index(vps.swap or "0")
         st.selectbox("Swap size", options=["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"], key="vps_swap", index=swap_index, help=pbgui_help.vps_swap)
@@ -103,6 +119,13 @@ def manage_vps():
                 st.write(":red[Invalid CoinMarketCap API_Key]")
         else:
             st.write(":red[Please configure PBCoinData]")
+    col1, col2, col3 = st.columns([1,1,2], vertical_alignment='bottom')
+    with col1:
+        st.checkbox("Enable Linux Firewall (ufw)", value=vps.firewall, key="vps_firewall", help=pbgui_help.vps_firewall)
+    with col2:
+        st.number_input("SSH port", value=vps.firewall_ssh_port, key="vps_firewall_ssh_port", help=pbgui_help.vps_firewall_ssh_port)
+    with col3:
+        st.text_input("IP-Addresses to allow", value=vps.firewall_ssh_ips, key="vps_firewall_ssh_ips", help=pbgui_help.vps_firewall_ssh_ips)
     st.checkbox("Debug", key="setup_debug")
     if st.button("Setup VPS", disabled=not vps.has_setup_parameters()):
          vpsmanager.setup_vps(vps, debug = st.session_state.setup_debug)
