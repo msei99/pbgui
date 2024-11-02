@@ -1,6 +1,7 @@
 import streamlit as st
 import platform
 from pbgui_func import check_password, set_page_config, change_ini, load_ini, save_ini, is_pb7_installed, is_pb_installed
+import pbgui_help
 from Services import Services
 from Instance import Instances
 from RunV7 import V7Instances
@@ -26,6 +27,12 @@ load_ini("main", "pb7venv")
 if not load_ini("main", "pbname"):
     st.session_state.pbname = platform.node()
     save_ini("main", "pbname", st.session_state.pbname)
+if "role" not in st.session_state:
+    load_ini("main", "role")
+    if st.session_state.role == "master":
+        st.session_state.master = True
+    else:
+        st.session_state.master = False
 
 col1, col2 = st.columns([5,1], vertical_alignment="bottom")
 with col1:
@@ -76,11 +83,24 @@ with col2:
         del st.session_state.input_pb7venv
         change_ini("main", "pb7venv")
 
-if "input_pbname" in st.session_state:
-    if st.session_state.input_pbname != st.session_state.pbname:
-        st.session_state.pbname = st.session_state.input_pbname
-        save_ini("main", "pbname", st.session_state.pbname)
-st.text_input("Bot Name", value=st.session_state.pbname, key="input_pbname", max_chars=32)
+col1, col2 = st.columns([5,1], vertical_alignment="bottom")
+with col1:
+    if "input_pbname" in st.session_state:
+        if st.session_state.input_pbname != st.session_state.pbname:
+            st.session_state.pbname = st.session_state.input_pbname
+            save_ini("main", "pbname", st.session_state.pbname)
+    st.text_input("Bot Name", value=st.session_state.pbname, key="input_pbname", max_chars=32)
+with col2:
+    if "input_master" in st.session_state:
+        if st.session_state.input_master != st.session_state.master:
+            st.session_state.master = st.session_state.input_master
+            if st.session_state.master:
+                save_ini("main", "role", "master")
+                st.session_state.role = "master"
+            else:
+                save_ini("main", "role", "slave")
+                st.session_state.role = "slave"
+    st.checkbox("Master", value=st.session_state.master, key="input_master", help=pbgui_help.role)
 
 # Check if any passivbot is installed
 if not any([is_pb7_installed(), is_pb_installed()]):

@@ -1068,3 +1068,11 @@ vps_firewall_ssh_ips = """
     List of allowed IPs for ssh, separated by comma, empty for all
     Example: 10.20.10.11, 10.21.22.33
     ```"""
+
+role = """
+    ```
+    If master:
+    - PBRemote will download alive data from the VPS
+    If slave:
+    - PBRemote will upload alive data to the VPS
+    ```"""

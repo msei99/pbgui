@@ -150,7 +150,7 @@ class RemoteServer():
         self.load()
         timestamp = round(datetime.now().timestamp())
         self._rtd = timestamp - self.ts
-        if self._rtd < 120:
+        if self._rtd < 200:
             return True
         return False
 
@@ -312,6 +312,11 @@ class PBRemote():
             self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
+        # Init role
+        if pb_config.has_option("main", "role"):
+            self.role = pb_config.get("main", "role")
+        else:
+            self.role = "slave"
         # Init pbdirs
         self.pbdir = None
         self.pb7dir = None
@@ -460,8 +465,12 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'multi':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
-        elif direction == 'down' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
+        # elif direction == 'down' and spath == 'cmd':
+        #     cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
+        elif direction == 'down' and spath == 'master':
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
+        elif direction == 'down' and spath == 'slave':
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,cmd_**/alive_*.cmd,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
             if logfile.stat().st_size >= 10485760:
@@ -473,6 +482,12 @@ class PBRemote():
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
         else:
             subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+
+    def sync_status_down(self):
+        if self.role == "master":
+            self.sync('down', 'master')
+        else:
+            self.sync('down', 'slave')
 
     def sync_v7_up(self):
         if self.local_run.instances_status_v7.has_new_status():
@@ -780,7 +795,8 @@ def main():
             remote.sync_single_up()
             remote.check_if_api_synced()
             remote.alive()
-            remote.sync('down', 'cmd')
+            # remote.sync('down', 'cmd')
+            remote.sync_status_down()
             remote.update_remote_servers()
             for server in remote.remote_servers:
                 server.load()
