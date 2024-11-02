@@ -150,7 +150,7 @@ class RemoteServer():
         self.load()
         timestamp = round(datetime.now().timestamp())
         self._rtd = timestamp - self.ts
-        if self._rtd < 60:
+        if self._rtd < 120:
             return True
         return False
 
@@ -303,6 +303,7 @@ class PBRemote():
         self.local_run = PBRun()
         self.index = 0
         self.startts = None
+        self.alivets = 0
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -561,6 +562,9 @@ class PBRemote():
         If there are more than 9 alive files, it will delete the oldest one.
         """
         timestamp = round(datetime.now().timestamp())
+        if timestamp - self.alivets < 60:
+            return
+        self.alivets = timestamp
         cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
