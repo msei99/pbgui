@@ -161,6 +161,7 @@ class RemoteServer():
         p = str(Path(f'{self._path}/alive_*.cmd'))
         alive_remote = glob.glob(p)
         alive_remote.sort()
+        self._name = PurePath(self._path).name[4:]
         if alive_remote:
             while len(alive_remote) > 0:
                 remote = Path(alive_remote.pop())
@@ -168,7 +169,6 @@ class RemoteServer():
                     with open(remote, "r", encoding='utf-8') as f:
                         cfg = json.load(f)
                         if "name" in cfg and "timestamp" in cfg:
-                            self._name = cfg["name"]
                             self._ts = cfg["timestamp"]
                         if "startts" in cfg:
                             self._startts = cfg["startts"]
@@ -637,6 +637,7 @@ class PBRemote():
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Add Server: {rserver.name}')
             self.add(rserver)
 
     def update_remote_servers(self):
