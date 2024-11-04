@@ -205,7 +205,7 @@
       git:
         repo: https://github.com/enarjord/passivbot.git
         dest: "{{ install_dir }}/pb6"
-        version: v6.1.4b
+        version: v6.1.4b_latest_v6
         update: yes
 
     - name: clone passivbot repository for pb7
