@@ -114,6 +114,13 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
+        if st.button("Update PBGui"):
+            vps.command = "vps-update-pbgui"
+            vps.command_text = "Update PBGui"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
         if st.button("Update pbgui, pb6 and pb7"):
             vps.command = "vps-update-pb"
             vps.command_text = "Update pbgui, pb6 and pb7"

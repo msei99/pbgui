@@ -1,0 +1,49 @@
+---
+# Update pbgui, pb6 and pb7
+# Steps:
+# 1. Clone pbgui repository
+# 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    # ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    # user_pw: "{{ user_pw }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: get install_dir
+      set_fact:
+        install_dir: "{{ lookup('env', 'HOME') + '/software' }}"
+
+    - name: clone pbgui repository
+      git:
+        repo: https://github.com/msei99/pbgui.git
+        dest: "{{ install_dir }}/pbgui"
+        version: main
+        update: yes
+        force: yes
+      register: pbgui_repo
+      notify: restart pbgui
+
+    - name: print pbgui_repo
+      debug:
+        var: pbgui_repo
+      tags: debug,never
+
+  handlers:
+    - name: Restart PBRun, PBRemote and PBCoinData
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      listen: "restart pbgui"
