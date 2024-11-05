@@ -24,6 +24,7 @@ import traceback
 import uuid
 from Status import InstanceStatus, InstancesStatus
 from PBCoinData import CoinData
+import re
 
 class Monitor():
     def __init__(self):
@@ -689,6 +690,12 @@ class PBRun():
     """
     def __init__(self):
         # self.run_instances = []
+        self.pbgui_version = "N/A"
+        self.pb6_version = "N/A"
+        self.pb7_version = "N/A"
+        self.pbgui_commit = "N/A"
+        self.pb6_commit = "N/A"
+        self.pb7_commit = "N/A"
         self.run_multi = []
         self.run_single = []
         self.run_v7 = []
@@ -777,6 +784,64 @@ class PBRun():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbrun.pid')
         self.my_pid = None
+
+    def load_git_commits(self):
+        """Load the git commit hash of pbgui, pb6 and pb7 using git log -n 1"""
+        pbgui_git = Path(f'{self.pbgdir}/.git')
+        if pbgui_git.exists():
+            pbgui_git = Path(f'{self.pbgdir}/.git')
+            pbgui_commit = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
+            self.pbgui_commit = pbgui_commit.stdout
+        if self.pbdir:
+            pb6_git = Path(f'{self.pbdir}/.git')
+            if pb6_git.exists():
+                pb6_git = Path(f'{self.pbdir}/.git')
+                pb6_commit = subprocess.run(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
+                self.pb6_commit = pb6_commit.stdout
+        if self.pb7dir:
+            pb7_git = Path(f'{self.pb7dir}/.git')
+            if pb7_git.exists():
+                pb7_git = Path(f'{self.pb7dir}/.git')
+                pb7_commit = subprocess.run(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
+                self.pb7_commit = pb7_commit.stdout
+
+    def load_versions(self):
+        """Load the versions of pbgui, pb6 and pb7 from README.md"""
+        pbgui_readme = Path(f'{self.pbgdir}/README.md')
+        if pbgui_readme.exists():
+            # read only first 20 lines
+            with open(pbgui_readme, "r", encoding='utf-8') as f:
+                lines = f.readlines()[:20]
+            for line in lines:
+                #find regex regex_search('^#? ?v[0-9.]+'
+                version = re.search('v[0-9.]+', line)
+                if version:
+                    self.pbgui_version = version.group(0)
+                    break
+        if self.pbdir:
+            pb6_readme = Path(f'{self.pbdir}/README.md')
+            if pb6_readme.exists():
+                # read only first 20 lines
+                with open(pb6_readme, "r", encoding='utf-8') as f:
+                    lines = f.readlines()[:20]
+                for line in lines:
+                    #find regex regex_search('^#? ?v[0-9.]+'
+                    version = re.search('v[0-9.]+', line)
+                    if version:
+                        self.pb6_version = version.group(0)
+                        break
+        if self.pb7dir:
+            pb7_readme = Path(f'{self.pb7dir}/README.md')
+            if pb7_readme.exists():
+                # read only first 20 lines
+                with open(pb7_readme, "r", encoding='utf-8') as f:
+                    lines = f.readlines()[:20]
+                for line in lines:
+                    #find regex regex_search('^#? ?v[0-9.]+'
+                    version = re.search('v[0-9.]+', line)
+                    if version:
+                        self.pb7_version = version.group(0)
+                        break
 
     def add_v7(self, run_v7: RunV7):
         if run_v7:

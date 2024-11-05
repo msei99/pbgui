@@ -14,7 +14,7 @@ class Monitor():
         if server.is_online():
             color = "green"
         else: color = "red"
-        st.markdown(f'### Remote Server: :{color}[{server.name}] ({server.rtd}s)')
+        st.markdown(f'### Remote Server: :{color}[{server.name}] ({server.rtd}s) PBGui: {server.pbgui_version}')
         col_1, col_2 = st.columns([1,1])
         with col_1:
             mem_total = int(server.mem[0] / 1024 / 1024)
@@ -109,7 +109,7 @@ class Monitor():
             "Memory": st.column_config.NumberColumn(format="%.2f MB"),
             "CPU": st.column_config.NumberColumn(format="%.2f %%"),
         }
-        st.header(f"Running V7 Instances ({len(d_v7)})")
+        st.header(f"Running V7 Instances ({len(d_v7)}) {server.pb7_version}")
         if d_v7:
             df = pd.DataFrame(d_v7)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
@@ -135,7 +135,7 @@ class Monitor():
                     st.markdown(f":red[Last Traceback: ] :blue[{d_v7[row]['Last Traceback']}]")
         else:
             st.write("None")
-        st.header(f"Running Multi Instances ({len(d_multi)})")
+        st.header(f"Running Multi Instances ({len(d_multi)}) {server.pb7_version}")
         if d_multi:
             df = pd.DataFrame(d_multi)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
@@ -161,7 +161,7 @@ class Monitor():
                     st.markdown(f":red[Last Traceback: ] :blue[{d_multi[row]['Last Traceback']}]")
         else:
             st.write("None")
-        st.header(f"Running Single Instances ({len(d_single)})")
+        st.header(f"Running Single Instances ({len(d_single)}) {server.pb7_version}")
         if d_single:
             df = pd.DataFrame(d_single)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
