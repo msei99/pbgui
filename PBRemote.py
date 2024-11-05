@@ -52,6 +52,12 @@ class RemoteServer():
         self._cpu = None
         self._boot = None
         self._monitor = []
+        self._pbgui_version = "N/A"
+        self._pbgui_commit = None
+        self._pb6_version = "N/A"
+        self._pb6_commit = None
+        self._pb7_version = "N/A"
+        self._pb7_commit = None
         self.pbname = None
         self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()
@@ -92,6 +98,18 @@ class RemoteServer():
     def boot(self): return self._boot
     @property
     def monitor(self): return self._monitor
+    @property
+    def pbgui_version(self): return self._pbgui_version
+    @property
+    def pbgui_commit(self): return self._pbgui_commit
+    @property
+    def pb6_version(self): return self._pb6_version
+    @property
+    def pb6_commit(self): return self._pb6_commit
+    @property
+    def pb7_version(self): return self._pb7_version
+    @property
+    def pb7_commit(self): return self._pb7_commit
 
     @name.setter
     def name(self, new_name):
@@ -186,6 +204,18 @@ class RemoteServer():
                             self._boot = cfg["boot"]
                         if "monitor" in cfg:
                             self._monitor = cfg["monitor"]
+                        if "pbgv" in cfg:
+                            self._pbgui_version = cfg["pbgv"]
+                        if "pbgc" in cfg:
+                            self._pbgui_commit = cfg["pbgc"]
+                        if "pb6v" in cfg:
+                            self._pb6_version = cfg["pb6v"]
+                        if "pb6c" in cfg:
+                            self._pb6_commit = cfg["pb6c"]
+                        if "pb7v" in cfg:
+                            self._pb7_version = cfg["pb7v"]
+                        if "pb7c" in cfg:
+                            self._pb7_commit = cfg["pb7c"]
                         return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
@@ -304,6 +334,7 @@ class PBRemote():
         self.index = 0
         self.startts = None
         self.alivets = 0
+        self.systemts = 0
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -577,6 +608,10 @@ class PBRemote():
         If there are more than 9 alive files, it will delete the oldest one.
         """
         timestamp = round(datetime.now().timestamp())
+        if timestamp - self.systemts > 3600:
+            self.local_run.load_versions()
+            self.local_run.load_git_commits()
+            self.systemts = timestamp
         if timestamp - self.alivets < 60:
             return
         self.alivets = timestamp
@@ -597,7 +632,13 @@ class PBRemote():
             "disk": disk,
             "cpu": cpu,
             "boot": boot,
-            "monitor": monitor
+            "monitor": monitor,
+            "pbgv": self.local_run.pbgui_version,
+            "pbgc": self.local_run.pbgui_commit,
+            "pb6v": self.local_run.pb6_version,
+            "pb6c": self.local_run.pb6_commit,
+            "pb7v": self.local_run.pb7_version,
+            "pb7c": self.local_run.pb7_commit,
             })
         with open(cfile, "w", encoding='utf-8') as f:
             json.dump(cfg, f)
