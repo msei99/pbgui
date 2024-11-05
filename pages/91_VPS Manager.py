@@ -194,7 +194,6 @@ def manage_vps():
          del st.session_state.manage_vps
          st.rerun()
     server = pbremote.find_server(vps.hostname)
-    print(server.__dict__)
     if server:
         monitor.server = server
         monitor.view_server()
