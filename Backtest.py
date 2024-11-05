@@ -285,16 +285,17 @@ class BacktestItem(Base):
                 except psutil.AccessDenied:
                     pass
                 if any("backtest.py" in sub for sub in cmdline):
-                    if (
-                        cmdline[5] == self.user and
-                        cmdline[7] == self.symbol and
-                        cmdline[9] == self.sd and
-                        cmdline[11] == self.ed and
-                        cmdline[13] == str(self.sb) and
-                        cmdline[15] == self.market_type and
-                        cmdline[18] == str(PurePath(self._config.config_file))
-                    ):
-                        return process
+                    if len(cmdline) == 19:
+                        if (
+                            cmdline[5] == self.user and
+                            cmdline[7] == self.symbol and
+                            cmdline[9] == self.sd and
+                            cmdline[11] == self.ed and
+                            cmdline[13] == str(self.sb) and
+                            cmdline[15] == self.market_type and
+                            cmdline[18] == str(PurePath(self._config.config_file))
+                        ):
+                            return process
 
     def run(self):
         if not self.is_finish() and not self.is_running():

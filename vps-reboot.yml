@@ -1,0 +1,24 @@
+---
+# Update Linux Server
+# Steps:
+# 1. Reboot Server
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    # user_pw: "{{ user_pw }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: Reboot
+      reboot:
+        msg: "Rebooting machine in 5 seconds"
+      become: yes

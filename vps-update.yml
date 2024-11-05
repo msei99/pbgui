@@ -1,0 +1,57 @@
+---
+# Update Linux Server
+# Steps:
+# 1. Update Server
+# 2. Check if reboot required
+# 3. Display a message if a reboot is required
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    # user_pw: "{{ user_pw }}"
+    reboot: "{{ reboot }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: update server
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+        autoremove: yes
+        autoclean: yes
+        clean: yes
+        force_apt_get: yes
+      become: yes
+      register: update_result
+
+    - name: print update result
+      debug:
+        var: update_result.stdout_lines
+
+    - name: Check if reboot required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Check if a reboot after update is required
+      debug:
+        msg: "Reboot is required"
+      when: reboot_required_file.stat.exists == true
+
+    - name: Reboot if required
+      reboot:
+        msg: "Rebooting machine in 5 seconds"
+      when:
+        - reboot_required_file.stat.exists == true
+        - reboot == true
+      become: yes
+    

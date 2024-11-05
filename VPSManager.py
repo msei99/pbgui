@@ -10,7 +10,6 @@ import getpass
 import shutil
 import socket
 
-
 PBGDIR = Path.cwd()
 
 class VPS:
@@ -26,10 +25,16 @@ class VPS:
         self.swap = "2.5G"
         self.last_init = None
         self.last_setup = None
+        self.last_update = None
         self.init_status = None
         self.setup_status = None
+        self.update_status = None
+        self.command = "unknown"
+        self.command_text = "unknown"
+        self.reboot = False
         self.init_log = ""
         self.setup_log = ""
+        self.update_log = ""
         self.bucket = None
         self.coinmarketcap_api_key = None
         self.firewall = True
@@ -60,16 +65,24 @@ class VPS:
                 self.last_setup = config["last_setup"]
             if "last_init" in config:
                 self.last_init = config["last_init"]
+            if "last_update" in config:
+                self.last_update = config["last_update"]
             if "setup_status" in config:
                 self.setup_status = config["setup_status"]
             if "init_status" in config:
                 self.init_status = config["init_status"]
+            if "update_status" in config:
+                self.update_status = config["update_status"]
             if "firewall" in config:
                 self.firewall = config["firewall"]
             if "firewall_ssh_port" in config:
                 self.firewall_ssh_port = config["firewall_ssh_port"]
             if "firewall_ssh_ips" in config:
                 self.firewall_ssh_ips = config["firewall_ssh_ips"]
+            if "command" in config:
+                self.command = config["command"]
+            if "command_text" in config:
+                self.command_text = config["command_text"]
 
     def is_vps_in_hosts(self):
         # open /etc/hosts and check if the ip and hostname is in there
@@ -106,6 +119,12 @@ class VPS:
             return True
         else:
             return False
+    
+    def has_user_pw(self):
+        if self.user_pw:
+            return True
+        else:
+            return False
 
     def is_initialized(self):
         if self.init_status == "successful":
@@ -120,6 +139,10 @@ class VPS:
     @st.fragment(run_every=1)
     def view_setup_status(self):
         st.text(f'Setup Status: {self.setup_status}')
+    
+    @st.fragment(run_every=1)
+    def view_update_status(self):
+        st.text(f'Update Status: {self.update_status}')
 
     @st.fragment(run_every=1)
     def view_init_log(self):
@@ -134,30 +157,13 @@ class VPS:
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
         result = ansi_escape.sub("", ansi)
         st.code(result, language="coffeescript")
-
-    @st.fragment
-    def view_log_init(self):
-        log = Path(f'{self.path}/vps_init.log')
-        if log.exists():
-            with open(log, 'r', encoding='utf-8') as f:
-                ansi = f.read()
-                ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-                result = ansi_escape.sub("", ansi)
-                st.code(result, language="coffeescript")
-                if st.button(":material/refresh:", key=f'refresh_view_log_{log}'):
-                    st.rerun(scope="fragment")
-
-    @st.fragment
-    def view_log_setup(self):
-        log = Path(f'{self.path}/vps_setup.log')
-        if log.exists():
-            with open(log, 'r', encoding='utf-8') as f:
-                ansi = f.read()
-                ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-                result = ansi_escape.sub("", ansi)
-                st.code(result, language="coffeescript")
-                if st.button(":material/refresh:", key=f'refresh_view_log_{log}'):
-                    st.rerun(scope="fragment")
+    
+    @st.fragment(run_every=1)
+    def view_update_log(self):
+        ansi = self.update_log
+        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+        result = ansi_escape.sub("", ansi)
+        st.code(result, language="coffeescript")
 
     def init_event_handler(self, event):
         log = Path(f'{self.path}/vps_init.log')
@@ -172,6 +178,13 @@ class VPS:
             with open(log, "a") as logfile:
                 logfile.write(dump)
             self.setup_log = self.setup_log + dump
+    
+    def update_event_handler(self, event):
+        log = Path(f'{self.path}/vps_update.log')
+        if (dump := event.get("stdout")):
+            with open(log, "a") as logfile:
+                logfile.write(dump)
+            self.update_log = self.update_log + dump
 
     def remove_init_log(self):
         log = Path(f'{self.path}/vps_init.log')
@@ -182,12 +195,20 @@ class VPS:
         log = Path(f'{self.path}/vps_setup.log')
         if log.exists():
             log.unlink()
+    
+    def remove_update_log(self):
+        log = Path(f'{self.path}/vps_update.log')
+        if log.exists():
+            log.unlink()
 
     def init_status_handler(self, status_data, runner_config):
         self.init_status = status_data["status"]
 
     def setup_status_handler(self, status_data, runner_config):
         self.setup_status = status_data["status"]
+    
+    def update_status_handler(self, status_data, runner_config):
+        self.update_status = status_data["status"]
 
     def init_finished(self, runner_config=None):
         self.last_init = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -196,6 +217,11 @@ class VPS:
 
     def setup_finished(self, runner_config=None):
         self.last_setup = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.save()
+        shutil.rmtree(f'{self.path}/tmp', ignore_errors=True)
+    
+    def update_finished(self, runner_config=None):
+        self.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.save()
         shutil.rmtree(f'{self.path}/tmp', ignore_errors=True)
 
@@ -215,11 +241,15 @@ class VPS:
                 "coinmarketcap_api_key": self.coinmarketcap_api_key,
                 "last_setup": self.last_setup,
                 "last_init": self.last_init,
+                "last_update": self.last_update,
                 "setup_status": self.setup_status,
                 "init_status": self.init_status,
+                "update_status": self.update_status,
                 "firewall": self.firewall,
                 "firewall_ssh_port": self.firewall_ssh_port,
-                "firewall_ssh_ips": self.firewall_ssh_ips
+                "firewall_ssh_ips": self.firewall_ssh_ips,
+                "command": self.command,
+                "command_text": self.command_text
             }
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
@@ -305,6 +335,36 @@ class VPSManager:
             finished_callback=vps.setup_finished
         )
 
+    def update_vps(self, vps : VPS, debug = False):
+        vps.update_status = None
+        vps.save()
+        vps.remove_update_log()
+        vps.update_log = ""
+        if debug:
+            tags = "debug,all"
+        else:
+            tags = None
+        ansible_runner.run_async(
+            playbook=str(PurePath(f'{PBGDIR}/{vps.command}.yml')),
+            inventory=vps.hostname,
+            extravars={
+                'hostname': vps.hostname,
+                'user': vps.user,
+                'user_pw': vps.user_pw,
+                'firewall': vps.firewall,
+                'firewall_ssh_port': vps.firewall_ssh_port,
+                'firewall_ssh_ips': vps.firewall_ssh_ips.split(','),
+                'reboot': vps.reboot,
+                'debug': debug
+            },
+            quiet=True,
+            tags=tags,
+            verbosity=1,
+            private_data_dir=vps.privat_data_dir,
+            event_handler=vps.update_event_handler,
+            status_handler=vps.update_status_handler,
+            finished_callback=vps.update_finished
+        )
 
 def main():
     print("Don't Run this Class from CLI")

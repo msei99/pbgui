@@ -3,7 +3,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.21
+# v1.22
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -29,9 +29,12 @@ It has the following functions:
 - Master Server: Linux with 32GB of memory and 8 CPUs.
 - VPS for Running Passivbot: Minimum specifications of 1 CPU, 1GB Memory, and 10GB SSD.
 
-I recommend the provider IONOS, as their smallest VPS plan is available for only 1 Euro.
-I have been using their services for over a year without any outages.
-Please use my [referral link](https://aklam.io/esMFvG) to obtain a VPS from IONOS.
+### Get your VPS for running passivbot
+
+I recommend the provider IONOS, as their smallest VPS plan is available for only 1 Euro \
+I have been using their services for over a year without any outages \
+Please use my [referral link](https://aklam.io/esMFvG) to obtain a VPS from IONOS \
+A good alternative is a VPS from Contabo. Please use my [referral link](https://www.tkqlhce.com/click-101296145-12454592)
 
 ### Support:
 If you like to support pbgui, please join one of my copytradings:\
@@ -191,6 +194,15 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.22 (05-11-2024)
+- VPS-Manager: UFW Firewall configuration
+- VPS-Manager: Update pbgui, pb6 and pb7 and restart passivbot after update
+- VPS-Manager: Update Linux
+- VPS-Manager: Reboot VPS
+- VPS-Manager: View Status and running passivbots
+- Bugfix: Don't allow passwords with {{ or }}
+- Add Master, Slave role, for using less traffic on PBRemote
 
 ## v1.21 (29-10-2024)
 - VPS-Manager: Fully automate setup your VPS with PBGui, PB6 and PB7.
