@@ -118,11 +118,11 @@ class Base:
             st.session_state.placeholder = st.empty()
         with col_2:
             if self.symbol == "Select Symbol":
-                color = "red"
+                symbol_label = ":red[SYMBOL]"
             else:
-                color = None
+                symbol_label = "SYMBOL"
                 st.session_state.base_symbol = self.symbol
-            st.selectbox(f':{color}[SYMBOL]', self.symbols, key="base_symbol")
+            st.selectbox(f'{symbol_label}', self.symbols, key="base_symbol")
             st.button("Update Symbols from Exchange", key="base_update_symbols")
         with col_3:
             st.radio("MARKET_TYPE", self.market_types, key="base_market_type")

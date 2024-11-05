@@ -3,10 +3,12 @@ import pbgui_help
 from pbgui_func import set_page_config, is_session_state_initialized, info_popup, error_popup
 from VPSManager import VPSManager, VPS
 import re
+from Monitor import Monitor
 
 
 def list_vps():
     vpsmanager = st.session_state.vpsmanager
+    pbremote = st.session_state.pbremote
     # Navigation
     with st.sidebar:
         if st.button(":material/add_box:"):
@@ -14,7 +16,12 @@ def list_vps():
             st.rerun()
         for vps in vpsmanager.vpss:
             if vps.hostname:
-                if st.button(vps.hostname):
+                server = pbremote.find_server(vps.hostname)
+                if server.is_online():
+                    color = "green"
+                else:
+                    color = "red"
+                if st.button(f':{color}[{vps.hostname}]'):
                     st.session_state.manage_vps = vps
                     st.rerun()
     st.header("VPS Manager")
@@ -26,22 +33,14 @@ def manage_vps():
     # Init PBRemote
     pbremote = st.session_state.pbremote
     vps.bucket = pbremote.bucket
+    # Init Monitor
+    if "monitor" not in st.session_state:
+        st.session_state.monitor = Monitor()
+    monitor = st.session_state.monitor
     # Init coindata
     coindata = st.session_state.pbcoindata
     vps.coinmarketcap_api_key = coindata.api_key
-    # Navigation
-    with st.sidebar:
-        if st.button(":material/refresh:"):
-            st.rerun()
-        if st.button(":material/home:"):
-            del st.session_state.manage_vps
-            st.rerun()
-        if st.button("Initialize"):
-            st.session_state.init_vps = vps
-            del st.session_state.manage_vps
-            st.rerun()
-    st.header("Manage VPS " + vps.hostname)
-    st.subheader("VPS Status")
+    # Init keys from session_state
     if vps.is_vps_in_hosts():
         hosts_ok = f' ✅'
     else:
@@ -58,6 +57,10 @@ def manage_vps():
         setup_ok = f' ✅'
     else:
         setup_ok = f' ❌'
+    if vps.update_status == "successful":
+        update_ok = f' ✅' 
+    else:
+        update_ok = f' ❌'
     if "vps_user_pw" in st.session_state:
         if st.session_state.vps_user_pw != vps.user_pw:
             vps.user_pw = st.session_state.vps_user_pw
@@ -88,14 +91,62 @@ def manage_vps():
         coindata_ok = f' ✅'
     else:
         coindata_ok = f' ❌'
-    
+    # Navigation
+    with st.sidebar:
+        st.checkbox("Debug", key="setup_debug")
+        if st.button(":material/refresh:"):
+            st.rerun()
+        if st.button(":material/home:"):
+            del st.session_state.manage_vps
+            st.rerun()
+        if st.button("Initialize"):
+            st.session_state.init_vps = vps
+            del st.session_state.manage_vps
+            st.rerun()
+        if st.button("Update Firewall", disabled=not vps.has_user_pw()):
+            vps.command = "ufw"
+            vps.command_text = "Update Firewall Settings"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
+        if st.button("Update pbgui, pb6 and pb7"):
+            vps.command = "vps-update-pb"
+            vps.command_text = "Update pbgui, pb6 and pb7"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
+        col1, col2 = st.columns([1,0.8])
+        with col1:
+            if st.button("Update Linux", disabled=not vps.has_user_pw()):
+                vps.command = "vps-update"
+                vps.command_text = "Update Linux"
+                vps.reboot = st.session_state.update_reboot
+                vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+                st.session_state.view_update = vps
+                del st.session_state.manage_vps
+                st.rerun()
+        with col2:
+            st.checkbox("Reboot", key="update_reboot")
+        if st.button("Reboot VPS", disabled=not vps.has_user_pw()):
+            vps.command = "vps-reboot"
+            vps.command_text = "Reboot VPS"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
+
+    st.header("Manage VPS " + vps.hostname)
+    st.subheader("VPS Status")
     st.write(
         "- IP and hostname in your local /etc/hosts" + hosts_ok + "\n"
         "- SSH:" + ssh_ok + "\n"
         "- Initialized" + init_ok + " Last Init: " + str(vps.last_init) + "\n"
         "- PBRemote is configured and running" + rclone_ok + "\n"
         "- PBCoinData is configured and running" + coindata_ok + "\n"
-        "- Setup finished" + setup_ok + " Last Setup: " + str(vps.last_setup) + "\n"
+        "- Setup finished" + setup_ok + " " + str(vps.last_setup) + "\n"
+        "- Last command: " + vps.command_text + " " + update_ok + " " + str(vps.last_update) + "\n"
     )
     col1, col2, col3, col4 = st.columns([1,1,1,1])
     with col1:
@@ -123,15 +174,18 @@ def manage_vps():
     with col1:
         st.checkbox("Enable Linux Firewall (ufw)", value=vps.firewall, key="vps_firewall", help=pbgui_help.vps_firewall)
     with col2:
-        st.number_input("SSH port", value=vps.firewall_ssh_port, key="vps_firewall_ssh_port", help=pbgui_help.vps_firewall_ssh_port)
+        st.number_input("SSH port", value=vps.firewall_ssh_port, format="%d", key="vps_firewall_ssh_port", help=pbgui_help.vps_firewall_ssh_port)
     with col3:
         st.text_input("IP-Addresses to allow", value=vps.firewall_ssh_ips, key="vps_firewall_ssh_ips", help=pbgui_help.vps_firewall_ssh_ips)
-    st.checkbox("Debug", key="setup_debug")
     if st.button("Setup VPS", disabled=not vps.has_setup_parameters()):
          vpsmanager.setup_vps(vps, debug = st.session_state.setup_debug)
          st.session_state.view_setup = vps
          del st.session_state.manage_vps
          st.rerun()
+    server = pbremote.find_server(vps.hostname)
+    if server:
+        monitor.server = server
+        monitor.view_server()
 
 def init_vps():
     # Init vpsmanager
@@ -150,13 +204,24 @@ def init_vps():
             vps.initial_root_pw = st.session_state.vps_initial_root_pw
     if "vps_root_pw" in st.session_state:
         if st.session_state.vps_root_pw != vps.root_pw:
-            vps.root_pw = st.session_state.vps_root_pw
+            #error when root_pw has {{ or }} in it
+            if "{{" in st.session_state.vps_root_pw or "}}" in st.session_state.vps_root_pw:
+                st.session_state.vps_root_pw = vps.root_pw
+                error_popup("Error: root_pw contains '{{' or '}}'")
+            else:
+                vps.root_pw = st.session_state.vps_root_pw
     if "vps_user" in st.session_state:
         if st.session_state.vps_user != vps.user:
             vps.user = st.session_state.vps_user
     if "vps_user_pw" in st.session_state:
         if st.session_state.vps_user_pw != vps.user_pw:
-            vps.user_pw = st.session_state.vps_user_pw
+            if st.session_state.vps_user_pw != "":
+                #error when user_pw has {{ or }} in it
+                if "{{" in st.session_state.vps_user_pw or "}}" in st.session_state.vps_user_pw:
+                    st.session_state.vps_user_pw = vps.user_pw
+                    error_popup("Error: user_pw contains '{{' or '}}'")
+                else:
+                    vps.user_pw = st.session_state.vps_user_pw
     if vps.is_vps_in_hosts():
         hosts_ok = f' ✅'
     else:
@@ -184,6 +249,9 @@ def init_vps():
         "- VPS Linux S, 2 vCores, 2 GB RAM, 80 GB SSD, 3 €/Monat\n"
         "- VPS Linux M, 2 vCores, 4 GB RAM, 120 GB SSD, 6 €/Monat\n"
         "- Please use my [referral link](https://aklam.io/esMFvG)\n"
+        "- A good alternative is a VPS from Contabo\n"
+        "- VPS 1, 4 vCores, 6 GB RAM, 100 GB SSD, 4,50 €/Monat\n"
+        "- Please use my [referral link](https://www.tkqlhce.com/click-101296145-12454592)\n"
     )
     st.subheader("Step 2: Install your VPS")
     st.write(
@@ -224,6 +292,27 @@ def init_vps():
          st.session_state.view_init = vps
          del st.session_state.init_vps
          st.rerun()
+
+def view_update():
+    vps = st.session_state.view_update
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/refresh:"):
+            st.rerun()
+        if st.button(":material/home:"):
+            del st.session_state.view_update
+            st.rerun()
+        if st.button("Manage VPS"):
+            st.session_state.manage_vps = vps
+            del st.session_state.view_update
+            st.rerun()
+    st.header(vps.command_text + " " + vps.hostname)
+    st.write(
+        "- Please wait until the update is finished.\n"
+        "- This can take some minutes.\n"
+        "- After update is successful you can go back to Manage VPS.\n")
+    vps.view_update_status()
+    vps.view_update_log()
 
 def view_init():
     vps = st.session_state.view_init
@@ -288,5 +377,7 @@ elif 'view_setup' in st.session_state:
     view_setup()
 elif 'manage_vps' in st.session_state:
     manage_vps()
+elif 'view_update' in st.session_state:
+    view_update()
 else:
     list_vps()

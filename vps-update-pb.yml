@@ -1,0 +1,109 @@
+---
+# Update pbgui, pb6 and pb7
+# Steps:
+# 1. Clone pbgui repository
+# 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
+# 3. Clone passivbot repository for pb6
+# 4. Restart all pb6 bots if pb6 repository was updated
+# 5. Clone passivbot repository for pb7
+# 6. Restart all pb7 bots if pb7 repository was updated
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    # ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    # user_pw: "{{ user_pw }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: get install_dir
+      set_fact:
+        install_dir: "{{ lookup('env', 'HOME') + '/software' }}"
+
+    - name: clone pbgui repository
+      git:
+        repo: https://github.com/msei99/pbgui.git
+        dest: "{{ install_dir }}/pbgui"
+        version: main
+        update: yes
+        force: yes
+      register: pbgui_repo
+      notify: restart pbgui
+
+    - name: print pbgui_repo
+      debug:
+        var: pbgui_repo
+      tags: debug,never
+
+    - name: clone passivbot repository for pb6
+      git:
+        repo: https://github.com/enarjord/passivbot.git
+        dest: "{{ install_dir }}/pb6"
+        version: v6.1.4b_latest_v6
+        update: yes
+        force: yes
+      register: pb6_repo
+      notify: restart pb6
+
+    - name: print pb6_repo
+      debug:
+        var: pb6_repo
+      tags: debug,never
+
+    - name: clone passivbot repository for pb7
+      git:
+        repo: https://github.com/enarjord/passivbot.git
+        dest: "{{ install_dir }}/pb7"
+        version: master
+        update: yes
+        force: yes
+      register: pb7_repo
+      notify: restart pb7
+
+    - name: print pb7_repo
+      debug:
+        var: pb7_repo
+      tags: debug,never
+
+  handlers:
+    - name: Restart PBRun, PBRemote and PBCoinData
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      listen: "restart pbgui"
+
+    - name: kill all pb6 processes
+      shell: "kill $(ps -ef | grep {{ install_dir }}/pb6/passivbot | grep -v grep | awk '{print $2}')"
+      listen: "restart pb6"
+
+    - name: Make sure PBRun ist running
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -s PBRun
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      listen: "restart pb6"
+
+    - name: kill all pb7 processes
+      shell: "kill $(ps -ef | grep {{ install_dir }}/pb7/src/main.py | grep -v grep | awk '{print $2}')"
+      listen: "restart pb7"
+    
+    - name: Make sure PBRun ist running
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -s PBRun
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      listen: "restart pb7"
