@@ -269,6 +269,8 @@ class VPSManager:
                 v.path = Path(host)
                 v.load()
                 self.vpss.append(v)
+        # sorrt vpss by hostname
+        self.vpss.sort(key=lambda x: x.hostname)
 
     def add_vps(self):
         return VPS()
