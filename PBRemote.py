@@ -22,6 +22,7 @@ from Status import InstancesStatus
 import shutil
 import hashlib
 import traceback
+import gzip
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -176,7 +177,7 @@ class RemoteServer():
         """
         Load the server's configuration.
         """
-        p = str(Path(f'{self._path}/alive_*.cmd'))
+        p = str(Path(f'{self._path}/alive_*.cmd*'))
         alive_remote = glob.glob(p)
         alive_remote.sort()
         self._name = PurePath(self._path).name[4:]
@@ -184,39 +185,43 @@ class RemoteServer():
             while len(alive_remote) > 0:
                 remote = Path(alive_remote.pop())
                 try:
-                    with open(remote, "r", encoding='utf-8') as f:
-                        cfg = json.load(f)
-                        if "name" in cfg and "timestamp" in cfg:
-                            self._ts = cfg["timestamp"]
-                        if "startts" in cfg:
-                            self._startts = cfg["startts"]
-                        if "api_md5" in cfg:
-                            self._api_md5 = cfg["api_md5"]
-                        if "mem" in cfg:
-                            self._mem = cfg["mem"]
-                        if "swap" in cfg:
-                            self._swap = cfg["swap"]
-                        if "disk" in cfg:
-                            self._disk = cfg["disk"]
-                        if "cpu" in cfg:
-                            self._cpu = cfg["cpu"]
-                        if "boot" in cfg:
-                            self._boot = cfg["boot"]
-                        if "monitor" in cfg:
-                            self._monitor = cfg["monitor"]
-                        if "pbgv" in cfg:
-                            self._pbgui_version = cfg["pbgv"]
-                        if "pbgc" in cfg:
-                            self._pbgui_commit = cfg["pbgc"]
-                        if "pb6v" in cfg:
-                            self._pb6_version = cfg["pb6v"]
-                        if "pb6c" in cfg:
-                            self._pb6_commit = cfg["pb6c"]
-                        if "pb7v" in cfg:
-                            self._pb7_version = cfg["pb7v"]
-                        if "pb7c" in cfg:
-                            self._pb7_commit = cfg["pb7c"]
-                        return
+                    if str(remote).endswith('.gz'):
+                        with gzip.open(remote, "rt", encoding='utf-8') as f:
+                            cfg = json.load(f)
+                    else:
+                        with open(remote, "r", encoding='utf-8') as f:
+                            cfg = json.load(f)
+                    if "name" in cfg and "timestamp" in cfg:
+                        self._ts = cfg["timestamp"]
+                    if "startts" in cfg:
+                        self._startts = cfg["startts"]
+                    if "api_md5" in cfg:
+                        self._api_md5 = cfg["api_md5"]
+                    if "mem" in cfg:
+                        self._mem = cfg["mem"]
+                    if "swap" in cfg:
+                        self._swap = cfg["swap"]
+                    if "disk" in cfg:
+                        self._disk = cfg["disk"]
+                    if "cpu" in cfg:
+                        self._cpu = cfg["cpu"]
+                    if "boot" in cfg:
+                        self._boot = cfg["boot"]
+                    if "monitor" in cfg:
+                        self._monitor = cfg["monitor"]
+                    if "pbgv" in cfg:
+                        self._pbgui_version = cfg["pbgv"]
+                    if "pbgc" in cfg:
+                        self._pbgui_commit = cfg["pbgc"]
+                    if "pb6v" in cfg:
+                        self._pb6_version = cfg["pb6v"]
+                    if "pb6c" in cfg:
+                        self._pb6_commit = cfg["pb6c"]
+                    if "pb7v" in cfg:
+                        self._pb7_version = cfg["pb7v"]
+                    if "pb7c" in cfg:
+                        self._pb7_commit = cfg["pb7c"]
+                    return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
 
@@ -483,25 +488,23 @@ class PBRemote():
         """
         pbgdir = Path.cwd()
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'status':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'status_single':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_single.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,status_single.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'status_v7':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd,status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'run_v7':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'multi':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
-        # elif direction == 'down' and spath == 'cmd':
-        #     cmd = ['rclone', 'sync', '-v', '--exclude', f'{{{spath}_{self.name}/*,instances_**,multi_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'master':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'slave':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,cmd_**/alive_*.cmd,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,cmd_**/alive_*.cmd*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
             if logfile.stat().st_size >= 10485760:
@@ -615,7 +618,6 @@ class PBRemote():
         if timestamp - self.alivets < 60:
             return
         self.alivets = timestamp
-        cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd')
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_usage('/')
@@ -640,10 +642,14 @@ class PBRemote():
             "pb7v": self.local_run.pb7_version,
             "pb7c": self.local_run.pb7_commit,
             })
-        with open(cfile, "w", encoding='utf-8') as f:
+        # Save the JSON data as a gzip file
+        cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd.gz')
+        with gzip.open(cfile, "wt", encoding='utf-8') as f:
             json.dump(cfg, f)
+        # with open(cfile, "w", encoding='utf-8') as f:
+        #     json.dump(cfg, f)
         self.sync('up', 'cmd')
-        p = str(Path(f'{self.cmd_path}/alive_*.cmd'))
+        p = str(Path(f'{self.cmd_path}/alive_*.cmd*'))
         found_local = glob.glob(p)
         found_local.sort()
         while len(found_local) > 9:
