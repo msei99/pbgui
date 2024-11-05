@@ -11,6 +11,10 @@ def list_vps():
     pbremote = st.session_state.pbremote
     # Navigation
     with st.sidebar:
+        if st.button(":material/refresh:"):
+            vpsmanager.vpss = []
+            vpsmanager.find_vps()
+            st.rerun()
         if st.button(":material/add_box:"):
             st.session_state.init_vps = vpsmanager.add_vps()
             st.rerun()
