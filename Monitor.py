@@ -135,7 +135,7 @@ class Monitor():
                     st.markdown(f":red[Last Traceback: ] :blue[{d_v7[row]['Last Traceback']}]")
         else:
             st.write("None")
-        st.header(f"Running Multi Instances ({len(d_multi)}) {server.pb7_version}")
+        st.header(f"Running Multi Instances ({len(d_multi)}) {server.pb6_version}")
         if d_multi:
             df = pd.DataFrame(d_multi)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
@@ -161,7 +161,7 @@ class Monitor():
                     st.markdown(f":red[Last Traceback: ] :blue[{d_multi[row]['Last Traceback']}]")
         else:
             st.write("None")
-        st.header(f"Running Single Instances ({len(d_single)}) {server.pb7_version}")
+        st.header(f"Running Single Instances ({len(d_single)}) {server.pb6_version}")
         if d_single:
             df = pd.DataFrame(d_single)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
