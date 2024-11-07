@@ -691,11 +691,19 @@ class PBRun():
     def __init__(self):
         # self.run_instances = []
         self.pbgui_version = "N/A"
+        self.pbgui_version_origin = "N/A"
         self.pb6_version = "N/A"
+        self.pb6_version_origin = "N/A"
         self.pb7_version = "N/A"
+        self.pb7_version_origin = "N/A"
         self.pbgui_commit = "N/A"
+        self.pbgui_commit_origin = "N/A"
         self.pb6_commit = "N/A"
+        self.pb6_commit_origin = "N/A"
         self.pb7_commit = "N/A"
+        self.pb7_commit_origin = "N/A"
+        self.upgrades = 0
+        self.reboot = False
         self.run_multi = []
         self.run_single = []
         self.run_v7 = []
@@ -785,6 +793,43 @@ class PBRun():
         self.pidfile = Path(f'{self.piddir}/pbrun.pid')
         self.my_pid = None
 
+    def has_upgrades(self):
+        """Check if apt-get dist-upgrade -s finds upgrades available"""
+        my_env = os.environ.copy()
+        my_env["LANG"] = 'C'
+        apt_upgrade = subprocess.run(["apt-get", "dist-upgrade", "-s"], stdout=subprocess.PIPE, text=True, env=my_env)
+        match = re.search(r"(\d+) upgraded", apt_upgrade.stdout)
+        if match:
+            self.upgrades = match.group(1)
+
+    def has_reboot(self):
+        """Check if /var/run/reboot-required exists"""
+        if Path("/var/run/reboot-required").exists():
+            self.reboot = True
+
+    def load_git_origin(self):
+        """git fetch origin and load last commit from origin/master"""
+        pbgui_git = Path(f'{self.pbgdir}/.git')
+        if pbgui_git.exists():
+            pbgui_git = Path(f'{self.pbgdir}/.git')
+            subprocess.run(["git", "--git-dir", f'{pbgui_git}', "fetch", "origin"])
+            pbgui_commit = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H", "origin/main"], stdout=subprocess.PIPE, text=True)
+            self.pbgui_commit_origin = pbgui_commit.stdout
+        if self.pbdir:
+            pb6_git = Path(f'{self.pbdir}/.git')
+            if pb6_git.exists():
+                pb6_git = Path(f'{self.pbdir}/.git')
+                subprocess.run(["git", "--git-dir", f'{pb6_git}', "fetch", "origin"])
+                pb6_commit = subprocess.run(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H", "origin/v6.1.4b_latest_v6"], stdout=subprocess.PIPE, text=True)
+                self.pb6_commit_origin = pb6_commit.stdout
+        if self.pb7dir:
+            pb7_git = Path(f'{self.pb7dir}/.git')
+            if pb7_git.exists():
+                pb7_git = Path(f'{self.pb7dir}/.git')
+                subprocess.run(["git", "--git-dir", f'{pb7_git}', "fetch", "origin"])
+                pb7_commit = subprocess.run(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H", "origin/master"], stdout=subprocess.PIPE, text=True)
+                self.pb7_commit_origin = pb7_commit.stdout
+
     def load_git_commits(self):
         """Load the git commit hash of pbgui, pb6 and pb7 using git log -n 1"""
         pbgui_git = Path(f'{self.pbgdir}/.git')
@@ -804,6 +849,34 @@ class PBRun():
                 pb7_git = Path(f'{self.pb7dir}/.git')
                 pb7_commit = subprocess.run(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
                 self.pb7_commit = pb7_commit.stdout
+
+    def load_versions_origin(self):
+        """git show origin:README.md and load the versions of pbgui, pb6 and pb7"""
+        pbgui_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbgdir}/.git', "show", "origin/main:README.md"], stdout=subprocess.PIPE, text=True)
+        lines = pbgui_readme_origin.stdout.splitlines()
+        for line in lines:
+            #find regex regex_search('^#? ?v[0-9.]+'
+            version = re.search('v[0-9.]+', line)
+            if version:
+                self.pbgui_version_origin = version.group(0)
+                break
+        pb6_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbdir}/.git', "show", "origin/v6.1.4b_latest_v6:README.md"], stdout=subprocess.PIPE, text=True)
+        lines = pb6_readme_origin.stdout.splitlines()
+        for line in lines:
+            #find regex regex_search('^#? ?v[0-9.]+'
+            version = re.search('v[0-9.]+', line)
+            if version:
+                self.pb6_version_origin = version.group(0)
+                break
+        pb7_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:README.md"], stdout=subprocess.PIPE, text=True)
+        lines = pb7_readme_origin.stdout.splitlines()
+        for line in lines:
+            #find regex regex_search('^#? ?v[0-9.]+'
+            version = re.search('v[0-9.]+', line)
+            if version:
+                self.pb7_version_origin = version.group(0)
+                break
+
 
     def load_versions(self):
         """Load the versions of pbgui, pb6 and pb7 from README.md"""
