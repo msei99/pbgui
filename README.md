@@ -3,7 +3,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.22
+# v1.23
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -194,6 +194,13 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.23 (07-11-2024)
+- PBRun/PBRemote: Check if updates for Linux and reboot needed
+- VPS-Manager: Overview of all VPS running versions and update/reboot status
+- PBRemote: Compression for alive files, 75% less data usage
+- VPS-Manager: Update only PBGui without pb6 and pb7
+- PBRun/PBRemote: gater pbgui/pb6/pb7 versions and send them to master
 
 ## v1.22 (05-11-2024)
 - VPS-Manager: UFW Firewall configuration
