@@ -53,6 +53,8 @@ class RemoteServer():
         self._cpu = None
         self._boot = None
         self._monitor = []
+        self._upgrades = 0
+        self._reboot = False
         self._pbgui_version = "N/A"
         self._pbgui_commit = None
         self._pb6_version = "N/A"
@@ -99,6 +101,10 @@ class RemoteServer():
     def boot(self): return self._boot
     @property
     def monitor(self): return self._monitor
+    @property
+    def upgrades(self): return self._upgrades
+    @property
+    def reboot(self): return self._reboot
     @property
     def pbgui_version(self): return self._pbgui_version
     @property
@@ -209,6 +215,10 @@ class RemoteServer():
                         self._boot = cfg["boot"]
                     if "monitor" in cfg:
                         self._monitor = cfg["monitor"]
+                    if "upgrades" in cfg:
+                        self._upgrades = cfg["upgrades"]
+                    if "reboot" in cfg:
+                        self._reboot = cfg["reboot"]
                     if "pbgv" in cfg:
                         self._pbgui_version = cfg["pbgv"]
                     if "pbgc" in cfg:
@@ -614,6 +624,8 @@ class PBRemote():
         if timestamp - self.systemts > 3600:
             self.local_run.load_versions()
             self.local_run.load_git_commits()
+            self.local_run.has_upgrades()
+            self.local_run.has_reboot()
             self.systemts = timestamp
         if timestamp - self.alivets < 60:
             return
@@ -635,6 +647,8 @@ class PBRemote():
             "cpu": cpu,
             "boot": boot,
             "monitor": monitor,
+            "upgrades": self.local_run.upgrades,
+            "reboot": self.local_run.reboot,
             "pbgv": self.local_run.pbgui_version,
             "pbgc": self.local_run.pbgui_commit,
             "pb6v": self.local_run.pb6_version,
