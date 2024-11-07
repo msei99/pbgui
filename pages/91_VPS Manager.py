@@ -4,11 +4,14 @@ from pbgui_func import set_page_config, is_session_state_initialized, info_popup
 from VPSManager import VPSManager, VPS
 import re
 from Monitor import Monitor
+from datetime import datetime
 
 
 def list_vps():
     vpsmanager = st.session_state.vpsmanager
     pbremote = st.session_state.pbremote
+    pbremote.local_run.load_git_origin()
+    pbremote.local_run.load_versions_origin()
     # Navigation
     with st.sidebar:
         if st.button(":material/refresh:"):
@@ -29,7 +32,46 @@ def list_vps():
                     st.session_state.manage_vps = vps
                     st.rerun()
     st.header("VPS Manager")
-
+    st.subheader("Overview")
+    if not "ed_key" in st.session_state:
+        st.session_state.ed_key = 0
+    d = []
+    for server in sorted(st.session_state.pbremote.remote_servers, key=lambda s: s.name):
+        boot = datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S")
+        if server.is_online():
+            online = "✅"
+        else:
+            online = "❌"
+        if server.pbgui_version == pbremote.local_run.pbgui_version_origin and server.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
+            pbgui = "✅"
+        else:
+            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin})"
+        if server.pb6_version == pbremote.local_run.pb6_version_origin and server.pb6_commit == pbremote.local_run.pb6_commit_origin:
+            pb6 = "✅"
+        else:
+            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin})"
+        if server.pb7_version == pbremote.local_run.pb7_version_origin and server.pb7_commit == pbremote.local_run.pb7_commit_origin:
+            pb7 = "✅"
+        else:
+            pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin})"
+        if server.reboot:
+            reboot = "❌"
+        else:
+            reboot = "✅"
+        d.append({
+            "Name": server.name,
+            "Online": online,
+            "Start": boot,
+            "Reboot": reboot,
+            "Updates": server.upgrades,
+            "PBGui": f'{server.pbgui_version}',
+            "PBGui github": pbgui,
+            "PB6": f'{server.pb6_version}',
+            "PB6 github": pb6,
+            "PB7": f'{server.pb7_version}',
+            "PB7 github": pb7
+        })
+    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
 
 def manage_vps():
     vpsmanager = st.session_state.vpsmanager
