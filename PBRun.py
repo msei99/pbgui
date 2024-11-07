@@ -249,7 +249,7 @@ class RunSingle():
         self.user = None
         self.path = None
         self._single_config = {}
-        self._parameters = None
+        self.parameters = None
         self.name = None
         self.multi = False
         self.version = None
@@ -288,6 +288,7 @@ class RunSingle():
 
     def start(self):
         if not self.is_running():
+            self.create_parameters()
             config = PurePath(f'{self.path}/config.json')
             cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot.py')]
             cmd_end = f'{self.parameters} {self.user} {self.symbol} '.lstrip(' ')
@@ -877,7 +878,6 @@ class PBRun():
                 self.pb7_version_origin = version.group(0)
                 break
 
-
     def load_versions(self):
         """Load the versions of pbgui, pb6 and pb7 from README.md"""
         pbgui_readme = Path(f'{self.pbgdir}/README.md')
@@ -1341,10 +1341,10 @@ class PBRun():
                         running_version = self.find_running_version(single_instance)
                         if running_version < run_single.version:
                             run_single.stop()
-                            run_single.create_parameters()
+                            # run_single.create_parameters()
                             run_single.start()
                     else:
-                        run_single.create_parameters()
+                        # run_single.create_parameters()
                         run_single.start()
                     self.add_single(run_single)
                     status.running = True
