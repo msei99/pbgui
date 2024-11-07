@@ -85,6 +85,7 @@
     - name: kill all pb6 processes
       shell: "kill $(ps -ef | grep {{ install_dir }}/pb6/passivbot | grep -v grep | awk '{print $2}')"
       listen: "restart pb6"
+      ignore_errors: yes
 
     - name: Make sure PBRun ist running
       shell: |
