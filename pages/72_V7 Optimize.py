@@ -87,9 +87,13 @@ def opt_v7_results():
             st.rerun()
         if st.button(":material/delete: selected"):
             opt_v7_results.remove_selected_results()
+            if "opt_v7_results_d" in st.session_state:
+                del st.session_state.opt_v7_results_d
             st.rerun()
         if st.button(":material/delete: all"):
             opt_v7_results.remove_all_results()
+            if "opt_v7_results_d" in st.session_state:
+                del st.session_state.opt_v7_results_d
             st.rerun()
     st.title(f"Optimize V7 Results")
     opt_v7_results.view_results()
