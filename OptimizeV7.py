@@ -14,7 +14,7 @@ from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_pop
 import uuid
 from pathlib import Path, PurePath
 from User import Users
-from shutil import rmtree
+import shutil
 import datetime
 import BacktestV7
 from Config import ConfigV7, Bounds
@@ -348,6 +348,7 @@ class OptimizeV7Results:
     
     def remove(self, file_name):
         Path(file_name).unlink(missing_ok=True)
+        Path(f'{file_name}.bak').unlink(missing_ok=True)
         analysis = PurePath(file_name).stem[0:19]
         analysis = str(self.analysis_path) + f'/{analysis}*.json'
         analysis = glob.glob(analysis, recursive=False)
@@ -381,7 +382,7 @@ class OptimizeV7Results:
         if not "opt_v7_results_d" in st.session_state:
             d = []
             for id, opt in enumerate(self.results):
-                backtest_name = self.find_result_name(opt)
+                name = self.find_result_name(opt)
                 analysis = PurePath(opt).stem[0:19]
                 analysis = str(self.analysis_path) + f'/{analysis}*.json'
                 analysis = glob.glob(analysis, recursive=False)
@@ -393,7 +394,7 @@ class OptimizeV7Results:
                     analysis = PurePath(analysis).stem
                 d.append({
                     'id': id,
-                    'Name': backtest_name,
+                    'Name': name,
                     'Result': result,
                     'Result Time': datetime.datetime.fromtimestamp(result_time),
                     'Analysis': analysis,
@@ -444,7 +445,12 @@ class OptimizeV7Results:
                         st.switch_page("pages/71_V7 Backtest.py")
 
     def generate_analysis(self, result_file):
-        cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file)]
+        # create a copy of result_file
+        result_file = Path(result_file)
+        result_file_copy = Path(f'{result_file}.bak')
+        shutil.copy(result_file, result_file_copy)
+        # run extract_best_config.py on result_file_copy
+        cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file_copy)]
         with st.spinner('Generating Result...'):
             if platform.system() == "Windows":
                 creationflags = subprocess.CREATE_NO_WINDOW
@@ -467,8 +473,8 @@ class OptimizeV7Results:
         self.find_results()
     
     def remove_all_results(self):
-        rmtree(self.results_path, ignore_errors=True)
-        rmtree(self.analysis_path, ignore_errors=True)
+        shutil.rmtree(self.results_path, ignore_errors=True)
+        shutil.rmtree(self.analysis_path, ignore_errors=True)
         self.results = []
 
 class OptimizeV7Item:
