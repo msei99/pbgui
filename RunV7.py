@@ -364,19 +364,20 @@ class V7Instance():
                 del st.session_state.edit_run_v7_leverage
                 del st.session_state.edit_run_v7_pnls_max_lookback_days
                 del st.session_state.edit_run_v7_minimum_coin_age_days
-                # del st.session_state.edit_run_v7_relative_volume_filter_clip_pct
-                # del st.session_state.edit_run_v7_ohlcv_rolling_window
                 del st.session_state.edit_run_v7_price_distance_threshold
                 del st.session_state.edit_run_v7_execution_delay_seconds
                 del st.session_state.edit_run_v7_filter_by_min_effective_cost
+                del st.session_state.edit_run_v7_empty_means_all_approved
                 del st.session_state.edit_run_v7_auto_gs
                 del st.session_state.edit_run_v7_max_n_cancellations_per_batch
                 del st.session_state.edit_run_v7_max_n_creations_per_batch
                 del st.session_state.edit_run_v7_forced_mode_long
                 del st.session_state.edit_run_v7_forced_mode_short
                 del st.session_state.edit_run_v7_time_in_force
-                del st.session_state.edit_run_v7_approved_coins
-                del st.session_state.edit_run_v7_ignored_coins
+                del st.session_state.edit_run_v7_approved_coins_long
+                del st.session_state.edit_run_v7_approved_coins_short
+                del st.session_state.edit_run_v7_ignored_coins_long
+                del st.session_state.edit_run_v7_ignored_coins_short
                 del st.session_state.edit_configv7_long_twe
                 del st.session_state.edit_configv7_short_twe
                 del st.session_state.edit_configv7_long_positions

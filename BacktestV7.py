@@ -651,6 +651,7 @@ class BacktestV7Item:
                 del st.session_state.edit_bt_v7_ed
                 del st.session_state.edit_bt_v7_sb
                 del st.session_state.edit_bt_v7_minimum_coin_age_days
+                del st.session_state.edit_bt_v7_compress_cache
                 del st.session_state.edit_bt_v7_market_cap
                 del st.session_state.edit_bt_v7_vol_mcap
                 del st.session_state.edit_bt_v7_approved_coins_long
