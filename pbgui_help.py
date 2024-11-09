@@ -1011,6 +1011,17 @@ dynamic_ignore = """
     On passivbot7 PBRun creat the ignored_coins.json file and pb7 will use this list as filter.
     ```"""
 
+empty_means_all_approved = """
+    ```
+    If true, will interpret approved_coins=[] as all coins approved.
+    If false, will interpret approved_coins=[] as no coins approved.
+    ```"""
+
+compress_cache = """
+    ```
+    set to true to save disk space. Set to false to load faster.
+    ```"""
+
 vps_swap = """
     ```
     recommended swap size for VPS
