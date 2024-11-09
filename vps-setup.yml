@@ -178,6 +178,27 @@
       become: yes
       when: swapfile_status.stat.exists == false
       
+    - name: Disable IPv6
+      block:
+        - name: Disable IPv6 all
+          sysctl:
+            name: net.ipv6.conf.all.disable_ipv6
+            value: 1
+            state: present
+
+        - name: Disable IPv6 default
+          sysctl:
+            name: net.ipv6.conf.default.disable_ipv6
+            value: 1
+            state: present
+
+        - name: Disable IPv6 loopback
+          sysctl:
+            name: net.ipv6.conf.lo.disable_ipv6
+            value: 1
+            state: present
+      become: yes
+
     - name: Add deadsnakes/ppa for installing python3.10
       apt_repository:
         repo: ppa:deadsnakes/ppa
