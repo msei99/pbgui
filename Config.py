@@ -192,68 +192,70 @@ class Config:
 
 # config template
 # {"backtest": {"base_dir": "backtests",
+#               "compress_cache": true,
 #               "end_date": "now",
 #               "exchange": "binance",
 #               "start_date": "2021-05-01",
 #               "starting_balance": 100000.0},
 #  "bot": {"long": {"close_grid_markup_range": 0.0016219,
 #                   "close_grid_min_markup": 0.012842,
-#                   "close_grid_qty_pct": 0.7227,
-#                   "close_trailing_grid_ratio": 0.021647,
-#                   "close_trailing_qty_pct": 0.88442,
-#                   "close_trailing_retracement_pct": 0.028596,
+#                   "close_grid_qty_pct": 0.65242,
+#                   "close_trailing_grid_ratio": 0.021638,
+#                   "close_trailing_qty_pct": 0.88439,
+#                   "close_trailing_retracement_pct": 0.028672,
 #                   "close_trailing_threshold_pct": 0.065293,
 #                   "ema_span_0": 465.26,
 #                   "ema_span_1": 1120.5,
 #                   "entry_grid_double_down_factor": 2.3744,
 #                   "entry_grid_spacing_pct": 0.052341,
-#                   "entry_grid_spacing_weight": 0.070299,
+#                   "entry_grid_spacing_weight": 0.070271,
 #                   "entry_initial_ema_dist": -0.0059754,
 #                   "entry_initial_qty_pct": 0.029454,
 #                   "entry_trailing_grid_ratio": -0.28169,
-#                   "entry_trailing_retracement_pct": 0.0024724,
-#                   "entry_trailing_threshold_pct": -0.044654,
+#                   "entry_trailing_retracement_pct": 0.0024748,
+#                   "entry_trailing_threshold_pct": -0.051708,
 #                   "filter_relative_volume_clip_pct": 0.51416,
 #                   "filter_rolling_window": 60.0,
 #                   "n_positions": 10.675,
-#                   "total_wallet_exposure_limit": 0.95749,
+#                   "total_wallet_exposure_limit": 0.95859,
 #                   "unstuck_close_pct": 0.071741,
 #                   "unstuck_ema_dist": -0.053527,
-#                   "unstuck_loss_allowance_pct": 0.035633,
+#                   "unstuck_loss_allowance_pct": 0.033558,
 #                   "unstuck_threshold": 0.49002},
-#          "short": {"close_grid_markup_range": 0.0049,
-#                    "close_grid_min_markup": 0.01341,
+#          "short": {"close_grid_markup_range": 0.0049057,
+#                    "close_grid_min_markup": 0.013579,
 #                    "close_grid_qty_pct": 0.6168,
-#                    "close_trailing_grid_ratio": 0.88877,
-#                    "close_trailing_qty_pct": 0.97708,
+#                    "close_trailing_grid_ratio": 0.88873,
+#                    "close_trailing_qty_pct": 0.97705,
 #                    "close_trailing_retracement_pct": 0.095287,
-#                    "close_trailing_threshold_pct": -0.052408,
-#                    "ema_span_0": 819.1,
-#                    "ema_span_1": 345.78,
-#                    "entry_grid_double_down_factor": 2.3061,
+#                    "close_trailing_threshold_pct": -0.060579,
+#                    "ema_span_0": 819.23,
+#                    "ema_span_1": 246.39,
+#                    "entry_grid_double_down_factor": 2.3062,
 #                    "entry_grid_spacing_pct": 0.072015,
 #                    "entry_grid_spacing_weight": 1.4565,
 #                    "entry_initial_ema_dist": -0.072047,
-#                    "entry_initial_qty_pct": 0.072208,
-#                    "entry_trailing_grid_ratio": -0.023189,
+#                    "entry_initial_qty_pct": 0.072205,
+#                    "entry_trailing_grid_ratio": -0.02319,
 #                    "entry_trailing_retracement_pct": 0.017338,
-#                    "entry_trailing_threshold_pct": -0.085573,
-#                    "filter_relative_volume_clip_pct": 0.50001,
+#                    "entry_trailing_threshold_pct": -0.084177,
+#                    "filter_relative_volume_clip_pct": 0.5183,
 #                    "filter_rolling_window": 68.072,
 #                    "n_positions": 1.1534,
-#                    "total_wallet_exposure_limit": 0.20901,
+#                    "total_wallet_exposure_limit": 0.209,
 #                    "unstuck_close_pct": 0.052695,
-#                    "unstuck_ema_dist": -0.02697,
-#                    "unstuck_loss_allowance_pct": 0.045985,
+#                    "unstuck_ema_dist": -0.026947,
+#                    "unstuck_loss_allowance_pct": 0.046017,
 #                    "unstuck_threshold": 0.58422}},
 #  "live": {"approved_coins": [],
 #           "auto_gs": true,
 #           "coin_flags": {},
+#           "empty_means_all_approved": false,
 #           "execution_delay_seconds": 2.0,
 #           "filter_by_min_effective_cost": true,
 #           "forced_mode_long": "",
 #           "forced_mode_short": "",
-#           "ignored_coins": ["COIN1", "COIN2"],
+#           "ignored_coins": [],
 #           "leverage": 10.0,
 #           "max_n_cancellations_per_batch": 5,
 #           "max_n_creations_per_batch": 3,
@@ -324,16 +326,17 @@ class Config:
 #               "n_cpus": 5,
 #               "population_size": 500,
 #               "scoring": ["mdg", "sharpe_ratio"]}}
-
 class Backtest:
     def __init__(self):
         self._base_dir = "backtests"
+        self._compress_cache = True
         self._end_date = "now"
         self._exchange = "binance"
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
         self._backtest = {
             "base_dir": self._base_dir,
+            "compress_cache": self._compress_cache,
             "end_date": self._end_date,
             "exchange": self._exchange,
             "start_date": self._start_date,
@@ -350,6 +353,8 @@ class Backtest:
         self._backtest = new_backtest
         if "base_dir" in self._backtest:
             self._base_dir = self._backtest["base_dir"]
+        if "compress_cache" in self._backtest:
+            self._compress_cache = self._backtest["compress_cache"]
         if "end_date" in self._backtest:
             self._end_date = self._backtest["end_date"]
         if "exchange" in self._backtest:
@@ -361,6 +366,8 @@ class Backtest:
     
     @property
     def base_dir(self): return self._base_dir
+    @property
+    def compress_cache(self): return self._compress_cache
     @property
     def end_date(self):
         if self._end_date == "now":
@@ -377,6 +384,10 @@ class Backtest:
     def base_dir(self, new_base_dir):
         self._base_dir = new_base_dir
         self._backtest["base_dir"] = self._base_dir
+    @compress_cache.setter
+    def compress_cache(self, new_compress_cache):
+        self._compress_cache = new_compress_cache
+        self._backtest["compress_cache"] = self._compress_cache
     @end_date.setter
     def end_date(self, new_end_date):
         self._end_date = new_end_date
@@ -1009,14 +1020,21 @@ class Short:
 
 class Live:
     def __init__(self):
-        self._approved_coins = []
+        self._approved_coins = {
+            "long": [],
+            "short": []
+        }
         self._auto_gs = True
         self._coin_flags = {}
+        self._empty_means_all_approved = False
         self._execution_delay_seconds = 2.0
         self._filter_by_min_effective_cost = True
         self._forced_mode_long = ""
         self._forced_mode_short = ""
-        self._ignored_coins = []
+        self._ignored_coins = {
+            "long": [],
+            "short": []
+        }
         self._leverage = 10.0
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3
@@ -1027,7 +1045,7 @@ class Live:
         # self._ohlcv_rolling_window = 60
         self._pnls_max_lookback_days = 30.0
         self._price_distance_threshold = 0.002
-        self._relative_volume_filter_clip_pct = 0.5
+        # self._relative_volume_filter_clip_pct = 0.5
         self._time_in_force = "good_till_cancelled"
         self._user = "bybit_01"
 
@@ -1035,6 +1053,7 @@ class Live:
             "approved_coins": self._approved_coins,
             "auto_gs": self._auto_gs,
             "coin_flags": self._coin_flags,
+            "empty_means_all_approved": self._empty_means_all_approved,
             "execution_delay_seconds": self._execution_delay_seconds,
             "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
             "forced_mode_long": self._forced_mode_long,
@@ -1050,7 +1069,7 @@ class Live:
             # "ohlcv_rolling_window": self._ohlcv_rolling_window,
             "pnls_max_lookback_days": self._pnls_max_lookback_days,
             "price_distance_threshold": self._price_distance_threshold,
-            "relative_volume_filter_clip_pct": self._relative_volume_filter_clip_pct,
+            # "relative_volume_filter_clip_pct": self._relative_volume_filter_clip_pct,
             "time_in_force": self._time_in_force,
             "user": self._user
         }
@@ -1064,11 +1083,20 @@ class Live:
     def live(self, new_live):
         self._live = new_live
         if "approved_coins" in self._live:
-            self._approved_coins = self._live["approved_coins"]
+            if "long" in self._live["approved_coins"]:
+                self._approved_coins["long"] = self._live["approved_coins"]["long"]
+            else:
+                self._approved_coins["long"] = self._live["approved_coins"]
+            if "short" in self._live["approved_coins"]:
+                self._approved_coins["short"] = self._live["approved_coins"]["short"]
+            else:
+                self._approved_coins["short"] = self._live["approved_coins"]
         if "auto_gs" in self._live:
             self._auto_gs = self._live["auto_gs"]
         if "coin_flags" in self._live:
             self._coin_flags = self._live["coin_flags"]
+        if "empty_means_all_approved" in self._live:
+            self._empty_means_all_approved = self._live["empty_means_all_approved"]
         if "execution_delay_seconds" in self._live:
             self._execution_delay_seconds = self._live["execution_delay_seconds"]
         if "filter_by_min_effective_cost" in self._live:
@@ -1078,7 +1106,14 @@ class Live:
         if "forced_mode_short" in self._live:
             self._forced_mode_short = self._live["forced_mode_short"]
         if "ignored_coins" in self._live:
-            self._ignored_coins = self._live["ignored_coins"]
+            if "long" in self._live["ignored_coins"]:
+                self._ignored_coins["long"] = self._live["ignored_coins"]["long"]
+            else:
+                self._ignored_coins["long"] = self._live["ignored_coins"]
+            if "short" in self._live["ignored_coins"]:
+                self._ignored_coins["short"] = self._live["ignored_coins"]["short"]
+            else:
+                self._ignored_coins["short"] = self._live["ignored_coins"]
         if "leverage" in self._live:
             self._leverage = self._live["leverage"]
         if "max_n_cancellations_per_batch" in self._live:
@@ -1099,8 +1134,8 @@ class Live:
             self._pnls_max_lookback_days = self._live["pnls_max_lookback_days"]
         if "price_distance_threshold" in self._live:
             self._price_distance_threshold = self._live["price_distance_threshold"]
-        if "relative_volume_filter_clip_pct" in self._live:
-            self._relative_volume_filter_clip_pct = self._live["relative_volume_filter_clip_pct"]
+        # if "relative_volume_filter_clip_pct" in self._live:
+        #     self._relative_volume_filter_clip_pct = self._live["relative_volume_filter_clip_pct"]
         if "time_in_force" in self._live:
             self._time_in_force = self._live["time_in_force"]
         if "user" in self._live:
@@ -1112,6 +1147,8 @@ class Live:
     def auto_gs(self): return self._auto_gs
     @property
     def coin_flags(self): return self._coin_flags
+    @property
+    def empty_means_all_approved(self): return self._empty_means_all_approved
     @property
     def execution_delay_seconds(self): return self._execution_delay_seconds
     @property
@@ -1142,8 +1179,8 @@ class Live:
     def pnls_max_lookback_days(self): return self._pnls_max_lookback_days
     @property
     def price_distance_threshold(self): return self._price_distance_threshold
-    @property
-    def relative_volume_filter_clip_pct(self): return self._relative_volume_filter_clip_pct
+    # @property
+    # def relative_volume_filter_clip_pct(self): return self._relative_volume_filter_clip_pct
     @property
     def time_in_force(self): return self._time_in_force
     @property
@@ -1161,6 +1198,10 @@ class Live:
     def coin_flags(self, new_coin_flags):
         self._coin_flags = new_coin_flags
         self._live["coin_flags"] = self._coin_flags
+    @empty_means_all_approved.setter
+    def empty_means_all_approved(self, new_empty_means_all_approved):
+        self._empty_means_all_approved = new_empty_means_all_approved
+        self._live["empty_means_all_approved"] = self._empty_means_all_approved
     @execution_delay_seconds.setter
     def execution_delay_seconds(self, new_execution_delay_seconds):
         self._execution_delay_seconds = new_execution_delay_seconds
@@ -1221,10 +1262,10 @@ class Live:
     def price_distance_threshold(self, new_price_distance_threshold):
         self._price_distance_threshold = new_price_distance_threshold
         self._live["price_distance_threshold"] = self._price_distance_threshold
-    @relative_volume_filter_clip_pct.setter
-    def relative_volume_filter_clip_pct(self, new_relative_volume_filter_clip_pct):
-        self._relative_volume_filter_clip_pct = new_relative_volume_filter_clip_pct
-        self._live["relative_volume_filter_clip_pct"] = self._relative_volume_filter_clip_pct
+    # @relative_volume_filter_clip_pct.setter
+    # def relative_volume_filter_clip_pct(self, new_relative_volume_filter_clip_pct):
+    #     self._relative_volume_filter_clip_pct = new_relative_volume_filter_clip_pct
+    #     self._live["relative_volume_filter_clip_pct"] = self._relative_volume_filter_clip_pct
     @time_in_force.setter
     def time_in_force(self, new_time_in_force):
         self._time_in_force = new_time_in_force

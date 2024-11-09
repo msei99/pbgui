@@ -3,7 +3,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.23
+# v1.24
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -194,6 +194,17 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.24 (09-11-2024)
+- Added approved_coins_long and _short
+- Added ignored_coins_long and short
+- Added empty_means_all_approved option from v7.2.2
+- Added compress_cache option on backtest_v7
+- Bugfix for new passivbot v7.2.2
+- Copy optimize_result before running analysis for not get locking errors
+- Bugfix for PBRun create_parameters on pb6 single instances
+- Bugfix for update pb6 and pb7 ignore error when no instance is running
+- More small bugfixes
 
 ## v1.23 (07-11-2024)
 - PBRun/PBRemote: Check if updates for Linux and reboot needed
