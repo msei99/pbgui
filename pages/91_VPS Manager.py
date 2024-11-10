@@ -24,10 +24,10 @@ def list_vps():
         for vps in vpsmanager.vpss:
             if vps.hostname:
                 server = pbremote.find_server(vps.hostname)
-                if server.is_online():
-                    color = "green"
-                else:
-                    color = "red"
+                color = "red"
+                if server:
+                    if server.is_online():
+                        color = "green"
                 if st.button(f':{color}[{vps.hostname}]'):
                     st.session_state.manage_vps = vps
                     st.rerun()
