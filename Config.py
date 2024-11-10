@@ -350,19 +350,18 @@ class Backtest:
     def backtest(self): return self._backtest
     @backtest.setter
     def backtest(self, new_backtest):
-        self._backtest = new_backtest
-        if "base_dir" in self._backtest:
-            self._base_dir = self._backtest["base_dir"]
-        if "compress_cache" in self._backtest:
-            self._compress_cache = self._backtest["compress_cache"]
-        if "end_date" in self._backtest:
-            self._end_date = self._backtest["end_date"]
-        if "exchange" in self._backtest:
-            self._exchange = self._backtest["exchange"]
-        if "start_date" in self._backtest:
-            self._start_date = self._backtest["start_date"]
-        if "starting_balance" in self._backtest:
-            self._starting_balance = self._backtest["starting_balance"]
+        if "base_dir" in new_backtest:
+            self.base_dir = new_backtest["base_dir"]
+        if "compress_cache" in new_backtest:
+            self.compress_cache = new_backtest["compress_cache"]
+        if "end_date" in new_backtest:
+            self.end_date = new_backtest["end_date"]
+        if "exchange" in new_backtest:
+            self.exchange = new_backtest["exchange"]
+        if "start_date" in new_backtest:
+            self.start_date = new_backtest["start_date"]
+        if "starting_balance" in new_backtest:
+            self.starting_balance = new_backtest["starting_balance"]
     
     @property
     def base_dir(self): return self._base_dir
@@ -421,11 +420,10 @@ class Bot:
     def bot(self): return self._bot
     @bot.setter
     def bot(self, new_bot):
-        self._bot = new_bot
-        if "long" in self._bot:
-            self.long = self._bot["long"]
-        if "short" in self._bot:
-            self.short = self._bot["short"]
+        if "long" in new_bot:
+            self.long = new_bot["long"]
+        if "short" in new_bot:
+            self.short = new_bot["short"]
     
     @property
     def long(self): return self._long
@@ -1018,12 +1016,85 @@ class Short:
         self._unstuck_threshold = new_unstuck_threshold
         self._short["unstuck_threshold"] = self._unstuck_threshold
 
+class ApprovedCoins:
+    def __init__(self):
+        self._long = []
+        self._short = []
+        self._approved_coins = {
+            "long": self._long,
+            "short": self._short
+        }
+
+    def __repr__(self):
+        return str(self._approved_coins)
+    
+    @property
+    def approved_coins(self): return self._approved_coins
+    @approved_coins.setter
+    def approved_coins(self, new_approved_coins):
+        if "long" in new_approved_coins:
+            self.long = new_approved_coins["long"]
+        else:
+            self.long = new_approved_coins
+        if "short" in new_approved_coins:
+            self.short = new_approved_coins["short"]
+        else:
+            self.short = new_approved_coins
+    
+    @property
+    def long(self): return self._long
+    @property
+    def short(self): return self._short
+    @long.setter
+    def long(self, new_long):
+        self._long = new_long
+        self._approved_coins["long"] = self._long
+    @short.setter
+    def short(self, new_short):
+        self._short = new_short
+        self._approved_coins["short"] = self._short
+
+class IgnoredCoins:
+    def __init__(self):
+        self._long = []
+        self._short = []
+        self._ignored_coins = {
+            "long": self._long,
+            "short": self._short
+        }
+    
+    def __repr__(self):
+        return str(self._ignored_coins)
+
+    @property
+    def ignored_coins(self): return self._ignored_coins
+    @ignored_coins.setter
+    def ignored_coins(self, new_ignored_coins):
+        if "long" in new_ignored_coins:
+            self.long = new_ignored_coins["long"]
+        else:
+            self.long = new_ignored_coins
+        if "short" in new_ignored_coins:
+            self.short = new_ignored_coins["short"]
+        else:
+            self.short = new_ignored_coins
+    
+    @property
+    def long(self): return self._long
+    @property
+    def short(self): return self._short
+    @long.setter
+    def long(self, new_long):
+        self._long = new_long
+        self._ignored_coins["long"] = self._long
+    @short.setter
+    def short(self, new_short):
+        self._short = new_short
+        self._ignored_coins["short"] = self._short
+
 class Live:
     def __init__(self):
-        self._approved_coins = {
-            "long": [],
-            "short": []
-        }
+        self._approved_coins = ApprovedCoins()
         self._auto_gs = True
         self._coin_flags = {}
         self._empty_means_all_approved = False
@@ -1031,10 +1102,7 @@ class Live:
         self._filter_by_min_effective_cost = True
         self._forced_mode_long = ""
         self._forced_mode_short = ""
-        self._ignored_coins = {
-            "long": [],
-            "short": []
-        }
+        self._ignored_coins = IgnoredCoins()
         self._leverage = 10.0
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3
@@ -1042,15 +1110,13 @@ class Live:
         self._minimum_coin_age_days = 30.0
         self._ohlcvs_1m_rolling_window_days = 4.0
         self._ohlcvs_1m_update_after_minutes = 10.0
-        # self._ohlcv_rolling_window = 60
         self._pnls_max_lookback_days = 30.0
         self._price_distance_threshold = 0.002
-        # self._relative_volume_filter_clip_pct = 0.5
         self._time_in_force = "good_till_cancelled"
         self._user = "bybit_01"
 
         self._live = {
-            "approved_coins": self._approved_coins,
+            "approved_coins": self._approved_coins._approved_coins,
             "auto_gs": self._auto_gs,
             "coin_flags": self._coin_flags,
             "empty_means_all_approved": self._empty_means_all_approved,
@@ -1058,7 +1124,7 @@ class Live:
             "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
             "forced_mode_long": self._forced_mode_long,
             "forced_mode_short": self._forced_mode_short,
-            "ignored_coins": self._ignored_coins,
+            "ignored_coins": self._ignored_coins._ignored_coins,
             "leverage": self._leverage,
             "max_n_cancellations_per_batch": self._max_n_cancellations_per_batch,
             "max_n_creations_per_batch": self._max_n_creations_per_batch,
@@ -1066,10 +1132,8 @@ class Live:
             "minimum_coin_age_days": self._minimum_coin_age_days,
             "ohlcvs_1m_rolling_window_days": self._ohlcvs_1m_rolling_window_days,
             "ohlcvs_1m_update_after_minutes": self._ohlcvs_1m_update_after_minutes,
-            # "ohlcv_rolling_window": self._ohlcv_rolling_window,
             "pnls_max_lookback_days": self._pnls_max_lookback_days,
             "price_distance_threshold": self._price_distance_threshold,
-            # "relative_volume_filter_clip_pct": self._relative_volume_filter_clip_pct,
             "time_in_force": self._time_in_force,
             "user": self._user
         }
@@ -1081,65 +1145,46 @@ class Live:
     def live(self): return self._live
     @live.setter
     def live(self, new_live):
-        self._live = new_live
-        if "approved_coins" in self._live:
-            if "long" in self._live["approved_coins"]:
-                self._approved_coins["long"] = self._live["approved_coins"]["long"]
-            else:
-                self._approved_coins["long"] = self._live["approved_coins"]
-            if "short" in self._live["approved_coins"]:
-                self._approved_coins["short"] = self._live["approved_coins"]["short"]
-            else:
-                self._approved_coins["short"] = self._live["approved_coins"]
-        if "auto_gs" in self._live:
-            self._auto_gs = self._live["auto_gs"]
-        if "coin_flags" in self._live:
-            self._coin_flags = self._live["coin_flags"]
-        if "empty_means_all_approved" in self._live:
-            self._empty_means_all_approved = self._live["empty_means_all_approved"]
-        if "execution_delay_seconds" in self._live:
-            self._execution_delay_seconds = self._live["execution_delay_seconds"]
-        if "filter_by_min_effective_cost" in self._live:
-            self._filter_by_min_effective_cost = self._live["filter_by_min_effective_cost"]
-        if "forced_mode_long" in self._live:
-            self._forced_mode_long = self._live["forced_mode_long"]
-        if "forced_mode_short" in self._live:
-            self._forced_mode_short = self._live["forced_mode_short"]
-        if "ignored_coins" in self._live:
-            if "long" in self._live["ignored_coins"]:
-                self._ignored_coins["long"] = self._live["ignored_coins"]["long"]
-            else:
-                self._ignored_coins["long"] = self._live["ignored_coins"]
-            if "short" in self._live["ignored_coins"]:
-                self._ignored_coins["short"] = self._live["ignored_coins"]["short"]
-            else:
-                self._ignored_coins["short"] = self._live["ignored_coins"]
-        if "leverage" in self._live:
-            self._leverage = self._live["leverage"]
-        if "max_n_cancellations_per_batch" in self._live:
-            self._max_n_cancellations_per_batch = self._live["max_n_cancellations_per_batch"]
-        if "max_n_creations_per_batch" in self._live:
-            self._max_n_creations_per_batch = self._live["max_n_creations_per_batch"]
-        if "max_n_restarts_per_day" in self._live:
-            self._max_n_restarts_per_day = self._live["max_n_restarts_per_day"]
-        if "minimum_coin_age_days" in self._live:
-            self._minimum_coin_age_days = self._live["minimum_coin_age_days"]
-        if "ohlcvs_1m_rolling_window_days" in self._live:
-            self._ohlcvs_1m_rolling_window_days = self._live["ohlcvs_1m_rolling_window_days"]
-        if "ohlcvs_1m_update_after_minutes" in self._live:
-            self._ohlcvs_1m_update_after_minutes = self._live["ohlcvs_1m_update_after_minutes"]
-        # if "ohlcv_rolling_window" in self._live:
-        #     self._ohlcv_rolling_window = self._live["ohlcv_rolling_window"]
-        if "pnls_max_lookback_days" in self._live:
-            self._pnls_max_lookback_days = self._live["pnls_max_lookback_days"]
-        if "price_distance_threshold" in self._live:
-            self._price_distance_threshold = self._live["price_distance_threshold"]
-        # if "relative_volume_filter_clip_pct" in self._live:
-        #     self._relative_volume_filter_clip_pct = self._live["relative_volume_filter_clip_pct"]
-        if "time_in_force" in self._live:
-            self._time_in_force = self._live["time_in_force"]
-        if "user" in self._live:
-            self._user = self._live["user"]
+        if "approved_coins" in new_live:
+            self.approved_coins = new_live["approved_coins"]
+        if "auto_gs" in new_live:
+            self.auto_gs = new_live["auto_gs"]
+        if "coin_flags" in new_live:
+            self.coin_flags = new_live["coin_flags"]
+        if "empty_means_all_approved" in new_live:
+            self.empty_means_all_approved = new_live["empty_means_all_approved"]
+        if "execution_delay_seconds" in new_live:
+            self.execution_delay_seconds = new_live["execution_delay_seconds"]
+        if "filter_by_min_effective_cost" in new_live:
+            self.filter_by_min_effective_cost = new_live["filter_by_min_effective_cost"]
+        if "forced_mode_long" in new_live:
+            self.forced_mode_long = new_live["forced_mode_long"]
+        if "forced_mode_short" in new_live:
+            self.forced_mode_short = new_live["forced_mode_short"]
+        if "ignored_coins" in new_live:
+            self.ignored_coins = new_live["ignored_coins"]
+        if "leverage" in new_live:
+            self.leverage = new_live["leverage"]
+        if "max_n_cancellations_per_batch" in new_live:
+            self.max_n_cancellations_per_batch = new_live["max_n_cancellations_per_batch"]
+        if "max_n_creations_per_batch" in new_live:
+            self.max_n_creations_per_batch = new_live["max_n_creations_per_batch"]
+        if "max_n_restarts_per_day" in new_live:
+            self.max_n_restarts_per_day = new_live["max_n_restarts_per_day"]
+        if "minimum_coin_age_days" in new_live:
+            self.minimum_coin_age_days = new_live["minimum_coin_age_days"]
+        if "ohlcvs_1m_rolling_window_days" in new_live:
+            self.ohlcvs_1m_rolling_window_days = new_live["ohlcvs_1m_rolling_window_days"]
+        if "ohlcvs_1m_update_after_minutes" in new_live:
+            self.ohlcvs_1m_update_after_minutes = new_live["ohlcvs_1m_update_after_minutes"]
+        if "pnls_max_lookback_days" in new_live:
+            self.pnls_max_lookback_days = new_live["pnls_max_lookback_days"]
+        if "price_distance_threshold" in new_live:
+            self.price_distance_threshold = new_live["price_distance_threshold"]
+        if "time_in_force" in new_live:
+            self.time_in_force = new_live["time_in_force"]
+        if "user" in new_live:
+            self.user = new_live["user"]
     
     @property
     def approved_coins(self): return self._approved_coins
@@ -1173,14 +1218,10 @@ class Live:
     def ohlcvs_1m_rolling_window_days(self): return self._ohlcvs_1m_rolling_window_days
     @property
     def ohlcvs_1m_update_after_minutes(self): return self._ohlcvs_1m_update_after_minutes
-    # @property
-    # def ohlcv_rolling_window(self): return self._ohlcv_rolling_window
     @property
     def pnls_max_lookback_days(self): return self._pnls_max_lookback_days
     @property
     def price_distance_threshold(self): return self._price_distance_threshold
-    # @property
-    # def relative_volume_filter_clip_pct(self): return self._relative_volume_filter_clip_pct
     @property
     def time_in_force(self): return self._time_in_force
     @property
@@ -1188,8 +1229,8 @@ class Live:
 
     @approved_coins.setter
     def approved_coins(self, new_approved_coins):
-        self._approved_coins = new_approved_coins
-        self._live["approved_coins"] = self._approved_coins
+        self._approved_coins.approved_coins = new_approved_coins
+        self._live["approved_coins"] = self._approved_coins.approved_coins
     @auto_gs.setter
     def auto_gs(self, new_auto_gs):
         self._auto_gs = new_auto_gs
@@ -1220,8 +1261,8 @@ class Live:
         self._live["forced_mode_short"] = self._forced_mode_short
     @ignored_coins.setter
     def ignored_coins(self, new_ignored_coins):
-        self._ignored_coins = new_ignored_coins
-        self._live["ignored_coins"] = self._ignored_coins
+        self._ignored_coins.ignored_coins = new_ignored_coins
+        self._live["ignored_coins"] = self._ignored_coins.ignored_coins
     @leverage.setter
     def leverage(self, new_leverage):
         self._leverage = new_leverage
@@ -1250,10 +1291,6 @@ class Live:
     def ohlcvs_1m_update_after_minutes(self, new_ohlcvs_1m_update_after_minutes):
         self._ohlcvs_1m_update_after_minutes = new_ohlcvs_1m_update_after_minutes
         self._live["ohlcvs_1m_update_after_minutes"] = self._ohlcvs_1m_update_after_minutes
-    # @ohlcv_rolling_window.setter
-    # def ohlcv_rolling_window(self, new_ohlcv_rolling_window):
-    #     self._ohlcv_rolling_window = new_ohlcv_rolling_window
-    #     self._live["ohlcv_rolling_window"] = self._ohlcv_rolling_window
     @pnls_max_lookback_days.setter
     def pnls_max_lookback_days(self, new_pnls_max_lookback_days):
         self._pnls_max_lookback_days = new_pnls_max_lookback_days
@@ -1262,10 +1299,6 @@ class Live:
     def price_distance_threshold(self, new_price_distance_threshold):
         self._price_distance_threshold = new_price_distance_threshold
         self._live["price_distance_threshold"] = self._price_distance_threshold
-    # @relative_volume_filter_clip_pct.setter
-    # def relative_volume_filter_clip_pct(self, new_relative_volume_filter_clip_pct):
-    #     self._relative_volume_filter_clip_pct = new_relative_volume_filter_clip_pct
-    #     self._live["relative_volume_filter_clip_pct"] = self._relative_volume_filter_clip_pct
     @time_in_force.setter
     def time_in_force(self, new_time_in_force):
         self._time_in_force = new_time_in_force
@@ -1306,23 +1339,22 @@ class Optimize:
     def optimize(self): return self._optimize
     @optimize.setter
     def optimize(self, new_optimize):
-        self._optimize = new_optimize
-        if "bounds" in self._optimize:
-            self.bounds = self._optimize["bounds"]
-        if "crossover_probability" in self._optimize:
-            self._crossover_probability = self._optimize["crossover_probability"]
-        if "iters" in self._optimize:
-            self._iters = self._optimize["iters"]
-        if "limits" in self._optimize:
-            self.limits = self._optimize["limits"]
-        if "mutation_probability" in self._optimize:
-            self._mutation_probability = self._optimize["mutation_probability"]
-        if "n_cpus" in self._optimize:
-            self._n_cpus = self._optimize["n_cpus"]
-        if "population_size" in self._optimize:
-            self._population_size = self._optimize["population_size"]
-        if "scoring" in self._optimize:
-            self._scoring = self._optimize["scoring"]
+        if "bounds" in new_optimize:
+            self.bounds = new_optimize["bounds"]
+        if "crossover_probability" in new_optimize:
+            self.crossover_probability = new_optimize["crossover_probability"]
+        if "iters" in new_optimize:
+            self.iters = new_optimize["iters"]
+        if "limits" in new_optimize:
+            self.limits = new_optimize["limits"]
+        if "mutation_probability" in new_optimize:
+            self.mutation_probability = new_optimize["mutation_probability"]
+        if "n_cpus" in new_optimize:
+            self.n_cpus = new_optimize["n_cpus"]
+        if "population_size" in new_optimize:
+            self.population_size = new_optimize["population_size"]
+        if "scoring" in new_optimize:
+            self.scoring = new_optimize["scoring"]
     
     @property
     def bounds(self): return self._bounds
@@ -1397,13 +1429,12 @@ class Limits:
     def limits(self): return self._limits
     @limits.setter
     def limits(self, new_limits):
-        self._limits = new_limits
-        if "lower_bound_drawdown_worst" in self._limits:
-            self._lower_bound_drawdown_worst = self._limits["lower_bound_drawdown_worst"]
-        if "lower_bound_equity_balance_diff_mean" in self._limits:
-            self._lower_bound_equity_balance_diff_mean = self._limits["lower_bound_equity_balance_diff_mean"]
-        if "lower_bound_loss_profit_ratio" in self._limits:
-            self._lower_bound_loss_profit_ratio = self._limits["lower_bound_loss_profit_ratio"]
+        if "lower_bound_drawdown_worst" in new_limits:
+            self.lower_bound_drawdown_worst = new_limits["lower_bound_drawdown_worst"]
+        if "lower_bound_equity_balance_diff_mean" in new_limits:
+            self.lower_bound_equity_balance_diff_mean = new_limits["lower_bound_equity_balance_diff_mean"]
+        if "lower_bound_loss_profit_ratio" in new_limits:
+            self.lower_bound_loss_profit_ratio = new_limits["lower_bound_loss_profit_ratio"]
     
     @property
     def lower_bound_drawdown_worst(self): return self._lower_bound_drawdown_worst
@@ -1741,159 +1772,158 @@ class Bounds:
     
     @bounds.setter
     def bounds(self, new_bounds):
-        self._bounds = new_bounds
-        if "long_close_grid_markup_range" in self._bounds:
-            self._long_close_grid_markup_range_0 = self._bounds["long_close_grid_markup_range"][0]
-            self._long_close_grid_markup_range_1 = self._bounds["long_close_grid_markup_range"][1]
-        if "long_close_grid_min_markup" in self._bounds:
-            self._long_close_grid_min_markup_0 = self._bounds["long_close_grid_min_markup"][0]
-            self._long_close_grid_min_markup_1 = self._bounds["long_close_grid_min_markup"][1]
-        if "long_close_grid_qty_pct" in self._bounds:
-            self._long_close_grid_qty_pct_0 = self._bounds["long_close_grid_qty_pct"][0]
-            self._long_close_grid_qty_pct_1 = self._bounds["long_close_grid_qty_pct"][1]
-        if "long_close_trailing_grid_ratio" in self._bounds:
-            self._long_close_trailing_grid_ratio_0 = self._bounds["long_close_trailing_grid_ratio"][0]
-            self._long_close_trailing_grid_ratio_1 = self._bounds["long_close_trailing_grid_ratio"][1]
-        if "long_close_trailing_qty_pct" in self._bounds:
-            self._long_close_trailing_qty_pct_0 = self._bounds["long_close_trailing_qty_pct"][0]
-            self._long_close_trailing_qty_pct_1 = self._bounds["long_close_trailing_qty_pct"][1]
-        if "long_close_trailing_retracement_pct" in self._bounds:
-            self._long_close_trailing_retracement_pct_0 = self._bounds["long_close_trailing_retracement_pct"][0]
-            self._long_close_trailing_retracement_pct_1 = self._bounds["long_close_trailing_retracement_pct"][1]
-        if "long_close_trailing_threshold_pct" in self._bounds:
-            self._long_close_trailing_threshold_pct_0 = self._bounds["long_close_trailing_threshold_pct"][0]
-            self._long_close_trailing_threshold_pct_1 = self._bounds["long_close_trailing_threshold_pct"][1]
-        if "long_ema_span_0" in self._bounds:
-            self._long_ema_span_0_0 = self._bounds["long_ema_span_0"][0]
-            self._long_ema_span_0_1 = self._bounds["long_ema_span_0"][1]
-        if "long_ema_span_1" in self._bounds:
-            self._long_ema_span_1_0 = self._bounds["long_ema_span_1"][0]
-            self._long_ema_span_1_1 = self._bounds["long_ema_span_1"][1]
-        if "long_entry_grid_double_down_factor" in self._bounds:
-            self._long_entry_grid_double_down_factor_0 = self._bounds["long_entry_grid_double_down_factor"][0]
-            self._long_entry_grid_double_down_factor_1 = self._bounds["long_entry_grid_double_down_factor"][1]
-        if "long_entry_grid_spacing_pct" in self._bounds:
-            self._long_entry_grid_spacing_pct_0 = self._bounds["long_entry_grid_spacing_pct"][0]
-            self._long_entry_grid_spacing_pct_1 = self._bounds["long_entry_grid_spacing_pct"][1]
-        if "long_entry_grid_spacing_weight" in self._bounds:
-            self._long_entry_grid_spacing_weight_0 = self._bounds["long_entry_grid_spacing_weight"][0]
-            self._long_entry_grid_spacing_weight_1 = self._bounds["long_entry_grid_spacing_weight"][1]
-        if "long_entry_initial_ema_dist" in self._bounds:
-            self._long_entry_initial_ema_dist_0 = self._bounds["long_entry_initial_ema_dist"][0]
-            self._long_entry_initial_ema_dist_1 = self._bounds["long_entry_initial_ema_dist"][1]
-        if "long_entry_initial_qty_pct" in self._bounds:
-            self._long_entry_initial_qty_pct_0 = self._bounds["long_entry_initial_qty_pct"][0]
-            self._long_entry_initial_qty_pct_1 = self._bounds["long_entry_initial_qty_pct"][1]
-        if "long_entry_trailing_grid_ratio" in self._bounds:
-            self._long_entry_trailing_grid_ratio_0 = self._bounds["long_entry_trailing_grid_ratio"][0]
-            self._long_entry_trailing_grid_ratio_1 = self._bounds["long_entry_trailing_grid_ratio"][1]
-        if "long_entry_trailing_retracement_pct" in self._bounds:
-            self._long_entry_trailing_retracement_pct_0 = self._bounds["long_entry_trailing_retracement_pct"][0]
-            self._long_entry_trailing_retracement_pct_1 = self._bounds["long_entry_trailing_retracement_pct"][1]
-        if "long_entry_trailing_threshold_pct" in self._bounds:
-            self._long_entry_trailing_threshold_pct_0 = self._bounds["long_entry_trailing_threshold_pct"][0]
-            self._long_entry_trailing_threshold_pct_1 = self._bounds["long_entry_trailing_threshold_pct"][1]
-        if "long_filter_relative_volume_clip_pct" in self._bounds:
-            self._long_filter_relative_volume_clip_pct_0 = self._bounds["long_filter_relative_volume_clip_pct"][0]
-            self._long_filter_relative_volume_clip_pct_1 = self._bounds["long_filter_relative_volume_clip_pct"][1]
-        if "long_filter_rolling_window" in self._bounds:
-            self._long_filter_rolling_window_0 = self._bounds["long_filter_rolling_window"][0]
-            self._long_filter_rolling_window_1 = self._bounds["long_filter_rolling_window"][1]
-        if "long_n_positions" in self._bounds:
-            self._long_n_positions_0 = self._bounds["long_n_positions"][0]
-            self._long_n_positions_1 = self._bounds["long_n_positions"][1]
-        if "long_total_wallet_exposure_limit" in self._bounds:
-            self._long_total_wallet_exposure_limit_0 = self._bounds["long_total_wallet_exposure_limit"][0]
-            self._long_total_wallet_exposure_limit_1 = self._bounds["long_total_wallet_exposure_limit"][1]
-        if "long_unstuck_close_pct" in self._bounds:
-            self._long_unstuck_close_pct_0 = self._bounds["long_unstuck_close_pct"][0]
-            self._long_unstuck_close_pct_1 = self._bounds["long_unstuck_close_pct"][1]
-        if "long_unstuck_ema_dist" in self._bounds:
-            self._long_unstuck_ema_dist_0 = self._bounds["long_unstuck_ema_dist"][0]
-            self._long_unstuck_ema_dist_1 = self._bounds["long_unstuck_ema_dist"][1]
-        if "long_unstuck_loss_allowance_pct" in self._bounds:
-            self._long_unstuck_loss_allowance_pct_0 = self._bounds["long_unstuck_loss_allowance_pct"][0]
-            self._long_unstuck_loss_allowance_pct_1 = self._bounds["long_unstuck_loss_allowance_pct"][1]
-        if "long_unstuck_threshold" in self._bounds:
-            self._long_unstuck_threshold_0 = self._bounds["long_unstuck_threshold"][0]
-            self._long_unstuck_threshold_1 = self._bounds["long_unstuck_threshold"][1]
+        if "long_close_grid_markup_range" in new_bounds:
+            self.long_close_grid_markup_range_0 = new_bounds["long_close_grid_markup_range"][0]
+            self.long_close_grid_markup_range_1 = new_bounds["long_close_grid_markup_range"][1]
+        if "long_close_grid_min_markup" in new_bounds:
+            self.long_close_grid_min_markup_0 = new_bounds["long_close_grid_min_markup"][0]
+            self.long_close_grid_min_markup_1 = new_bounds["long_close_grid_min_markup"][1]
+        if "long_close_grid_qty_pct" in new_bounds:
+            self.long_close_grid_qty_pct_0 = new_bounds["long_close_grid_qty_pct"][0]
+            self.long_close_grid_qty_pct_1 = new_bounds["long_close_grid_qty_pct"][1]
+        if "long_close_trailing_grid_ratio" in new_bounds:
+            self.long_close_trailing_grid_ratio_0 = new_bounds["long_close_trailing_grid_ratio"][0]
+            self.long_close_trailing_grid_ratio_1 = new_bounds["long_close_trailing_grid_ratio"][1]
+        if "long_close_trailing_qty_pct" in new_bounds:
+            self.long_close_trailing_qty_pct_0 = new_bounds["long_close_trailing_qty_pct"][0]
+            self.long_close_trailing_qty_pct_1 = new_bounds["long_close_trailing_qty_pct"][1]
+        if "long_close_trailing_retracement_pct" in new_bounds:
+            self.long_close_trailing_retracement_pct_0 = new_bounds["long_close_trailing_retracement_pct"][0]
+            self.long_close_trailing_retracement_pct_1 = new_bounds["long_close_trailing_retracement_pct"][1]
+        if "long_close_trailing_threshold_pct" in new_bounds:
+            self.long_close_trailing_threshold_pct_0 = new_bounds["long_close_trailing_threshold_pct"][0]
+            self.long_close_trailing_threshold_pct_1 = new_bounds["long_close_trailing_threshold_pct"][1]
+        if "long_ema_span_0" in new_bounds:
+            self.long_ema_span_0_0 = new_bounds["long_ema_span_0"][0]
+            self.long_ema_span_0_1 = new_bounds["long_ema_span_0"][1]
+        if "long_ema_span_1" in new_bounds:
+            self.long_ema_span_1_0 = new_bounds["long_ema_span_1"][0]
+            self.long_ema_span_1_1 = new_bounds["long_ema_span_1"][1]
+        if "long_entry_grid_double_down_factor" in new_bounds:
+            self.long_entry_grid_double_down_factor_0 = new_bounds["long_entry_grid_double_down_factor"][0]
+            self.long_entry_grid_double_down_factor_1 = new_bounds["long_entry_grid_double_down_factor"][1]
+        if "long_entry_grid_spacing_pct" in new_bounds:
+            self.long_entry_grid_spacing_pct_0 = new_bounds["long_entry_grid_spacing_pct"][0]
+            self.long_entry_grid_spacing_pct_1 = new_bounds["long_entry_grid_spacing_pct"][1]
+        if "long_entry_grid_spacing_weight" in new_bounds:
+            self.long_entry_grid_spacing_weight_0 = new_bounds["long_entry_grid_spacing_weight"][0]
+            self.long_entry_grid_spacing_weight_1 = new_bounds["long_entry_grid_spacing_weight"][1]
+        if "long_entry_initial_ema_dist" in new_bounds:
+            self.long_entry_initial_ema_dist_0 = new_bounds["long_entry_initial_ema_dist"][0]
+            self.long_entry_initial_ema_dist_1 = new_bounds["long_entry_initial_ema_dist"][1]
+        if "long_entry_initial_qty_pct" in new_bounds:
+            self.long_entry_initial_qty_pct_0 = new_bounds["long_entry_initial_qty_pct"][0]
+            self.long_entry_initial_qty_pct_1 = new_bounds["long_entry_initial_qty_pct"][1]
+        if "long_entry_trailing_grid_ratio" in new_bounds:
+            self.long_entry_trailing_grid_ratio_0 = new_bounds["long_entry_trailing_grid_ratio"][0]
+            self.long_entry_trailing_grid_ratio_1 = new_bounds["long_entry_trailing_grid_ratio"][1]
+        if "long_entry_trailing_retracement_pct" in new_bounds:
+            self.long_entry_trailing_retracement_pct_0 = new_bounds["long_entry_trailing_retracement_pct"][0]
+            self.long_entry_trailing_retracement_pct_1 = new_bounds["long_entry_trailing_retracement_pct"][1]
+        if "long_entry_trailing_threshold_pct" in new_bounds:
+            self.long_entry_trailing_threshold_pct_0 = new_bounds["long_entry_trailing_threshold_pct"][0]
+            self.long_entry_trailing_threshold_pct_1 = new_bounds["long_entry_trailing_threshold_pct"][1]
+        if "long_filter_relative_volume_clip_pct" in new_bounds:
+            self.long_filter_relative_volume_clip_pct_0 = new_bounds["long_filter_relative_volume_clip_pct"][0]
+            self.long_filter_relative_volume_clip_pct_1 = new_bounds["long_filter_relative_volume_clip_pct"][1]
+        if "long_filter_rolling_window" in new_bounds:
+            self.long_filter_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
+            self.long_filter_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
+        if "long_n_positions" in new_bounds:
+            self.long_n_positions_0 = new_bounds["long_n_positions"][0]
+            self.long_n_positions_1 = new_bounds["long_n_positions"][1]
+        if "long_total_wallet_exposure_limit" in new_bounds:
+            self.long_total_wallet_exposure_limit_0 = new_bounds["long_total_wallet_exposure_limit"][0]
+            self.long_total_wallet_exposure_limit_1 = new_bounds["long_total_wallet_exposure_limit"][1]
+        if "long_unstuck_close_pct" in new_bounds:
+            self.long_unstuck_close_pct_0 = new_bounds["long_unstuck_close_pct"][0]
+            self.long_unstuck_close_pct_1 = new_bounds["long_unstuck_close_pct"][1]
+        if "long_unstuck_ema_dist" in new_bounds:
+            self.long_unstuck_ema_dist_0 = new_bounds["long_unstuck_ema_dist"][0]
+            self.long_unstuck_ema_dist_1 = new_bounds["long_unstuck_ema_dist"][1]
+        if "long_unstuck_loss_allowance_pct" in new_bounds:
+            self.long_unstuck_loss_allowance_pct_0 = new_bounds["long_unstuck_loss_allowance_pct"][0]
+            self.long_unstuck_loss_allowance_pct_1 = new_bounds["long_unstuck_loss_allowance_pct"][1]
+        if "long_unstuck_threshold" in new_bounds:
+            self.long_unstuck_threshold_0 = new_bounds["long_unstuck_threshold"][0]
+            self.long_unstuck_threshold_1 = new_bounds["long_unstuck_threshold"][1]
     
         # Short parameters
-        if "short_close_grid_markup_range" in self._bounds:
-            self._short_close_grid_markup_range_0 = self._bounds["short_close_grid_markup_range"][0]
-            self._short_close_grid_markup_range_1 = self._bounds["short_close_grid_markup_range"][1]
-        if "short_close_grid_min_markup" in self._bounds:
-            self._short_close_grid_min_markup_0 = self._bounds["short_close_grid_min_markup"][0]
-            self._short_close_grid_min_markup_1 = self._bounds["short_close_grid_min_markup"][1]
-        if "short_close_grid_qty_pct" in self._bounds:
-            self._short_close_grid_qty_pct_0 = self._bounds["short_close_grid_qty_pct"][0]
-            self._short_close_grid_qty_pct_1 = self._bounds["short_close_grid_qty_pct"][1]
-        if "short_close_trailing_grid_ratio" in self._bounds:
-            self._short_close_trailing_grid_ratio_0 = self._bounds["short_close_trailing_grid_ratio"][0]
-            self._short_close_trailing_grid_ratio_1 = self._bounds["short_close_trailing_grid_ratio"][1]
-        if "short_close_trailing_qty_pct" in self._bounds:
-            self._short_close_trailing_qty_pct_0 = self._bounds["short_close_trailing_qty_pct"][0]
-            self._short_close_trailing_qty_pct_1 = self._bounds["short_close_trailing_qty_pct"][1]
-        if "short_close_trailing_retracement_pct" in self._bounds:
-            self._short_close_trailing_retracement_pct_0 = self._bounds["short_close_trailing_retracement_pct"][0]
-            self._short_close_trailing_retracement_pct_1 = self._bounds["short_close_trailing_retracement_pct"][1]
-        if "short_close_trailing_threshold_pct" in self._bounds:
-            self._short_close_trailing_threshold_pct_0 = self._bounds["short_close_trailing_threshold_pct"][0]
-            self._short_close_trailing_threshold_pct_1 = self._bounds["short_close_trailing_threshold_pct"][1]
-        if "short_ema_span_0" in self._bounds:
-            self._short_ema_span_0_0 = self._bounds["short_ema_span_0"][0]
-            self._short_ema_span_0_1 = self._bounds["short_ema_span_0"][1]
-        if "short_ema_span_1" in self._bounds:
-            self._short_ema_span_1_0 = self._bounds["short_ema_span_1"][0]
-            self._short_ema_span_1_1 = self._bounds["short_ema_span_1"][1]
-        if "short_entry_grid_double_down_factor" in self._bounds:
-            self._short_entry_grid_double_down_factor_0 = self._bounds["short_entry_grid_double_down_factor"][0]
-            self._short_entry_grid_double_down_factor_1 = self._bounds["short_entry_grid_double_down_factor"][1]
-        if "short_entry_grid_spacing_pct" in self._bounds:
-            self._short_entry_grid_spacing_pct_0 = self._bounds["short_entry_grid_spacing_pct"][0]
-            self._short_entry_grid_spacing_pct_1 = self._bounds["short_entry_grid_spacing_pct"][1]
-        if "short_entry_grid_spacing_weight" in self._bounds:
-            self._short_entry_grid_spacing_weight_0 = self._bounds["short_entry_grid_spacing_weight"][0]
-            self._short_entry_grid_spacing_weight_1 = self._bounds["short_entry_grid_spacing_weight"][1]
-        if "short_entry_initial_ema_dist" in self._bounds:
-            self._short_entry_initial_ema_dist_0 = self._bounds["short_entry_initial_ema_dist"][0]
-            self._short_entry_initial_ema_dist_1 = self._bounds["short_entry_initial_ema_dist"][1]
-        if "short_entry_initial_qty_pct" in self._bounds:
-            self._short_entry_initial_qty_pct_0 = self._bounds["short_entry_initial_qty_pct"][0]
-            self._short_entry_initial_qty_pct_1 = self._bounds["short_entry_initial_qty_pct"][1]
-        if "short_entry_trailing_grid_ratio" in self._bounds:
-            self._short_entry_trailing_grid_ratio_0 = self._bounds["short_entry_trailing_grid_ratio"][0]
-            self._short_entry_trailing_grid_ratio_1 = self._bounds["short_entry_trailing_grid_ratio"][1]
-        if "short_entry_trailing_retracement_pct" in self._bounds:
-            self._short_entry_trailing_retracement_pct_0 = self._bounds["short_entry_trailing_retracement_pct"][0]
-            self._short_entry_trailing_retracement_pct_1 = self._bounds["short_entry_trailing_retracement_pct"][1]
-        if "short_entry_trailing_threshold_pct" in self._bounds:
-            self._short_entry_trailing_threshold_pct_0 = self._bounds["short_entry_trailing_threshold_pct"][0]
-            self._short_entry_trailing_threshold_pct_1 = self._bounds["short_entry_trailing_threshold_pct"][1]
-        if "short_filter_relative_volume_clip_pct" in self._bounds:
-            self._short_filter_relative_volume_clip_pct_0 = self._bounds["short_filter_relative_volume_clip_pct"][0]
-            self._short_filter_relative_volume_clip_pct_1 = self._bounds["short_filter_relative_volume_clip_pct"][1]
-        if "short_filter_rolling_window" in self._bounds:
-            self._short_filter_rolling_window_0 = self._bounds["short_filter_rolling_window"][0]
-            self._short_filter_rolling_window_1 = self._bounds["short_filter_rolling_window"][1]
-        if "short_n_positions" in self._bounds:
-            self._short_n_positions_0 = self._bounds["short_n_positions"][0]
-            self._short_n_positions_1 = self._bounds["short_n_positions"][1]
-        if "short_total_wallet_exposure_limit" in self._bounds:
-            self._short_total_wallet_exposure_limit_0 = self._bounds["short_total_wallet_exposure_limit"][0]
-            self._short_total_wallet_exposure_limit_1 = self._bounds["short_total_wallet_exposure_limit"][1]
-        if "short_unstuck_close_pct" in self._bounds:
-            self._short_unstuck_close_pct_0 = self._bounds["short_unstuck_close_pct"][0]
-            self._short_unstuck_close_pct_1 = self._bounds["short_unstuck_close_pct"][1]
-        if "short_unstuck_ema_dist" in self._bounds:
-            self._short_unstuck_ema_dist_0 = self._bounds["short_unstuck_ema_dist"][0]
-            self._short_unstuck_ema_dist_1 = self._bounds["short_unstuck_ema_dist"][1]
-        if "short_unstuck_loss_allowance_pct" in self._bounds:
-            self._short_unstuck_loss_allowance_pct_0 = self._bounds["short_unstuck_loss_allowance_pct"][0]
-            self._short_unstuck_loss_allowance_pct_1 = self._bounds["short_unstuck_loss_allowance_pct"][1]
-        if "short_unstuck_threshold" in self._bounds:
-            self._short_unstuck_threshold_0 = self._bounds["short_unstuck_threshold"][0]
-            self._short_unstuck_threshold_1 = self._bounds["short_unstuck_threshold"][1]
+        if "short_close_grid_markup_range" in new_bounds:
+            self.short_close_grid_markup_range_0 = new_bounds["short_close_grid_markup_range"][0]
+            self.short_close_grid_markup_range_1 = new_bounds["short_close_grid_markup_range"][1]
+        if "short_close_grid_min_markup" in new_bounds:
+            self.short_close_grid_min_markup_0 = new_bounds["short_close_grid_min_markup"][0]
+            self.short_close_grid_min_markup_1 = new_bounds["short_close_grid_min_markup"][1]
+        if "short_close_grid_qty_pct" in new_bounds:
+            self.short_close_grid_qty_pct_0 = new_bounds["short_close_grid_qty_pct"][0]
+            self.short_close_grid_qty_pct_1 = new_bounds["short_close_grid_qty_pct"][1]
+        if "short_close_trailing_grid_ratio" in new_bounds:
+            self.short_close_trailing_grid_ratio_0 = new_bounds["short_close_trailing_grid_ratio"][0]
+            self.short_close_trailing_grid_ratio_1 = new_bounds["short_close_trailing_grid_ratio"][1]
+        if "short_close_trailing_qty_pct" in new_bounds:
+            self.short_close_trailing_qty_pct_0 = new_bounds["short_close_trailing_qty_pct"][0]
+            self.short_close_trailing_qty_pct_1 = new_bounds["short_close_trailing_qty_pct"][1]
+        if "short_close_trailing_retracement_pct" in new_bounds:
+            self.short_close_trailing_retracement_pct_0 = new_bounds["short_close_trailing_retracement_pct"][0]
+            self.short_close_trailing_retracement_pct_1 = new_bounds["short_close_trailing_retracement_pct"][1]
+        if "short_close_trailing_threshold_pct" in new_bounds:
+            self.short_close_trailing_threshold_pct_0 = new_bounds["short_close_trailing_threshold_pct"][0]
+            self.short_close_trailing_threshold_pct_1 = new_bounds["short_close_trailing_threshold_pct"][1]
+        if "short_ema_span_0" in new_bounds:
+            self.short_ema_span_0_0 = new_bounds["short_ema_span_0"][0]
+            self.short_ema_span_0_1 = new_bounds["short_ema_span_0"][1]
+        if "short_ema_span_1" in new_bounds:
+            self.short_ema_span_1_0 = new_bounds["short_ema_span_1"][0]
+            self.short_ema_span_1_1 = new_bounds["short_ema_span_1"][1]
+        if "short_entry_grid_double_down_factor" in new_bounds:
+            self.short_entry_grid_double_down_factor_0 = new_bounds["short_entry_grid_double_down_factor"][0]
+            self.short_entry_grid_double_down_factor_1 = new_bounds["short_entry_grid_double_down_factor"][1]
+        if "short_entry_grid_spacing_pct" in new_bounds:
+            self.short_entry_grid_spacing_pct_0 = new_bounds["short_entry_grid_spacing_pct"][0]
+            self.short_entry_grid_spacing_pct_1 = new_bounds["short_entry_grid_spacing_pct"][1]
+        if "short_entry_grid_spacing_weight" in new_bounds:
+            self.short_entry_grid_spacing_weight_0 = new_bounds["short_entry_grid_spacing_weight"][0]
+            self.short_entry_grid_spacing_weight_1 = new_bounds["short_entry_grid_spacing_weight"][1]
+        if "short_entry_initial_ema_dist" in new_bounds:
+            self.short_entry_initial_ema_dist_0 = new_bounds["short_entry_initial_ema_dist"][0]
+            self.short_entry_initial_ema_dist_1 = new_bounds["short_entry_initial_ema_dist"][1]
+        if "short_entry_initial_qty_pct" in new_bounds:
+            self.short_entry_initial_qty_pct_0 = new_bounds["short_entry_initial_qty_pct"][0]
+            self.short_entry_initial_qty_pct_1 = new_bounds["short_entry_initial_qty_pct"][1]
+        if "short_entry_trailing_grid_ratio" in new_bounds:
+            self.short_entry_trailing_grid_ratio_0 = new_bounds["short_entry_trailing_grid_ratio"][0]
+            self.short_entry_trailing_grid_ratio_1 = new_bounds["short_entry_trailing_grid_ratio"][1]
+        if "short_entry_trailing_retracement_pct" in new_bounds:
+            self.short_entry_trailing_retracement_pct_0 = new_bounds["short_entry_trailing_retracement_pct"][0]
+            self.short_entry_trailing_retracement_pct_1 = new_bounds["short_entry_trailing_retracement_pct"][1]
+        if "short_entry_trailing_threshold_pct" in new_bounds:
+            self.short_entry_trailing_threshold_pct_0 = new_bounds["short_entry_trailing_threshold_pct"][0]
+            self.short_entry_trailing_threshold_pct_1 = new_bounds["short_entry_trailing_threshold_pct"][1]
+        if "short_filter_relative_volume_clip_pct" in new_bounds:
+            self.short_filter_relative_volume_clip_pct_0 = new_bounds["short_filter_relative_volume_clip_pct"][0]
+            self.short_filter_relative_volume_clip_pct_1 = new_bounds["short_filter_relative_volume_clip_pct"][1]
+        if "short_filter_rolling_window" in new_bounds:
+            self.short_filter_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
+            self.short_filter_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
+        if "short_n_positions" in new_bounds:
+            self.short_n_positions_0 = new_bounds["short_n_positions"][0]
+            self.short_n_positions_1 = new_bounds["short_n_positions"][1]
+        if "short_total_wallet_exposure_limit" in new_bounds:
+            self.short_total_wallet_exposure_limit_0 = new_bounds["short_total_wallet_exposure_limit"][0]
+            self.short_total_wallet_exposure_limit_1 = new_bounds["short_total_wallet_exposure_limit"][1]
+        if "short_unstuck_close_pct" in new_bounds:
+            self.short_unstuck_close_pct_0 = new_bounds["short_unstuck_close_pct"][0]
+            self.short_unstuck_close_pct_1 = new_bounds["short_unstuck_close_pct"][1]
+        if "short_unstuck_ema_dist" in new_bounds:
+            self.short_unstuck_ema_dist_0 = new_bounds["short_unstuck_ema_dist"][0]
+            self.short_unstuck_ema_dist_1 = new_bounds["short_unstuck_ema_dist"][1]
+        if "short_unstuck_loss_allowance_pct" in new_bounds:
+            self.short_unstuck_loss_allowance_pct_0 = new_bounds["short_unstuck_loss_allowance_pct"][0]
+            self.short_unstuck_loss_allowance_pct_1 = new_bounds["short_unstuck_loss_allowance_pct"][1]
+        if "short_unstuck_threshold" in new_bounds:
+            self.short_unstuck_threshold_0 = new_bounds["short_unstuck_threshold"][0]
+            self.short_unstuck_threshold_1 = new_bounds["short_unstuck_threshold"][1]
         
     # Long parameters
     @property
@@ -2527,18 +2557,18 @@ class PBGui:
     @pbgui.setter
     def pbgui(self, new_pbgui):
         self._pbgui = new_pbgui
-        if "version" in self._pbgui:
-            self._version = self._pbgui["version"]
-        if "enabled_on" in self._pbgui:
-            self._enabled_on = self._pbgui["enabled_on"]
-        if "starting_config" in self._pbgui:
-            self._starting_config = self._pbgui["starting_config"]
-        if "market_cap" in self._pbgui:
-            self._market_cap = self._pbgui["market_cap"]
-        if "vol_mcap" in self._pbgui:
-            self._vol_mcap = self._pbgui["vol_mcap"]
-        if "dynamic_ignore" in self._pbgui:
-            self._dynamic_ignore = self._pbgui["dynamic_ignore"]
+        if "version" in new_pbgui:
+            self.version = new_pbgui["version"]
+        if "enabled_on" in new_pbgui:
+            self.enabled_on = new_pbgui["enabled_on"]
+        if "starting_config" in new_pbgui:
+            self.starting_config = new_pbgui["starting_config"]
+        if "market_cap" in new_pbgui:
+            self.market_cap = new_pbgui["market_cap"]
+        if "vol_mcap" in new_pbgui:
+            self.vol_mcap = new_pbgui["vol_mcap"]
+        if "dynamic_ignore" in new_pbgui:
+            self.dynamic_ignore = new_pbgui["dynamic_ignore"]
     
     @property
     def version(self): return self._version
@@ -2606,35 +2636,35 @@ class ConfigV7():
     @backtest.setter
     def backtest(self, new_value):
         self._backtest.backtest = new_value
-        self._config["backtest"] = new_value
+        self._config["backtest"] = self._backtest.backtest
 
     @property
     def bot(self): return self._bot
     @bot.setter
     def bot(self, new_value):
         self._bot.bot = new_value
-        self._config["bot"] = new_value
+        self._config["bot"] = self._bot.bot
 
     @property
     def live(self): return self._live
     @live.setter
     def live(self, new_value):
         self._live.live = new_value
-        self._config["live"] = new_value
+        self._config["live"] = self._live.live
 
     @property
     def optimize(self): return self._optimize
     @optimize.setter
     def optimize(self, new_value):
         self._optimize.optimize = new_value
-        self._config["optimize"] = new_value
+        self._config["optimize"] = self._optimize.optimize
 
     @property
     def pbgui(self): return self._pbgui
     @pbgui.setter
     def pbgui(self, new_value):
         self._pbgui.pbgui = new_value
-        self._config["pbgui"] = new_value
+        self._config["pbgui"] = self._pbgui.pbgui
 
     @property
     def config(self): return self._config
@@ -2657,34 +2687,12 @@ class ConfigV7():
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
-                    # config = f.read()
                     config = json.load(f)
-                if "backtest" in config:
-                    self.backtest = config["backtest"]
-                if "bot" in config:
-                    self.bot = config["bot"]
-                if "live" in config:
-                    self.live = config["live"]
-                    if "ohlcvs_1m_rolling_window_days" not in config["live"]:
-                        self.config["live"]["ohlcvs_1m_rolling_window_days"] = Live()._ohlcvs_1m_rolling_window_days
-                    if "ohlcvs_1m_rolling_window_days" not in config["live"]:
-                        self.config["live"]["ohlcvs_1m_update_after_minutes"] = Live()._ohlcvs_1m_update_after_minutes
-                if "optimize" in config:
-                    self.optimize = config["optimize"]
-                    # Fix for old optimizer configs
-                    if "long_filter_relative_volume_clip_pct" not in config["optimize"]["bounds"]:
-                        self.config["optimize"]["bounds"]["long_filter_relative_volume_clip_pct"] = [Bounds()._long_filter_relative_volume_clip_pct_0, Bounds()._long_filter_relative_volume_clip_pct_1]
-                    if "short_filter_relative_volume_clip_pct" not in config["optimize"]["bounds"]:
-                        self.config["optimize"]["bounds"]["short_filter_relative_volume_clip_pct"] = [Bounds()._short_filter_relative_volume_clip_pct_0, Bounds()._short_filter_relative_volume_clip_pct_1]
-                    if "long_filter_rolling_window" not in config["optimize"]["bounds"]:
-                        self.config["optimize"]["bounds"]["long_filter_rolling_window"] = [Bounds()._long_filter_rolling_window_0, Bounds()._long_filter_rolling_window_1]
-                    if "short_filter_rolling_window" not in config["optimize"]["bounds"]:
-                        self.config["optimize"]["bounds"]["short_filter_rolling_window"] = [Bounds()._short_filter_rolling_window_0, Bounds()._short_filter_rolling_window_1]
-                if "pbgui" in config:
-                    self.pbgui = config["pbgui"]
+                self.config = config
             except Exception as e:
                 print(f'Error loding v7 config: {e}')
                 traceback.print_exc()
+
 
     def save_config(self):
         if self._config != None and self._config_file != None:
