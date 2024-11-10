@@ -106,8 +106,8 @@ class V7Instance():
     def edit(self):
         # Change ignored_coins back to empty list if we changed it to a path
         if type(self.config.live.ignored_coins) == str:
-            self.config.live.ignored_coins["long"] = []
-            self.config.live.ignored_coins["short"] = []
+            self.config.live.ignored_coins.long = []
+            self.config.live.ignored_coins.short = []
         # Init coindata
         coindata = st.session_state.pbcoindata
         if coindata.exchange != self._users.find_exchange(self.user):
@@ -193,25 +193,25 @@ class V7Instance():
                 coindata.vol_mcap = self.config.pbgui.vol_mcap
         # Symbol config
         if "edit_run_v7_approved_coins_long" in st.session_state:
-            if st.session_state.edit_run_v7_approved_coins_long != self.config.live.approved_coins["long"]:
-                self.config.live.approved_coins["long"] = st.session_state.edit_run_v7_approved_coins_long
-                if 'All' in self.config.live.approved_coins["long"]:
-                    self.config.live.approved_coins["long"] = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins["long"]:
-                    self.config.live.approved_coins["long"] = coindata.symbols_cpt.copy()
+            if st.session_state.edit_run_v7_approved_coins_long != self.config.live.approved_coins.long:
+                self.config.live.approved_coins.long = st.session_state.edit_run_v7_approved_coins_long
+                if 'All' in self.config.live.approved_coins.long:
+                    self.config.live.approved_coins.long = coindata.symbols.copy()
+                elif 'CPT' in self.config.live.approved_coins.long:
+                    self.config.live.approved_coins.long = coindata.symbols_cpt.copy()
         if "edit_run_v7_approved_coins_short" in st.session_state:
-            if st.session_state.edit_run_v7_approved_coins_short != self.config.live.approved_coins["short"]:
-                self.config.live.approved_coins["short"] = st.session_state.edit_run_v7_approved_coins_short
-                if 'All' in self.config.live.approved_coins["short"]:
-                    self.config.live.approved_coins["short"] = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins["short"]:
-                    self.config.live.approved_coins["short"] = coindata.symbols_cpt.copy()
+            if st.session_state.edit_run_v7_approved_coins_short != self.config.live.approved_coins.short:
+                self.config.live.approved_coins.short = st.session_state.edit_run_v7_approved_coins_short
+                if 'All' in self.config.live.approved_coins.short:
+                    self.config.live.approved_coins.short = coindata.symbols.copy()
+                elif 'CPT' in self.config.live.approved_coins.short:
+                    self.config.live.approved_coins.short = coindata.symbols_cpt.copy()
         if "edit_run_v7_ignored_coins_long" in st.session_state:
-            if st.session_state.edit_run_v7_ignored_coins_long != self.config.live.ignored_coins["long"]:
-                self.config.live.ignored_coins["long"] = st.session_state.edit_run_v7_ignored_coins_long
+            if st.session_state.edit_run_v7_ignored_coins_long != self.config.live.ignored_coins.long:
+                self.config.live.ignored_coins.long = st.session_state.edit_run_v7_ignored_coins_long
         if "edit_run_v7_ignored_coins_short" in st.session_state:
-            if st.session_state.edit_run_v7_ignored_coins_short != self.config.live.ignored_coins["short"]:
-                self.config.live.ignored_coins["short"] = st.session_state.edit_run_v7_ignored_coins_short
+            if st.session_state.edit_run_v7_ignored_coins_short != self.config.live.ignored_coins.short:
+                self.config.live.ignored_coins.short = st.session_state.edit_run_v7_ignored_coins_short
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
@@ -286,50 +286,50 @@ class V7Instance():
             st.checkbox("empty_means_all_approved", value=self.config.live.empty_means_all_approved, help=pbgui_help.empty_means_all_approved, key="edit_run_v7_empty_means_all_approved")
         # Apply filters
         for symbol in coindata.ignored_coins:
-            if symbol not in self.config.live.ignored_coins["long"]:
-                self.config.live.ignored_coins["long"].append(symbol)
-            if symbol not in self.config.live.ignored_coins["short"]:
-                self.config.live.ignored_coins["short"].append(symbol)
-            if symbol in self.config.live.approved_coins["long"]:
-                self.config.live.approved_coins["long"].remove(symbol)
-            if symbol in self.config.live.approved_coins["short"]:
-                self.config.live.approved_coins["short"].remove(symbol)
+            if symbol not in self.config.live.ignored_coins.long:
+                self.config.live.ignored_coins.long.append(symbol)
+            if symbol not in self.config.live.ignored_coins.short:
+                self.config.live.ignored_coins.short.append(symbol)
+            if symbol in self.config.live.approved_coins.long:
+                self.config.live.approved_coins.long.remove(symbol)
+            if symbol in self.config.live.approved_coins.short:
+                self.config.live.approved_coins.short.remove(symbol)
         # Remove unavailable symbols
-        for symbol in self.config.live.approved_coins["long"].copy():
+        for symbol in self.config.live.approved_coins.long.copy():
             if symbol not in coindata.symbols:
-                self.config.live.approved_coins["long"].remove(symbol)
-        for symbol in self.config.live.approved_coins["short"].copy():
+                self.config.live.approved_coins.long.remove(symbol)
+        for symbol in self.config.live.approved_coins.short.copy():
             if symbol not in coindata.symbols:
-                self.config.live.approved_coins["short"].remove(symbol)
-        for symbol in self.config.live.ignored_coins["long"].copy():
+                self.config.live.approved_coins.short.remove(symbol)
+        for symbol in self.config.live.ignored_coins.long.copy():
             if symbol not in coindata.symbols:
-                self.config.live.ignored_coins["long"].remove(symbol)
-        for symbol in self.config.live.ignored_coins["short"].copy():
+                self.config.live.ignored_coins.long.remove(symbol)
+        for symbol in self.config.live.ignored_coins.short.copy():
             if symbol not in coindata.symbols:
-                self.config.live.ignored_coins["short"].remove(symbol)
+                self.config.live.ignored_coins.short.remove(symbol)
         # Remove from approved_coins when in ignored coins
-        for symbol in self.config.live.ignored_coins["long"]:
-            if symbol in self.config.live.approved_coins["long"]:
-                self.config.live.approved_coins["long"].remove(symbol)
-        for symbol in self.config.live.ignored_coins["short"]:
-            if symbol in self.config.live.approved_coins["short"]:
-                self.config.live.approved_coins["short"].remove(symbol)
+        for symbol in self.config.live.ignored_coins.long:
+            if symbol in self.config.live.approved_coins.long:
+                self.config.live.approved_coins.long.remove(symbol)
+        for symbol in self.config.live.ignored_coins.short:
+            if symbol in self.config.live.approved_coins.short:
+                self.config.live.approved_coins.short.remove(symbol)
         # Correct Display of Symbols
         if "edit_run_v7_approved_coins_long" in st.session_state:
-            st.session_state.edit_run_v7_approved_coins_long = self.config.live.approved_coins["long"]
+            st.session_state.edit_run_v7_approved_coins_long = self.config.live.approved_coins.long
         if "edit_run_v7_approved_coins_short" in st.session_state:
-            st.session_state.edit_run_v7_approved_coins_short = self.config.live.approved_coins["short"]
+            st.session_state.edit_run_v7_approved_coins_short = self.config.live.approved_coins.short
         if "edit_run_v7_ignored_coins_long" in st.session_state:
-            st.session_state.edit_run_v7_ignored_coins_long = self.config.live.ignored_coins["long"]
+            st.session_state.edit_run_v7_ignored_coins_long = self.config.live.ignored_coins.long
         if "edit_run_v7_ignored_coins_short" in st.session_state:
-            st.session_state.edit_run_v7_ignored_coins_short = self.config.live.ignored_coins["short"]
+            st.session_state.edit_run_v7_ignored_coins_short = self.config.live.ignored_coins.short
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('approved_coins_long', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins["long"], key="edit_run_v7_approved_coins_long", help=pbgui_help.approved_coins)
-            st.multiselect('ignored_symbols_long', coindata.symbols, default=self.config.live.ignored_coins["long"], key="edit_run_v7_ignored_coins_long", help=pbgui_help.ignored_coins)
+            st.multiselect('approved_coins_long', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.long, key="edit_run_v7_approved_coins_long", help=pbgui_help.approved_coins)
+            st.multiselect('ignored_symbols_long', coindata.symbols, default=self.config.live.ignored_coins.long, key="edit_run_v7_ignored_coins_long", help=pbgui_help.ignored_coins)
         with col2:
-            st.multiselect('approved_coins_short', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins["short"], key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
-            st.multiselect('ignored_symbols_short', coindata.symbols, default=self.config.live.ignored_coins["short"], key="edit_run_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
+            st.multiselect('approved_coins_short', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.short, key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
+            st.multiselect('ignored_symbols_short', coindata.symbols, default=self.config.live.ignored_coins.short, key="edit_run_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
         # Edit long / short
         self.config.bot.edit()
         # View log
