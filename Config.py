@@ -2546,6 +2546,7 @@ class PBGui:
             "enabled_on": self._enabled_on,
             "starting_config": self._starting_config,
             "market_cap": self._market_cap,
+            "vol_mcap": self._vol_mcap,
             "dynamic_ignore": self._dynamic_ignore,
         }
     
@@ -2556,7 +2557,6 @@ class PBGui:
     def pbgui(self): return self._pbgui
     @pbgui.setter
     def pbgui(self, new_pbgui):
-        self._pbgui = new_pbgui
         if "version" in new_pbgui:
             self.version = new_pbgui["version"]
         if "enabled_on" in new_pbgui:
