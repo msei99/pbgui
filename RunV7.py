@@ -105,7 +105,7 @@ class V7Instance():
 
     def edit(self):
         # Change ignored_coins back to empty list if we changed it to a path
-        if type(self.config.live.ignored_coins) == str:
+        if type(self.config.live.ignored_coins.long) == str:
             self.config.live.ignored_coins.long = []
             self.config.live.ignored_coins.short = []
         # Init coindata
