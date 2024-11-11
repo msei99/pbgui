@@ -6,7 +6,8 @@ import uuid
 import requests
 import configparser
 import os
-from pathlib import Path, PurePath
+from pathlib import Path
+from pbgui_purefunc import load_ini, save_ini
 
 @st.dialog("Select file")
 def change_ini(section, parameter):
@@ -14,32 +15,13 @@ def change_ini(section, parameter):
     col1, col2 = st.columns([1,1])
     with col1:
         if st.button(":green[Yes]"):
-            filename = str(Path(filename).absolute())
+            filename = os.path.abspath(filename)
             st.session_state[parameter] = filename
             save_ini(section, parameter, filename)
             st.rerun()
     with col2:
         if st.button(":red[No]"):
             st.rerun()
-
-def save_ini(section : str, parameter : str, value : str):
-    pb_config = configparser.ConfigParser()
-    pb_config.read('pbgui.ini')
-    if not pb_config.has_section(section):
-        pb_config.add_section(section)
-    pb_config.set(section, parameter, value)
-    with open('pbgui.ini', 'w') as pbgui_configfile:
-        pb_config.write(pbgui_configfile)
-
-def load_ini(section : str, parameter : str):
-    if parameter not in st.session_state:
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option(section, parameter):
-            st.session_state[parameter] = pb_config.get(section, parameter)
-        else:
-            st.session_state[parameter] = ""
-    return st.session_state[parameter]
 
 def pbdir(): return load_ini("main", "pbdir")
 
