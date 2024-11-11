@@ -96,29 +96,6 @@
         chdir: "{{ install_dir }}/pbgui"
       listen: "restart pb6"
 
-    - name: Get files in a folder
-      find:
-        paths: "{{ install_dir }}/pb7/passivbot-rust/src"
-      register: found_files
-      listen: "restart pb7"
-
-    - name: Get latest src file
-      set_fact:
-        latest_file: "{{ found_files.files | sort(attribute='mtime',reverse=true) | first }}"
-      listen: "restart pb7"
-    
-    - name: get mtime of libpassivbot_rust.so
-      stat:
-        path: "{{ install_dir }}/pb7/passivbot-rust/target/release/libpassivbot_rust.so"
-      register: libpassivbot
-      listen: "restart pb7"
-
-    - name: Check if rust build is required
-      set_fact:
-        rust_build: "{{ libpassivbot.stat.mtime > latest_file.mtime }}"
-      when: libpassivbot.stat.exists == true
-      listen: "restart pb7"
-
     - name: Build passivbot-rust with maturin
       shell: |
         source "{{ install_dir }}/venv_pb7/bin/activate"
@@ -127,7 +104,6 @@
         chdir: "{{ install_dir }}/pb7/passivbot-rust"
         executable: /bin/bash
       register: maturin_result
-      when: libpassivbot.stat.exists == false or rust_build == false
       listen: "restart pb7"
 
     - name: kill all pb7 processes
