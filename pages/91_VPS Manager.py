@@ -189,11 +189,20 @@ def manage_vps():
     # Navigation
     with st.sidebar:
         st.checkbox("Debug", key="setup_debug")
-        if st.button(":material/refresh:"):
-            st.rerun()
-        if st.button(":material/home:"):
-            del st.session_state.manage_vps
-            st.rerun()
+        col1, col2, col3 = st.columns([1, 1, 2])
+        with col1:
+            if st.button(":material/refresh:"):
+                st.rerun()
+        with col2:
+            if st.button(":material/home:"):
+                del st.session_state.manage_vps
+                st.rerun()
+        with col3:
+            if st.button(":material/delete:"):
+                vps.delete()
+                del st.session_state.vpsmanager
+                del st.session_state.manage_vps
+                st.rerun()
         if st.button("Initialize"):
             st.session_state.init_vps = vps
             del st.session_state.manage_vps

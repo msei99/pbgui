@@ -254,6 +254,10 @@ class VPS:
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
     
+    def delete(self):
+        vps_path = Path(f'{PBGDIR}/data/vpsmanager/hosts/{self.hostname}')
+        shutil.rmtree(vps_path, ignore_errors=True)
+    
 class VPSManager:
     def __init__(self):
         self.vpss = []
@@ -269,7 +273,7 @@ class VPSManager:
                 v.path = Path(host)
                 v.load()
                 self.vpss.append(v)
-        # sorrt vpss by hostname
+        # sort vpss by hostname
         self.vpss.sort(key=lambda x: x.hostname)
 
     def add_vps(self):
