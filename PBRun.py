@@ -577,9 +577,7 @@ class RunV7():
 
     def watch_dynamic(self):
         if self.dynamic_ignore is not None:
-            if self.dynamic_ignore.watch():
-                self.stop()
-                self.start()
+            self.dynamic_ignore.watch()
 
     def is_running(self):
         if self.pid():
