@@ -798,7 +798,11 @@ class PBRun():
         """Check if apt-get dist-upgrade -s finds upgrades available"""
         my_env = os.environ.copy()
         my_env["LANG"] = 'C'
-        apt_upgrade = subprocess.run(["apt-get", "dist-upgrade", "-s"], stdout=subprocess.PIPE, text=True, env=my_env)
+        try:
+            apt_upgrade = subprocess.run(["apt-get", "dist-upgrade", "-s"], stdout=subprocess.PIPE, text=True, env=my_env)
+        except Exception as e:
+            self.upgrades = "N/A"
+            return
         match = re.search(r"(\d+) upgraded", apt_upgrade.stdout)
         if match:
             self.upgrades = match.group(1)
