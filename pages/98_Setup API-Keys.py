@@ -139,6 +139,7 @@ def select_user():
     users = st.session_state.users
     instances = st.session_state.pbgui_instances
     multi_instances = st.session_state.multi_instances
+    v7_instances = st.session_state.v7_instances
     if not "ed_user_key" in st.session_state:
         st.session_state.ed_user_key = 0
     with st.sidebar:
@@ -152,12 +153,12 @@ def select_user():
                 st.session_state.edit_user = users.users[row]
                 st.rerun()
             if "Delete" in ed["edited_rows"][row]:
-                if not instances.is_user_used(users.users[row].name) and not multi_instances.is_user_used(users.users[row].name):
+                if not instances.is_user_used(users.users[row].name) and not multi_instances.is_user_used(users.users[row].name) and not v7_instances.is_user_used(users.users[row].name):
                     delete_user(users.users[row].name)
     d = []
     for id, user in enumerate(users):
         in_use = False
-        if instances.is_user_used(user.name) or multi_instances.is_user_used(user.name):
+        if instances.is_user_used(user.name) or multi_instances.is_user_used(user.name) or v7_instances.is_user_used(user.name):
             in_use = None
         d.append({
             'id': id,
