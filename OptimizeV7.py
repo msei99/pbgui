@@ -43,6 +43,12 @@ class OptimizeV7QueueItem:
         if self.log:
             if self.log.exists():
                 with open(self.log, 'r', encoding='utf-8') as f:
+                    #load max. 100 kilobytes from behind
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    f.seek(0, os.SEEK_SET)
+                    if size > 102400:
+                        f.seek(size-102400)
                     return f.read()
 
     @st.fragment

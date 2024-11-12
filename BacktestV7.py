@@ -45,6 +45,12 @@ class BacktestV7QueueItem():
         if self.log:
             if self.log.exists():
                 with open(self.log, 'r', encoding='utf-8') as f:
+                    #load max. 100 kilobytes from behind
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    f.seek(0, os.SEEK_SET)
+                    if size > 102400:
+                        f.seek(-102400, os.SEEK_END)
                     return f.read()
 
     @st.fragment
@@ -57,7 +63,9 @@ class BacktestV7QueueItem():
                 st.rerun(scope="fragment")
         logfile = self.load_log()
         if st.session_state[f'reverse_view_log_{self.name}']:
-            logfile = '\n'.join(logfile.split('\n')[::-1])
+            #only the last 100 lines
+            logfile = '\n'.join(logfile.split('\n')[-100:])
+            # logfile = '\n'.join(logfile.split('\n')[::-1])
         with st.container(height=1200):
             st.code(logfile)
 
