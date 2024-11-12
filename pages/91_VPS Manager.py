@@ -252,17 +252,26 @@ def manage_vps():
             del st.session_state.manage_vps
             st.rerun()
 
-    st.header("Manage VPS " + vps.hostname)
-    st.subheader("VPS Status")
-    st.write(
-        "- IP and hostname in your local /etc/hosts" + hosts_ok + "\n"
-        "- SSH:" + ssh_ok + "\n"
-        "- Initialized" + init_ok + " Last Init: " + str(vps.last_init) + "\n"
-        "- PBRemote is configured and running" + rclone_ok + "\n"
-        "- PBCoinData is configured and running" + coindata_ok + "\n"
-        "- Setup finished" + setup_ok + " " + str(vps.last_setup) + "\n"
-        "- Last command: " + vps.command_text + " " + update_ok + " " + str(vps.last_update) + "\n"
-    )
+    st.subheader(f"VPS Status {vps.hostname}")
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
+        st.write(
+            "- IP and hostname in your local /etc/hosts" + hosts_ok + "\n"
+            "- SSH:" + ssh_ok + "\n"
+            "- Initialized" + init_ok + " Last Init: " + str(vps.last_init) + "\n"
+        )
+    with col2:
+        st.write(
+            "- PBRemote is configured and running" + rclone_ok + "\n"
+            "- PBCoinData is configured and running" + coindata_ok + "\n"
+            "- Setup finished" + setup_ok + " " + str(vps.last_setup) + "\n"
+            "- Last command: " + vps.command_text + " " + update_ok + " " + str(vps.last_update) + "\n"
+        )
+    with col3:
+        st.write(
+            "- Last command: " + vps.command_text + " " + update_ok + " " + str(vps.last_update) + "\n"
+        )
+
     col1, col2, col3, col4 = st.columns([1,1,1,1])
     with col1:
         st.text_input("VPS user password", value=vps.user_pw, type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)
