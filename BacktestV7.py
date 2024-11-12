@@ -49,10 +49,17 @@ class BacktestV7QueueItem():
 
     @st.fragment
     def view_log(self):
+        col1, col2 = st.columns([1,12])
+        with col1:
+            st.checkbox("Reverse", key=f'reverse_view_log_{self.name}')
+        with col2:
+            if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
+                st.rerun(scope="fragment")
         logfile = self.load_log()
-        st.code(logfile)
-        if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
-            st.rerun(scope="fragment")
+        if st.session_state[f'reverse_view_log_{self.name}']:
+            logfile = '\n'.join(logfile.split('\n')[::-1])
+        with st.container(height=1200):
+            st.code(logfile)
 
     def status(self):
         if self.is_backtesting():
