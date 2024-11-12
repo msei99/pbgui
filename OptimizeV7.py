@@ -47,10 +47,18 @@ class OptimizeV7QueueItem:
 
     @st.fragment
     def view_log(self):
+        col1, col2 = st.columns([1,12])
+        with col1:
+            st.checkbox("Reverse", key=f'reverse_view_log_{self.filename}')
+        with col2:
+            if st.button(":material/refresh:", key=f'refresh_view_log_{self.filename}'):
+                st.rerun(scope="fragment")
         logfile = self.load_log()
-        st.code(logfile)
-        if st.button(":material/refresh:", key=f'refresh_view_log_{self.filename}'):
-            st.rerun(scope="fragment")
+        if st.session_state[f'reverse_view_log_{self.filename}']:
+            # reverse logfile line by line
+            logfile = '\n'.join(logfile.split('\n')[::-1])
+        with st.container(height=1200):
+            st.code(logfile)
 
     def status(self):
         if self.is_optimizing():
