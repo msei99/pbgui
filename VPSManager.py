@@ -264,6 +264,15 @@ class VPSManager:
         self.path = Path(f'{PBGDIR}/data/vpsmanager/hosts')
         self.find_vps()
     
+    def list(self):
+        return list(map(lambda x: x.hostname, self.vpss))
+
+    def find_vps_by_hostname(self, hostname):
+        for vps in self.vpss:
+            if vps.hostname == hostname:
+                return vps
+        return None
+
     def find_vps(self):
         p = str(Path(f'{PBGDIR}/data/vpsmanager/hosts/*/*.json'))
         hosts = glob.glob(p, recursive=False)
