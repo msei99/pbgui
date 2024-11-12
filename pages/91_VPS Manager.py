@@ -124,6 +124,9 @@ def list_vps():
 
 def manage_vps():
     vpsmanager = st.session_state.vpsmanager
+    if "manage_vps_select_vps" in st.session_state:
+        if st.session_state.manage_vps_select_vps != st.session_state.manage_vps.hostname:
+            st.session_state.manage_vps = vpsmanager.find_vps_by_hostname(st.session_state.manage_vps_select_vps)
     vps = st.session_state.manage_vps
     # Init PBRemote
     pbremote = st.session_state.pbremote
@@ -188,6 +191,7 @@ def manage_vps():
         coindata_ok = f' ❌'
     # Navigation
     with st.sidebar:
+        st.selectbox("VPS", vpsmanager.list(), index=vpsmanager.list().index(vps.hostname), key='manage_vps_select_vps')
         st.checkbox("Debug", key="setup_debug")
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
