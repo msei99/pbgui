@@ -647,7 +647,7 @@ class OptimizeV7Item:
         with col1:
             st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_opt_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
-            st.number_input("vol/mcap", min_value=0.0, value=self.config.pbgui.vol_mcap, step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
+            st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
         # Apply filters
         for symbol in coindata.ignored_coins:
             if symbol in self.config.live.approved_coins.long:
