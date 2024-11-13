@@ -279,7 +279,7 @@ class V7Instance():
         with col1:
             st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_run_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
-            st.number_input("vol/mcap", min_value=0.0, value=self.config.pbgui.vol_mcap, step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
+            st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
         with col3:
             st.checkbox("dynamic_ignore", value=self.config.pbgui.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_run_v7_dynamic_ignore")
         with col4:
@@ -374,6 +374,12 @@ class V7Instance():
                 del st.session_state.edit_run_v7_forced_mode_long
                 del st.session_state.edit_run_v7_forced_mode_short
                 del st.session_state.edit_run_v7_time_in_force
+                del st.session_state.edit_run_v7_max_n_restarts_per_day
+                del st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days
+                del st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes
+                del st.session_state.edit_run_v7_market_cap
+                del st.session_state.edit_run_v7_vol_mcap
+                del st.session_state.edit_run_v7_dynamic_ignore
                 del st.session_state.edit_run_v7_approved_coins_long
                 del st.session_state.edit_run_v7_approved_coins_short
                 del st.session_state.edit_run_v7_ignored_coins_long
