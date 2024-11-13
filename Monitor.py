@@ -368,6 +368,7 @@ class Monitor():
                 del st.session_state.traceback_warning_single
                 del st.session_state.traceback_error_single
                 del st.session_state.monitor_edit
+                del st.session_state.monitor
                 st.rerun()
             if st.button(":material/save:"):
                 save_ini("monitor", "mem_warning_v7", str(st.session_state.mem_warning_v7))
