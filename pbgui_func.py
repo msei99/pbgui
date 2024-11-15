@@ -83,6 +83,7 @@ def set_page_config(page : str = "Start"):
             'About': "Passivbot GUI v1.26"
         }
     )
+    
 
 def is_session_state_initialized():
     # Init Service5

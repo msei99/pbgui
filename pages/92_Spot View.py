@@ -123,7 +123,9 @@ def view_history():
             st.rerun()
     instance.compare_history()
 
-set_page_config()
+set_page_config("Spot View")
+
+st.header("Spot View", divider="red")
 
 # Init session states
 if is_session_state_initialized():

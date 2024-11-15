@@ -152,9 +152,9 @@ def select_instance():
     st.session_state.edit_single_instances_d_multi = d_multi
     column_config = {
         "id": None}
-    st.header("Single Instances")
+    st.subheader("Single Instances")
     st.data_editor(data=d, width=None, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On','Version','Remote','Remote Version'])
-    st.header("Instances used in Multi configuration")
+    st.subheader("Instances used in Multi configuration")
     st.data_editor(data=d_multi, width=None, height=36+(len(d_multi))*35, use_container_width=True, key="editor_select_instance_multi", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On'])
 
 def edit_instance():
@@ -259,6 +259,8 @@ def edit_instance():
     instance.view_log()
 
 set_page_config()
+
+st.header("Single Run", divider="red")
 
 # Init session states
 if is_session_state_initialized():

@@ -171,7 +171,9 @@ def select_user():
         "id": None}
     st.data_editor(data=d, width=None, height=(len(users.users)+1)*36, use_container_width=True, key=f'editor_{st.session_state.ed_user_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Exchange',])
 
-set_page_config()
+set_page_config("Setup API-Keys")
+
+st.header("Setup API-Keys", divider="red")
 
 # Init session states
 if is_session_state_initialized():
