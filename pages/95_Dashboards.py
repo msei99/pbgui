@@ -66,6 +66,8 @@ def dashboard():
 
 set_page_config("Dashboard")
 
+st.header("Dashboards", divider="red")
+
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")

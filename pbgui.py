@@ -13,11 +13,11 @@ from pathlib import Path, PurePath
 
 set_page_config()
 
+st.header("Passivbot GUI", divider="red")
+
 # Password Check
 if not check_password():
     st.stop()
-
-st.header("Passivbot GUI")
 
 # Load pb6 path from pbgui.ini
 if "input_pbdir" in st.session_state:

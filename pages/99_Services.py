@@ -222,7 +222,9 @@ def pbcoindata_details():
         st.session_state.pbgui_instances.view_log("PBCoinData")
 
 
-set_page_config()
+set_page_config("Services")
+
+st.header("Services", divider="red")
 
 # Init session states
 if is_session_state_initialized():

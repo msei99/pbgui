@@ -115,7 +115,9 @@ def opt_results():
     elif my_opt_results.layer == 3:
         my_opt_results.view_results_l3()
 
-set_page_config()
+set_page_config("Single Optimize")
+
+st.header("Single Optimize", divider="red")
 
 # Init session states
 if is_session_state_initialized():

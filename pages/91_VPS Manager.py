@@ -45,7 +45,7 @@ def list_vps():
                 if st.button(f':{color}[{vps.hostname}]'):
                     st.session_state.manage_vps = vps
                     st.rerun()
-    st.header("VPS Manager")
+    
     st.subheader("Overview")
     if not "ed_key" in st.session_state:
         st.session_state.ed_key = 0
@@ -521,6 +521,8 @@ def view_setup():
     vps.view_setup_log()
 
 set_page_config("VPS Manager")
+
+st.header("VPS Manager", divider="red")
 
 # Init session states
 if is_session_state_initialized():
