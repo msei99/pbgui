@@ -111,9 +111,6 @@ def calculate_close_grid(start_price, close_grid_min_markup, close_grid_markup_r
 
 
 def show_visualizer():
-    # App Title
-    st.title("🛠️ Passivbot V7 Grid Visualizer")  # Display the app title with an icon
-
     st.warning("""
     ⚠️ This tool is ignoring trailing entry/closes and ema distances! \n
     It's pupose is to visualize the grid levels and help you to understand the PBv7 parameters better.\n""")
@@ -385,6 +382,8 @@ def show_visualizer():
 
 
 set_page_config()
+
+st.header("Passivbot V7 Grid Visualizer", divider="red")  # Display the app title with an icon
 
 # Init session states
 if is_session_state_initialized():
