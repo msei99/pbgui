@@ -111,6 +111,7 @@ def select_instance():
             'Version': instance.config.pbgui.version,
             'Remote': remote_str,
             'Remote Version': instance.running_version,
+            'Note': instance.config.pbgui.note,
             'Delete': False,
         })
     column_config = {
