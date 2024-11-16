@@ -711,10 +711,9 @@ class BacktestMultiItem:
             st.selectbox('Exchange',['binance', 'bybit'], index = exchange_index, key="edit_bt_multi_exchange")
         with col2:
             if not self.name:
-                color = "red"
+                st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, key="edit_bt_multi_name")
             else:
-                color = None
-            st.text_input(f":{color}[Backtest Name]", value=self.name, max_chars=64, key="edit_bt_multi_name")
+                st.text_input(f"Backtest Name", value=self.name, max_chars=64, key="edit_bt_multi_name")
         with col3:
             st.date_input("START_DATE", datetime.datetime.strptime(self.sd, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_bt_multi_sd")
         with col4:
