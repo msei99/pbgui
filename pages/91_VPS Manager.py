@@ -358,59 +358,60 @@ def manage_vps():
             del st.session_state.manage_vps
             st.rerun()
 
-    st.subheader(f"VPS Status {vps.hostname}")
-    col1, col2, col3, col4 = st.columns([1,1,1,1])
-    with col1:
-        st.write(
-            "- IP and hostname in your local /etc/hosts" + hosts_ok + "\n"
-            "- SSH:" + ssh_ok + "\n"
-            "- Initialized" + init_ok + " Last Init: " + str(vps.last_init) + "\n"
-        )
-    with col2:
-        st.write(
-            "- PBRemote is configured and running" + rclone_ok + "\n"
-            "- PBCoinData is configured and running" + coindata_ok + "\n"
-            "- Setup finished" + setup_ok + " " + str(vps.last_setup) + "\n"
-        )
-    with col3:
-        st.write(
-            "- Last command: " + vps.command_text + " " + update_ok + " " + str(vps.last_update) + "\n"
-        )
+    st.subheader(f"VPS Status: {vps.hostname}")
+    with st.expander("VPS Setup Settings"):
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.write(
+                "- IP and hostname in your local /etc/hosts" + hosts_ok + "\n"
+                "- SSH:" + ssh_ok + "\n"
+                "- Initialized" + init_ok + " Last Init: " + str(vps.last_init) + "\n"
+            )
+        with col2:
+            st.write(
+                "- PBRemote is configured and running" + rclone_ok + "\n"
+                "- PBCoinData is configured and running" + coindata_ok + "\n"
+                "- Setup finished" + setup_ok + " " + str(vps.last_setup) + "\n"
+            )
+        with col3:
+            st.write(
+                "- Last command: " + vps.command_text + " " + update_ok + " " + str(vps.last_update) + "\n"
+            )
 
-    col1, col2, col3, col4 = st.columns([1,1,1,1])
-    with col1:
-        st.text_input("VPS user password", value=vps.user_pw, type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)
-    with col2:
-        swap_index = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"].index(vps.swap or "0")
-        st.selectbox("Swap size", options=["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"], key="vps_swap", index=swap_index, help=pbgui_help.vps_swap)
-    with col3:
-        if pbremote.bucket:
-            st.text_input('PBRemote bucket', value=vps.bucket, key="vps_bucket", disabled=True, help=pbgui_help.pbremote_bucket)
-        else:
-            if pbremote.rclone_installed:
-                st.write(":red[No bucket found. Please configure rclone.]")
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.text_input("VPS user password", value=vps.user_pw, type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)
+        with col2:
+            swap_index = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"].index(vps.swap or "0")
+            st.selectbox("Swap size", options=["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"], key="vps_swap", index=swap_index, help=pbgui_help.vps_swap)
+        with col3:
+            if pbremote.bucket:
+                st.text_input('PBRemote bucket', value=vps.bucket, key="vps_bucket", disabled=True, help=pbgui_help.pbremote_bucket)
             else:
-                st.write(":red[rclone not installed. Please install rclone.]")
-    with col4:
-        if coindata.api_key:
-            if coindata.fetch_api_status():
-                st.text_input("CoinMarketCap API_Key", value=vps.coinmarketcap_api_key, type="password", key="vps_coindata_api_key", disabled=True, help=pbgui_help.coindata_api_key)
+                if pbremote.rclone_installed:
+                    st.write(":red[No bucket found. Please configure rclone.]")
+                else:
+                    st.write(":red[rclone not installed. Please install rclone.]")
+        with col4:
+            if coindata.api_key:
+                if coindata.fetch_api_status():
+                    st.text_input("CoinMarketCap API_Key", value=vps.coinmarketcap_api_key, type="password", key="vps_coindata_api_key", disabled=True, help=pbgui_help.coindata_api_key)
+                else:
+                    st.write(":red[Invalid CoinMarketCap API_Key]")
             else:
-                st.write(":red[Invalid CoinMarketCap API_Key]")
-        else:
-            st.write(":red[Please configure PBCoinData]")
-    col1, col2, col3 = st.columns([1,1,2], vertical_alignment='bottom')
-    with col1:
-        st.checkbox("Enable Linux Firewall (ufw)", value=vps.firewall, key="vps_firewall", help=pbgui_help.vps_firewall)
-    with col2:
-        st.number_input("SSH port", value=vps.firewall_ssh_port, format="%d", key="vps_firewall_ssh_port", help=pbgui_help.vps_firewall_ssh_port)
-    with col3:
-        st.text_input("IP-Addresses to allow", value=vps.firewall_ssh_ips, key="vps_firewall_ssh_ips", help=pbgui_help.vps_firewall_ssh_ips)
-    if st.button("Setup VPS", disabled=not vps.has_setup_parameters()):
-         vpsmanager.setup_vps(vps, debug = st.session_state.setup_debug)
-         st.session_state.view_setup = vps
-         del st.session_state.manage_vps
-         st.rerun()
+                st.write(":red[Please configure PBCoinData]")
+        col1, col2, col3 = st.columns([1,1,2], vertical_alignment='bottom')
+        with col1:
+            st.checkbox("Enable Linux Firewall (ufw)", value=vps.firewall, key="vps_firewall", help=pbgui_help.vps_firewall)
+        with col2:
+            st.number_input("SSH port", value=vps.firewall_ssh_port, format="%d", key="vps_firewall_ssh_port", help=pbgui_help.vps_firewall_ssh_port)
+        with col3:
+            st.text_input("IP-Addresses to allow", value=vps.firewall_ssh_ips, key="vps_firewall_ssh_ips", help=pbgui_help.vps_firewall_ssh_ips)
+        if st.button("Setup VPS", disabled=not vps.has_setup_parameters()):
+            vpsmanager.setup_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_setup = vps
+            del st.session_state.manage_vps
+            st.rerun()
     server = pbremote.find_server(vps.hostname)
     if server:
         d = []
