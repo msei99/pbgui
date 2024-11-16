@@ -781,6 +781,7 @@ class PBRemote():
             while True:
                 if count > 5:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRemote')
+                    break
                 sleep(2)
                 if self.is_running():
                     break
