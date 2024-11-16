@@ -350,6 +350,7 @@ class PBRemote():
         self.startts = None
         self.alivets = 0
         self.systemts = 0
+        self.rtd = 0
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -427,6 +428,43 @@ class PBRemote():
         self.bucket_dir = f'{self.bucket}{self.bucket.split(":")[0]}'
         self.load_remote()
 
+    @property
+    def pbgui_version(self):
+        return self.local_run.pbgui_version
+    @property
+    def pbgui_commit(self):
+        return self.local_run.pbgui_commit
+    @property
+    def mem(self):
+        return psutil.virtual_memory()
+    @property
+    def swap(self):
+        return psutil.swap_memory()
+    @property
+    def disk(self):
+        return psutil.disk_usage('/')
+    @property
+    def cpu(self):
+        return psutil.cpu_percent()
+    @property
+    def boot(self):
+        return psutil.boot_time()
+    @property
+    def monitor(self):
+        return self.load_monitor()
+    @property
+    def pb7_version(self):
+        return self.local_run.pb7_version
+    @property
+    def pb6_version(self):
+        return self.local_run.pb6_version
+    @property
+    def pb7_commit(self):
+        return self.local_run.pb7_commit
+    @property
+    def pb6_commit(self):
+        return self.local_run.pb6_commit
+
     # api_md5
     @property
     def api_md5(self): return self.calculate_api_md5()
@@ -470,6 +508,12 @@ class PBRemote():
                 continue
             if any("rclone" in sub for sub in cmdline) and any(f'{self.bucket_dir}' in sub for sub in cmdline):
                 return process
+
+    def is_online(self):
+        if self.is_running() and self.local_run.is_running():
+            return True
+        else:
+            return False
 
     def sync(self, direction: str, spath: str):
         """
@@ -630,23 +674,23 @@ class PBRemote():
         if timestamp - self.alivets < 60:
             return
         self.alivets = timestamp
-        mem = psutil.virtual_memory()
-        swap = psutil.swap_memory()
-        disk = psutil.disk_usage('/')
-        cpu = psutil.cpu_percent()
-        boot = psutil.boot_time()
-        monitor = self.load_monitor()
+        # self.mem = psutil.virtual_memory()
+        # self.swap = psutil.swap_memory()
+        # self.disk = psutil.disk_usage('/')
+        # self.cpu = psutil.cpu_percent()
+        # self.boot = psutil.boot_time()
+        # self.monitor = self.load_monitor()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
             "name": self.name,
             "api_md5": self.api_md5,
-            "mem": mem,
-            "swap": swap,
-            "disk": disk,
-            "cpu": cpu,
-            "boot": boot,
-            "monitor": monitor,
+            "mem": self.mem,
+            "swap": self.swap,
+            "disk": self.disk,
+            "cpu": self.cpu,
+            "boot": self.boot,
+            "monitor": self.monitor,
             "upgrades": self.local_run.upgrades,
             "reboot": self.local_run.reboot,
             "pbgv": self.local_run.pbgui_version,
