@@ -33,6 +33,7 @@ class MultiInstance():
             if "edit_multi_user" in st.session_state and "edit_multi_loss_allowance_pct" in st.session_state:
                 del st.session_state.edit_multi_enabled_on
                 del st.session_state.edit_multi_version
+                del st.session_state.edit_multi_note
                 del st.session_state.edit_multi_market_cap
                 del st.session_state.edit_multi_vol_mcap
                 del st.session_state.edit_multi_dynamic_ignore
@@ -81,6 +82,12 @@ class MultiInstance():
     @version.setter
     def version(self, new_version):
         self._version = new_version
+    # note
+    @property
+    def note(self): return self._note
+    @note.setter
+    def note(self, new_note):
+        self._note = new_note
     # market_cap
     @property
     def market_cap(self): return self._market_cap
@@ -279,6 +286,7 @@ class MultiInstance():
         # Init defaults
         self._enabled_on = "disabled"
         self._version = 0
+        self._note = ""
         self._market_cap = 0
         self._vol_mcap = 10.0
         self._dynamic_ignore = False
@@ -328,6 +336,8 @@ class MultiInstance():
             self._enabled_on = self._multi_config["enabled_on"]
         if "version" in self._multi_config:
             self._version = self._multi_config["version"]
+        if "note" in self._multi_config:
+            self._note = self._multi_config["note"]
         if "market_cap" in self._multi_config:
             self._market_cap = self._multi_config["market_cap"]
         if "vol_mcap" in self._multi_config:
@@ -542,6 +552,7 @@ class MultiInstance():
         if "edit_multi_version" in st.session_state:
             del st.session_state.edit_multi_version
         self._multi_config["version"] = self.version
+        self._multi_config["note"] = self.note
         self._multi_config["enabled_on"] = self.enabled_on
         self._multi_config["market_cap"] = self.market_cap
         self._multi_config["vol_mcap"] = self.vol_mcap
@@ -610,6 +621,9 @@ class MultiInstance():
         if "edit_multi_version" in st.session_state:
             if st.session_state.edit_multi_version != self.version:
                 self.version = st.session_state.edit_multi_version
+        if "edit_multi_note" in st.session_state:
+            if st.session_state.edit_multi_note != self.note:
+                self.note = st.session_state.edit_multi_note
         if "edit_multi_leverage" in st.session_state:
             if st.session_state.edit_multi_leverage != self.leverage:
                 self.leverage = st.session_state.edit_multi_leverage
@@ -957,7 +971,7 @@ class MultiInstance():
         with col2:
             st.checkbox("short_enabled", value=self.short_enabled, help=pbgui_help.multi_long_short_enabled, key="edit_multi_short_enabled")
         with col3:
-            st.empty()
+            st.text_input("note", value=self.note, key="edit_multi_note", help=pbgui_help.instance_note)
         with col4:
             st.checkbox("auto_gs", value=self.auto_gs, help=pbgui_help.auto_gs, key="edit_multi_auto_gs")
         col1, col2, col3, col4 = st.columns([1,1,1,1])

@@ -158,6 +158,7 @@ def select_instance():
             'Version': instance.version,
             'Remote': remote_str,
             'Remote Version': instance.running_version,
+            'Note': instance.note,
             'Delete': False,
         })
     column_config = {
