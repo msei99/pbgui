@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted
 import pbgui_help
 from Monitor import Monitor
 
@@ -221,14 +221,14 @@ def pbcoindata_details():
     if st.checkbox("Show logfile", key="pbcoindata_log"):
         st.session_state.pbgui_instances.view_log("PBCoinData")
 
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-set_page_config("Services")
-
-st.header("Services", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBGUI Services")
+st.header("PBGUI Services", divider="red")
 
 if 'monitor_edit' in st.session_state:
     st.session_state.monitor.edit_monitor_config()

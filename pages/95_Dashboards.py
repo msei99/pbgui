@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_authenticted
 from Dashboard import Dashboard
 
 def dashboard():
@@ -64,12 +64,16 @@ def dashboard():
     elif "dashboard" in st.session_state:
         st.session_state.dashboard.view()
 
-set_page_config("Dashboard")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
+# Page Setup
+set_page_config("Dashboards")
 st.header("Dashboards", divider="red")
 
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+if not "dashboard" in st.session_state:
+    st.info("Please select a dashboard from the sidebar or create a new one.")
 
 dashboard()
