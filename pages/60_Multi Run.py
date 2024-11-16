@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, is_pb_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb_installed, is_authenticted
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
 from Instance import Instances, Instance
@@ -171,14 +171,14 @@ def select_instance():
         }
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_multi_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
     
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-set_page_config("Multi Run")
-
-st.header("Multi Run", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv6 Multi Run")
+st.header("PBv6 Multi Run", divider="red")
 
 # Check if PB6 is installed
 if not is_pb_installed():
