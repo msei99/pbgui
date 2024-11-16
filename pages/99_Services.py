@@ -80,7 +80,6 @@ def pbcoindata_overview():
     st.metric(label="PBCoinData", value=pbcoindata_icon)
     
 def overview():
-    st.header("Service Status")
     col_1, col_2, col_3, col_4, col_5 = st.columns([1,1,1,1,1])
     with col_1:
         pbrun_overview()
