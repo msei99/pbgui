@@ -728,6 +728,11 @@ config_version = """
     if you hit save.
     ```"""
 
+instance_note = """
+    ```
+    Your personal note for this instance. It is only intended to help you organise your instances.
+    ```"""
+
 pbshare_grid = """
     ```
     enable for generate grid picture and share them on gphoto
