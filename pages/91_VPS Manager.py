@@ -55,7 +55,6 @@ def list_vps():
                     st.session_state.manage_vps = vps
                     st.rerun()
 
-    st.header("VPS Manager")
     st.subheader("Overview")
     if not "ed_key" in st.session_state:
         st.session_state.ed_key = 0
