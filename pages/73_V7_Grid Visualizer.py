@@ -353,6 +353,7 @@ def show_visualizer():
         st.subheader("📊 Statistics")  # Subheader for the statistics section
         stats_df = pd.DataFrame.from_dict(stats, orient='index', columns=['Value'])  # Create a DataFrame from the stats
         stats_df.index.name = 'Statistic'  # Name the index column
+        stats_df['Value'] = stats_df['Value'].astype(str)
         st.table(stats_df)  # Display the statistics table
 
     # Display Entry Grid as Table
