@@ -133,6 +133,8 @@ def bt_v7_queue():
 
 set_page_config("Backtest V7")
 
+st.header("V7 Backtest", divider="red")
+
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")

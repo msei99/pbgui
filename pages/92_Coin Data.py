@@ -82,6 +82,8 @@ def setup_coindata():
 
 set_page_config("Coin Data")
 
+st.header("Coin Data", divider="red")
+
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
