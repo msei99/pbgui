@@ -127,6 +127,9 @@ class V7Instance():
         if "edit_run_v7_version" in st.session_state:
             if st.session_state.edit_run_v7_version != self.config.pbgui.version:
                 self.config.pbgui.version = st.session_state.edit_run_v7_version
+        if "edit_run_v7_note" in st.session_state:
+            if st.session_state.edit_run_v7_note != self.config.pbgui.note:
+                self.config.pbgui.note = st.session_state.edit_run_v7_note
         if "edit_run_v7_leverage" in st.session_state:
             if st.session_state.edit_run_v7_leverage != self.config.live.leverage:
                 self.config.live.leverage = st.session_state.edit_run_v7_leverage
@@ -229,6 +232,8 @@ class V7Instance():
             st.number_input("minimum_coin_age_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.minimum_coin_age_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
         with col2:
             st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
+        with col3:
+            st.text_input("note", value=self.config.pbgui.note, key="edit_run_v7_note", help=pbgui_help.instance_note)
             # st.number_input("relative_volume_filter_clip_pct", min_value=0.0, max_value=1.0, value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), step=0.1, format="%.2f", key="edit_run_v7_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
         # with col3:
         #     st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
