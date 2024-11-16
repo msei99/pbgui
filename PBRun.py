@@ -1433,6 +1433,7 @@ class PBRun():
             while True:
                 if count > 5:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRun')
+                    break
                 sleep(1)
                 if self.is_running():
                     break
