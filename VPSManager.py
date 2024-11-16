@@ -1,5 +1,6 @@
 import streamlit as st
 from time import sleep
+import platform
 import json
 from pathlib import Path, PurePath
 from datetime import datetime
@@ -9,8 +10,13 @@ import re
 import getpass
 import shutil
 import socket
+from pbgui_purefunc import pbdir, pbvenv, pb7dir, pb7venv, load_ini
 
 PBGDIR = Path.cwd()
+PBDIR = pbdir()
+PB7DIR = pb7dir()
+PBVENV = pbvenv()
+PB7VENV = pb7venv()
 
 class VPS:
     def __init__(self):
@@ -262,8 +268,47 @@ class VPSManager:
     def __init__(self):
         self.vpss = []
         self.path = Path(f'{PBGDIR}/data/vpsmanager/hosts')
+        self.privat_data_dir = None
+        self.last_update = None
+        self.command = "unknown"
+        self.command_text = "unknown"
+        self.update_status = None
+        self.update_log = ""
         self.find_vps()
+        self.load_hostname()
+        self.load_master()
     
+    @st.fragment(run_every=1)
+    def view_update_status(self):
+        st.text(f'Update Status: {self.update_status}')
+
+    @st.fragment(run_every=1)
+    def view_update_log(self):
+        ansi = self.update_log
+        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+        result = ansi_escape.sub("", ansi)
+        st.code(result, language="coffeescript")
+
+    def update_event_handler(self, event):
+        log = Path(f'{PBGDIR}/data/vpsmanager/vps_update.log')
+        if (dump := event.get("stdout")):
+            with open(log, "a") as logfile:
+                logfile.write(dump)
+            self.update_log = self.update_log + dump
+
+    def update_status_handler(self, status_data, runner_config):
+        self.update_status = status_data["status"]
+
+    def update_finished(self, runner_config=None):
+        self.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.save_master()
+        shutil.rmtree(f'{PBGDIR}/data/vpsmanager/tmp', ignore_errors=True)
+
+    def remove_update_log(self):
+        log = Path(f'{PBGDIR}/data/vpsmanager/vps_update.log')
+        if log.exists():
+            log.unlink()
+
     def list(self):
         return list(map(lambda x: x.hostname, self.vpss))
 
@@ -380,6 +425,66 @@ class VPSManager:
             status_handler=vps.update_status_handler,
             finished_callback=vps.update_finished
         )
+
+    def update_master(self, debug = False):
+        self.update_status = None
+        self.privat_data_dir = Path(f'{PBGDIR}/data/vpsmanager/tmp')
+        self.privat_data_dir.mkdir(parents=True, exist_ok=True)
+        self.remove_update_log()
+        self.update_log = ""
+        if debug:
+            tags = "debug,all"
+        else:
+            tags = None
+        ansible_runner.run_async(
+            playbook=str(PurePath(f'{PBGDIR}/{self.command}.yml')),
+            extravars={
+                'pbgdir': str(PBGDIR),
+                'pb6dir': str(PBDIR),
+                'pb7dir': str(PB7DIR),
+                'pb7venv': str(PurePath(PB7VENV).parents[1]),
+                'debug': debug
+            },
+            quiet=True,
+            tags=tags,
+            verbosity=1,
+            private_data_dir=self.privat_data_dir,
+            event_handler=self.update_event_handler,
+            status_handler=self.update_status_handler,
+            finished_callback=self.update_finished
+        )
+
+    def load_hostname(self):
+        self.hostname = load_ini("main", "pbname")        
+        if not self.hostname:
+            self.hostname = platform.node()
+
+    def load_master(self):
+        self.path = Path(f'{PBGDIR}/data/vpsmanager')
+        file = f'{self.path}/{self.hostname}.json'
+        if Path(file).exists():
+            with open(file, 'r') as f:
+                config = json.load(f)
+                if "last_update" in config:
+                    self.last_update = config["last_update"]
+                if "update_status" in config:
+                    self.update_status = config["update_status"]
+                if "command" in config:
+                    self.command = config["command"]
+                if "command_text" in config:
+                    self.command_text = config["command_text"]
+
+    def save_master(self):
+        self.path = Path(f'{PBGDIR}/data/vpsmanager')
+        file = f'{self.path}/{self.hostname}.json'
+        config = {
+            "last_update": self.last_update,
+            "update_status": self.update_status,
+            "command": self.command,
+            "command_text": self.command_text
+        }
+        with open(file, "w", encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
 
 def main():
     print("Don't Run this Class from CLI")
