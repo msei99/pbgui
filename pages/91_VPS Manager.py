@@ -31,10 +31,19 @@ def list_vps():
         if st.button(":material/refresh:"):
             vpsmanager.vpss = []
             vpsmanager.find_vps()
+            pbremote.systemts = 0
             st.rerun()
         if st.button(":material/add_box:"):
             st.session_state.init_vps = vpsmanager.add_vps()
             st.rerun()
+        if pbremote.is_running() and pbremote.local_run.is_running():
+            color = "green"
+        else:
+            color = "red"
+        if st.button(f':{color}[{pbremote.name}]'):
+            st.session_state.manage_master = True
+            st.rerun()
+
         for vps in vpsmanager.vpss:
             if vps.hostname:
                 server = pbremote.find_server(vps.hostname)
@@ -45,7 +54,8 @@ def list_vps():
                 if st.button(f':{color}[{vps.hostname}]'):
                     st.session_state.manage_vps = vps
                     st.rerun()
-    
+
+    st.header("VPS Manager")
     st.subheader("Overview")
     if not "ed_key" in st.session_state:
         st.session_state.ed_key = 0
@@ -77,11 +87,11 @@ def list_vps():
         "Start": datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S"),
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
-        "PBGui": f'{pbremote.local_run.pbgui_version}',
+        "PBGui": f'{pbremote.pbgui_version}',
         "PBGui github": pbgui,
-        "PB6": f'{pbremote.local_run.pb6_version}',
+        "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
-        "PB7": f'{pbremote.local_run.pb7_version}',
+        "PB7": f'{pbremote.pb7_version}',
         "PB7 github": pb7
     })
     # Add VPS
@@ -121,6 +131,102 @@ def list_vps():
             "PB7 github": pb7
         })
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
+
+def manage_master():
+    vpsmanager = st.session_state.vpsmanager
+    # Init PBRemote
+    pbremote = st.session_state.pbremote
+    # Init coindata
+    coindata = st.session_state.pbcoindata
+    # Init Monitor
+    if "monitor" not in st.session_state:
+        st.session_state.monitor = Monitor()
+    monitor = st.session_state.monitor
+    # Navigation
+    with st.sidebar:
+        col1, col2, col3 = st.columns([1, 1, 2])
+        with col1:
+            if st.button(":material/refresh:"):
+                st.rerun()
+        with col2:
+            if st.button(":material/home:"):
+                del st.session_state.manage_master
+                st.rerun()
+        st.checkbox("Debug", key="setup_debug")
+        if st.button("Update pbgui, pb6 and pb7"):
+            vpsmanager.command = "master-update-pb"
+            vpsmanager.command_text = "Update pbgui, pb6 and pb7"
+            vpsmanager.update_master(debug = st.session_state.setup_debug)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
+
+    # Init Status
+    if pbremote.bucket:
+        rclone_ok = f' ✅'
+    else:
+        rclone_ok = f' ❌'
+    if coindata.fetch_api_status():
+        coindata_ok = f' ✅'
+    else:
+        coindata_ok = f' ❌'
+    if vpsmanager.update_status == "successful":
+        update_ok = f' ✅' 
+    else:
+        update_ok = f' ❌'
+
+
+    st.subheader(f"Local Status {pbremote.name}")
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
+        st.empty()
+    with col2:
+        st.write(
+            "- PBRemote is configured and running" + rclone_ok + "\n"
+            "- PBCoinData is configured and running" + coindata_ok + "\n"
+        )
+    with col3:
+        st.write(
+            "- Last command: " + vpsmanager.command_text + " " + update_ok + " " + str(vpsmanager.last_update) + "\n"
+        )
+    d = []
+    boot = datetime.fromtimestamp(pbremote.boot).strftime("%Y-%m-%d %H:%M:%S")
+    if pbremote.is_online():
+        online = "✅"
+    else:
+        online = "❌"
+    if pbremote.pbgui_version == pbremote.local_run.pbgui_version_origin and pbremote.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
+        pbgui = "✅"
+    else:
+        pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin})"
+    if pbremote.pb6_version == pbremote.local_run.pb6_version_origin and pbremote.pb6_commit == pbremote.local_run.pb6_commit_origin:
+        pb6 = "✅"
+    else:
+        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin})"
+    if pbremote.pb7_version == pbremote.local_run.pb7_version_origin and pbremote.pb7_commit == pbremote.local_run.pb7_commit_origin:
+        pb7 = "✅"
+    else:
+        pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin})"
+    if pbremote.local_run.reboot:
+        reboot = "❌"
+    else:
+        reboot = "✅"
+    d.append({
+        "Name": pbremote.name,
+        "Online": online,
+        "Start": datetime.fromtimestamp(pbremote.boot).strftime("%Y-%m-%d %H:%M:%S"),
+        "Reboot": reboot,
+        "Updates": pbremote.local_run.upgrades,
+        "PBGui": f'{pbremote.pbgui_version}',
+        "PBGui github": pbgui,
+        "PB6": f'{pbremote.pb6_version}',
+        "PB6 github": pb6,
+        "PB7": f'{pbremote.pb7_version}',
+        "PB7 github": pb7
+    })
+    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
+    monitor.server = pbremote
+    monitor.view_server()
 
 def manage_vps():
     vpsmanager = st.session_state.vpsmanager
@@ -265,7 +371,6 @@ def manage_vps():
             "- PBRemote is configured and running" + rclone_ok + "\n"
             "- PBCoinData is configured and running" + coindata_ok + "\n"
             "- Setup finished" + setup_ok + " " + str(vps.last_setup) + "\n"
-            "- Last command: " + vps.command_text + " " + update_ok + " " + str(vps.last_update) + "\n"
         )
     with col3:
         st.write(
@@ -453,6 +558,23 @@ def init_vps():
          del st.session_state.init_vps
          st.rerun()
 
+def view_update_master():
+    vpsmanager = st.session_state.vpsmanager
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/refresh:"):
+            st.rerun()
+        if st.button(":material/home:"):
+            del st.session_state.view_update_master
+            st.rerun()
+    st.header(vpsmanager.command_text + " " + st.session_state.pbname)
+    st.write(
+        "- Please wait until the update is finished.\n"
+        "- This can take some minutes.\n"
+        "- After update is successful you can go back to Overview.\n")
+    vpsmanager.view_update_status()
+    vpsmanager.view_update_log()
+
 def view_update():
     vps = st.session_state.view_update
     # Navigation
@@ -539,7 +661,11 @@ elif 'view_setup' in st.session_state:
     view_setup()
 elif 'manage_vps' in st.session_state:
     manage_vps()
+elif 'manage_master' in st.session_state:
+    manage_master()
 elif 'view_update' in st.session_state:
     view_update()
+elif 'view_update_master' in st.session_state:
+    view_update_master()
 else:
     list_vps()

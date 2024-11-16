@@ -2541,6 +2541,7 @@ class PBGui:
         self._market_cap = 0
         self._vol_mcap = 10.0
         self._dynamic_ignore = False
+        self._note = ''
         self._pbgui = {
             "version": self._version,
             "enabled_on": self._enabled_on,
@@ -2548,6 +2549,7 @@ class PBGui:
             "market_cap": self._market_cap,
             "vol_mcap": self._vol_mcap,
             "dynamic_ignore": self._dynamic_ignore,
+            "note": self._note,
         }
     
     def __repr__(self):
@@ -2569,6 +2571,8 @@ class PBGui:
             self.vol_mcap = new_pbgui["vol_mcap"]
         if "dynamic_ignore" in new_pbgui:
             self.dynamic_ignore = new_pbgui["dynamic_ignore"]
+        if "note" in new_pbgui:
+            self.note = new_pbgui["note"]
     
     @property
     def version(self): return self._version
@@ -2582,6 +2586,8 @@ class PBGui:
     def vol_mcap(self): return self._vol_mcap
     @property
     def dynamic_ignore(self): return self._dynamic_ignore
+    @property
+    def note(self): return self._note
 
     @version.setter
     def version(self, new_version):
@@ -2607,6 +2613,10 @@ class PBGui:
     def dynamic_ignore(self, new_dynamic_ignore):
         self._dynamic_ignore = new_dynamic_ignore
         self._pbgui["dynamic_ignore"] = self._dynamic_ignore
+    @note.setter
+    def note(self, new_note):
+        self._note = new_note
+        self._pbgui["note"] = self._note
 
 class ConfigV7():
     def __init__(self, file_name = None):
