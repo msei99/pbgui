@@ -503,6 +503,8 @@ class RunMulti():
         # Generate clean multi_run.hjson file
         del self._multi_config["enabled_on"]
         del self._multi_config["version"]
+        if "note" in self._multi_config:
+            del self._multi_config["note"]
         if "market_cap" in self._multi_config:
             del self._multi_config["market_cap"]
         if "vol_mcap" in self._multi_config:
