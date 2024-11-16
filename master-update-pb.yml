@@ -34,6 +34,7 @@
         version: main
         update: yes
         force: yes
+      when: pbgdir is defined
       register: pbgui_repo
       notify: restart pbgui
 
@@ -49,6 +50,7 @@
         version: v6.1.4b_latest_v6
         update: yes
         force: yes
+      when: pb6dir is defined
       register: pb6_repo
       notify: restart pb6
 
@@ -64,6 +66,7 @@
         version: master
         update: yes
         force: yes
+      when: pb7dir is defined
       register: pb7_repo
       notify: restart pb7
 
