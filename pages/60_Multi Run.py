@@ -172,7 +172,9 @@ def select_instance():
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_multi_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
     
 
-set_page_config()
+set_page_config("Multi Run")
+
+st.header("Multi Run", divider="red")
 
 # Init session states
 if is_session_state_initialized():

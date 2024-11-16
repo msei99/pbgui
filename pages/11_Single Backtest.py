@@ -217,6 +217,8 @@ def bt_import():
 
 set_page_config("Backtest")
 
+st.header("Single Backtest", divider="red")
+
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")

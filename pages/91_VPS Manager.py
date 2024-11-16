@@ -644,6 +644,8 @@ def view_setup():
 
 set_page_config("VPS Manager")
 
+st.header("VPS Manager", divider="red")
+
 # Init session states
 if is_session_state_initialized():
     st.switch_page("pbgui.py")
