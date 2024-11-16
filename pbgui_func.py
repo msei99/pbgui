@@ -43,6 +43,12 @@ def is_pb7_installed():
 
 PBGDIR = Path.cwd()
 
+def is_authenticted():
+    if 'password_correct' in st.session_state:
+        if st.session_state['password_correct']:
+            return True   
+    return False
+
 def check_password():
     """Returns `True` if the user had the correct password."""
 
@@ -56,6 +62,7 @@ def check_password():
 
     if "password_correct" not in st.session_state:
         # First run, show input for password.
+        st.info("Please enter your password to continue.")
         st.text_input(
             "Password", type="password", on_change=password_entered, key="password"
         )
@@ -84,8 +91,10 @@ def set_page_config(page : str = "Start"):
         }
     )
     
+    with st.sidebar:
+        st.write(f"### {page} Options")
 
-def is_session_state_initialized():
+def is_session_state_not_initialized():
     # Init Service5
     if (
         'pbdir' not in st.session_state or

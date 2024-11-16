@@ -436,7 +436,7 @@ class Dashboard():
         self.rows = dashboard_config["rows"]
         self.cols = dashboard_config["cols"]
         # Titel
-        st.title(f"Dashboard: {self.name}")
+        st.subheader(f"Dashboard: {self.name}")
         for row in range(1, self.rows + 1):
             if self.cols == 2:
                 db_col1, db_col2 = st.columns([1,1])

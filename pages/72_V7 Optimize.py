@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup, is_pb7_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted
 from OptimizeV7 import OptimizeV7Item, OptimizesV7, OptimizeV7Queue, OptimizeV7Results
 
 def opt_v7():
@@ -132,13 +132,14 @@ def opt_v7_queue():
     st.title("Optimize V7 Queue")
     opt_v7_queue.view()
 
-set_page_config("Optimize V7")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-st.header("V7 Optimize", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv7 Optimize")
+st.header("PBv7 Optimize", divider="red")
 
 # Check if PB7 is installed
 if not is_pb7_installed():

@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_initialized, info_popup, error_popup, is_pb_installed
+from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_not_initialized, info_popup, error_popup, is_pb_installed, is_authenticted
 from Instance import Instances, Instance
 from Backtest import BacktestItem
 from PBRemote import PBRemote
@@ -258,13 +258,15 @@ def edit_instance():
         st.number_input("config version", min_value=instance.version, value=instance.version, step=1, format="%.d", key="edit_instance_version", help=pbgui_help.config_version)
     instance.view_log()
 
-set_page_config()
 
-st.header("Single Run", divider="red")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv6 Single Run")
+st.header("PB v6 Single Run", divider="red")
 
 # Check if PB6 is installed
 if not is_pb_installed():

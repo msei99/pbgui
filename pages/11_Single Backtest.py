@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, is_pb_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_pb_installed, is_authenticted
 from Backtest import BacktestItem, BacktestQueue, BacktestResults
 from Instance import Instance
 import datetime
@@ -215,13 +215,14 @@ def bt_import():
             st.rerun()
     my_bt.import_pbconfigdb()
 
-set_page_config("Backtest")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-st.header("Single Backtest", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv6Single Backtest")
+st.header("PBv6 Single Backtest", divider="red")
 
 # Check if PB6 is installed
 if not is_pb_installed():

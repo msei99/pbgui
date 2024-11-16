@@ -1,6 +1,6 @@
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, is_session_state_initialized, is_pb_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_pb_installed, is_authenticted
 from Instance import Instances
 import pandas as pd
 
@@ -123,13 +123,14 @@ def view_history():
             st.rerun()
     instance.compare_history()
 
-set_page_config("Spot View")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-st.header("Spot View", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv6 Spot View")
+st.header("PBv6 Spot View", divider="red")
 
 # Check if PB6 is installed
 if not is_pb_installed():
