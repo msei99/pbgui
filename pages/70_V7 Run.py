@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, is_pb7_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted
 from RunV7 import V7Instances , V7Instance
 from BacktestV7 import BacktestV7Item
 from PBRun import PBRun
@@ -118,13 +118,14 @@ def select_instance():
         "id": None}
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_v7_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
     
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-set_page_config("V7 Run")
-st.header("V7 Run", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv7 Run")
+st.header("PBv7 Run", divider="red")
 
 # Check if PB7 is installed
 if not is_pb7_installed():

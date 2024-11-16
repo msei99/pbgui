@@ -1,5 +1,5 @@
 import streamlit as st  # Streamlit library for creating web apps
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, is_pb7_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted
 import numpy as np  # NumPy for numerical operations
 import pandas as pd  # Pandas for data manipulation and analysis
 import plotly.graph_objs as go  # Plotly for interactive data visualization
@@ -115,7 +115,7 @@ def show_visualizer():
     ⚠️ This tool is ignoring trailing entry/closes and ema distances! \n
     It's pupose is to visualize the grid levels and help you to understand the PBv7 parameters better.\n""")
 
-    st.header("📊 Settings")
+    st.subheader("📊 Settings")
     # Create four columns for organizing parameters
     col1, col2 = st.columns(2)
 
@@ -380,13 +380,13 @@ def show_visualizer():
         })
         st.table(close_grid_df)  # Display the close grid DataFrame as a table
 
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-set_page_config()
-
-st.header("Passivbot V7 Grid Visualizer", divider="red")  # Display the app title with an icon
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv7 Grid Visualizer")
+st.header("PBv7 Grid Visualizer", divider="red")  # Display the app title with an icon
 
 show_visualizer()  # Call the show_visualizer function to display the grid visualizer

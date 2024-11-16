@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, error_popup, info_popup, is_pb_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb_installed, is_authenticted
 from OptimizeMulti import OptimizeMultiItem, OptimizesMulti, OptimizeMultiQueue, OptimizeMultiResults
 from Instance import Instance
 
@@ -120,13 +120,14 @@ def opt_multi_queue():
     st.title("Optimize Multi Queue")
     opt_multi_queue.view()
 
-set_page_config("Multi Optimize")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-st.header("Multi Optimize", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv6 Multi Optimize")
+st.header("PBv6 Multi Optimize", divider="red")
 
 # Check if PB6 is installed
 if not is_pb_installed():

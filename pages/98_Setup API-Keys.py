@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted
 from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
@@ -171,13 +171,14 @@ def select_user():
         "id": None}
     st.data_editor(data=d, width=None, height=(len(users.users)+1)*36, use_container_width=True, key=f'editor_{st.session_state.ed_user_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Exchange',])
 
-set_page_config("Setup API-Keys")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-st.header("Setup API-Keys", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("API-Keys")
+st.header("API-Keys", divider="red")
 
 # Display Setup
 if 'edit_user' in st.session_state:

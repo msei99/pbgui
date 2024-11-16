@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_initialized, is_pb_installed
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_pb_installed, is_authenticted
 from Optimize import OptimizeItem, OptimizeQueue, OptimizeResults
 from OptimizeConfig import OptimizeConfigs
 
@@ -115,13 +115,14 @@ def opt_results():
     elif my_opt_results.layer == 3:
         my_opt_results.view_results_l3()
 
-set_page_config("Single Optimize")
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
 
-st.header("Single Optimize", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
+# Page Setup
+set_page_config("PBv6 Single Optimize")
+st.header("PBv6 Single Optimize", divider="red")
 
 # Check if PB6 is installed
 if not is_pb_installed():

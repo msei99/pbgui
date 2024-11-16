@@ -1,6 +1,6 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_initialized, info_popup, error_popup
+from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted
 from PBCoinData import CoinData
 from Exchange import Exchanges
 
@@ -80,13 +80,14 @@ def setup_coindata():
         else:
             st.error(coindata.api_error, icon="🚨")
 
+# Redirect to Login if not authenticated or session state not initialized
+if not is_authenticted() or is_session_state_not_initialized():
+    st.switch_page("pages/00_login.py")
+    st.stop()
+
+# Page Setup
 set_page_config("Coin Data")
-
 st.header("Coin Data", divider="red")
-
-# Init session states
-if is_session_state_initialized():
-    st.switch_page("pbgui.py")
 
 if 'setup_coindata' in st.session_state:
     setup_coindata()
