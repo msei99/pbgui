@@ -857,30 +857,33 @@ class PBRun():
 
     def load_versions_origin(self):
         """git show origin:README.md and load the versions of pbgui, pb6 and pb7"""
-        pbgui_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbgdir}/.git', "show", "origin/main:README.md"], stdout=subprocess.PIPE, text=True)
-        lines = pbgui_readme_origin.stdout.splitlines()
-        for line in lines:
-            #find regex regex_search('^#? ?v[0-9.]+'
-            version = re.search('v[0-9.]+', line)
-            if version:
-                self.pbgui_version_origin = version.group(0)
-                break
-        pb6_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbdir}/.git', "show", "origin/v6.1.4b_latest_v6:README.md"], stdout=subprocess.PIPE, text=True)
-        lines = pb6_readme_origin.stdout.splitlines()
-        for line in lines:
-            #find regex regex_search('^#? ?v[0-9.]+'
-            version = re.search('v[0-9.]+', line)
-            if version:
-                self.pb6_version_origin = version.group(0)
-                break
-        pb7_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:README.md"], stdout=subprocess.PIPE, text=True)
-        lines = pb7_readme_origin.stdout.splitlines()
-        for line in lines:
-            #find regex regex_search('^#? ?v[0-9.]+'
-            version = re.search('v[0-9.]+', line)
-            if version:
-                self.pb7_version_origin = version.group(0)
-                break
+        if Path(f'{self.pbgdir}/.git').exists():
+            pbgui_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbgdir}/.git', "show", "origin/main:README.md"], stdout=subprocess.PIPE, text=True)
+            lines = pbgui_readme_origin.stdout.splitlines()
+            for line in lines:
+                #find regex regex_search('^#? ?v[0-9.]+'
+                version = re.search('v[0-9.]+', line)
+                if version:
+                    self.pbgui_version_origin = version.group(0)
+                    break
+        if Path(f'{self.pbdir}/.git').exists():
+            pb6_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbdir}/.git', "show", "origin/v6.1.4b_latest_v6:README.md"], stdout=subprocess.PIPE, text=True)
+            lines = pb6_readme_origin.stdout.splitlines()
+            for line in lines:
+                #find regex regex_search('^#? ?v[0-9.]+'
+                version = re.search('v[0-9.]+', line)
+                if version:
+                    self.pb6_version_origin = version.group(0)
+                    break
+        if Path(f'{self.pb7dir}/.git').exists():
+            pb7_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:README.md"], stdout=subprocess.PIPE, text=True)
+            lines = pb7_readme_origin.stdout.splitlines()
+            for line in lines:
+                #find regex regex_search('^#? ?v[0-9.]+'
+                version = re.search('v[0-9.]+', line)
+                if version:
+                    self.pb7_version_origin = version.group(0)
+                    break
 
     def load_versions(self):
         """Load the versions of pbgui, pb6 and pb7 from README.md"""
@@ -1430,6 +1433,7 @@ class PBRun():
             while True:
                 if count > 5:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRun')
+                    break
                 sleep(1)
                 if self.is_running():
                     break
