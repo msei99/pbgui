@@ -948,7 +948,8 @@ class MultiInstance():
         with col1:
             st.selectbox('User',self._users.list(), index = self._users.list().index(self.user), key="edit_multi_user")
         with col2:
-            enabled_on = ["disabled",self.remote.name] + self.remote.list()
+            slist = sorted(self.remote.list())
+            enabled_on = ["disabled",self.remote.name] + slist
             enabled_on_index = enabled_on.index(self.enabled_on)
             st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_multi_enabled_on")
             st.empty()
