@@ -614,6 +614,8 @@ def view_init():
             del st.session_state.view_init
             st.rerun()
         if st.button("Manage VPS"):
+            if "vpsmanager" in st.session_state:
+                del st.session_state.vpsmanager
             st.session_state.manage_vps = vps
             del st.session_state.view_init
             st.rerun()
