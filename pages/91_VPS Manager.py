@@ -464,7 +464,14 @@ def init_vps():
             vps.ip = st.session_state.vps_ip
     if "vps_hostname" in st.session_state:
         if st.session_state.vps_hostname != vps.hostname:
-            vps.hostname = st.session_state.vps_hostname
+            if st.session_state.vps_hostname == st.session_state.pbname:
+                st.session_state.vps_hostname = vps.hostname
+                error_popup("Error: hostname is equal to pbname, use another hostname")
+            elif st.session_state.vps_hostname in vpsmanager.list():
+                st.session_state.vps_hostname = vps.hostname
+                error_popup("Error: hostname already exists")
+            else:
+                vps.hostname = st.session_state.vps_hostname
     if "vps_initial_root_pw" in st.session_state:
         if st.session_state.vps_initial_root_pw != vps.initial_root_pw:
             vps.initial_root_pw = st.session_state.vps_initial_root_pw
