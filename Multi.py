@@ -539,6 +539,7 @@ class MultiInstance():
                 return True
             except Exception as e:
                 print(f'Something went wrong, but continue {e}')
+                print(f'Error in config file: {file}')
                 traceback.print_exc()
 
     def save(self):
