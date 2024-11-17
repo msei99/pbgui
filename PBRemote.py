@@ -36,7 +36,7 @@ class RemoteServer():
             path (str): Path to the remote server configuration.
         """
         self._name = None
-        self._ts = None
+        self._ts = 0
         self._startts = 0
         self._rtd = None
         self._edit = False
@@ -50,8 +50,8 @@ class RemoteServer():
         self._mem = []
         self._swap = []
         self._disk = []
-        self._cpu = None
-        self._boot = None
+        self._cpu = 0
+        self._boot = 0
         self._monitor = []
         self._upgrades = 0
         self._reboot = False
