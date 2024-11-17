@@ -466,7 +466,7 @@ def init_vps():
         if st.session_state.vps_hostname != vps.hostname:
             if st.session_state.vps_hostname == st.session_state.pbname:
                 st.session_state.vps_hostname = vps.hostname
-                error_popup("Error: hostname is equal to pbname, use another hostname")
+                error_popup("Error: hostname is equal to master, use another hostname")
             elif st.session_state.vps_hostname in vpsmanager.list():
                 st.session_state.vps_hostname = vps.hostname
                 error_popup("Error: hostname already exists")
