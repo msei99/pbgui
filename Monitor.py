@@ -109,8 +109,9 @@ class Monitor():
             "Memory": st.column_config.NumberColumn(format="%.2f MB"),
             "CPU": st.column_config.NumberColumn(format="%.2f %%"),
         }
-        st.header(f"Running V7 Instances ({len(d_v7)}) {server.pb7_version}")
+
         if d_v7:
+            st.subheader(f"Running V7 Instances ({len(d_v7)}) {server.pb7_version}")
             df = pd.DataFrame(d_v7)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
@@ -133,10 +134,10 @@ class Monitor():
                     st.markdown(f":green[Last Info: ] :blue[{d_v7[row]['Last Info']}]")
                     st.markdown(f":orange[Last Error: ] :blue[{d_v7[row]['Last Error']}]")
                     st.markdown(f":red[Last Traceback: ] :blue[{d_v7[row]['Last Traceback']}]")
-        else:
-            st.write("None")
-        st.header(f"Running Multi Instances ({len(d_multi)}) {server.pb6_version}")
+
+        
         if d_multi:
+            st.subheader(f"Running Multi Instances ({len(d_multi)}) {server.pb6_version}")
             df = pd.DataFrame(d_multi)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
@@ -159,10 +160,9 @@ class Monitor():
                     st.markdown(f":green[Last Info: ] :blue[{d_multi[row]['Last Info']}]")
                     st.markdown(f":orange[Last Error: ] :blue[{d_multi[row]['Last Error']}]")
                     st.markdown(f":red[Last Traceback: ] :blue[{d_multi[row]['Last Traceback']}]")
-        else:
-            st.write("None")
-        st.header(f"Running Single Instances ({len(d_single)}) {server.pb6_version}")
+
         if d_single:
+            st.subheader(f"Running Single Instances ({len(d_single)}) {server.pb6_version}")
             df = pd.DataFrame(d_single)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
@@ -185,8 +185,6 @@ class Monitor():
                     st.markdown(f":green[Last Info: ] :blue[{d_single[row]['Last Info']}]")
                     st.markdown(f":orange[Last Error: ] :blue[{d_single[row]['Last Error']}]")
                     st.markdown(f":red[Last Traceback: ] :blue[{d_single[row]['Last Traceback']}]")
-        else:
-            st.write("None")
 
     def load_monitor_config(self):
         st.session_state.mem_warning_v7 = load_ini("monitor", "mem_warning_v7")

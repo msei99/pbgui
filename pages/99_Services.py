@@ -80,7 +80,6 @@ def pbcoindata_overview():
     st.metric(label="PBCoinData", value=pbcoindata_icon)
     
 def overview():
-    st.header("Service Status")
     col_1, col_2, col_3, col_4, col_5 = st.columns([1,1,1,1,1])
     with col_1:
         pbrun_overview()
@@ -114,7 +113,7 @@ def pbrun_details():
         if st.button(":back:", key="button_pbrun_back"):
             del st.session_state.pbrun_details
             st.rerun()
-    st.header("PBRun Details")
+    st.subheader("PBRun Details")
     pbrun_overview()
     if st.checkbox("Show logfile", key="pbrun_log"):
         st.session_state.pbgui_instances.view_log("PBRun")
@@ -145,7 +144,7 @@ def pbremote_details():
         st.markdown("""---""")
         st.markdown("Remote Servers")
         api_sync = []
-        for rserver in pbremote.remote_servers:
+        for rserver in sorted(st.session_state.pbremote.remote_servers, key=lambda s: s.name):
             if rserver.is_online():
                 color = "green"
                 if not rserver.is_api_md5_same(pbremote.api_md5):
@@ -153,7 +152,8 @@ def pbremote_details():
             else: color = "red"
             if st.button(f':{color}[{rserver.name}]'):
                 st.session_state.server = rserver
-    st.header("PBRemote Details")
+                
+    st.subheader("PBRemote Details")
     pbremote_overview()
     if pbremote.bucket:
         buckets_index = pbremote.buckets.index(pbremote.bucket)
@@ -171,13 +171,15 @@ def pbremote_details():
         api_sync_list = []
         for api in api_sync:
             api_sync_list.append(api.name)
-        st.header("API not in sync with remote servers:")
+        st.subheader("API not in sync with remote servers:")
         st.write(f"{api_sync_list}")
         if st.button(f'Sync API-Keys to all',key="sync_api"):
             pbremote.sync_api_up()
     if "server" in st.session_state:
         monitor.server = st.session_state.server
         monitor.view_server()
+    else:
+        st.info("Please select a remote server from the sidebar to view details.")
 
 def pbstat_details():
     # Navigation
@@ -185,7 +187,7 @@ def pbstat_details():
         if st.button(":back:", key="button_pbstat_back"):
             del st.session_state.pbstat_details
             st.rerun()
-    st.header("PBStat Details")
+    st.subheader("PBStat Details")
     pbstat_overview()
     if st.checkbox("Show logfile", key="pbstat_log"):
         st.session_state.pbgui_instances.view_log("PBStat")
@@ -197,7 +199,7 @@ def pbdata_details():
         if st.button(":back:", key="button_pbdata_back"):
             del st.session_state.pbdata_details
             st.rerun()
-    st.header("PBData Details")
+    st.subheader("PBData Details")
     pbdata_overview()
     users = st.session_state.users
 
@@ -216,7 +218,7 @@ def pbcoindata_details():
         if st.button(":back:", key="button_pbcoindata_back"):
             del st.session_state.pbcoindata_details
             st.rerun()
-    st.header("PBCoinData Details")
+    st.subheader("PBCoinData Details")
     pbcoindata_overview()
     if st.checkbox("Show logfile", key="pbcoindata_log"):
         st.session_state.pbgui_instances.view_log("PBCoinData")
