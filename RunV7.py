@@ -218,7 +218,11 @@ class V7Instance():
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            st.selectbox('User',self._users.list_v7(), index = self._users.list_v7().index(self.user), key="edit_run_v7_user")
+            if self.user in self._users.list_v7():
+                index = self._users.list_v7().index(self.user)
+            else:
+                index = 0
+            st.selectbox('User',self._users.list_v7(), index = index, key="edit_run_v7_user")
         with col2:
             slist = sorted(self.remote.list())
             enabled_on = ["disabled",self.remote.name] + slist
