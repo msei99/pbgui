@@ -579,7 +579,7 @@ class Dashboard():
             if sum_period:
                 st.session_state[f'dashboard_ppl_sum_period_{position}'] = sum_period
                 
-        st.markdown("#### :blue[Daily Profits and Losses]")
+        st.markdown("#### :blue[Profits and Losses]")
         col1, col2, col3 = st.columns([2,1,1])
         with col1:
             st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_ppl_users_{position}")
