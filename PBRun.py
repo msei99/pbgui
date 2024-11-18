@@ -399,7 +399,8 @@ class RunSingle():
                 # Load user from config
                 if "_user" in self._single_config:
                     self.user = self._single_config["_user"]
-                    self.monitor.user = self.user
+                    path = PurePath(self.path).stem
+                    self.monitor.user = path
                 # Load symbol from config
                 if "_symbol" in self._single_config:
                     self.symbol = self._single_config["_symbol"]
