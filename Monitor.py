@@ -8,6 +8,7 @@ class Monitor():
         if "mem_warning_v7" not in st.session_state:
             self.load_monitor_config()
         self.server = None
+        self.logfiles = []
 
     def view_server(self):
         server = self.server
@@ -97,10 +98,13 @@ class Monitor():
                 })
                 if info["PB Version"] == "7":
                     d_v7.append(info)
+                    self.logfiles.append(f'run_v7/{info["Name"]}/passivbot.log')
                 elif info["PB Version"] == "6":
                     d_multi.append(info)
+                    self.logfiles.append(f'multi/{info["Name"]}/passivbot.log')
                 elif info["PB Version"] == "s":
                     d_single.append(info)
+                    self.logfiles.append(f'instances/{info["Name"]}/passivbot.log')
         column_config = {
             "PB Version": None,
             "Last Info": None,

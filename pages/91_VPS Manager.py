@@ -452,6 +452,44 @@ def manage_vps():
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
         monitor.server = server
         monitor.view_server()
+        logs = ["logs/PBCoinData.log", "logs/PBRun.log", "logs/PBRemote.log", "logs/sync.log"] + monitor.logfiles
+        view_log(vps, logs)
+
+@st.fragment
+def view_log(vps : VPS, logs : list):
+    vpsmanager = st.session_state.vpsmanager
+    # Init keys from session_state
+    if "select_log_vps" in st.session_state:
+        if st.session_state.select_log_vps != vps.logfilename:
+            vps.logfilename = st.session_state.select_log_vps
+    if 'size_log_vps' in st.session_state:
+        if st.session_state.size_log_vps != vps.logsize:
+            vps.logsize = st.session_state.size_log_vps
+            vps.load_log()
+    col1, col2, col3, col4 = st.columns([4,1,1,4], vertical_alignment="bottom")
+    with col1:
+        st.selectbox("Logfile", logs, key=f'select_log_vps')
+    with col2:
+        st.checkbox("Reverse", value=True, key=f'select_reverse_log_vps')
+    with col3:
+        st.selectbox("view last kB", [50, 100, 250, 500, 1000, 2000, 5000, 10000, 100000], key=f'size_log_vps')
+    with col4:
+        if st.button(":material/refresh:", key=f'fetch_log_vps'):
+            vps.command = "vps-fetch-logfile"
+            vps.command_text = f"Fetch logfile {vps.logfilename}"
+            with st.spinner(f"Fetching logfile {vps.logfilename}"):
+                vpsmanager.fetch_log(vps, debug = st.session_state.setup_debug)
+                st.rerun(scope="fragment")
+    logfile = vps.logfile
+    if logfile:
+        if st.session_state[f'select_reverse_log_vps']:
+            logfile = '\n'.join(logfile.split('\n')[::-1])
+        with st.container(height=1200):
+            if vps.logsize <= 250:
+                st.code(logfile)
+            else:
+                st.text(logfile)
+
 
 def init_vps():
     # Init vpsmanager

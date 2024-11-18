@@ -1,0 +1,32 @@
+---
+# Update pbgui, pb6 and pb7
+# Steps:
+# 1. Clone pbgui repository
+# 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    # ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    vps_dir: "{{ vps_dir }}"
+    logfile: "{{ logfile }}"
+    # user_pw: "{{ user_pw }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: get logs_dir
+      set_fact:
+        logs_dir: "{{ lookup('env', 'HOME') + '/software/pbgui/data' }}"
+
+    - name: fetch logfile from vps
+      fetch:
+        src: "{{ logs_dir }}/{{ logfile }}"
+        dest: "{{ vps_dir }}/"
+        flat: yes
