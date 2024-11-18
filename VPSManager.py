@@ -46,6 +46,9 @@ class VPS:
         self.firewall = True
         self.firewall_ssh_port = 22
         self.firewall_ssh_ips = ""
+        self.logfilename = None
+        self.logfile = None
+        self.logsize = 50
 
     @property
     def hostname(self):
@@ -56,11 +59,12 @@ class VPS:
         self._hostname = new_hostanme
         self.path = Path(f'{PBGDIR}/data/vpsmanager/hosts/{self.hostname}')
 
-    def load(self):
-        with open(self.path, 'r') as f:
+    def load(self, file):
+        with open(file, 'r') as f:
             config = json.load(f)
             if "_hostname" in config:
                 self._hostname = config["_hostname"]
+                self.path = Path(f'{PBGDIR}/data/vpsmanager/hosts/{self.hostname}')
             if "ip" in config:
                 self.ip = config["ip"]
             if "user" in config:
@@ -230,6 +234,25 @@ class VPS:
         self.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.save()
         shutil.rmtree(f'{self.path}/tmp', ignore_errors=True)
+    
+    def fetch_log_finished(self, runner_config=None):
+        shutil.rmtree(f'{self.path}/tmp', ignore_errors=True)
+        self.load_log()
+
+    def load_log(self):
+        if self.logfilename:
+            log = Path(f'{self.path}/{self.logfilename}')
+            if log.exists():
+                # Open the file in binary mode to handle raw bytes
+                with open(log, 'rb') as f:
+                    # Move the pointer to the last log_size KB (100 * 1024 bytes)
+                    f.seek(0, 2)  # Move to the end of the file
+                    file_size = f.tell()
+                    # Ensure that we don't try to read more than the file size
+                    start_pos = max(file_size - self.logsize * 1024, 0)
+                    f.seek(start_pos)
+                    # Read the last 100 KB (or less if the file is smaller)
+                    self.logfile = f.read().decode('utf-8', errors='ignore')  # Decode and ignore errors
 
     def save(self):
         if self.hostname:
@@ -324,8 +347,8 @@ class VPSManager:
         if hosts:
             for host in hosts:
                 v = VPS()
-                v.path = Path(host)
-                v.load()
+                # v.path = Path(host)
+                v.load(host)
                 self.vpss.append(v)
         # sort vpss by hostname
         self.vpss.sort(key=lambda x: x.hostname)
@@ -424,6 +447,34 @@ class VPSManager:
             event_handler=vps.update_event_handler,
             status_handler=vps.update_status_handler,
             finished_callback=vps.update_finished
+        )
+
+    def fetch_log(self, vps : VPS, debug = False):
+        # vps.update_status = None
+        # vps.save()
+        # vps.remove_update_log()
+        # vps.update_log = ""
+        if debug:
+            tags = "debug,all"
+        else:
+            tags = None
+        ansible_runner.run(
+            playbook=str(PurePath(f'{PBGDIR}/{vps.command}.yml')),
+            inventory=vps.hostname,
+            extravars={
+                'hostname': vps.hostname,
+                'user': vps.user,
+                'vps_dir': str(vps.path) + "/" + str(PurePath(vps.logfilename).parent),
+                'logfile': vps.logfilename,
+                'debug': debug
+            },
+            quiet=True,
+            tags=tags,
+            verbosity=1,
+            private_data_dir=vps.privat_data_dir,
+            # event_handler=vps.update_event_handler,
+            # status_handler=vps.update_status_handler,
+            finished_callback=vps.fetch_log_finished
         )
 
     def update_master(self, debug = False):
