@@ -567,7 +567,7 @@ class Dashboard():
             st.plotly_chart(fig, key=f"dashboard_pnl_plot_{position}")
     
     @st.fragment
-    def view_ppl(self, position : str, user : str = None, period : str = None):
+    def view_ppl(self, position : str, user : str = None, period : str = None, sum_period : str = None):
         users = st.session_state.users
         if f"dashboard_ppl_users_{position}" not in st.session_state:
             if user:
@@ -576,8 +576,8 @@ class Dashboard():
             if period:
                 st.session_state[f'dashboard_ppl_period_{position}'] = period
         if f"dashboard_ppl_sum_period_{position}" not in st.session_state:
-            if period:
-                st.session_state[f'dashboard_ppl_sum_period_{position}'] = period
+            if sum_period:
+                st.session_state[f'dashboard_ppl_sum_period_{position}'] = sum_period
                 
         st.markdown("#### :blue[Daily Profits and Losses]")
         col1, col2, col3 = st.columns([2,1,1])
