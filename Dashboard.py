@@ -618,6 +618,9 @@ class Dashboard():
                 var_name='Type',
                 value_name='Sum'
             )
+            
+            # Convert to Text, remove 0 values
+            df_long['Text'] = df_long['Sum'].apply(lambda x: '' if x == 0 else f"{x:.2f}")
 
             # Map 'Type' values to 'Profits' and 'Losses'
             df_long['Type'] = df_long['Type'].map({
@@ -641,14 +644,14 @@ class Dashboard():
                 x='Date',
                 y='Sum',
                 color='Type',
-                barmode='relative',  # 'group' or 'relative'
-                text='Sum',
+                barmode='relative',
+                text='Text',  # Change this line
                 title=f"From: {df['Date'].min()} To: {df['Date'].max()}",
                 color_discrete_map={'Profits': 'green', 'Losses': 'red'}
             )
 
             # Update the figure layout
-            fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig.update_traces(texttemplate='%{text}', textposition='outside')
             fig.update_layout(
                 xaxis_title='Date',
                 yaxis_title='Sum',
@@ -656,6 +659,7 @@ class Dashboard():
                     automargin=True,
                     range=[y_axis_min, y_axis_max],  # Set the new Y-axis range
                 ),
+                xaxis=dict(type='category'),  # Add this line to treat x-axis labels as categories
                 legend_title_text='Legend'
             )
 
