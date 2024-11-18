@@ -78,6 +78,7 @@ class Dashboard():
     def ALL_TIME(self): return [0, self.now_ts]
 
     PERIOD = ['TODAY', 'YESTERDAY', 'THIS_WEEK', 'LAST_WEEK', 'LAST_WEEK_NOW', 'THIS_MONTH', 'LAST_MONTH', 'LAST_MONTH_NOW', 'THIS_YEAR', 'LAST_YEAR', 'LAST_YEAR_NOW',  'ALL_TIME']
+    SUM_PERIOD = ['DAY', 'WEEK', 'MONTH', 'YEAR', 'ALL_TIME']
     DASHBOARD_TYPES = ['NONE', 'PNL', 'TOP', 'POSITIONS', 'ORDERS', 'INCOME', 'BALANCE', 'P+L']
 
     def __init__(self, name : str = None):
@@ -144,9 +145,11 @@ class Dashboard():
         if dashboard_type_1 == "P+L":
             ppl_users_1 = st.session_state[f'dashboard_ppl_users_{from_row}_{from_col}']
             ppl_period_1 = st.session_state[f'dashboard_ppl_period_{from_row}_{from_col}']
+            ppl_sum_period_1 = st.session_state[f'dashboard_ppl_sum_period_{from_row}_{from_col}']
             del st.session_state[f'dashboard_ppl_users_{from_row}_{from_col}']
             del st.session_state[f'dashboard_ppl_period_{from_row}_{from_col}']
-            move_1 = {"ppl_users_1": ppl_users_1, "ppl_period_1": ppl_period_1}    
+            del st.session_state[f'dashboard_ppl_sum_period_{from_row}_{from_col}']
+            move_1 = {"ppl_users_1": ppl_users_1, "ppl_period_1": ppl_period_1, "ppl_sum_period_1": ppl_sum_period_1}    
             
             
         if dashboard_type_2 == "PNL":
@@ -186,9 +189,11 @@ class Dashboard():
         if dashboard_type_2 == "P+L":
             ppl_users_2 = st.session_state[f'dashboard_ppl_users_{to_row}_{to_col}']
             ppl_period_2 = st.session_state[f'dashboard_ppl_period_{to_row}_{to_col}']
+            ppl_sum_period_2 = st.session_state[f'dashboard_ppl_sum_period_{to_row}_{to_col}']
             del st.session_state[f'dashboard_ppl_users_{to_row}_{to_col}']
             del st.session_state[f'dashboard_ppl_period_{to_row}_{to_col}']
-            move_2 = {"ppl_users_2": ppl_users_2, "ppl_period_2": ppl_period_2}
+            del st.session_state[f'dashboard_ppl_sum_period_{to_row}_{to_col}']
+            move_2 = {"ppl_users_2": ppl_users_2, "ppl_period_2": ppl_period_2, "ppl_sum_period_2": ppl_sum_period_2}
             
             
         for key, val in move_1.items():
@@ -291,8 +296,8 @@ class Dashboard():
                         else:
                             self.view_balance(f'{row}_1')
                     if st.session_state[f'dashboard_type_{row}_1'] == "P+L":
-                        if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config:
-                            self.view_ppl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'])
+                        if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_1' in self.dashboard_config:
+                            self.view_ppl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
                         else:
                             self.view_ppl(f'{row}_1')
                 with db_col2:
@@ -344,8 +349,8 @@ class Dashboard():
                         else:
                             self.view_balance(f'{row}_2')
                     if st.session_state[f'dashboard_type_{row}_2'] == "P+L":
-                        if f'dashboard_ppl_users_{row}_2' in self.dashboard_config and f'dashboard_ppl_period_{row}_2' in self.dashboard_config:
-                            self.view_ppl(f'{row}_2', self.dashboard_config[f'dashboard_ppl_users_{row}_2'], self.dashboard_config[f'dashboard_ppl_period_{row}_2'])
+                        if f'dashboard_ppl_users_{row}_2' in self.dashboard_config and f'dashboard_ppl_period_{row}_2' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_2' in self.dashboard_config:
+                            self.view_ppl(f'{row}_2', self.dashboard_config[f'dashboard_ppl_users_{row}_2'], self.dashboard_config[f'dashboard_ppl_period_{row}_2'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
                         else:
                             self.view_ppl(f'{row}_2')
         else:
@@ -390,8 +395,8 @@ class Dashboard():
                     else:
                         self.view_balance(f'{row}_1')
                 if st.session_state[f'dashboard_type_{row}_1'] == "P+L":
-                    if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config:
-                        self.view_ppl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'])
+                    if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_1' in self.dashboard_config:
+                        self.view_ppl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
                     else:
                         self.view_ppl(f'{row}_1')
         if "swap_rerun" in st.session_state:
@@ -428,6 +433,7 @@ class Dashboard():
                 if st.session_state[f'dashboard_type_{row}_{col}'] == "P+L":
                     dashboard_config[f'dashboard_ppl_users_{row}_{col}'] = st.session_state[f'dashboard_ppl_users_{row}_{col}']
                     dashboard_config[f'dashboard_ppl_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_period_{row}_{col}']
+                    dashboard_config[f'dashboard_ppl_sum_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_sum_period_{row}_{col}']
         self.dashboard_config = dashboard_config
         dashboard_path = Path(f'{PBGDIR}/data/dashboards')
         dashboard_path.mkdir(parents=True, exist_ok=True)
@@ -488,7 +494,7 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                         self.view_balance(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
-                        self.view_ppl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'])
+                        self.view_ppl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
                 with db_col2:
                     if dashboard_config[f'dashboard_type_{row}_2'] == "PNL":
                         self.view_pnl(f'{row}_2', dashboard_config[f'dashboard_pnl_users_{row}_2'], dashboard_config[f'dashboard_pnl_period_{row}_2'], dashboard_config[f'dashboard_pnl_mode_{row}_2'])
@@ -503,7 +509,7 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_2'] == "BALANCE":
                         self.view_balance(f'{row}_2', dashboard_config[f'dashboard_balance_users_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "P+L":
-                        self.view_ppl(f'{row}_2', dashboard_config[f'dashboard_ppl_users_{row}_2'], dashboard_config[f'dashboard_ppl_period_{row}_2'])
+                        self.view_ppl(f'{row}_2', dashboard_config[f'dashboard_ppl_users_{row}_2'], dashboard_config[f'dashboard_ppl_period_{row}_2'], dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
             else:
                 if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
                     self.view_pnl(f'{row}_1', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
@@ -518,7 +524,7 @@ class Dashboard():
                 if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                     self.view_balance(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
-                    self.view_ppl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'])
+                    self.view_ppl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
 
     @st.fragment
     def view_pnl(self, position : str, user : str = None, period : str = None, mode : str = "bar"):
@@ -569,6 +575,9 @@ class Dashboard():
         if f"dashboard_ppl_period_{position}" not in st.session_state:
             if period:
                 st.session_state[f'dashboard_ppl_period_{position}'] = period
+        if f"dashboard_ppl_sum_period_{position}" not in st.session_state:
+            if period:
+                st.session_state[f'dashboard_ppl_sum_period_{position}'] = period
                 
         st.markdown("#### :blue[Daily Profits and Losses]")
         col1, col2, col3 = st.columns([2,1,1])
@@ -577,12 +586,15 @@ class Dashboard():
         with col2:
             st.selectbox('period', self.PERIOD, key=f"dashboard_ppl_period_{position}")
         with col3:
-            st.empty()
+            st.selectbox('sum_period', self.SUM_PERIOD, key=f"dashboard_ppl_sum_period_{position}")
+            
         if st.session_state[f'dashboard_ppl_users_{position}']:
             if st.session_state[f'dashboard_ppl_period_{position}'] in self.PERIOD:
-                period_index = self.PERIOD.index(st.session_state[f'dashboard_ppl_period_{position}'])
-                period_range = getattr(self, self.PERIOD[period_index])
-                ppl = self.db.select_ppl(st.session_state[f'dashboard_ppl_users_{position}'], period_range[0], period_range[1])
+                if st.session_state[f'dashboard_ppl_sum_period_{position}'] in self.SUM_PERIOD:
+                    period_index = self.PERIOD.index(st.session_state[f'dashboard_ppl_period_{position}'])
+                    period_range = getattr(self, self.PERIOD[period_index])
+                    
+                    ppl = self.db.select_ppl(st.session_state[f'dashboard_ppl_users_{position}'], period_range[0], period_range[1], st.session_state[f'dashboard_ppl_sum_period_{position}'])
             
             df = pd.DataFrame(ppl, columns =['Date', 'sum_positive', 'sum_negative'])
             
