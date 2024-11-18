@@ -463,32 +463,48 @@ class Database():
         except sqlite3.Error as e:
             print(e)
     
-    def select_ppl(self, user: list, start: str, end: str):
+    def select_ppl(self, user: list, start: str, end: str, sum_period: str):
+    # Define date formats for different sum_period values
+        date_formats = {
+            'DAY': "'%Y-%m-%d'",
+            'WEEK': "'%Y-%W'",
+            'MONTH': "'%Y-%m'",
+            'YEAR': "'%Y'",
+        }
+
+        if sum_period == 'ALL_TIME':
+            select_period = "'ALL_TIME' AS period"
+            group_by_clause = ''
+        else:
+            date_format = date_formats.get(sum_period, "'%Y-%m-%d'")
+            select_period = f"strftime({date_format}, \"timestamp\" / 1000, 'unixepoch') AS period"
+            group_by_clause = 'GROUP BY period'
+
         if 'ALL' in user:
-            sql = '''
+            sql = f'''
             SELECT
-                strftime('%Y-%m-%d', "timestamp" / 1000, 'unixepoch') AS date,
+                {select_period},
                 SUM(CASE WHEN "income" >= 0 THEN "income" ELSE 0 END) AS "sum_positive",
                 SUM(CASE WHEN "income" < 0 THEN "income" ELSE 0 END) AS "sum_negative"
             FROM "history"
             WHERE "history"."timestamp" >= ?
                 AND "history"."timestamp" <= ?
-            GROUP BY date
+            {group_by_clause}
             '''
             sql_parameters = (start, end)
         else:
             placeholders = ','.join('?' * len(user))
-            sql = '''
+            sql = f'''
             SELECT
-                strftime('%Y-%m-%d', "timestamp" / 1000, 'unixepoch') AS date,
+                {select_period},
                 SUM(CASE WHEN "income" >= 0 THEN "income" ELSE 0 END) AS "sum_positive",
                 SUM(CASE WHEN "income" < 0 THEN "income" ELSE 0 END) AS "sum_negative"
             FROM "history"
-            WHERE "history"."user" IN ({})
+            WHERE "history"."user" IN ({placeholders})
                 AND "history"."timestamp" >= ?
                 AND "history"."timestamp" <= ?
-            GROUP BY date
-            '''.format(placeholders)
+            {group_by_clause}
+            '''
             sql_parameters = tuple(user) + (start, end)
         try:
             with sqlite3.connect(self.db) as conn:
@@ -498,7 +514,7 @@ class Database():
                 return rows
         except sqlite3.Error as e:
             print(e)
-                
+
     def select_income(self, user: list, start: str, end: str):
         if 'ALL' in user:
             sql = '''SELECT "timestamp", "income" FROM "history"
