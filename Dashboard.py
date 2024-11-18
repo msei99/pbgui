@@ -146,7 +146,7 @@ class Dashboard():
             ppl_period_1 = st.session_state[f'dashboard_ppl_period_{from_row}_{from_col}']
             del st.session_state[f'dashboard_ppl_users_{from_row}_{from_col}']
             del st.session_state[f'dashboard_ppl_period_{from_row}_{from_col}']
-            move_1 = {"ppl_users_1": ppl_users_1, "ppl_period_1": ppl_period_1, "ppl_mode_1": ppl_mode_1}    
+            move_1 = {"ppl_users_1": ppl_users_1, "ppl_period_1": ppl_period_1}    
             
             
         if dashboard_type_2 == "PNL":
@@ -188,7 +188,7 @@ class Dashboard():
             ppl_period_2 = st.session_state[f'dashboard_ppl_period_{to_row}_{to_col}']
             del st.session_state[f'dashboard_ppl_users_{to_row}_{to_col}']
             del st.session_state[f'dashboard_ppl_period_{to_row}_{to_col}']
-            move_2 = {"ppl_users_2": ppl_users_2, "ppl_period_2": ppl_period_2, "ppl_mode_2": ppl_mode_2}
+            move_2 = {"ppl_users_2": ppl_users_2, "ppl_period_2": ppl_period_2}
             
             
         for key, val in move_1.items():
