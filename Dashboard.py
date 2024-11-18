@@ -494,6 +494,9 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                         self.view_balance(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
+                        # Compatibility for 1st P+L implementation
+                        if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
+                            dashboard_config[f'dashboard_ppl_sum_period_{row}_1'] = 'DAY'
                         self.view_ppl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
                 with db_col2:
                     if dashboard_config[f'dashboard_type_{row}_2'] == "PNL":
@@ -509,6 +512,9 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_2'] == "BALANCE":
                         self.view_balance(f'{row}_2', dashboard_config[f'dashboard_balance_users_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "P+L":
+                        # Compatibility for 1st P+L implementation
+                        if f'dashboard_ppl_sum_period_{row}_2' not in dashboard_config:
+                            dashboard_config[f'dashboard_ppl_sum_period_{row}_2'] = 'DAY'
                         self.view_ppl(f'{row}_2', dashboard_config[f'dashboard_ppl_users_{row}_2'], dashboard_config[f'dashboard_ppl_period_{row}_2'], dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
             else:
                 if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
@@ -524,6 +530,9 @@ class Dashboard():
                 if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                     self.view_balance(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
+                    # Compatibility for 1st P+L implementation
+                    if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
+                        dashboard_config[f'dashboard_ppl_sum_period_{row}_1'] = 'DAY'
                     self.view_ppl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
 
     @st.fragment
