@@ -463,44 +463,6 @@ class Database():
         except sqlite3.Error as e:
             print(e)
     
-    # def select_ppl(self, user: list, start: str, end: str, sum_period: str):
-    #     # sum = SUM_PERIOD = ['DAY', 'WEEK', 'MONTH', 'YEAR', 'ALL_TIME']
-        
-    #     if 'ALL' in user:
-    #         sql = '''
-    #         SELECT
-    #             strftime('%Y-%m-%d', "timestamp" / 1000, 'unixepoch') AS date,
-    #             SUM(CASE WHEN "income" >= 0 THEN "income" ELSE 0 END) AS "sum_positive",
-    #             SUM(CASE WHEN "income" < 0 THEN "income" ELSE 0 END) AS "sum_negative"
-    #         FROM "history"
-    #         WHERE "history"."timestamp" >= ?
-    #             AND "history"."timestamp" <= ?
-    #         GROUP BY date
-    #         '''
-    #         sql_parameters = (start, end)
-    #     else:
-    #         placeholders = ','.join('?' * len(user))
-    #         sql = '''
-    #         SELECT
-    #             strftime('%Y-%m-%d', "timestamp" / 1000, 'unixepoch') AS date,
-    #             SUM(CASE WHEN "income" >= 0 THEN "income" ELSE 0 END) AS "sum_positive",
-    #             SUM(CASE WHEN "income" < 0 THEN "income" ELSE 0 END) AS "sum_negative"
-    #         FROM "history"
-    #         WHERE "history"."user" IN ({})
-    #             AND "history"."timestamp" >= ?
-    #             AND "history"."timestamp" <= ?
-    #         GROUP BY date
-    #         '''.format(placeholders)
-    #         sql_parameters = tuple(user) + (start, end)
-    #     try:
-    #         with sqlite3.connect(self.db) as conn:
-    #             cur = conn.cursor()
-    #             cur.execute(sql, sql_parameters)
-    #             rows = cur.fetchall()
-    #             return rows
-    #     except sqlite3.Error as e:
-    #         print(e)
-    
     def select_ppl(self, user: list, start: str, end: str, sum_period: str):
     # Define date formats for different sum_period values
         date_formats = {
