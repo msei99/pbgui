@@ -451,7 +451,7 @@ class VPSManager:
 
     def fetch_log(self, vps : VPS, debug = False):
         # vps.update_status = None
-        # vps.save()
+        vps.save()
         # vps.remove_update_log()
         # vps.update_log = ""
         if debug:

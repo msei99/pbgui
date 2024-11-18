@@ -54,6 +54,7 @@ class Monitor():
         d_v7 = []
         d_multi = []
         d_single = []
+        self.logfiles = []
         if server.monitor:
             for monitor in server.monitor:
                 info = ({
