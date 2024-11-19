@@ -203,7 +203,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - VPS-Manager: Don't allow add VPS with same names
 - New P+L Dashboard (Sephral)
 - New Navigation (Sephral)
-- Added V7 Grif Visualizer (Sephral)
+- Added V7 Grid Visualizer (Sephral)
 - Added optional notes to instances (Sephral)
 - Imporved Titel & Page Headers (Sephral)
 - VPS-Manager: Added update function for localhost (Master) for pbgui, pb6 and pb7
