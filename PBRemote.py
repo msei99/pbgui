@@ -334,6 +334,26 @@ class RemoteServer():
             return hashlib.md5(file_contents).hexdigest()
         return None
 
+    def delete_server(self):
+        """
+        Delete the server from the remote storage.
+        """
+        pbgdir = Path.cwd()
+        # rclone delete pbgui:pbgui --include *manibot51*/**
+        cmd = ['rclone', 'delete', '-v', f'{self.bucket}', '--include', f'*{self.name}*/**']
+        logfile = Path(f'{pbgdir}/data/logs/sync.log')
+        log = open(logfile,"ab")
+        if platform.system() == "Windows":
+            creationflags = subprocess.CREATE_NO_WINDOW
+            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+        else:
+            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        # delete local files
+        shutil.rmtree(f'{pbgdir}/data/remote/cmd_{self.name}', ignore_errors=True)
+        shutil.rmtree(f'{pbgdir}/data/remote/instances_{self.name}', ignore_errors=True)
+        shutil.rmtree(f'{pbgdir}/data/remote/multi_{self.name}', ignore_errors=True)
+        shutil.rmtree(f'{pbgdir}/data/remote/run_v7_{self.name}', ignore_errors=True)
+
 class PBRemote():
     """
     PBRemote class is used to manage the local server and synchronizing data from the remote storage.
@@ -760,11 +780,18 @@ class PBRemote():
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
+            add = True
             for server in self.remote_servers:
                 if rserver.name == server.name:
-                    return
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Add New Server: {rserver.name}')
-            self.add(rserver)
+                    add = False
+            if add:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Add New Server: {rserver.name}')
+                self.add(rserver)
+        # Remove servers that are not in the remote anymore
+        for server in self.remote_servers:
+            if not Path(f'{pbgdir}/data/remote/cmd_{server.name}').exists():
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove Server: {server.name}')
+                self.remove(server)
 
     def run(self):
         """Starts PBRemote in unbuffered mode, and send an error message if it does not open every 10 secondes."""
@@ -857,7 +884,6 @@ class PBRemote():
             except FileNotFoundError:
                 pass
         return []
-
 
 def main():
     """

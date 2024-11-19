@@ -3,7 +3,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.26
+# v1.27
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -194,6 +194,21 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.27 (19-11-2024)
+- Bugfix Results Backtest Single
+- PBRemote: Added delete function for offline Remote Servers with cleanup remote storage
+- VPS-Manager: Find new added VPS after a refresh of the Page
+- VPS-Manager: View logfiles from VPS
+- VPS-Manager: Don't allow add VPS with same names
+- New P+L Dashboard (Sephral)
+- New Navigation (Sephral)
+- Added V7 Grif Visualizer (Sephral)
+- Added optional notes to instances (Sephral)
+- Imporved Titel & Page Headers (Sephral)
+- VPS-Manager: Added update function for localhost (Master) for pbgui, pb6 and pb7
+- A lot of small bugfixes
+- More small improvements
 
 ## v1.26 (13-11-2024)
 - VPS-Manager always build rust when update v7 passivbot
