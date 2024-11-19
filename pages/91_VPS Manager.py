@@ -32,6 +32,7 @@ def list_vps():
             vpsmanager.vpss = []
             vpsmanager.find_vps()
             pbremote.systemts = 0
+            pbremote.update_remote_servers()
             st.rerun()
         if st.button(":material/add_box:"):
             st.session_state.init_vps = vpsmanager.add_vps()
@@ -147,6 +148,7 @@ def manage_master():
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             if st.button(":material/refresh:"):
+                pbremote.update_remote_servers()
                 st.rerun()
         with col2:
             if st.button(":material/home:"):
@@ -233,6 +235,11 @@ def manage_vps():
     if "manage_vps_select_vps" in st.session_state:
         if st.session_state.manage_vps_select_vps != st.session_state.manage_vps.hostname:
             st.session_state.manage_vps = vpsmanager.find_vps_by_hostname(st.session_state.manage_vps_select_vps)
+            del st.session_state.vps_user_pw
+            del st.session_state.vps_swap
+            del st.session_state.vps_firewall
+            del st.session_state.vps_firewall_ssh_port
+            del st.session_state.vps_firewall_ssh_ips
     vps = st.session_state.manage_vps
     # Init PBRemote
     pbremote = st.session_state.pbremote

@@ -586,11 +586,11 @@ class BacktestResults:
         st.dataframe(data=self.results_d, width=None, height=36+(len(self.results_d))*35, use_container_width=True, hide_index=None, column_order=None, column_config=st.session_state.setup_column_config)
 
     def view(self, trades: pd.DataFrame = None, only : bool = False):
-        if f'setup_table_bt_{self}' in st.session_state and st.session_state.page == "Backtest":
+        if f'setup_table_bt_{self}' in st.session_state and st.session_state.page == "PBv6Single Backtest":
             self.setup_table()
             return
         if (self.backtests or trades is not None) and not only:
-            if st.session_state.page == "Backtest":
+            if st.session_state.page == "PBv6Single Backtest":
                 st.markdown('### Filter and select backtests for view')
                 col1, col2, col3 = st.columns([1,1,1])
                 with col1:
@@ -668,7 +668,7 @@ class BacktestResults:
                     else:
                         bt.selected = False
             if self.results_d:
-                if st.session_state.page == "Backtest":
+                if st.session_state.page == "PBv6Single Backtest":
                     with st.sidebar:
                         if st.button("Setup"):
                             st.session_state[f'setup_table_bt_{self}'] = True

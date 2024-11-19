@@ -131,16 +131,22 @@ def pbremote_details():
             pbremote.bucket = st.session_state.pbremote_bucket
     # Navigation
     with st.sidebar:
-        if st.button(":material/refresh:"):
-            st.rerun()
-        if st.button(":material/home:"):
-            del st.session_state.pbremote_details
-            st.rerun()
-        if st.button(":material/save:"):
-            pbremote.save_config()
-        if st.button(":material/edit:"):
-            st.session_state.monitor_edit = True
-            st.rerun()
+        col1, col2, col3, col4 = st.columns([1, 1, 1 ,1])
+        with col1:
+            if st.button(":material/refresh:"):
+                pbremote.update_remote_servers()
+                st.rerun()
+        with col2:
+            if st.button(":material/home:"):
+                del st.session_state.pbremote_details
+                st.rerun()
+        with col3:
+            if st.button(":material/save:"):
+                pbremote.save_config()
+        with col4:
+            if st.button(":material/edit:"):
+                st.session_state.monitor_edit = True
+                st.rerun()
         st.markdown("""---""")
         st.markdown("Remote Servers")
         api_sync = []
@@ -150,8 +156,16 @@ def pbremote_details():
                 if not rserver.is_api_md5_same(pbremote.api_md5):
                     api_sync.append(rserver)
             else: color = "red"
-            if st.button(f':{color}[{rserver.name}]'):
-                st.session_state.server = rserver
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                if st.button(f':{color}[{rserver.name}]'):
+                    st.session_state.server = rserver
+            with col2:
+                if color == "red":
+                    if st.button(":material/delete:"):
+                        rserver.delete_server()
+                        pbremote.update_remote_servers()
+                        st.rerun()
                 
     st.subheader("PBRemote Details")
     pbremote_overview()
