@@ -180,23 +180,22 @@
       
     - name: Disable IPv6
       block:
-        - name: Disable IPv6 all
-          sysctl:
-            name: net.ipv6.conf.all.disable_ipv6
-            value: 1
+        - name: Add GRUB command to disable IPv6 GRUB_CMDLINE_LINUX_DEFAULT
+          ansible.builtin.lineinfile:
+            path: /etc/default/grub
+            regexp: '^GRUB_CMDLINE_LINUX_DEFAULT'
+            line: 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash ipv6.disable=1"'
             state: present
 
-        - name: Disable IPv6 default
-          sysctl:
-            name: net.ipv6.conf.default.disable_ipv6
-            value: 1
+        - name: Add GRUB command to disable IPv6 GRUB_CMDLINE_LINUX
+          ansible.builtin.lineinfile:
+            path: /etc/default/grub
+            regexp: '^GRUB_CMDLINE_LINUX'
+            line: 'GRUB_CMDLINE_LINUX="ipv6.disable=1"'
             state: present
 
-        - name: Disable IPv6 loopback
-          sysctl:
-            name: net.ipv6.conf.lo.disable_ipv6
-            value: 1
-            state: present
+        - name: Update GRUB configuration
+          command: update-grub
       become: yes
 
     - name: Add deadsnakes/ppa for installing python3.10
