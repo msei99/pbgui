@@ -363,8 +363,10 @@ class VPSManager:
         vps.init_log = ""
         if debug:
             tags = "debug,all"
+            verbosity = 3
         else:
             tags = None
+            verbosity = 1
         ansible_runner.run_async(
             playbook=str(PurePath(f'{PBGDIR}/vps-init.yml')),
             inventory=vps.hostname,
@@ -379,7 +381,7 @@ class VPSManager:
             },
             quiet=True,
             tags=tags,
-            verbosity=1,
+            verbosity=verbosity,
             private_data_dir=vps.privat_data_dir,
             event_handler=vps.init_event_handler,
             status_handler=vps.init_status_handler,
@@ -392,8 +394,10 @@ class VPSManager:
         vps.setup_log = ""
         if debug:
             tags = "debug,all"
+            verbosity = 3
         else:
             tags = None
+            verbosity = 1
         ansible_runner.run_async(
             playbook=str(PurePath(f'{PBGDIR}/vps-setup.yml')),
             inventory=vps.hostname,
@@ -411,7 +415,7 @@ class VPSManager:
             },
             quiet=True,
             tags=tags,
-            verbosity=1,
+            verbosity=verbosity,
             private_data_dir=vps.privat_data_dir,
             event_handler=vps.setup_event_handler,
             status_handler=vps.setup_status_handler,
@@ -425,8 +429,10 @@ class VPSManager:
         vps.update_log = ""
         if debug:
             tags = "debug,all"
+            verbosity = 3
         else:
             tags = None
+            verbosity = 1
         ansible_runner.run_async(
             playbook=str(PurePath(f'{PBGDIR}/{vps.command}.yml')),
             inventory=vps.hostname,
@@ -442,7 +448,7 @@ class VPSManager:
             },
             quiet=True,
             tags=tags,
-            verbosity=1,
+            verbosity=verbosity,
             private_data_dir=vps.privat_data_dir,
             event_handler=vps.update_event_handler,
             status_handler=vps.update_status_handler,
@@ -456,8 +462,10 @@ class VPSManager:
         # vps.update_log = ""
         if debug:
             tags = "debug,all"
+            verbosity = 3
         else:
             tags = None
+            verbosity = 1
         ansible_runner.run(
             playbook=str(PurePath(f'{PBGDIR}/{vps.command}.yml')),
             inventory=vps.hostname,
@@ -470,7 +478,7 @@ class VPSManager:
             },
             quiet=True,
             tags=tags,
-            verbosity=1,
+            verbosity=verbosity,
             private_data_dir=vps.privat_data_dir,
             # event_handler=vps.update_event_handler,
             # status_handler=vps.update_status_handler,
@@ -485,8 +493,10 @@ class VPSManager:
         self.update_log = ""
         if debug:
             tags = "debug,all"
+            verbosity = 3
         else:
             tags = None
+            verbosity = 1
         ansible_runner.run_async(
             playbook=str(PurePath(f'{PBGDIR}/{self.command}.yml')),
             extravars={
@@ -498,7 +508,7 @@ class VPSManager:
             },
             quiet=True,
             tags=tags,
-            verbosity=1,
+            verbosity=verbosity,
             private_data_dir=self.privat_data_dir,
             event_handler=self.update_event_handler,
             status_handler=self.update_status_handler,
