@@ -28,7 +28,7 @@ SYMBOLMAP = {
     "BEAMX": "BEAM",
     "DODOX": "DODO",
     "LUNA2": "LUNA",
-    "NEIROETH": "NEIRO",
+    # "NEIROETH": "NEIRO",
     "1MBABYDOGE": "BabyDoge",
     #Bybit
     "1000000BABYDOGE": "BabyDoge",
@@ -382,7 +382,7 @@ class CoinData:
             if sym in SYMBOLMAP:
                 sym = SYMBOLMAP[sym]
             for id, coin in enumerate(self.data["data"]):
-                if coin["symbol"] == sym:
+                if coin["symbol"] == sym or (sym == "NEIROETH" and coin["id"] == 32461):
                     if coin["quote"]["USD"]["market_cap"]:
                         coin_data = coin
                         market_cap = coin["quote"]["USD"]["market_cap"]
