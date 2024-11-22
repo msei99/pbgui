@@ -363,8 +363,8 @@ class Exchange:
                     last_funding = fundings[-1]
                     all_histories = fundings + all_histories
                 if len(fundings) == limit:
-                    print(f'User:{self.user.name} Fetched', len(fundings), 'fundings from', self.instance.iso8601(first_funding['timestamp']), 'till', self.instance.iso8601(last_funding['timestamp']))
-                    since = fundings[-1]['timestamp']
+                    print(f'User:{self.user.name} Fetched', len(fundings), 'fundings from', self.instance.iso8601(int(first_funding['time'])), 'till', self.instance.iso8601(int(last_funding['time'])))
+                    since = int(fundings[-1]['time'])
                 else:
                     print(f'User:{self.user.name} Fetched', len(fundings), 'fundings from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
                     since = end
