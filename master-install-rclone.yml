@@ -1,0 +1,72 @@
+---
+# Install or Update rclone
+# Steps:
+# 1. fetch install.sh from rclone website
+# 2. Run install.sh
+
+- hosts: localhost
+  # gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    # user: "{{ user }}"
+    # user_pw: "{{ user_pw }}"
+    pbgdir: "{{ pbgdir }}"
+
+  tasks:
+    # - name: display facts
+    #   debug:
+    #     var: ansible_facts
+    #   tags: debug,never
+
+    - name: get install_dir
+      set_fact:
+        install_dir: "{{ pbgdir }}/data/vpsmanager"
+    
+    - name: print install_dir
+      debug:
+        var: install_dir
+      tags: debug,never
+    
+    - name: fetch rclone install.sh
+      get_url:
+        url: https://rclone.org/install.sh
+        dest: "{{ install_dir }}/rclone-install.sh"
+        mode: 0755
+        force: yes
+      register: rclone_install
+    
+    - name: print rclone_install
+      debug:
+        var: rclone_install
+      tags: debug,never
+    
+    - name: run rclone-install.sh
+      command: "{{ install_dir }}/rclone-install.sh"
+      args:
+        chdir: "{{ install_dir }}"
+      register: rclone_install
+      become: yes
+      ignore_errors: yes
+
+    - name: print stdout
+      debug:
+        var: rclone_install.stdout_lines
+      when: rclone_install.failed
+
+    - name: print rclone_install
+      debug:
+        var: rclone_install
+      tags: debug,never
+
+    - name: remove rclone-install.sh
+      file:
+        path: "{{ install_dir }}/rclone-install.sh"
+        state: absent
+      register: rclone_install
+
+    - name: print rclone_install
+      debug:
+        var: rclone_install
+      tags: debug,never

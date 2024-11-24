@@ -162,6 +162,18 @@ def manage_master():
             del st.session_state.manage_master
             st.session_state.view_update_master = True
             st.rerun()
+        st.text_input("sudo password", type="password", key="sudo_pw", help=pbgui_help.sudo_pw)
+        enable_install = False
+        if "sudo_pw" in st.session_state:
+            if st.session_state.sudo_pw != "":
+                enable_install = True
+        if st.button("Install rclone", disabled=not enable_install):
+            vpsmanager.command = "master-install-rclone"
+            vpsmanager.command_text = "Install rclone"
+            vpsmanager.update_master(debug = st.session_state.setup_debug, sudo_pw = st.session_state.sudo_pw)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
 
     # Init Status
     if pbremote.bucket:
@@ -294,7 +306,9 @@ def manage_vps():
             else:
                 st.session_state.vps_firewall_ssh_ips = vps.firewall_ssh_ips
     # Init Status
-    if pbremote.bucket:
+    if "rclone_test" not in st.session_state:
+        st.session_state.rclone_test, detail_result = pbremote.test_bucket()
+    if st.session_state.rclone_test:
         rclone_ok = f' ✅'
     else:
         rclone_ok = f' ❌'
@@ -309,6 +323,8 @@ def manage_vps():
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             if st.button(":material/refresh:"):
+                if "rclone_test" in st.session_state:
+                    del st.session_state.rclone_test
                 st.rerun()
         with col2:
             if st.button(":material/home:"):
