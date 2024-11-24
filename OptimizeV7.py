@@ -381,9 +381,17 @@ class OptimizeV7Results:
     def find_result_name(self, result_file):
         with open(result_file, "r", encoding='utf-8') as f:
             first_line = f.readline()
-            config = json.loads(first_line)
-            backtest_name = config["config"]["backtest"]["base_dir"].split("/")[-1]
-            return backtest_name
+            if not first_line:
+                return "Empty Result"
+            try:
+                config = json.loads(first_line)
+            except Exception as e:
+                return "Corrupt Result"
+            if "config" not in config:
+                return "Corrupt Result"
+            else:
+                backtest_name = config["config"]["backtest"]["base_dir"].split("/")[-1]
+                return backtest_name
 
     def view_analysis(self, analysis):
         file = Path(f'{self.analysis_path}/{analysis}.json')
