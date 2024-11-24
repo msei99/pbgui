@@ -415,6 +415,13 @@ class PBRemote():
         self.pidfile = Path(f'{self.piddir}/pbremote.pid')
         self.my_pid = None
         self.bucket = None
+        self.bucket_type = "s3"
+        self.bucket_endpoint = None
+        self.bucket_no_check_bucket = "true"
+        self.bucket_access_key_id = None
+        self.bucket_secret_access_key = None
+        self.bucket_provider = "Synology"
+        self.bucket_region = None
         self.rclone_installed = self.is_rclone_installed()
         if not self.rclone_installed:
             if __name__ == '__main__':
@@ -425,7 +432,7 @@ class PBRemote():
             else:
                 self.error = "rclone not installed"
                 return
-        self.buckets = self.fetch_buckets()
+        self.fetch_buckets()
         if not self.buckets:
             if __name__ == '__main__':
                 sys.stdout = sys.__stdout__
@@ -880,10 +887,89 @@ class PBRemote():
             try:
                 result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 if result.returncode == 0:
-                    return result.stdout.splitlines()
+                    self.buckets = result.stdout.splitlines()
+                    return True
+            except Exception as e:
+                return False
+        return False
+
+    def fetch_bucket_config(self):
+        """Checks if rclone is installed and return all the buckets available in the remote server as an array."""
+        if self.is_rclone_installed():
+            cmd = ['rclone', 'config', 'dump']
+            try:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode == 0:
+                    rcfile = result.stdout
             except FileNotFoundError:
                 pass
-        return []
+            config = json.loads(rcfile)
+            bucket = self.bucket[0:-1]
+            if bucket in config:
+                bconfig = config[bucket]
+                if "type" in bconfig:
+                    self.bucket_type = bconfig["type"]
+                if "endpoint" in bconfig:
+                    self.bucket_endpoint = bconfig["endpoint"]
+                if "no_check_bucket" in bconfig:
+                    self.bucket_no_check_bucket = bconfig["no_check_bucket"]
+                if "access_key_id" in bconfig:
+                    self.bucket_access_key_id = bconfig["access_key_id"]
+                if "provider" in bconfig:
+                    self.bucket_provider = bconfig["provider"]
+                if "region" in bconfig:
+                    self.bucket_region = bconfig["region"]
+                if "secret_access_key" in bconfig:
+                    self.bucket_secret_access_key = bconfig["secret_access_key"]
+                return bconfig
+        return None
+    
+    def save_bucket_config(self):
+        """Checks if rclone is installed and save the bucket configuration."""
+        if self.is_rclone_installed():
+            cmd = [
+                'rclone', 'config', 'create',
+                self.bucket[0:-1],
+                self.bucket_type,
+                f'provider={self.bucket_provider}',
+                f'region={self.bucket_region}',
+                f'endpoint={self.bucket_endpoint}',
+                f'no_check_bucket={self.bucket_no_check_bucket}',
+                f'access_key_id={self.bucket_access_key_id}',
+                f'secret_access_key={self.bucket_secret_access_key}'
+                ]
+            try:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode == 0:
+                    return True, result.stdout
+                else:
+                    return False, result.stderr
+            except Exception as e:
+                return False, f'Error: {e}'
+
+    def test_bucket(self):
+        """Tests the bucket configuration by running 'rclone ls' as a process."""
+        cmd = ['rclone', 'ls', self.bucket]
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode == 0:
+                return True, result.stdout
+            else:
+                return False, result.stderr
+        except Exception as e:
+            return False, f'Error: {e}'
+    
+    def delete_bucket(self):
+        """Deletes the bucket configuration by running 'rclone config delete' as a process."""
+        cmd = ['rclone', 'config', 'delete', self.bucket[0:-1]]
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode == 0:
+                return True, result.stdout
+            else:
+                return False, result.stderr
+        except Exception as e:
+            return False, f'Error: {e}'
 
 def main():
     """

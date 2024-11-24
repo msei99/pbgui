@@ -1092,3 +1092,10 @@ role = """
     If slave:
     - PBRemote will upload alive data to the VPS
     ```"""
+
+sudo_pw = """
+    ```
+    The sudo password of your local user
+    This is needed to install:
+    - rclone
+    ```"""

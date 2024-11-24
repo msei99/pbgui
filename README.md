@@ -3,7 +3,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.27
+# v1.28
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -157,7 +157,10 @@ sudo -v ; curl https://rclone.org/install.sh | sudo bash
 ```
 As a recommendation, Synology C2 Object Storage offers a reliable option.
 They provide 15GB of free storage, and you can sign up at https://c2.synology.com/en-uk/object-storage/overview.
-After registration, create your bucket using your own unique name. Please note that using "pbgui" as a bucket name will not work, as it has already been chosen by me. Configure rclone on your PC and servers by following the steps below:
+After registration, create your bucket using your own unique name. Please note that using "pbgui" as a bucket name will not work, as it has already been chosen by me.
+You can install rclone and configure bucket using PBGui. Go to Services/PBRemote/Show Details.
+Or do a manual Setup:
+Configure rclone on your PC and servers by following the steps below:
 Rclone configuration (Synology):
 ```
 rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=eu-002.s3.synologyc2.net no_check_bucket=true access_key_id=<key> secret_access_key=<secret>
@@ -194,6 +197,18 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.28 (24-11-2024)
+- VPS-Manager check for working rclone on Master before Setup a VPS
+- Added GUI Settup for rclone buckets (Services PBRemote)
+- Added Test Connection for rclone buckets
+- VPS-Manager Install and Update rclone on Master
+- Bugfix Optimize V7 corrupted results
+- Higher verbosity Level when setup vps and select debug
+- Disable ipv6 on VPS using grub
+- Coindata Fix for NEIROETHUSDT on binance and correct marketcap
+- Bugfix Hyperliquid import
+- Expanded Settings when Setup an new VPS
 
 ## v1.27 (19-11-2024)
 - Bugfix Results Backtest Single

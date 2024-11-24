@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, error_popup, info_popup
 import pbgui_help
 from Monitor import Monitor
 
@@ -170,15 +170,36 @@ def pbremote_details():
     st.subheader("PBRemote Details")
     pbremote_overview()
     if pbremote.bucket:
-        buckets_index = pbremote.buckets.index(pbremote.bucket)
+        if pbremote.bucket in pbremote.buckets:
+            buckets_index = pbremote.buckets.index(pbremote.bucket)
+        else: buckets_index = 0
+        if "bucket_config" not in st.session_state:
+            st.session_state.bucket_config = pbremote.fetch_bucket_config()
     else: buckets_index = 0
+    if st.button("Add bucket", key="pbremote_bucket_add"):
+        pbremote.bucket = None
+        pbremote.bucket_region = None
+        pbremote.bucket_endpoint = None
+        pbremote.bucket_access_key_id = None
+        pbremote.bucket_secret_access_key = None
+        st.session_state.edit_bucket = True
+        st.rerun()
     if pbremote.buckets:
-        st.selectbox('Select bucket',pbremote.buckets, index = buckets_index, key="pbremote_bucket", help=pbgui_help.pbremote_bucket)
+        col1, col2 = st.columns([1, 1], vertical_alignment='bottom')
+        with col1:
+            st.selectbox('Select bucket',pbremote.buckets, index = buckets_index, key="pbremote_bucket", help=pbgui_help.pbremote_bucket)
+        with col2:
+            if st.button("Edit", key="pbremote_bucket_edit"):
+                bucket_config = pbremote.fetch_bucket_config()
+                if bucket_config:
+                    st.session_state.edit_bucket = True
+                    st.rerun()
     else:
         if pbremote.rclone_installed:
-            st.write("No bucket found. Please configure rclone.")
+            st.write("No bucket found. Please configure rclone by using the 'Add bucket' button.")
         else:
             st.write("rclone not installed. Please install rclone.")
+            st.info("Go to VPS Manager, select your local system and install rclone.")
     if st.checkbox("Show logfile", key="pbremote_log"):
         st.session_state.pbgui_instances.view_log("PBRemote")
     if len(api_sync) > 0:
@@ -194,6 +215,88 @@ def pbremote_details():
         monitor.view_server()
     else:
         st.info("Please select a remote server from the sidebar to view details.")
+
+def edit_bucket():
+    # Init PBRemote
+    pbremote = st.session_state.pbremote
+    # Init keys from session_state
+    if "pbremote_bucket_name" in st.session_state:
+        if st.session_state.pbremote_bucket_name + ":" != pbremote.bucket:
+            pbremote.bucket = st.session_state.pbremote_bucket_name + ":"
+    if "pbremote_bucket_region" in st.session_state:
+        if st.session_state.pbremote_bucket_region != pbremote.bucket_region:
+            pbremote.bucket_region = st.session_state.pbremote_bucket_region
+    if "pbremote_bucket_endpoint" in st.session_state:
+        if st.session_state.pbremote_bucket_endpoint != pbremote.bucket_endpoint:
+            pbremote.bucket_endpoint = st.session_state.pbremote_bucket_endpoint
+    if "pbremote_bucket_access_key" in st.session_state:
+        if st.session_state.pbremote_bucket_access_key != pbremote.bucket_access_key_id:
+            pbremote.bucket_access_key_id = st.session_state.pbremote_bucket_access_key
+    if "pbremote_bucket_secret_key" in st.session_state:
+        if st.session_state.pbremote_bucket_secret_key != pbremote.bucket_secret_access_key:
+            pbremote.bucket_secret_access_key = st.session_state.pbremote_bucket_secret_key
+    # Navigation
+    with st.sidebar:
+        if st.button(":back:", key="button_edit_bucket_back"):
+            del st.session_state.edit_bucket
+            st.rerun()
+        if st.button(":material/save:"):
+            ok, result = pbremote.save_bucket_config()
+            if ok:
+                result_popup("Bucket saved", result)
+                pbremote.fetch_buckets()
+            else:
+                error_popup(result)
+        if st.button(":material/delete:"):
+            ok, result = pbremote.delete_bucket()
+            if ok:
+                result_popup("Bucket deleted", result)
+                pbremote.fetch_buckets()
+                del st.session_state.edit_bucket
+            else:
+                error_popup(result)
+
+    # Instructions and link to Synology        
+    st.write(
+        "1. Get your free 15GB account at [Synology C2](https://c2.synology.com/en-uk/object-storage/overview).\n"
+        "2. Create a bucket in your C2 Object Storage.\n"
+        "3. Fill in the details below.\n"
+        "4. Save the config.\n"
+        "5. Test the connection.\n"
+        "6. Go back and save the settings.\n"
+    )
+   
+    # Display
+    if pbremote.bucket:
+        bucket_name = pbremote.bucket[0:-1]
+    else:
+        bucket_name = ""
+    st.text_input("Bucket name", value=bucket_name, key="pbremote_bucket_name")
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    with col1:
+        st.text_input("region", value=pbremote.bucket_region, key="pbremote_bucket_region")
+    with col2:
+        st.text_input("endpoint", value=pbremote.bucket_endpoint, key="pbremote_bucket_endpoint")
+    with col3:
+        st.text_input("access_key_id", value=pbremote.bucket_access_key_id, key="pbremote_bucket_access_key")
+    with col4:
+        st.text_input("secret_access_key", value=pbremote.bucket_secret_access_key, type="password", key="pbremote_bucket_secret_key")
+    if st.button("Test Connection"):
+        ok, result = pbremote.test_bucket()
+        if ok:
+            result_popup("Connection successful", result)
+        else:
+            error_popup(result)
+    st.info("Save your config before testing the connection.")
+
+@st.dialog("Info", width="large")
+def result_popup(message, result):
+    st.info(f'{message}', icon="✅")
+    with st.container(height=1200):
+        st.text(result)
+    if st.button(":green[OK]"):
+        st.rerun()
+
 
 def pbstat_details():
     # Navigation
@@ -250,6 +353,8 @@ if 'monitor_edit' in st.session_state:
     st.session_state.monitor.edit_monitor_config()
 elif 'pbrun_details' in st.session_state:
     pbrun_details()
+elif 'edit_bucket' in st.session_state:
+    edit_bucket()
 elif 'pbremote_details' in st.session_state:
     pbremote_details()
 elif 'pbstat_details' in st.session_state:
