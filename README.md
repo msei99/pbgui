@@ -145,23 +145,24 @@ python PBData.py &
 This command will run the PBData.py in the background and filling the database for the dashboard
 
 ## PBRemote Server Manager
+You can install rclone and configure bucket using PBGui. Go to Services/PBRemote/Show Details.
+
 With PBRemote, you can efficiently manage passivbot instances on multiple servers directly from your PC.
 This includes starting, stopping, removing, and syncing instances from and to your servers.
 PBRemote utilizes rclone to establish communication via cloud storage with your servers.
 The advantage is that you do not need to open any incoming firewall ports on your PC or servers.
 Additionally, all your passivbot config data is securely transferred and stored on your preferred cloud storage provider.
 rclone supports over 70 cloud storage providers, you can find more information at https://rclone.org/.
-To install rclone, you can use the following command:
+Manual install rclone, you can use the following command:
 ```
 sudo -v ; curl https://rclone.org/install.sh | sudo bash
 ```
 As a recommendation, Synology C2 Object Storage offers a reliable option.
 They provide 15GB of free storage, and you can sign up at https://c2.synology.com/en-uk/object-storage/overview.
 After registration, create your bucket using your own unique name. Please note that using "pbgui" as a bucket name will not work, as it has already been chosen by me.
-You can install rclone and configure bucket using PBGui. Go to Services/PBRemote/Show Details.
 Or do a manual Setup:
 Configure rclone on your PC and servers by following the steps below:
-Rclone configuration (Synology):
+Manual Rclone configuration (Synology):
 ```
 rclone config create <bucket_name> s3 provider=Synology region=eu-002 endpoint=eu-002.s3.synologyc2.net no_check_bucket=true access_key_id=<key> secret_access_key=<secret>
 ```
