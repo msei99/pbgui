@@ -557,9 +557,15 @@ class OptimizeV7Item:
         if "edit_opt_v7_starting_config" in st.session_state:
             if st.session_state.edit_opt_v7_starting_config != self.config.pbgui.starting_config:
                 self.config.pbgui.starting_config = st.session_state.edit_opt_v7_starting_config
+        if "edit_opt_v7_compress_results_file" in st.session_state:
+            if st.session_state.edit_opt_v7_compress_results_file != self.config.optimize.compress_results_file:
+                self.config.optimize.compress_results_file = st.session_state.edit_opt_v7_compress_results_file
         if "edit_opt_v7_lower_bound_drawdown_worst" in st.session_state:
             if st.session_state.edit_opt_v7_lower_bound_drawdown_worst != self.config.optimize.limits.lower_bound_drawdown_worst:
                 self.config.optimize.limits.lower_bound_drawdown_worst = st.session_state.edit_opt_v7_lower_bound_drawdown_worst
+        if "edit_opt_v7_lower_bound_drawdown_worst_mean_1pct" in st.session_state:
+            if st.session_state.edit_opt_v7_lower_bound_drawdown_worst_mean_1pct != self.config.optimize.limits.lower_bound_drawdown_worst_mean_1pct:
+                self.config.optimize.limits.lower_bound_drawdown_worst_mean_1pct = st.session_state.edit_opt_v7_lower_bound_drawdown_worst_mean_1pct
         if "edit_opt_v7_lower_bound_equity_balance_diff_mean" in st.session_state:
             if st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_mean != self.config.optimize.limits.lower_bound_equity_balance_diff_mean:
                 self.config.optimize.limits.lower_bound_equity_balance_diff_mean = st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_mean
@@ -622,7 +628,7 @@ class OptimizeV7Item:
             st.date_input("START_DATE", datetime.datetime.strptime(self.config.backtest.start_date, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_opt_v7_sd")
         with col4:
             st.date_input("END_DATE", datetime.datetime.strptime(self.config.backtest.end_date, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_opt_v7_ed")
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
         with col1:
             st.number_input('STARTING_BALANCE',value=float(self.config.backtest.starting_balance),step=500.0, key="edit_opt_v7_sb")
         with col2:
@@ -631,17 +637,19 @@ class OptimizeV7Item:
             st.number_input('n_cpus',value=self.config.optimize.n_cpus, min_value=1, max_value=multiprocessing.cpu_count(), step=1, help=None, key="edit_opt_v7_n_cpu")
         with col4:
             st.checkbox("Start with config", value=self.config.pbgui.starting_config, key="edit_opt_v7_starting_config")
+        with col5:
+            st.checkbox("compress results file", value=self.config.optimize.compress_results_file, key="edit_opt_v7_compress_results_file")
         with st.expander("Edit Config", expanded=False):
             self.config.bot.edit()
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
             st.number_input("lower_bound_drawdown_worst", min_value=0.0, max_value=1.0, value=self.config.optimize.limits.lower_bound_drawdown_worst, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_drawdown_worst", help=pbgui_help.limits_lower_bound_drawdown_worst)
         with col2:
-            st.number_input("lower_bound_equity_balance_diff_mean", min_value=0.0, max_value=1.0, value=self.config.optimize.limits.lower_bound_equity_balance_diff_mean, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_equity_balance_diff_mean", help=pbgui_help.limits_lower_bound_equity_balance_diff_mean)
+            st.number_input("lower_bound_drawdown_worst_mean_1pct", min_value=0.0, max_value=1.0, value=self.config.optimize.limits.lower_bound_drawdown_worst_mean_1pct, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_drawdown_worst_mean_1pct", help=pbgui_help.limits_lower_bound_drawdown_worst_mean_1pct)
         with col3:
-            st.number_input("lower_bound_loss_profit_ratio", min_value=0.0, max_value=1.0, value=self.config.optimize.limits.lower_bound_loss_profit_ratio, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_loss_profit_ratio", help=pbgui_help.limits_lower_bound_loss_profit_ratio)
+            st.number_input("lower_bound_equity_balance_diff_mean", min_value=0.0, max_value=1.0, value=self.config.optimize.limits.lower_bound_equity_balance_diff_mean, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_equity_balance_diff_mean", help=pbgui_help.limits_lower_bound_equity_balance_diff_mean)
         with col4:
-            st.multiselect("scoring", ["mdg", "sharpe_ratio"], default=self.config.optimize.scoring, key="edit_opt_v7_scoring", help=pbgui_help.scoring)
+            st.number_input("lower_bound_loss_profit_ratio", min_value=0.0, max_value=1.0, value=self.config.optimize.limits.lower_bound_loss_profit_ratio, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_loss_profit_ratio", help=pbgui_help.limits_lower_bound_loss_profit_ratio)
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.number_input("population_size", min_value=1, max_value=10000, value=self.config.optimize.population_size, step=1, format="%d", key="edit_opt_v7_population_size", help=pbgui_help.population_size)
@@ -650,7 +658,7 @@ class OptimizeV7Item:
         with col3:
             st.number_input("mutation_probability", min_value=0.0, max_value=1.0, value=self.config.optimize.mutation_probability, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
         with col4:
-            st.empty()
+            st.multiselect("scoring", ["adg","mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio"], max_selections=2, default=self.config.optimize.scoring, key="edit_opt_v7_scoring")
         # Filters
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:

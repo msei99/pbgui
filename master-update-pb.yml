@@ -97,6 +97,13 @@
         chdir: "{{ pbgdir }}"
       listen: "restart pb6"
 
+    - name: Install pb7 requirements
+      pip:
+        virtualenv: "{{ pb7venv }}"
+        requirements: "{{ pb7dir }}/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pb7"
+
     - name: Build passivbot-rust with maturin
       shell: |
         source "{{ pb7venv }}/bin/activate"
