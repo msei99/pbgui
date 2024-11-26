@@ -772,6 +772,12 @@ limits_lower_bound_drawdown_worst = """
     lowest drawdown during backtest
     ```"""
 
+limits_lower_bound_drawdown_worst_mean_1pct = """
+    ```
+    The optimizer will penalize backtests whose metrics exceed the given values
+    mean of the worst 1% of drawdowns
+    ```"""
+
 limits_lower_bound_equity_balance_diff_mean = """
     ```
     The optimizer will penalize backtests whose metrics exceed the given values

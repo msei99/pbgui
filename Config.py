@@ -197,56 +197,56 @@ class Config:
 #               "exchange": "binance",
 #               "start_date": "2021-05-01",
 #               "starting_balance": 100000.0},
-#  "bot": {"long": {"close_grid_markup_range": 0.0016219,
-#                   "close_grid_min_markup": 0.012842,
-#                   "close_grid_qty_pct": 0.65242,
-#                   "close_trailing_grid_ratio": 0.021638,
-#                   "close_trailing_qty_pct": 0.88439,
-#                   "close_trailing_retracement_pct": 0.028672,
-#                   "close_trailing_threshold_pct": 0.065293,
-#                   "ema_span_0": 465.26,
+#  "bot": {"long": {"close_grid_markup_range": 0.0013425,
+#                   "close_grid_min_markup": 0.0047292,
+#                   "close_grid_qty_pct": 0.85073,
+#                   "close_trailing_grid_ratio": 0.037504,
+#                   "close_trailing_qty_pct": 0.54254,
+#                   "close_trailing_retracement_pct": 0.021623,
+#                   "close_trailing_threshold_pct": 0.065009,
+#                   "ema_span_0": 469.33,
 #                   "ema_span_1": 1120.5,
-#                   "entry_grid_double_down_factor": 2.3744,
-#                   "entry_grid_spacing_pct": 0.052341,
-#                   "entry_grid_spacing_weight": 0.070271,
-#                   "entry_initial_ema_dist": -0.0059754,
-#                   "entry_initial_qty_pct": 0.029454,
-#                   "entry_trailing_grid_ratio": -0.28169,
-#                   "entry_trailing_retracement_pct": 0.0024748,
-#                   "entry_trailing_threshold_pct": -0.051708,
-#                   "filter_relative_volume_clip_pct": 0.51416,
-#                   "filter_rolling_window": 60.0,
-#                   "n_positions": 10.675,
-#                   "total_wallet_exposure_limit": 0.95859,
-#                   "unstuck_close_pct": 0.071741,
-#                   "unstuck_ema_dist": -0.053527,
-#                   "unstuck_loss_allowance_pct": 0.033558,
-#                   "unstuck_threshold": 0.49002},
-#          "short": {"close_grid_markup_range": 0.0049057,
-#                    "close_grid_min_markup": 0.013579,
-#                    "close_grid_qty_pct": 0.6168,
-#                    "close_trailing_grid_ratio": 0.88873,
-#                    "close_trailing_qty_pct": 0.97705,
-#                    "close_trailing_retracement_pct": 0.095287,
-#                    "close_trailing_threshold_pct": -0.060579,
-#                    "ema_span_0": 819.23,
-#                    "ema_span_1": 246.39,
-#                    "entry_grid_double_down_factor": 2.3062,
-#                    "entry_grid_spacing_pct": 0.072015,
-#                    "entry_grid_spacing_weight": 1.4565,
-#                    "entry_initial_ema_dist": -0.072047,
-#                    "entry_initial_qty_pct": 0.072205,
-#                    "entry_trailing_grid_ratio": -0.02319,
-#                    "entry_trailing_retracement_pct": 0.017338,
-#                    "entry_trailing_threshold_pct": -0.084177,
-#                    "filter_relative_volume_clip_pct": 0.5183,
-#                    "filter_rolling_window": 68.072,
-#                    "n_positions": 1.1534,
-#                    "total_wallet_exposure_limit": 0.209,
-#                    "unstuck_close_pct": 0.052695,
-#                    "unstuck_ema_dist": -0.026947,
-#                    "unstuck_loss_allowance_pct": 0.046017,
-#                    "unstuck_threshold": 0.58422}},
+#                   "entry_grid_double_down_factor": 2.2661,
+#                   "entry_grid_spacing_pct": 0.05224,
+#                   "entry_grid_spacing_weight": 0.070246,
+#                   "entry_initial_ema_dist": -0.015187,
+#                   "entry_initial_qty_pct": 0.032679,
+#                   "entry_trailing_grid_ratio": -0.29357,
+#                   "entry_trailing_retracement_pct": 0.002646,
+#                   "entry_trailing_threshold_pct": -0.043522,
+#                   "filter_relative_volume_clip_pct": 0.51429,
+#                   "filter_rolling_window": 330.17,
+#                   "n_positions": 5.2399,
+#                   "total_wallet_exposure_limit": 1.2788,
+#                   "unstuck_close_pct": 0.05968,
+#                   "unstuck_ema_dist": -0.027416,
+#                   "unstuck_loss_allowance_pct": 0.035915,
+#                   "unstuck_threshold": 0.45572},
+#          "short": {"close_grid_markup_range": 0.0020933,
+#                    "close_grid_min_markup": 0.016488,
+#                    "close_grid_qty_pct": 0.93256,
+#                    "close_trailing_grid_ratio": 0.035892,
+#                    "close_trailing_qty_pct": 0.98975,
+#                    "close_trailing_retracement_pct": 0.0042704,
+#                    "close_trailing_threshold_pct": -0.046918,
+#                    "ema_span_0": 1174.4,
+#                    "ema_span_1": 1217.3,
+#                    "entry_grid_double_down_factor": 2.0966,
+#                    "entry_grid_spacing_pct": 0.070355,
+#                    "entry_grid_spacing_weight": 1.5293,
+#                    "entry_initial_ema_dist": -0.090036,
+#                    "entry_initial_qty_pct": 0.07003,
+#                    "entry_trailing_grid_ratio": 0.075994,
+#                    "entry_trailing_retracement_pct": 0.023943,
+#                    "entry_trailing_threshold_pct": -0.079098,
+#                    "filter_relative_volume_clip_pct": 0.49361,
+#                    "filter_rolling_window": 57.016,
+#                    "n_positions": 1.1103,
+#                    "total_wallet_exposure_limit": 0.0,
+#                    "unstuck_close_pct": 0.063395,
+#                    "unstuck_ema_dist": -0.025704,
+#                    "unstuck_loss_allowance_pct": 0.04867,
+#                    "unstuck_threshold": 0.58437}},
 #  "live": {"approved_coins": [],
 #           "auto_gs": true,
 #           "coin_flags": {},
@@ -317,15 +317,18 @@ class Config:
 #                          "short_unstuck_ema_dist": [-0.1, 0.01],
 #                          "short_unstuck_loss_allowance_pct": [0.0, 0.05],
 #                          "short_unstuck_threshold": [0.4, 0.95]},
+#               "compress_results_file": true,
 #               "crossover_probability": 0.7,
 #               "iters": 30000,
 #               "limits": {"lower_bound_drawdown_worst": 0.25,
-#                          "lower_bound_equity_balance_diff_mean": 0.01,
+#                          "lower_bound_drawdown_worst_mean_1pct": 0.15,
+#                          "lower_bound_equity_balance_diff_mean": 0.02,
 #                          "lower_bound_loss_profit_ratio": 0.6},
 #               "mutation_probability": 0.2,
 #               "n_cpus": 5,
 #               "population_size": 500,
-#               "scoring": ["mdg", "sharpe_ratio"]}}
+#               "scoring": ["mdg", "sortino_ratio"]}}
+
 class Backtest:
     def __init__(self):
         self._base_dir = "backtests"
@@ -1313,16 +1316,18 @@ class Optimize:
         self._bounds = Bounds()
         self._limits = Limits()
         # optimize
+        self._compress_results_file = True
         self._crossover_probability = 0.7
         self._iters = 100000
         self._mutation_probability = 0.2
         self._n_cpus = 5
         self._population_size = 500
         # scoring
-        self._scoring = ["mdg", "sharpe_ratio"]
+        self._scoring = ["mdg", "sortino_ratio"]
 
         self._optimize = {
             "bounds": self._bounds._bounds,
+            "compress_results_file": self._compress_results_file,
             "crossover_probability": self._crossover_probability,
             "iters": self._iters,
             "limits": self._limits._limits,
@@ -1341,6 +1346,8 @@ class Optimize:
     def optimize(self, new_optimize):
         if "bounds" in new_optimize:
             self.bounds = new_optimize["bounds"]
+        if "compress_results_file" in new_optimize:
+            self.compress_results_file = new_optimize["compress_results_file"]
         if "crossover_probability" in new_optimize:
             self.crossover_probability = new_optimize["crossover_probability"]
         if "iters" in new_optimize:
@@ -1358,6 +1365,8 @@ class Optimize:
     
     @property
     def bounds(self): return self._bounds
+    @property
+    def compress_results_file(self): return self._compress_results_file
     @property
     def limits(self): return self._limits
     @property
@@ -1380,6 +1389,10 @@ class Optimize:
     def bounds(self, new_bounds):
         self._bounds.bounds = new_bounds
         self._optimize["bounds"] = self._bounds.bounds
+    @compress_results_file.setter
+    def compress_results_file(self, new_compress_results_file):
+        self._compress_results_file = new_compress_results_file
+        self._optimize["compress_results_file"] = self._compress_results_file
     @limits.setter
     def limits(self, new_limits):
         self._limits.limits = new_limits
@@ -1414,10 +1427,12 @@ class Optimize:
 class Limits:
     def __init__(self):
         self._lower_bound_drawdown_worst = 0.25
-        self._lower_bound_equity_balance_diff_mean = 0.01
+        self._lower_bound_drawdown_worst_mean_1pct = 0.15
+        self._lower_bound_equity_balance_diff_mean = 0.02
         self._lower_bound_loss_profit_ratio = 0.6
         self._limits = {
             "lower_bound_drawdown_worst": self._lower_bound_drawdown_worst,
+            "lower_bound_drawdown_worst_mean_1pct": self._lower_bound_drawdown_worst_mean_1pct,
             "lower_bound_equity_balance_diff_mean": self._lower_bound_equity_balance_diff_mean,
             "lower_bound_loss_profit_ratio": self._lower_bound_loss_profit_ratio
         }
@@ -1431,6 +1446,8 @@ class Limits:
     def limits(self, new_limits):
         if "lower_bound_drawdown_worst" in new_limits:
             self.lower_bound_drawdown_worst = new_limits["lower_bound_drawdown_worst"]
+        if "lower_bound_drawdown_worst_mean_1pct" in new_limits:
+            self.lower_bound_drawdown_worst_mean_1pct = new_limits["lower_bound_drawdown_worst_mean_1pct"]
         if "lower_bound_equity_balance_diff_mean" in new_limits:
             self.lower_bound_equity_balance_diff_mean = new_limits["lower_bound_equity_balance_diff_mean"]
         if "lower_bound_loss_profit_ratio" in new_limits:
@@ -1438,6 +1455,8 @@ class Limits:
     
     @property
     def lower_bound_drawdown_worst(self): return self._lower_bound_drawdown_worst
+    @property
+    def lower_bound_drawdown_worst_mean_1pct(self): return self._lower_bound_drawdown_worst_mean_1pct
     @property
     def lower_bound_equity_balance_diff_mean(self): return self._lower_bound_equity_balance_diff_mean
     @property
@@ -1447,6 +1466,10 @@ class Limits:
     def lower_bound_drawdown_worst(self, new_lower_bound_drawdown_worst):
         self._lower_bound_drawdown_worst = new_lower_bound_drawdown_worst
         self._limits["lower_bound_drawdown_worst"] = self._lower_bound_drawdown_worst
+    @lower_bound_drawdown_worst_mean_1pct.setter
+    def lower_bound_drawdown_worst_mean_1pct(self, new_lower_bound_drawdown_worst_mean_1pct):
+        self._lower_bound_drawdown_worst_mean_1pct = new_lower_bound_drawdown_worst_mean_1pct
+        self._limits["lower_bound_drawdown_worst_mean_1pct"] = self._lower_bound_drawdown_worst_mean_1pct
     @lower_bound_equity_balance_diff_mean.setter
     def lower_bound_equity_balance_diff_mean(self, new_lower_bound_equity_balance_diff_mean):
         self._lower_bound_equity_balance_diff_mean = new_lower_bound_equity_balance_diff_mean
