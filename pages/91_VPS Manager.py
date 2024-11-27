@@ -162,6 +162,13 @@ def manage_master():
             del st.session_state.manage_master
             st.session_state.view_update_master = True
             st.rerun()
+        if st.button("Update pb6 and pb7"):
+            vpsmanager.command = "master-update-pbonly"
+            vpsmanager.command_text = "Update pb6 and pb7"
+            vpsmanager.update_master(debug = st.session_state.setup_debug)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
         st.text_input("sudo password", type="password", key="sudo_pw", help=pbgui_help.sudo_pw)
         enable_install = False
         if "sudo_pw" in st.session_state:
