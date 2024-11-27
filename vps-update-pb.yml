@@ -73,6 +73,13 @@
       tags: debug,never
 
   handlers:
+    - name: Install pbgui requirements
+      pip:
+        virtualenv: "{{ install_dir }}/venv_pbgui"
+        requirements: "{{ install_dir }}/pbgui/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pbgui"
+
     - name: Restart PBRun, PBRemote and PBCoinData
       shell: |
         source "{{ install_dir }}/venv_pbgui/bin/activate"
@@ -81,6 +88,13 @@
         executable: /bin/bash
         chdir: "{{ install_dir }}/pbgui"
       listen: "restart pbgui"
+
+    - name: Install pb6 requirements
+      pip:
+        virtualenv: "{{ install_dir }}/venv_pb6"
+        requirements: "{{ install_dir }}/pb6/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pb6"
 
     - name: kill all pb6 processes
       shell: "kill $(ps -ef | grep {{ install_dir }}/pb6/passivbot | grep -v grep | awk '{print $2}')"
@@ -95,6 +109,13 @@
         executable: /bin/bash
         chdir: "{{ install_dir }}/pbgui"
       listen: "restart pb6"
+
+    - name: Install pb7 requirements
+      pip:
+        virtualenv: "{{ install_dir }}/venv_pb7"
+        requirements: "{{ install_dir }}/pb7/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pb7"
 
     - name: Build passivbot-rust with maturin
       shell: |
