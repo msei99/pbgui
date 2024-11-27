@@ -16,6 +16,7 @@
     # ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
     pbgdir: "{{ pbgdir }}"
+    pbgvenv: "{{ pbgvenv }}"
     pb6dir: "{{ pb6dir }}"
     pb7dir: "{{ pb7dir }}"
     pb7venv: "{{ pb7venv }}"
@@ -76,6 +77,13 @@
       tags: debug,never
 
   handlers:
+    -name: Install pbgui requirements
+      pip:
+        virtualenv: "{{ pbgvenv }}"
+        requirements: "{{ pbgdir }}/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pbgui"
+
     - name: Restart PBRun, PBRemote and PBCoinData
       shell: |
         python "{{ pbgdir }}/starter.py" -r PBRun PBRemote PBCoinData
@@ -83,6 +91,13 @@
         executable: /bin/bash
         chdir: "{{ pbgdir }}"
       listen: "restart pbgui"
+
+    - name: Install pb6 requirements
+      pip:
+        virtualenv: "{{ pb6venv }}"
+        requirements: "{{ pb6dir }}/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pb6"
 
     - name: kill all pb6 processes
       shell: "kill $(ps -ef | grep {{ pb6dir }}/passivbot | grep -v grep | awk '{print $2}')"
