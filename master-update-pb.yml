@@ -77,7 +77,7 @@
       tags: debug,never
 
   handlers:
-    -name: Install pbgui requirements
+    - name: Install pbgui requirements
       pip:
         virtualenv: "{{ pbgvenv }}"
         requirements: "{{ pbgdir }}/requirements.txt"
