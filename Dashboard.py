@@ -758,6 +758,8 @@ class Dashboard():
             else:
                 users_selected = st.session_state[f'dashboard_balance_users_{position}']
             balances = self.db.fetch_balances(users_selected)
+            if not balances:
+                return
             df = pd.DataFrame(balances, columns=['Id', 'Date', 'Balance', 'User'])
             my_tz = datetime.now().astimezone().tzinfo
             df['Date'] = pd.to_datetime(df['Date'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(my_tz).dt.strftime('%Y-%m-%d %H:%M:%S')
