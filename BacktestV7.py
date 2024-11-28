@@ -67,8 +67,9 @@ class BacktestV7QueueItem():
             if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
                 st.rerun(scope="fragment")
         logfile = self.load_log(st.session_state[f'size_view_log_{self.name}'])
-        if st.session_state[f'reverse_view_log_{self.name}']:
-            logfile = '\n'.join(logfile.split('\n')[::-1])
+        if logfile:
+            if st.session_state[f'reverse_view_log_{self.name}']:
+                logfile = '\n'.join(logfile.split('\n')[::-1])
         with st.container(height=1200):
             st.code(logfile)
 
