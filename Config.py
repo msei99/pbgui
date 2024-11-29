@@ -1031,16 +1031,23 @@ class ApprovedCoins:
     def __repr__(self):
         return str(self._approved_coins)
     
+    def _autofill_USDT(self, symbols_list):
+        # Check if symbols end with 'USDT' and add it if they don't
+        return [
+            symbol if symbol.endswith("USDT") else symbol + "USDT"
+            for symbol in symbols_list
+        ]
+    
     @property
     def approved_coins(self): return self._approved_coins
     @approved_coins.setter
     def approved_coins(self, new_approved_coins):
         if "long" in new_approved_coins:
-            self.long = new_approved_coins["long"]
+            self.long = self._autofill_USDT(new_approved_coins["long"])
         else:
             self.long = new_approved_coins
         if "short" in new_approved_coins:
-            self.short = new_approved_coins["short"]
+            self.short = self._autofill_USDT(new_approved_coins["short"])
         else:
             self.short = new_approved_coins
     
@@ -1050,11 +1057,11 @@ class ApprovedCoins:
     def short(self): return self._short
     @long.setter
     def long(self, new_long):
-        self._long = new_long
+        self._long = self._autofill_USDT(new_long)
         self._approved_coins["long"] = self._long
     @short.setter
     def short(self, new_short):
-        self._short = new_short
+        self._short = self._autofill_USDT(new_short)
         self._approved_coins["short"] = self._short
 
 class IgnoredCoins:
@@ -1069,16 +1076,23 @@ class IgnoredCoins:
     def __repr__(self):
         return str(self._ignored_coins)
 
+    def _autofill_USDT(self, symbols_list):
+        # Check if symbols end with 'USDT' and add it if they don't
+        return [
+            symbol if symbol.endswith("USDT") else symbol + "USDT"
+            for symbol in symbols_list
+        ]
+        
     @property
     def ignored_coins(self): return self._ignored_coins
     @ignored_coins.setter
     def ignored_coins(self, new_ignored_coins):
         if "long" in new_ignored_coins:
-            self.long = new_ignored_coins["long"]
+            self.long = self._autofill_USDT(new_ignored_coins["long"])
         else:
             self.long = new_ignored_coins
         if "short" in new_ignored_coins:
-            self.short = new_ignored_coins["short"]
+            self.short = self._autofill_USDT(new_ignored_coins["short"])
         else:
             self.short = new_ignored_coins
     
@@ -1088,11 +1102,11 @@ class IgnoredCoins:
     def short(self): return self._short
     @long.setter
     def long(self, new_long):
-        self._long = new_long
+        self._long = self._autofill_USDT(new_long)
         self._ignored_coins["long"] = self._long
     @short.setter
     def short(self, new_short):
-        self._short = new_short
+        self._short = self._autofill_USDT(new_short)
         self._ignored_coins["short"] = self._short
 
 class Live:
