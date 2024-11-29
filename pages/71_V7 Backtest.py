@@ -45,7 +45,7 @@ def bt_v7():
             else:
                 if not bt_v7.name:
                     info_popup("Name is empty")
-    st.title(f"Backtest v7: {bt_v7.name}")
+    st.subheader(f"Create/Edit: {bt_v7.name}")
     bt_v7.edit()
     # with st.expander("Optimize loss_allowance_pct, stuck_threshold and unstuck_close_pct", expanded=False):
     #     bt_v7.optimize()
@@ -66,6 +66,7 @@ def bt_v7_list():
         if st.button("Add Backtest"):
             st.session_state.bt_v7 = BacktestV7Item()
             st.rerun()
+    st.subheader("Available Configs")
     bt_v7_list.view_backtests()
 
 def bt_v7_results():
@@ -96,7 +97,7 @@ def bt_v7_results():
         if st.button(":material/delete: all"):
             bt_v7_results.remove_all_results()
             st.rerun()
-    st.title(f"Backtest v7 Results: {bt_v7_results.name}")
+    st.subheader(f"Results: {bt_v7_results.name}")
     bt_v7_results.view_results()
 
 def bt_v7_queue():
@@ -128,7 +129,7 @@ def bt_v7_queue():
         if st.button(":material/delete: all"):
             bt_v7_queue.remove_finish(all=True)
             st.rerun()
-    st.title("Backtest v7 Queue")
+    st.subheader("Queue")
     bt_v7_queue.view()
 
 # Redirect to Login if not authenticated or session state not initialized

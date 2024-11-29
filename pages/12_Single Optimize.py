@@ -69,10 +69,12 @@ def opt_queue():
             del st.session_state.opt_queue
             my_opt.file = None
             st.rerun()
+    st.subheader("Queue")
     my_opt_queue.options()
     my_opt_queue.view_queue()
 
 def opt_results():
+    st.subheader("Results")
     # Init OptimizeResults
     if 'my_opt_results' in st.session_state:
         my_opt_results = st.session_state.my_opt_results

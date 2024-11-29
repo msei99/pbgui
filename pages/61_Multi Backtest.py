@@ -38,7 +38,7 @@ def bt_multi():
                     info_popup("Backtest not saved")
                 elif not bt_multi.symbols:
                     info_popup("No Symbols")
-    st.title(f"Backtest Multi: {bt_multi.name}")
+    st.subheader(f"Create/Edit: {bt_multi.name}")
     bt_multi.edit()
     with st.expander("Optimize loss_allowance_pct, stuck_threshold and unstuck_close_pct", expanded=False):
         bt_multi.optimize()
@@ -89,6 +89,7 @@ def bt_multi_list():
         if st.button("Add Backtest"):
             st.session_state.bt_multi = BacktestMultiItem()
             st.rerun()
+    st.subheader("Available Configs")
     bt_multi_list.view_backtests()
 
 def bt_multi_results():
@@ -119,7 +120,7 @@ def bt_multi_results():
         if st.button(":wastebasket: all"):
             bt_multi_results.remove_all_results()
             st.rerun()
-    st.title(f"Backtest Multi Results: {bt_multi_results.name}")
+    st.subheader(f"Results: {bt_multi_results.name}")
     bt_multi_results.view_results()
 
 def bt_multi_queue():
@@ -151,7 +152,7 @@ def bt_multi_queue():
         if st.button(":wastebasket: all"):
             bt_multi_queue.remove_finish(all=True)
             st.rerun()
-    st.title("Backtest Multi Queue")
+    st.subheader("Queue")
     bt_multi_queue.view()
 
 # Redirect to Login if not authenticated or session state not initialized

@@ -561,13 +561,19 @@ class BacktestV7Item:
             })
         column_config = {
             "id": None,
-            'adg': st.column_config.NumberColumn(format="%.8f"),
+            'adg': st.column_config.NumberColumn(format="%.8f", label="ADG"),
             'final_balance': st.column_config.NumberColumn(format="$ %.2f"),
             "view": st.column_config.CheckboxColumn(label="View Result"),
-            "plot": st.column_config.CheckboxColumn(label="View be Plot"),
+            "plot": st.column_config.CheckboxColumn(label="View BE Plot"),
             "fills": st.column_config.CheckboxColumn(label="View Fills"),
             "create_run": st.column_config.CheckboxColumn(label="Create Run"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
+            "compare": st.column_config.CheckboxColumn(label="Compare"),
+            "optimize": st.column_config.CheckboxColumn(label="Optimize"),
+            "drawdown_worst": st.column_config.NumberColumn(format="%.8f", label="Drawdown Worst"),
+            "sharpe_ratio": st.column_config.NumberColumn(format="%.8f", label="Sharpe Ratio"),
+            "starting_balance": st.column_config.NumberColumn(format="%.0f", label="Starting Balance"),
+            "final_balance": st.column_config.NumberColumn(format="%.0f", label="Final Balance")
             }
         #Display Backtests
         height = 36+(len(d))*35
@@ -682,7 +688,7 @@ class BacktestV7Item:
                     error_popup("Invalid JSON")
             st.session_state.import_backtest_v7_config = json.dumps(self.config.config, indent=4)
         # Display import
-        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_backtest_v7_config", height=1200)
+        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_backtest_v7_config", height=500)
         col1, col2 = st.columns([1,1])
         with col1:
             if st.button("OK"):

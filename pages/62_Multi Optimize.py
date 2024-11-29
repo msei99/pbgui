@@ -37,7 +37,7 @@ def opt_multi():
                     info_popup("Optimize not saved")
                 elif not opt_multi.symbols:
                     info_popup("No Symbols")
-    st.title(f"Optimize Multi: {opt_multi.name}")
+    st.subheader(f"Create/Edit: {opt_multi.name}")
     opt_multi.edit()
 
 def opt_multi_list():
@@ -59,6 +59,7 @@ def opt_multi_list():
         if st.button("Add Optimize"):
             st.session_state.opt_multi = OptimizeMultiItem()
             st.rerun()
+    st.subheader("Available Configs")
     opt_multi_list.view_optimizes()
 
 def opt_multi_results():
@@ -83,7 +84,7 @@ def opt_multi_results():
         if st.button(":wastebasket: all"):
             opt_multi_results.remove_all_results()
             st.rerun()
-    st.title(f"Optimize Multi Results")
+    st.subheader(f"Results")
     opt_multi_results.view_results()
 
 def opt_multi_queue():
@@ -117,7 +118,7 @@ def opt_multi_queue():
         if st.button(":wastebasket: all"):
             opt_multi_queue.remove_finish(all=True)
             st.rerun()
-    st.title("Optimize Multi Queue")
+    st.subheader("Queue")
     opt_multi_queue.view()
 
 # Redirect to Login if not authenticated or session state not initialized
