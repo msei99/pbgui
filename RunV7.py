@@ -363,7 +363,7 @@ class V7Instance():
                 self._user = self.config.live.user
         # Display import
         st.selectbox('User',self._users.list_v7(), index = self._users.list_v7().index(self.user), key="import_run_v7_user")
-        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_run_v7_config", height=1200)
+        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_run_v7_config", height=500)
         col1, col2 = st.columns([1,1])
         with col1:
             if st.button("OK"):
