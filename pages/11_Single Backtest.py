@@ -86,6 +86,8 @@ def bt_queue():
     if "backtest_autostart" in st.session_state:
         if st.session_state.backtest_autostart != my_btq.autostart:
             my_btq.autostart = st.session_state.backtest_autostart
+            
+    st.subheader("Queue")
     # Load Queue
     my_btq.load()
     # Navigation

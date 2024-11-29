@@ -43,7 +43,7 @@ def opt_v7():
                     info_popup("Name is empty")
                 elif not opt_v7.config.config_file:
                     info_popup("Optimize not saved")
-    st.title(f"Optimize V7")
+    st.subheader(f"Create/Edit: {opt_v7.name}")
     opt_v7.edit()
 
 def opt_v7_list():
@@ -65,6 +65,7 @@ def opt_v7_list():
         if st.button("Add Optimize"):
             st.session_state.opt_v7 = OptimizeV7Item()
             st.rerun()
+    st.subheader("Available Configs")
     opt_v7_list.view_optimizes()
 
 def opt_v7_results():
@@ -95,7 +96,7 @@ def opt_v7_results():
             if "opt_v7_results_d" in st.session_state:
                 del st.session_state.opt_v7_results_d
             st.rerun()
-    st.title(f"Optimize V7 Results")
+    st.subheader("Results")
     opt_v7_results.view_results()
 
 def opt_v7_queue():
@@ -129,7 +130,7 @@ def opt_v7_queue():
         if st.button(":material/delete: all"):
             opt_v7_queue.remove_finish(all=True)
             st.rerun()
-    st.title("Optimize V7 Queue")
+    st.subheader("Queue")
     opt_v7_queue.view()
 
 # Redirect to Login if not authenticated or session state not initialized

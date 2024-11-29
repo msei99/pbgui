@@ -814,6 +814,9 @@ class BacktestMultiItem:
             "plot": st.column_config.CheckboxColumn(label="View Plots"),
             "drawdowns": st.column_config.CheckboxColumn(label="View Drawdowns"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
+            "starting_balance": st.column_config.NumberColumn(format="%.0f", label="Starting Balance"),
+            "final_balance": st.column_config.NumberColumn(format="%.0f", label="Final Balance"),
+            "drawdown_max": st.column_config.NumberColumn(format="%.4f", label="Drawdown Max")
             }
         #Display Backtests
         height = 36+(len(d))*35
