@@ -368,6 +368,7 @@ class BacktestV7Item:
         self.config = ConfigV7()
         self.log = None
         self.backtest_results = []
+        self.compare_results = []
         if backtest_path:
             self.config.config_file = backtest_path
             self.config.load_config()
@@ -544,6 +545,7 @@ class BacktestV7Item:
         for id, result in enumerate(self.backtest_results):
             d.append({
                 'id': id,
+                'compare': False,
                 'view': False,
                 'plot': False,
                 'fills': False,
@@ -573,7 +575,12 @@ class BacktestV7Item:
         st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
         if f'select_btv7_result_{ed_key}' in st.session_state:
             ed = st.session_state[f'select_btv7_result_{ed_key}']
+            self.compare_results = []
+            self.compare_fig = go.Figure()
             for row in ed["edited_rows"]:
+                if "compare" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["compare"]:
+                        self.compare_results.append(self.backtest_results[row])
                 if "view" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["view"]:
                         self.backtest_results[row].load_fills()
@@ -606,6 +613,21 @@ class BacktestV7Item:
                         if "opt_v7_results" in st.session_state:    
                             del st.session_state.opt_v7_results
                         st.switch_page("pages/72_V7 Optimize.py")
+            if self.compare_results:
+                self.view_compare()
+
+    def view_compare(self):
+        self.compare_fig.update_layout(yaxis_title='Balance')
+        # Add Compare as Titel to fig
+        self.compare_fig.update_layout(title_text="Compare Results", title_x=0.5)
+        for result in self.compare_results:
+            result.load_be()
+            if result.be is not None:
+                self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity'], name=f"{result.time} equity", line=dict(width=0.75)))
+                self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['balance'], name=f"{result.time} balance", line=dict(width=2.5)))
+        self.compare_fig.update_layout(yaxis_title='Balance', height=800)
+        self.compare_fig.update_xaxes(showgrid=True, griddash="dot")
+        st.plotly_chart(self.compare_fig, key=f"backtest_v7_compare_be")
 
     def calculate_results(self):
         p = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}/{self.config.backtest.exchange}/**/analysis.json'))
