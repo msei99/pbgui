@@ -501,7 +501,6 @@ class VPSManager:
             playbook=str(PurePath(f'{PBGDIR}/{self.command}.yml')),
             extravars={
                 'pbgdir': str(PBGDIR),
-                'pbgvenv': str(PBVENV),
                 'pb6dir': str(PBDIR),
                 'pb7dir': str(PB7DIR),
                 'pb7venv': str(PurePath(PB7VENV).parents[1]),
