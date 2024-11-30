@@ -368,7 +368,8 @@ class BacktestV7Item:
         self.config = ConfigV7()
         self.log = None
         self.backtest_results = []
-        self.compare_results = []
+        if "btv7_compare_results" not in st.session_state:
+            st.session_state.btv7_compare_results = []
         if backtest_path:
             self.config.config_file = backtest_path
             self.config.load_config()
@@ -541,11 +542,56 @@ class BacktestV7Item:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
+        if f'select_btv7_result_{ed_key}' in st.session_state:
+            ed = st.session_state[f'select_btv7_result_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "compare" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["compare"]:
+                        self.add_compare(self.backtest_results[row])
+                    else:
+                        self.remove_compare(self.backtest_results[row])
+                if "view" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["view"]:
+                        self.backtest_results[row].load_fills()
+                        self.backtest_results[row].load_be()
+                        self.backtest_results[row].view_chart_be()
+                        self.backtest_results[row].view_chart_symbol()
+                        self.backtest_results[row].view()
+                if "plot" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["plot"]:
+                        self.backtest_results[row].view_plot()
+                if "fills" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["fills"]:
+                        self.backtest_results[row].view_fills()
+                if "create_run" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["create_run"]:
+                        st.session_state.edit_v7_instance = V7Instance()
+                        st.session_state.edit_v7_instance.config = self.backtest_results[row].config
+                        st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
+                        st.switch_page("pages/70_V7 Run.py")
+                if "optimize" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["optimize"]:
+                        st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
+                        st.session_state.opt_v7.config = self.backtest_results[row].config
+                        st.session_state.opt_v7.config.pbgui.starting_config = True
+                        st.session_state.opt_v7.name = self.name
+                        if "opt_v7_list" in st.session_state:
+                            del st.session_state.opt_v7_list
+                        if "opt_v7_queue" in st.session_state:
+                            del st.session_state.opt_v7_queue
+                        if "opt_v7_results" in st.session_state:    
+                            del st.session_state.opt_v7_results
+                        st.switch_page("pages/72_V7 Optimize.py")
         d = []
         for id, result in enumerate(self.backtest_results):
+            compare = False
+            if st.session_state.btv7_compare_results:
+                for r in st.session_state.btv7_compare_results:
+                    if r.result_path == result.result_path:
+                        compare = True
             d.append({
                 'id': id,
-                'compare': False,
+                'compare': compare,
                 'view': False,
                 'plot': False,
                 'fills': False,
@@ -579,61 +625,41 @@ class BacktestV7Item:
         height = 36+(len(d))*35
         if height > 1000: height = 1016
         st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
-        if f'select_btv7_result_{ed_key}' in st.session_state:
-            ed = st.session_state[f'select_btv7_result_{ed_key}']
-            self.compare_results = []
-            self.compare_fig = go.Figure()
-            for row in ed["edited_rows"]:
-                if "compare" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["compare"]:
-                        self.compare_results.append(self.backtest_results[row])
-                if "view" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["view"]:
-                        self.backtest_results[row].load_fills()
-                        self.backtest_results[row].load_be()
-                        self.backtest_results[row].view_chart_be()
-                        self.backtest_results[row].view_chart_symbol()
-                        self.backtest_results[row].view()
-                if "plot" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["plot"]:
-                        self.backtest_results[row].view_plot()
-                if "fills" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["fills"]:
-                        self.backtest_results[row].view_fills()
-                if "create_run" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["create_run"]:
-                        st.session_state.edit_v7_instance = V7Instance()
-                        st.session_state.edit_v7_instance.config = self.backtest_results[row].config
-                        st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
-                        st.switch_page("pages/70_V7 Run.py")
-                if "optimize" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["optimize"]:
-                        st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
-                        st.session_state.opt_v7.config = self.backtest_results[row].config
-                        st.session_state.opt_v7.config.pbgui.starting_config = True
-                        st.session_state.opt_v7.name = self.name
-                        if "opt_v7_list" in st.session_state:
-                            del st.session_state.opt_v7_list
-                        if "opt_v7_queue" in st.session_state:
-                            del st.session_state.opt_v7_queue
-                        if "opt_v7_results" in st.session_state:    
-                            del st.session_state.opt_v7_results
-                        st.switch_page("pages/72_V7 Optimize.py")
-            if self.compare_results:
-                self.view_compare()
+        if st.session_state.btv7_compare_results:
+            self.view_compare()
+
+    def remove_compare(self, result):
+        if st.session_state.btv7_compare_results:
+            for r in st.session_state.btv7_compare_results.copy():
+                if r.result_path == result.result_path:
+                    st.session_state.btv7_compare_results.remove(r)
+
+    def add_compare(self, result):
+        if st.session_state.btv7_compare_results:
+            for r in st.session_state.btv7_compare_results.copy():
+                if r.result_path == result.result_path:
+                    return
+        st.session_state.btv7_compare_results.append(result)
 
     def view_compare(self):
+        self.compare_fig = go.Figure()
         self.compare_fig.update_layout(yaxis_title='Balance')
-        # Add Compare as Titel to fig
         self.compare_fig.update_layout(title_text="Compare Results", title_x=0.5)
-        for result in self.compare_results:
-            result.load_be()
-            if result.be is not None:
-                self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity'], name=f"{result.time} equity", line=dict(width=0.75)))
-                self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['balance'], name=f"{result.time} balance", line=dict(width=2.5)))
         self.compare_fig.update_layout(yaxis_title='Balance', height=800)
         self.compare_fig.update_xaxes(showgrid=True, griddash="dot")
-        st.plotly_chart(self.compare_fig, key=f"backtest_v7_compare_be")
+        if st.session_state.btv7_compare_results:
+            if st.button("Clear Compare"):
+                st.session_state.btv7_compare_results = []
+                st.rerun()
+            for result in st.session_state.btv7_compare_results:
+                result.load_be()
+                if result.be is not None:
+                    name = PurePath(*result.result_path.parts[-3:-2])
+                    formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
+                    self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity'], name=f"{name} {formatted_time} equity", line=dict(width=0.75)))
+                    self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['balance'], name=f"{name} {formatted_time} balance", line=dict(width=2.5)))
+            self.compare_fig.update_yaxes(tickformat=".2f")
+            st.plotly_chart(self.compare_fig, key=f"backtest_v7_compare_be")
 
     def calculate_results(self):
         p = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}/{self.config.backtest.exchange}/**/analysis.json'))
