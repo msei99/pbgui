@@ -16,7 +16,6 @@
     # ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
     pbgdir: "{{ pbgdir }}"
-    pbgvenv: "{{ pbgvenv }}"
     pb6dir: "{{ pb6dir }}"
     pb7dir: "{{ pb7dir }}"
     pb7venv: "{{ pb7venv }}"
@@ -79,7 +78,6 @@
   handlers:
     - name: Install pbgui requirements
       pip:
-        virtualenv: "{{ pbgvenv }}"
         requirements: "{{ pbgdir }}/requirements.txt"
         extra_args: --upgrade pip
       listen: "restart pbgui"
