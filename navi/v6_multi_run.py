@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb_installed, is_authenticted
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb_installed, is_authenticted, get_navi_paths
 from BacktestMulti import BacktestMultiItem
 from Multi import MultiInstance, MultiInstances
 from Instance import Instances, Instance
@@ -56,7 +56,7 @@ def edit_multi_instance():
                 del st.session_state.bt_multi_results
             if "bt_multi_edit_symbol" in st.session_state:
                 del st.session_state.bt_multi_edit_symbol
-            st.switch_page("pages/61_Multi Backtest.py")
+            st.switch_page(get_navi_paths()["V6_MULTI_BACKTEST"])
     multi_instance.edit()
     if multi_instance.default_config.preview_grid:
         if "preview_grid_instance" not in st.session_state:
@@ -173,7 +173,7 @@ def select_instance():
     
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
-    st.switch_page("pages/00_login.py")
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
 # Page Setup
