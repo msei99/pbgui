@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit_scrollable_textbox as stx
 import pbgui_help
-from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
+from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup, get_navi_paths
 import os
 from PBRemote import PBRemote
 from User import Users
@@ -775,7 +775,7 @@ class MultiInstance():
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == self._symbols[row]:
                             st.session_state.edit_instance = instance
-                            st.switch_page("pages/10_Single Run.py")
+                            st.switch_page(get_navi_paths()["V6_SINGLE_RUN"])
                     # Edit Symbol config without single instance
                     if not Path(self.instance_path).exists():
                         info_popup("You need to save the Multi config first, before editing a symbol")

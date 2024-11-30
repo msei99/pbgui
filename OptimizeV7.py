@@ -10,7 +10,7 @@ import configparser
 import time
 import multiprocessing
 from Exchange import Exchange
-from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -468,7 +468,7 @@ class OptimizeV7Results:
                             del st.session_state.bt_v7_results
                         if "bt_v7_edit_symbol" in st.session_state:
                             del st.session_state.bt_v7_edit_symbol
-                        st.switch_page("pages/71_V7 Backtest.py")
+                        st.switch_page(get_navi_paths()["V7_BACKTEST"])
 
     def generate_analysis(self, result_file):
         # create a copy of result_file
