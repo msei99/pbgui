@@ -550,19 +550,6 @@ class BacktestV7Item:
                         self.add_compare(self.backtest_results[row])
                     else:
                         self.remove_compare(self.backtest_results[row])
-                if "view" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["view"]:
-                        self.backtest_results[row].load_fills()
-                        self.backtest_results[row].load_be()
-                        self.backtest_results[row].view_chart_be()
-                        self.backtest_results[row].view_chart_symbol()
-                        self.backtest_results[row].view()
-                if "plot" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["plot"]:
-                        self.backtest_results[row].view_plot()
-                if "fills" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["fills"]:
-                        self.backtest_results[row].view_fills()
                 if "create_run" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["create_run"]:
                         st.session_state.edit_v7_instance = V7Instance()
@@ -627,6 +614,22 @@ class BacktestV7Item:
         st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
         if st.session_state.btv7_compare_results:
             self.view_compare()
+        if f'select_btv7_result_{ed_key}' in st.session_state:
+            ed = st.session_state[f'select_btv7_result_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "view" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["view"]:
+                        self.backtest_results[row].load_fills()
+                        self.backtest_results[row].load_be()
+                        self.backtest_results[row].view_chart_be()
+                        self.backtest_results[row].view_chart_symbol()
+                        self.backtest_results[row].view()
+                if "plot" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["plot"]:
+                        self.backtest_results[row].view_plot()
+                if "fills" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["fills"]:
+                        self.backtest_results[row].view_fills()
 
     def remove_compare(self, result):
         if st.session_state.btv7_compare_results:
@@ -845,6 +848,9 @@ class BacktestV7Result:
             fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['balance'], name="balance", line=dict(width=2.5)))
             fig.update_layout(yaxis_title='Balance', height=800)
             fig.update_xaxes(showgrid=True, griddash="dot")
+            name = PurePath(*self.result_path.parts[-3:-2])
+            formatted_time = self.time.strftime("%Y-%m-%d %H:%M:%S")
+            fig.update_layout(title_text=f'{name} {formatted_time}', title_x=0.5)
             st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_be")
         else:
             st.error("No balance and equity data found")
