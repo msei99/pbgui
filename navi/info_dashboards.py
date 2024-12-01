@@ -11,6 +11,12 @@ def dashboard():
     if "dashboards" not in st.session_state:
         st.session_state.dashboards = Dashboard().list_dashboards()
     dashboards = st.session_state.dashboards
+    
+    # If there's only one dashboard, load it
+    if not "dashboard" in st.session_state and len(dashboards) == 1:
+        st.session_state.dashboard = Dashboard(dashboards[0])
+        st.rerun()
+        
     with st.sidebar:
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
@@ -58,7 +64,6 @@ def dashboard():
                 st.session_state.dashboard = Dashboard(db)
                 # dashboard = st.session_state.dashboard
                 st.rerun()
-
     if "edit_dashboard" in st.session_state:
         st.session_state.dashboard.create_dashboard()
     elif "dashboard" in st.session_state:
