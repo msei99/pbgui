@@ -1,6 +1,6 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted
+from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths
 from VPSManager import VPSManager, VPS
 import re
 from Monitor import Monitor
@@ -722,7 +722,7 @@ def view_setup():
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
-    st.switch_page("pages/00_login.py")
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
 # Page Setup
