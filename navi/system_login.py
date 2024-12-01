@@ -1,6 +1,6 @@
 import streamlit as st
 import platform
-from pbgui_func import check_password, set_page_config, change_ini, is_pb7_installed, is_pb_installed, is_authenticted
+from pbgui_func import check_password, set_page_config, change_ini, is_pb7_installed, is_pb_installed, is_authenticted, get_navi_paths
 from pbgui_purefunc import load_ini, save_ini
 import pbgui_help
 from Services import Services

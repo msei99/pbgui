@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_not_initialized, info_popup, error_popup, is_pb_installed, is_authenticted
+from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_not_initialized, info_popup, error_popup, is_pb_installed, is_authenticted, get_navi_paths
 from Instance import Instances, Instance
 from Backtest import BacktestItem
 from PBRemote import PBRemote
@@ -226,7 +226,7 @@ def edit_instance():
                 del st.session_state.bt_queue
             if "bt_compare" in st.session_state:
                 del st.session_state.bt_compare
-            st.switch_page("pages/11_Single Backtest.py")
+            st.switch_page(get_navi_paths()["V6_SINGLE_BACKTEST"])
         source_name = st.text_input('pbconfigdb by [Scud](%s)' % "https://pbconfigdb.scud.dedyn.io/", value="PBGUI", max_chars=16, key="name_input", help=pbgui_help.upload_pbguidb)
         if not "error_config" in st.session_state and not instance.symbol == "Select Symbol" and instance._config.config:
             if st.button("Upload"):
@@ -261,7 +261,7 @@ def edit_instance():
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
-    st.switch_page("pages/00_login.py")
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
 # Page Setup

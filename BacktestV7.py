@@ -11,7 +11,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, get_navi_paths
 import uuid
 from Base import Base
 from Exchange import Exchange
@@ -555,7 +555,7 @@ class BacktestV7Item:
                         st.session_state.edit_v7_instance = V7Instance()
                         st.session_state.edit_v7_instance.config = self.backtest_results[row].config
                         st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
-                        st.switch_page("pages/70_V7 Run.py")
+                        st.switch_page(get_navi_paths()["V7_RUN"])
                 if "optimize" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["optimize"]:
                         st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
@@ -568,7 +568,7 @@ class BacktestV7Item:
                             del st.session_state.opt_v7_queue
                         if "opt_v7_results" in st.session_state:    
                             del st.session_state.opt_v7_results
-                        st.switch_page("pages/72_V7 Optimize.py")
+                        st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
         d = []
         for id, result in enumerate(self.backtest_results):
             compare = False
