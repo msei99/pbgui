@@ -1,5 +1,5 @@
 import streamlit as st  # Streamlit library for creating web apps
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths
 import numpy as np  # NumPy for numerical operations
 import pandas as pd  # Pandas for data manipulation and analysis
 import plotly.graph_objs as go  # Plotly for interactive data visualization
@@ -383,7 +383,7 @@ def show_visualizer():
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
-    st.switch_page("pages/00_login.py")
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
 # Page Setup

@@ -1,6 +1,6 @@
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-from pbgui_func import set_page_config, is_session_state_not_initialized, is_pb_installed, is_authenticted
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_pb_installed, is_authenticted, get_navi_paths
 from Instance import Instances
 import pandas as pd
 
@@ -85,7 +85,7 @@ def view_instance():
         if st.button("Edit"):
             st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
-            st.switch_page("pages/10_Single Run.py")
+            st.switch_page(get_navi_paths()["V6_SINGLE_RUN"])
 #            st.rerun()
         if st.button("History"):
             st.session_state.view_history = True
@@ -117,7 +117,7 @@ def view_history():
             st.session_state.edit_instance = st.session_state.view_instance
             del st.session_state.view_instance
             del st.session_state.view_history
-            st.switch_page("pages/10_Single Run.py")
+            st.switch_page(get_navi_paths()["V6_SINGLE_RUN"])
         if st.button("View"):
             del st.session_state.view_history
             st.rerun()
@@ -125,7 +125,7 @@ def view_history():
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
-    st.switch_page("pages/00_login.py")
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
 # Page Setup
