@@ -93,7 +93,82 @@ def set_page_config(page : str = "Start"):
     
     with st.sidebar:
         st.write(f"### {page} Options")
+        
+def get_navi_paths():
+    NAVI_BASE_DIR = "navi/"
+    paths = {
+        "SYSTEM_LOGIN":        os.path.join(NAVI_BASE_DIR, "system_login.py"),
+        "SYSTEM_API_KEYS":     os.path.join(NAVI_BASE_DIR, "system_api_keys.py"),
+        "SYSTEM_SERVICES":     os.path.join(NAVI_BASE_DIR, "system_services.py"),
+        "SYSTEM_VPS_MANAGER":  os.path.join(NAVI_BASE_DIR, "system_vps_manager.py"),
 
+        "INFO_DASHBOARDS":     os.path.join(NAVI_BASE_DIR, "info_dashboards.py"),
+        "INFO_COIN_DATA":      os.path.join(NAVI_BASE_DIR, "info_coin_data.py"),
+
+        "V6_SINGLE_RUN":       os.path.join(NAVI_BASE_DIR, "v6_single_run.py"),
+        "V6_SINGLE_BACKTEST":  os.path.join(NAVI_BASE_DIR, "v6_single_backtest.py"),
+        "V6_SINGLE_OPTIMIZE":  os.path.join(NAVI_BASE_DIR, "v6_single_optimize.py"),
+        "V6_SPOT_VIEW":        os.path.join(NAVI_BASE_DIR, "v6_spot_view.py"),
+
+        "V6_MULTI_RUN":        os.path.join(NAVI_BASE_DIR, "v6_multi_run.py"),
+        "V6_MULTI_BACKTEST":   os.path.join(NAVI_BASE_DIR, "v6_multi_backtest.py"),
+        "V6_MULTI_OPTIMIZE":   os.path.join(NAVI_BASE_DIR, "v6_multi_optimize.py"),
+
+        "V7_RUN":              os.path.join(NAVI_BASE_DIR, "v7_run.py"),
+        "V7_BACKTEST":         os.path.join(NAVI_BASE_DIR, "v7_backtest.py"),
+        "V7_OPTIMIZE":         os.path.join(NAVI_BASE_DIR, "v7_optimize.py"),
+        "V7_GRID_VISUALIZER":  os.path.join(NAVI_BASE_DIR, "v7_grid_visualizer.py"),
+    }
+    return paths
+
+def build_navigation():
+    paths = get_navi_paths()
+
+    # Single Pages
+    pM1 = st.Page(paths["SYSTEM_LOGIN"], title="Welcome", icon=":material/logout:")
+    pM2 = st.Page(paths["SYSTEM_API_KEYS"], title="API-Keys", icon=":material/key:")
+    pM3 = st.Page(paths["SYSTEM_SERVICES"], title="PBGUI Services", icon=":material/build:")
+    pM4 = st.Page(paths["SYSTEM_VPS_MANAGER"], title="VPS Manager", icon=":material/computer:")
+
+    pSe1 = st.Page(paths["INFO_DASHBOARDS"], title="Dashboards", icon=":material/dashboard:")
+    pSe2 = st.Page(paths["INFO_COIN_DATA"], title="Coin Data", icon=":material/monetization_on:")
+
+    pS1 = st.Page(paths["V6_SINGLE_RUN"], title="Run", icon=":material/play_arrow:")
+    pS2 = st.Page(paths["V6_SINGLE_BACKTEST"], title="Backtest", icon=":material/history:")
+    pS3 = st.Page(paths["V6_SINGLE_OPTIMIZE"], title="Optimize", icon=":material/tune:")
+    pS4 = st.Page(paths["V6_SPOT_VIEW"], title="Spot View", icon=":material/remove_red_eye:")
+
+    p61 = st.Page(paths["V6_MULTI_RUN"], title="Run", icon=":material/play_arrow:")
+    p62 = st.Page(paths["V6_MULTI_BACKTEST"], title="Backtest", icon=":material/history:")
+    p63 = st.Page(paths["V6_MULTI_OPTIMIZE"], title="Optimize", icon=":material/tune:")
+
+    p71 = st.Page(paths["V7_RUN"], title="Run", icon=":material/play_arrow:")
+    p72 = st.Page(paths["V7_BACKTEST"], title="Backtest", icon=":material/history:")
+    p73 = st.Page(paths["V7_OPTIMIZE"], title="Optimize", icon=":material/tune:")
+    p74 = st.Page(paths["V7_GRID_VISUALIZER"], title="Grid Visualizer", icon=":material/remove_red_eye:")
+
+       
+    # Page Groups
+    SystemPages = [pM1, pM2, pM3, pM4]
+    InfotmationPages = [pSe1, pSe2]
+    v7Pages = [p71, p72, p73, p74]
+    v6Pages = [p61, p62, p63]
+    SinglePages = [pS1, pS2, pS3, pS4]
+
+    # Navigation
+    navi = st.navigation(
+        {
+            "System": SystemPages,
+            "Information": InfotmationPages,
+            "PBv7": v7Pages,
+            "PBv6 Multi": v6Pages,
+            "PBv6 Single": SinglePages,
+        },position="sidebar"
+    )
+    st.session_state.navigation = navi
+    navi.run()
+    
+    
 def is_session_state_not_initialized():
     # Init Service5
     if (

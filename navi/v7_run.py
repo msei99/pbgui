@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths
 from RunV7 import V7Instances , V7Instance
 from BacktestV7 import BacktestV7Item
 from PBRun import PBRun
@@ -30,7 +30,7 @@ def edit_v7_instance():
                 del st.session_state.bt_v7_results
             if "bt_v7_edit_symbol" in st.session_state:
                 del st.session_state.bt_v7_edit_symbol
-            st.switch_page("pages/71_V7 Backtest.py")
+            st.switch_page(get_navi_paths()["V7_BACKTEST"])
     v7_instance.edit()
 
 @st.dialog("Delete Instance?")
@@ -120,7 +120,7 @@ def select_instance():
     
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
-    st.switch_page("pages/00_login.py")
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
 # Page Setup

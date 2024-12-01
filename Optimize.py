@@ -4,7 +4,7 @@ from Backtest import BacktestItem, BacktestResults
 from OptimizeConfig import OptimizeConfigs, OptimizeConfig
 from pathlib import Path, PurePath
 from shutil import rmtree
-from pbgui_func import pbdir, pbvenv, PBGDIR
+from pbgui_func import pbdir, pbvenv, PBGDIR, get_navi_paths
 import json
 import glob
 import datetime
@@ -1019,7 +1019,7 @@ class OptimizeResults:
                                 del st.session_state.bt_compare
                             if "bt_import" in st.session_state:
                                 del st.session_state.bt_import
-                            st.switch_page("pages/11_Single Backtest.py")
+                            st.switch_page(get_navi_paths()["V6_SINGLE_BACKTEST"])
         column_config = {
             "View": st.column_config.CheckboxColumn('View', default=False),
             "path": None,

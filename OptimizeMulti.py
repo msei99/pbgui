@@ -11,7 +11,7 @@ import glob
 import configparser
 import time
 import multiprocessing
-from pbgui_func import pbdir, pbvenv, PBGDIR, load_symbols_from_ini, error_popup, info_popup
+from pbgui_func import pbdir, pbvenv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -388,7 +388,7 @@ class OptimizeMultiResults:
                             del st.session_state.bt_multi_results
                         if "bt_multi_edit_symbol" in st.session_state:
                             del st.session_state.bt_multi_edit_symbol
-                        st.switch_page("pages/61_Multi Backtest.py")
+                        st.switch_page(get_navi_paths()["V6_MULTI_BACKTEST"])
 
     def generate_analysis(self, result_file):
         cmd = [st.session_state.pbvenv, '-u', PurePath(f'{pbdir()}/tools/extract_best_multi_config.py'), str(result_file)]

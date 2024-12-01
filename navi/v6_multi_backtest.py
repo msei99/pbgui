@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb_installed, is_authenticted
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb_installed, is_authenticted, get_navi_paths
 from BacktestMulti import BacktestMultiItem, BacktestsMulti, BacktestMultiQueue
 import datetime
 from Instance import Instance
@@ -157,7 +157,7 @@ def bt_multi_queue():
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
-    st.switch_page("pages/00_login.py")
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
 # Page Setup
