@@ -96,6 +96,8 @@ class CoinData:
         self._symbols_data = []
         self.approved_coins = []
         self.ignored_coins = []
+        self._all_tags = []
+        self._tags = []
         self.load_symbols()
         self._market_cap = 0
         self._vol_mcap = 10.0
@@ -165,6 +167,20 @@ class CoinData:
         if self._vol_mcap != new_vol_mcap:
             self._vol_mcap = new_vol_mcap
             self.list_symbols()
+    
+    @property
+    def all_tags(self):
+        if not self._all_tags:
+            self.list_symbols()
+        return self._all_tags
+
+    @property
+    def tags(self):
+        return self._tags
+    @tags.setter
+    def tags(self, new_tags):
+        self._tags = new_tags
+        self.list_symbols()
 
     def run(self):
         if not self.is_running():
@@ -414,10 +430,14 @@ class CoinData:
                         "vol/mcap": 0,
                         "link": None,
                     }
+                for tag in coin_data["tags"]:
+                    if tag not in self._all_tags:
+                        self._all_tags.append(tag)
                 # if self.market_cap != 0 or self.vol_mcap != 10.0:
                 if market_cap > self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap:
-                    self._symbols_data.append(symbol_data)
-                    self.approved_coins.append(symbol)
+                    if not self.tags or any(tag in coin_data["tags"] for tag in self.tags):
+                        self._symbols_data.append(symbol_data)
+                        self.approved_coins.append(symbol)
                 else:
                     self.ignored_coins.append(symbol)
         #Sort approved and ignored coins and symbols_Data
