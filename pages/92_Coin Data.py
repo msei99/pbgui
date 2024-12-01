@@ -24,6 +24,9 @@ def view_coindata():
     if "view_coindata_vol_mcap" in st.session_state:
         if st.session_state.view_coindata_vol_mcap != coindata.vol_mcap:
             coindata.vol_mcap = st.session_state.view_coindata_vol_mcap
+    if "edit_coindata_tags" in st.session_state:
+        if st.session_state.edit_coindata_tags != coindata.tags:
+            coindata.tags = st.session_state.edit_coindata_tags
     # Display
     col_1, col_2, col_3, col_4, col_5 = st.columns([1,1,1,1,1])
     with col_1:
@@ -32,6 +35,7 @@ def view_coindata():
         st.number_input("market_cap", min_value=0, value=coindata.market_cap, step=50, format="%.d", key="view_coindata_market_cap", help=pbgui_help.market_cap)
     with col_3:
         st.number_input("vol/mcap", min_value=0.0, value=coindata.vol_mcap, step=0.05, format="%.2f", key="view_coindata_vol_mcap", help=pbgui_help.vol_mcap)
+    st.multiselect("Tags", coindata.all_tags, default=[], key="edit_coindata_tags")
     column_config = {
         "price": st.column_config.NumberColumn(format="%.8f"),
         "link": st.column_config.LinkColumn(display_text="CoinMarketCap")
