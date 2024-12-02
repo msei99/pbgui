@@ -2560,17 +2560,21 @@ class PBGui:
     def __init__(self):
         self._version = 0
         self._enabled_on = "disabled"
+        self._only_cpt = False
         self._starting_config = False
         self._market_cap = 0
         self._vol_mcap = 10.0
+        self._tags = []
         self._dynamic_ignore = False
         self._note = ''
         self._pbgui = {
             "version": self._version,
             "enabled_on": self._enabled_on,
+            "only_cpt": self._only_cpt,
             "starting_config": self._starting_config,
             "market_cap": self._market_cap,
             "vol_mcap": self._vol_mcap,
+            "tags": self._tags,
             "dynamic_ignore": self._dynamic_ignore,
             "note": self._note,
         }
@@ -2586,12 +2590,16 @@ class PBGui:
             self.version = new_pbgui["version"]
         if "enabled_on" in new_pbgui:
             self.enabled_on = new_pbgui["enabled_on"]
+        if "only_cpt" in new_pbgui:
+            self.only_cpt = new_pbgui["only_cpt"]
         if "starting_config" in new_pbgui:
             self.starting_config = new_pbgui["starting_config"]
         if "market_cap" in new_pbgui:
             self.market_cap = new_pbgui["market_cap"]
         if "vol_mcap" in new_pbgui:
             self.vol_mcap = new_pbgui["vol_mcap"]
+        if "tags" in new_pbgui:
+            self.tags = new_pbgui["tags"]
         if "dynamic_ignore" in new_pbgui:
             self.dynamic_ignore = new_pbgui["dynamic_ignore"]
         if "note" in new_pbgui:
@@ -2602,11 +2610,15 @@ class PBGui:
     @property
     def enabled_on(self): return self._enabled_on
     @property
+    def only_cpt(self): return self._only_cpt
+    @property
     def starting_config(self): return self._starting_config
     @property
     def market_cap(self): return self._market_cap
     @property
     def vol_mcap(self): return self._vol_mcap
+    @property
+    def tags(self): return self._tags
     @property
     def dynamic_ignore(self): return self._dynamic_ignore
     @property
@@ -2620,6 +2632,10 @@ class PBGui:
     def enabled_on(self, new_enabled_on):
         self._enabled_on = new_enabled_on
         self._pbgui["enabled_on"] = self._enabled_on
+    @only_cpt.setter
+    def only_cpt(self, new_only_cpt):
+        self._only_cpt = new_only_cpt
+        self._pbgui["only_cpt"] = self._only_cpt
     @starting_config.setter
     def starting_config(self, new_starting_config):
         self._starting_config = new_starting_config
@@ -2632,6 +2648,10 @@ class PBGui:
     def vol_mcap(self, new_vol_mcap):
         self._vol_mcap = new_vol_mcap
         self._pbgui["vol_mcap"] = self._vol_mcap
+    @tags.setter
+    def tags(self, new_tags):
+        self._tags = new_tags
+        self._pbgui["tags"] = self._tags
     @dynamic_ignore.setter
     def dynamic_ignore(self, new_dynamic_ignore):
         self._dynamic_ignore = new_dynamic_ignore

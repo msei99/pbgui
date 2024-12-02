@@ -392,6 +392,8 @@ class BacktestV7Item:
             coindata.market_cap = self.config.pbgui.market_cap
         if coindata.vol_mcap != self.config.pbgui.vol_mcap:
             coindata.vol_mcap = self.config.pbgui.vol_mcap
+        if coindata.tags != self.config.pbgui.tags:
+            coindata.tags = self.config.pbgui.tags
         # Init session_state for keys
         if "edit_bt_v7_exchange" in st.session_state:
             if st.session_state.edit_bt_v7_exchange != self.config.backtest.exchange:
@@ -417,6 +419,10 @@ class BacktestV7Item:
             if st.session_state.edit_bt_v7_compress_cache != self.config.backtest.compress_cache:
                 self.config.backtest.compress_cache = st.session_state.edit_bt_v7_compress_cache
         # Filters
+        if "edit_bt_v7_only_cpt" in st.session_state:
+            if st.session_state.edit_bt_v7_only_cpt != self.config.pbgui.only_cpt:
+                self.config.pbgui.only_cpt = st.session_state.edit_bt_v7_only_cpt
+                coindata.only_cpt = self.config.pbgui.only_cpt
         if "edit_bt_v7_market_cap" in st.session_state:
             if st.session_state.edit_bt_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_bt_v7_market_cap
@@ -425,21 +431,17 @@ class BacktestV7Item:
             if st.session_state.edit_bt_v7_vol_mcap != self.config.pbgui.vol_mcap:
                 self.config.pbgui.vol_mcap = st.session_state.edit_bt_v7_vol_mcap
                 coindata.vol_mcap = self.config.pbgui.vol_mcap
+        if "edit_bt_v7_tags" in st.session_state:
+            if st.session_state.edit_bt_v7_tags != self.config.pbgui.tags:
+                self.config.pbgui.tags = st.session_state.edit_bt_v7_tags
+                coindata.tags = self.config.pbgui.tags
         # Symbol config
         if "edit_bt_v7_approved_coins_long" in st.session_state:
             if st.session_state.edit_bt_v7_approved_coins_long != self.config.live.approved_coins.long:
                 self.config.live.approved_coins.long = st.session_state.edit_bt_v7_approved_coins_long
-                if 'All' in self.config.live.approved_coins.long:
-                    self.config.live.approved_coins.long = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins.long:
-                    self.config.live.approved_coins.long = coindata.symbols_cpt.copy()
         if "edit_bt_v7_approved_coins_short" in st.session_state:
             if st.session_state.edit_bt_v7_approved_coins_short != self.config.live.approved_coins.short:
                 self.config.live.approved_coins.short = st.session_state.edit_bt_v7_approved_coins_short
-                if 'All' in self.config.live.approved_coins.short:
-                    self.config.live.approved_coins.short = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins.short:
-                    self.config.live.approved_coins.short = coindata.symbols_cpt.copy()
         if "edit_bt_v7_ignored_coins_long" in st.session_state:
             if st.session_state.edit_bt_v7_ignored_coins_long != self.config.live.ignored_coins.long:
                 self.config.live.ignored_coins.long = st.session_state.edit_bt_v7_ignored_coins_long
@@ -475,16 +477,17 @@ class BacktestV7Item:
             st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_bt_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
             st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_bt_v7_vol_mcap", help=pbgui_help.vol_mcap)
+        with col3:
+            st.multiselect("Tags", coindata.all_tags, default=self.config.pbgui.tags, key="edit_bt_v7_tags", help=pbgui_help.coindata_tags)
+        with col4:
+            st.checkbox("only_cpt", value=self.config.pbgui.only_cpt, help=pbgui_help.only_cpt, key="edit_bt_v7_only_cpt")
+            st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_bt_v7_apply_filters")
         # Apply filters
-        for symbol in coindata.ignored_coins:
-            if symbol not in self.config.live.ignored_coins.long:
-                self.config.live.ignored_coins.long.append(symbol)
-            if symbol not in self.config.live.ignored_coins.short:
-                self.config.live.ignored_coins.short.append(symbol)
-            if symbol in self.config.live.approved_coins.long:
-                self.config.live.approved_coins.long.remove(symbol)
-            if symbol in self.config.live.approved_coins.short:
-                self.config.live.approved_coins.short.remove(symbol)
+        if st.session_state.edit_bt_v7_apply_filters:
+            self.config.live.approved_coins.long = coindata.approved_coins
+            self.config.live.approved_coins.short = coindata.approved_coins
+            self.config.live.ignored_coins.long = coindata.ignored_coins
+            self.config.live.ignored_coins.short = coindata.ignored_coins
         # Remove unavailable symbols
         for symbol in self.config.live.approved_coins.long.copy():
             if symbol not in coindata.symbols:
@@ -516,10 +519,10 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_ignored_coins_short = self.config.live.ignored_coins.short
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('approved_coins_long', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.long, key="edit_bt_v7_approved_coins_long", help=pbgui_help.approved_coins)
+            st.multiselect('approved_coins_long', coindata.symbols, default=self.config.live.approved_coins.long, key="edit_bt_v7_approved_coins_long", help=pbgui_help.approved_coins)
             st.multiselect('ignored_symbols_long', coindata.symbols, default=self.config.live.ignored_coins.long, key="edit_bt_v7_ignored_coins_long", help=pbgui_help.ignored_coins)
         with col2:
-            st.multiselect('approved_coins_short', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.short, key="edit_bt_v7_approved_coins_short", help=pbgui_help.approved_coins)
+            st.multiselect('approved_coins_short', coindata.symbols, default=self.config.live.approved_coins.short, key="edit_bt_v7_approved_coins_short", help=pbgui_help.approved_coins)
             st.multiselect('ignored_symbols_short', coindata.symbols, default=self.config.live.ignored_coins.short, key="edit_bt_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
         self.config.bot.edit()
 

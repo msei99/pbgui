@@ -205,6 +205,8 @@ class DynamicIgnore():
         self.path = None
         self.coindata = CoinData()
         self.ignored_coins = []
+        self.ignored_coins_long = []
+        self.ignored_coins_short = []
     
     def watch(self):
         if self.coindata.has_new_data():
@@ -228,8 +230,17 @@ class DynamicIgnore():
     
     def save(self):
         file = Path(f'{self.path}/ignored_coins.json')
+        ignored_coins = self.ignored_coins
+        if self.ignored_coins_long:
+            for symbol in self.ignored_coins_long:
+                if symbol not in ignored_coins:
+                    ignored_coins.append(symbol)
+        if self.ignored_coins_short:
+            for symbol in self.ignored_coins_short:
+                if symbol not in ignored_coins:
+                    ignored_coins.append(symbol)
         with open(file, "w", encoding='utf-8') as f:
-            json.dump(self.ignored_coins, f)
+            json.dump(ignored_coins, f)
     
     def update_hjson(self):
         file = Path(f'{self.path}/multi_run.hjson')
@@ -664,6 +675,14 @@ class RunV7():
                             self.dynamic_ignore.path = self.path
                             self.dynamic_ignore.coindata.market_cap = self._v7_config["pbgui"]["market_cap"]
                             self.dynamic_ignore.coindata.vol_mcap = self._v7_config["pbgui"]["vol_mcap"]
+                            if "only_cpt" in self._v7_config["pbgui"]:
+                                self.dynamic_ignore.coindata.only_cpt = self._v7_config["pbgui"]["only_cpt"]
+                            if "live" in self._v7_config:
+                                if "ignored_coins" in self._v7_config["live"]:
+                                    if "long" in self._v7_config["live"]["ignored_coins"]:
+                                        self.dynamic_ignore.ignored_coins_long = self._v7_config["live"]["ignored_coins"]["long"]
+                                    if "short" in self._v7_config["live"]["ignored_coins"]:
+                                        self.dynamic_ignore.ignored_coins_short = self._v7_config["live"]["ignored_coins"]["short"]
                             self._v7_config["live"]["ignored_coins"] = str(PurePath(f'{self.path}/ignored_coins.json'))
                             with open(file, "w", encoding='utf-8') as f:
                                 json.dump(self._v7_config, f, indent=4)

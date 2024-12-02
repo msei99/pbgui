@@ -116,6 +116,8 @@ class V7Instance():
             coindata.market_cap = self.config.pbgui.market_cap
         if coindata.vol_mcap != self.config.pbgui.vol_mcap:
             coindata.vol_mcap = self.config.pbgui.vol_mcap
+        if coindata.tags != self.config.pbgui.tags:
+            coindata.tags = self.config.pbgui.tags
         # Init session_state for keys
         if "edit_run_v7_user" in st.session_state:
             if st.session_state.edit_run_v7_user != self.user:
@@ -139,9 +141,6 @@ class V7Instance():
         if "edit_run_v7_minimum_coin_age_days" in st.session_state:
             if st.session_state.edit_run_v7_minimum_coin_age_days != self.config.live.minimum_coin_age_days:
                 self.config.live.minimum_coin_age_days = st.session_state.edit_run_v7_minimum_coin_age_days
-        # if "edit_run_v7_relative_volume_filter_clip_pct" in st.session_state:
-        #     if st.session_state.edit_run_v7_relative_volume_filter_clip_pct != self.config.live.relative_volume_filter_clip_pct:
-        #         self.config.live.relative_volume_filter_clip_pct = st.session_state.edit_run_v7_relative_volume_filter_clip_pct
         if "edit_run_v7_price_distance_threshold" in st.session_state:
             if st.session_state.edit_run_v7_price_distance_threshold != self.config.live.price_distance_threshold:
                 self.config.live.price_distance_threshold = st.session_state.edit_run_v7_price_distance_threshold
@@ -186,6 +185,10 @@ class V7Instance():
         if "edit_run_v7_empty_means_all_approved" in st.session_state:
             if st.session_state.edit_run_v7_empty_means_all_approved != self.config.live.empty_means_all_approved:
                 self.config.live.empty_means_all_approved = st.session_state.edit_run_v7_empty_means_all_approved
+        if "edit_run_v7_only_cpt" in st.session_state:
+            if st.session_state.edit_run_v7_only_cpt != self.config.pbgui.only_cpt:
+                self.config.pbgui.only_cpt = st.session_state.edit_run_v7_only_cpt
+                coindata.only_cpt = self.config.pbgui.only_cpt
         if "edit_run_v7_market_cap" in st.session_state:
             if st.session_state.edit_run_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_run_v7_market_cap
@@ -194,21 +197,17 @@ class V7Instance():
             if st.session_state.edit_run_v7_vol_mcap != self.config.pbgui.vol_mcap:
                 self.config.pbgui.vol_mcap = st.session_state.edit_run_v7_vol_mcap
                 coindata.vol_mcap = self.config.pbgui.vol_mcap
+        if "edit_run_v7_tags" in st.session_state:
+            if st.session_state.edit_run_v7_tags != self.config.pbgui.tags:
+                self.config.pbgui.tags = st.session_state.edit_run_v7_tags
+                coindata.tags = self.config.pbgui.tags
         # Symbol config
         if "edit_run_v7_approved_coins_long" in st.session_state:
             if st.session_state.edit_run_v7_approved_coins_long != self.config.live.approved_coins.long:
                 self.config.live.approved_coins.long = st.session_state.edit_run_v7_approved_coins_long
-                if 'All' in self.config.live.approved_coins.long:
-                    self.config.live.approved_coins.long = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins.long:
-                    self.config.live.approved_coins.long = coindata.symbols_cpt.copy()
         if "edit_run_v7_approved_coins_short" in st.session_state:
             if st.session_state.edit_run_v7_approved_coins_short != self.config.live.approved_coins.short:
                 self.config.live.approved_coins.short = st.session_state.edit_run_v7_approved_coins_short
-                if 'All' in self.config.live.approved_coins.short:
-                    self.config.live.approved_coins.short = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins.short:
-                    self.config.live.approved_coins.short = coindata.symbols_cpt.copy()
         if "edit_run_v7_ignored_coins_long" in st.session_state:
             if st.session_state.edit_run_v7_ignored_coins_long != self.config.live.ignored_coins.long:
                 self.config.live.ignored_coins.long = st.session_state.edit_run_v7_ignored_coins_long
@@ -239,11 +238,6 @@ class V7Instance():
             st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
         with col3:
             st.text_input("note", value=self.config.pbgui.note, key="edit_run_v7_note", help=pbgui_help.instance_note)
-            # st.number_input("relative_volume_filter_clip_pct", min_value=0.0, max_value=1.0, value=float(round(self.config.live.relative_volume_filter_clip_pct, 2)), step=0.1, format="%.2f", key="edit_run_v7_relative_volume_filter_clip_pct", help=pbgui_help.relative_volume_filter_clip_pct)
-        # with col3:
-        #     st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
-        # with col4:
-        #     st.number_input("ohlcv_rolling_window", min_value=0, max_value=100, value=self.config.live.ohlcv_rolling_window, step=1, format="%.d", key="edit_run_v7_ohlcv_rolling_window", help=pbgui_help.ohlcv_rolling_window)
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
             st.number_input("price_distance_threshold", min_value=0.0, max_value=1.0, value=self.config.live.price_distance_threshold, step=0.001, format="%.3f", key="edit_run_v7_price_distance_threshold", help=pbgui_help.price_distance_threshold)
@@ -287,24 +281,26 @@ class V7Instance():
         #Filters
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
+            st.checkbox("dynamic_ignore", value=self.config.pbgui.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_run_v7_dynamic_ignore")
+        with col2:
+            st.checkbox("empty_means_all_approved", value=self.config.live.empty_means_all_approved, help=pbgui_help.empty_means_all_approved, key="edit_run_v7_empty_means_all_approved")
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        with col1:
             st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_run_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
             st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
         with col3:
-            st.checkbox("dynamic_ignore", value=self.config.pbgui.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_run_v7_dynamic_ignore")
+            st.multiselect("Tags", coindata.all_tags, default=self.config.pbgui.tags, key="edit_run_v7_tags", help=pbgui_help.coindata_tags)
         with col4:
-            st.checkbox("empty_means_all_approved", value=self.config.live.empty_means_all_approved, help=pbgui_help.empty_means_all_approved, key="edit_run_v7_empty_means_all_approved")
+            st.checkbox("only_cpt", value=self.config.pbgui.only_cpt, help=pbgui_help.only_cpt, key="edit_run_v7_only_cpt")
+            st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_run_v7_apply_filters")
         # Apply filters
-        for symbol in coindata.ignored_coins:
-            if symbol not in self.config.live.ignored_coins.long:
-                self.config.live.ignored_coins.long.append(symbol)
-            if symbol not in self.config.live.ignored_coins.short:
-                self.config.live.ignored_coins.short.append(symbol)
-            if symbol in self.config.live.approved_coins.long:
-                self.config.live.approved_coins.long.remove(symbol)
-            if symbol in self.config.live.approved_coins.short:
-                self.config.live.approved_coins.short.remove(symbol)
-        # Remove unavailable symbols
+        if st.session_state.edit_run_v7_apply_filters:
+            self.config.live.approved_coins.long = coindata.approved_coins
+            self.config.live.approved_coins.short = coindata.approved_coins
+            self.config.live.ignored_coins.long = coindata.ignored_coins
+            self.config.live.ignored_coins.short = coindata.ignored_coins
+        # # Remove unavailable symbols
         for symbol in self.config.live.approved_coins.long.copy():
             if symbol not in coindata.symbols:
                 self.config.live.approved_coins.long.remove(symbol)
@@ -335,11 +331,14 @@ class V7Instance():
             st.session_state.edit_run_v7_ignored_coins_short = self.config.live.ignored_coins.short
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('approved_coins_long', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.long, key="edit_run_v7_approved_coins_long", help=pbgui_help.approved_coins)
+            st.multiselect('approved_coins_long', coindata.symbols, default=self.config.live.approved_coins.long, key="edit_run_v7_approved_coins_long", help=pbgui_help.approved_coins)
             st.multiselect('ignored_symbols_long', coindata.symbols, default=self.config.live.ignored_coins.long, key="edit_run_v7_ignored_coins_long", help=pbgui_help.ignored_coins)
         with col2:
-            st.multiselect('approved_coins_short', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.short, key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
+            st.multiselect('approved_coins_short', coindata.symbols, default=self.config.live.approved_coins.short, key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
             st.multiselect('ignored_symbols_short', coindata.symbols, default=self.config.live.ignored_coins.short, key="edit_run_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
+        if self.config.pbgui.dynamic_ignore:
+            st.code(f'approved_symbols: {coindata.approved_coins}', wrap_lines=True)
+            st.code(f'dynamic_ignored symbols: {coindata.ignored_coins}', wrap_lines=True)
         # Edit long / short
         self.config.bot.edit()
         # View log

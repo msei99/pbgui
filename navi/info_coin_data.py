@@ -35,7 +35,7 @@ def view_coindata():
         st.number_input("market_cap", min_value=0, value=coindata.market_cap, step=50, format="%.d", key="view_coindata_market_cap", help=pbgui_help.market_cap)
     with col_3:
         st.number_input("vol/mcap", min_value=0.0, value=coindata.vol_mcap, step=0.05, format="%.2f", key="view_coindata_vol_mcap", help=pbgui_help.vol_mcap)
-    st.multiselect("Tags", coindata.all_tags, default=[], key="edit_coindata_tags")
+    st.multiselect("Tags", coindata.all_tags, default=[], key="edit_coindata_tags", help=pbgui_help.coindata_tags)
     column_config = {
         "price": st.column_config.NumberColumn(format="%.8f"),
         "link": st.column_config.LinkColumn(display_text="CoinMarketCap")
