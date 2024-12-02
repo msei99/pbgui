@@ -101,6 +101,7 @@ class CoinData:
         self.load_symbols()
         self._market_cap = 0
         self._vol_mcap = 10.0
+        self._only_cpt = False
     
     @property
     def api_key(self):
@@ -169,6 +170,15 @@ class CoinData:
             self.list_symbols()
     
     @property
+    def only_cpt(self):
+        return self._only_cpt
+    @only_cpt.setter
+    def only_cpt(self, new_only_cpt):
+        if self._only_cpt != new_only_cpt:
+            self._only_cpt = new_only_cpt
+            self.list_symbols()
+
+    @property
     def all_tags(self):
         if not self._all_tags:
             self.list_symbols()
@@ -179,8 +189,10 @@ class CoinData:
         return self._tags
     @tags.setter
     def tags(self, new_tags):
-        self._tags = new_tags
-        self.list_symbols()
+        if self._tags != new_tags:
+            self._tags = new_tags
+            self.list_symbols()
+    
 
     def run(self):
         if not self.is_running():
@@ -417,6 +429,7 @@ class CoinData:
                         "volume_24h": int(coin_data["quote"]["USD"]["volume_24h"]),
                         "market_cap": int(market_cap),
                         "vol/mcap": coin_data["quote"]["USD"]["volume_24h"]/market_cap,
+                        "copy_trading": symbol in self.symbols_cpt,
                         "link": f'https://coinmarketcap.com/currencies/{coin_data["slug"]}',
                     }
                 else:
@@ -428,16 +441,19 @@ class CoinData:
                         "volume_24h": 0,
                         "market_cap": 0,
                         "vol/mcap": 0,
+                        "copy_trading": symbol in self.symbols_cpt,
                         "link": None,
                     }
                 for tag in coin_data["tags"]:
                     if tag not in self._all_tags:
                         self._all_tags.append(tag)
+                cpt = True
+                if self.only_cpt and not symbol_data["copy_trading"]:
+                    cpt = False
                 # if self.market_cap != 0 or self.vol_mcap != 10.0:
-                if market_cap > self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap:
-                    if not self.tags or any(tag in coin_data["tags"] for tag in self.tags):
-                        self._symbols_data.append(symbol_data)
-                        self.approved_coins.append(symbol)
+                if cpt and market_cap > self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap and (not self.tags or any(tag in coin_data["tags"] for tag in self.tags)):
+                    self._symbols_data.append(symbol_data)
+                    self.approved_coins.append(symbol)
                 else:
                     self.ignored_coins.append(symbol)
         #Sort approved and ignored coins and symbols_Data

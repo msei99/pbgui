@@ -970,6 +970,16 @@ time_in_force = """
     PostOnly (post_only): If the order would be filled immediately when submitted, it will be cancelled.
     ```"""
 
+apply_filters = """
+    ```
+    If true, will apply filters to the coins.    
+    ```"""
+
+only_cpt = """
+    ```
+    If true, will only trade coins that are allowed for CopyTrading.
+    ```"""
+
 market_cap = """
     ```
     minimum market capitalization in millions of USD (1 million = 1'000'000)
@@ -978,6 +988,11 @@ market_cap = """
 vol_mcap = """
     ```
     minimum volume to market cap ratio
+    ```"""
+
+coindata_tags = """
+    ```
+    list of tags to filter coins by
     ```"""
 
 coindata_api_key = """
@@ -1003,8 +1018,6 @@ approved_coins = """
     ```
     list of approved coins to trade
     You can not add coins here if they are in ignored_coins.
-    Select ALL for add all available coins, but respect filters.
-    Select CPT for add only coins that are allowed for CopyTrading, but respect filters.
     ```"""
 
 ignored_coins = """
@@ -1016,7 +1029,10 @@ ignored_coins = """
 dynamic_ignore = """
     ```
     If enabled, PBRun will dynamically maintain the ignored_coins list.
-    The list will created using the market_cap and vol_mcap filters.
+    The list will created using the market_cap, vol_mcap and tags filters.
+    If only_cpt is enabled, coins not allowed for CopyTrading will be
+    added to the ignored_coins list. Coins in ignored_symbols_long or
+    ignored_symbols_short will also be added to the ignored_coins list.
     Update interval is configured in PBCoinData.
     On passivbot6 PBRun will restart the bot if needed.
     On passivbot7 PBRun creat the ignored_coins.json file and pb7 will use this list as filter.

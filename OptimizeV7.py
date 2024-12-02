@@ -531,6 +531,8 @@ class OptimizeV7Item:
             coindata.market_cap = self.config.pbgui.market_cap
         if coindata.vol_mcap != self.config.pbgui.vol_mcap:
             coindata.vol_mcap = self.config.pbgui.vol_mcap
+        if coindata.tags != self.config.pbgui.tags:
+            coindata.tags = self.config.pbgui.tags
         # Init session_state for keys
         if "edit_opt_v7_exchange" in st.session_state:
             if st.session_state.edit_opt_v7_exchange != self.config.backtest.exchange:
@@ -586,6 +588,10 @@ class OptimizeV7Item:
             if st.session_state.edit_opt_v7_scoring != self.config.optimize.scoring:
                 self.config.optimize.scoring = st.session_state.edit_opt_v7_scoring
         # Filters
+        if "edit_opt_v7_only_cpt" in st.session_state:
+            if st.session_state.edit_opt_v7_only_cpt != self.config.pbgui.only_cpt:
+                self.config.pbgui.only_cpt = st.session_state.edit_opt_v7_only_cpt
+                coindata.only_cpt = self.config.pbgui.only_cpt
         if "edit_opt_v7_market_cap" in st.session_state:
             if st.session_state.edit_opt_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_opt_v7_market_cap
@@ -594,21 +600,17 @@ class OptimizeV7Item:
             if st.session_state.edit_opt_v7_vol_mcap != self.config.pbgui.vol_mcap:
                 self.config.pbgui.vol_mcap = st.session_state.edit_opt_v7_vol_mcap
                 coindata.vol_mcap = self.config.pbgui.vol_mcap
+        if "edit_opt_v7_tags" in st.session_state:
+            if st.session_state.edit_opt_v7_tags != self.config.pbgui.tags:
+                self.config.pbgui.tags = st.session_state.edit_opt_v7_tags
+                coindata.tags = self.config.pbgui.tags
         # Symbol config
         if "edit_opt_v7_approved_coins_long" in st.session_state:
             if st.session_state.edit_opt_v7_approved_coins_long != self.config.live.approved_coins.long:
                 self.config.live.approved_coins.long = st.session_state.edit_opt_v7_approved_coins_long
-                if 'All' in self.config.live.approved_coins.long:
-                    self.config.live.approved_coins.long = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins.long:
-                    self.config.live.approved_coins.long = coindata.symbols_cpt.copy()
         if "edit_opt_v7_approved_coins_short" in st.session_state:
             if st.session_state.edit_opt_v7_approved_coins_short != self.config.live.approved_coins.short:
                 self.config.live.approved_coins.short = st.session_state.edit_opt_v7_approved_coins_short
-                if 'All' in self.config.live.approved_coins.short:
-                    self.config.live.approved_coins.short = coindata.symbols.copy()
-                elif 'CPT' in self.config.live.approved_coins.short:
-                    self.config.live.approved_coins.short = coindata.symbols_cpt.copy()
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
@@ -661,17 +663,20 @@ class OptimizeV7Item:
         with col4:
             st.multiselect("scoring", ["adg","mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio"], max_selections=2, default=self.config.optimize.scoring, key="edit_opt_v7_scoring")
         # Filters
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
             st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_opt_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
             st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
+        with col3:
+            st.multiselect("Tags", coindata.all_tags, default=self.config.pbgui.tags, key="edit_opt_v7_tags", help=pbgui_help.coindata_tags)
+        with col4:
+            st.checkbox("only_cpt", value=self.config.pbgui.only_cpt, help=pbgui_help.only_cpt, key="edit_opt_v7_only_cpt")
+            st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_opt_v7_apply_filters")
         # Apply filters
-        for symbol in coindata.ignored_coins:
-            if symbol in self.config.live.approved_coins.long:
-                self.config.live.approved_coins.long.remove(symbol)
-            if symbol in self.config.live.approved_coins.short:
-                self.config.live.approved_coins.short.remove(symbol)
+        if st.session_state.edit_opt_v7_apply_filters:
+            self.config.live.approved_coins.long = coindata.approved_coins
+            self.config.live.approved_coins.short = coindata.approved_coins
         # Remove unavailable symbols
         for symbol in self.config.live.approved_coins.long.copy():
             if symbol not in coindata.symbols:
@@ -680,15 +685,15 @@ class OptimizeV7Item:
             if symbol not in coindata.symbols:
                 self.config.live.approved_coins.short.remove(symbol)
         # Correct Display of Symbols
-        if "edit_run_v7_approved_coins_long" in st.session_state:
-            st.session_state.edit_run_v7_approved_coins_long = self.config.live.approved_coins.long
-        if "edit_run_v7_approved_coins_short" in st.session_state:
-            st.session_state.edit_run_v7_approved_coins_short = self.config.live.approved_coins.short
+        if "edit_opt_v7_approved_coins_long" in st.session_state:
+            st.session_state.edit_opt_v7_approved_coins_long = self.config.live.approved_coins.long
+        if "edit_opt_v7_approved_coins_short" in st.session_state:
+            st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('approved_coins_long', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.long, key="edit_opt_v7_approved_coins_long")
+            st.multiselect('approved_coins_long', coindata.symbols, default=self.config.live.approved_coins.long, key="edit_opt_v7_approved_coins_long")
         with col2:
-            st.multiselect('approved_coins_short', ['All', 'CPT'] + coindata.symbols, default=self.config.live.approved_coins.short, key="edit_opt_v7_approved_coins_short")
+            st.multiselect('approved_coins_short', coindata.symbols, default=self.config.live.approved_coins.short, key="edit_opt_v7_approved_coins_short")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             # long_close_grid_markup_range
