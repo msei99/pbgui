@@ -20,6 +20,8 @@ def bt_v7():
                     bt_v7.save()
                     if "bt_v7_list" in st.session_state:
                         del st.session_state.bt_v7_list
+                    if "bt_v7_all_results" in st.session_state:
+                        del st.session_state.bt_v7_all_results
             else:
                 info_popup("Name is empty")
         if st.button("Import"):
@@ -30,6 +32,7 @@ def bt_v7():
             st.rerun()
         if st.button("Queue"):
             del st.session_state.bt_v7
+            del st.session_state.bt_v7_all_results
             st.session_state.bt_v7_queue = BacktestV7Queue()
             st.rerun()
         if st.button("Add to Backtest Queue"):
@@ -38,6 +41,8 @@ def bt_v7():
                     bt_v7.save()
                     if "bt_v7_list" in st.session_state:
                         del st.session_state.bt_v7_list
+                    if "bt_v7_all_results" in st.session_state:
+                        del st.session_state.bt_v7_all_results
                     bt_v7.save_queue()
                     st.session_state.bt_v7_queue = BacktestV7Queue()
                     del st.session_state.bt_v7
@@ -60,6 +65,9 @@ def bt_v7_list():
         if st.button(":material/refresh:"):
             st.session_state.bt_v7_list = BacktestsV7()
             st.rerun()
+        if st.button("All Results"):
+            st.session_state.bt_v7_all_results = BacktestsV7()
+            st.rerun()    
         if st.button("Queue"):
             st.session_state.bt_v7_queue = BacktestV7Queue()
             st.rerun()
@@ -69,6 +77,30 @@ def bt_v7_list():
     st.subheader("Available Configs")
     bt_v7_list.view_backtests()
 
+def bt_v7_all_results():
+    # Init bt_v7_list
+    if "bt_v7_all_results" not in st.session_state:
+        st.session_state.bt_v7_all_results = BacktestsV7()
+    bt_v7_all_results = st.session_state.bt_v7_all_results
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/refresh:"):
+            st.session_state.bt_v7_list = BacktestsV7()
+            st.rerun()
+        if st.button(":material/home:"):
+            del st.session_state.bt_v7_all_results
+        if st.button("All Results"):
+            st.session_state.bt_v7_all_results = BacktestsV7()
+            st.rerun()    
+        if st.button("Queue"):
+            st.session_state.bt_v7_queue = BacktestV7Queue()
+            st.rerun()
+        if st.button("Add Backtest"):
+            st.session_state.bt_v7 = BacktestV7Item()
+            st.rerun()
+    st.subheader("All Results")
+    bt_v7_all_results.view_all_results()
+    
 def bt_v7_results():
     # Init bt_v7_results
     bt_v7_results = st.session_state.bt_v7_results
@@ -152,5 +184,7 @@ elif "bt_v7" in st.session_state:
     bt_v7()
 elif "bt_v7_queue" in st.session_state:
     bt_v7_queue()
+elif "bt_v7_all_results" in st.session_state:
+    bt_v7_all_results()  
 else:
     bt_v7_list()
