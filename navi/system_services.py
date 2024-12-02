@@ -162,7 +162,7 @@ def pbremote_details():
                     st.session_state.server = rserver
             with col2:
                 if color == "red":
-                    if st.button(":material/delete:"):
+                    if st.button(":material/delete:", key=f"delete_{rserver.name}"):
                         rserver.delete_server()
                         pbremote.update_remote_servers()
                         st.rerun()
