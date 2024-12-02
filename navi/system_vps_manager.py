@@ -41,7 +41,7 @@ def list_vps():
             color = "green"
         else:
             color = "red"
-        if st.button(f':{color}[{pbremote.name}]'):
+        if st.button(f':{color}[{pbremote.name} (local)]'):
             st.session_state.manage_master = True
             st.rerun()
 
@@ -82,7 +82,7 @@ def list_vps():
     else:
         pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin})"
     d.append({
-        "Name": pbremote.name,
+        "Name": pbremote.name + " (local)",
         "Online": online,
         "Start": datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S"),
         "Reboot": reboot,
