@@ -164,9 +164,9 @@ def select_instance():
     column_config = {
         "id": None,
         'TWE': st.column_config.Column(help='Total Wallet Exposure'),
-        'lap': st.column_config.Column(help='loss_allowance_pct'),
-        'ucp': st.column_config.Column(help='unstuck_close_pct'),
-        'st': st.column_config.Column(help='stuck_threshold'),
+        'lap': st.column_config.Column(label='LAP',help='Loss Allowance Pct'),
+        'ucp': st.column_config.Column(label='UCP',help='Unstuck Close Pct'),
+        'st': st.column_config.Column(label='ST',help='Stuck Threshold'),
         'AU': st.column_config.Column(help='Auto Unstuck'),
         }
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_multi_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
