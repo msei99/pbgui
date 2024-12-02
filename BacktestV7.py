@@ -349,6 +349,11 @@ class BacktestV7Queue:
             "view": st.column_config.CheckboxColumn(label="View Results"),
             "log": st.column_config.CheckboxColumn(label="View Logfile"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
+            "id": st.column_config.NumberColumn(format="%.0f", label="ID"),
+            "name": st.column_config.TextColumn(label="Name"),
+            "filename": st.column_config.TextColumn(label="Filename"),
+            "exchange": st.column_config.TextColumn(label="Exchange"),
+            "finish": st.column_config.CheckboxColumn(label="Finished"),
             }
         #Display Queue
         height = 36+(len(d))*35
@@ -913,6 +918,7 @@ class BacktestsV7:
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
             "view": st.column_config.CheckboxColumn(label="View Results"),
+            "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
         #Display Backtests
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_backtest_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])

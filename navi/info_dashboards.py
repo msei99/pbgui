@@ -11,6 +11,34 @@ def dashboard():
     if "dashboards" not in st.session_state:
         st.session_state.dashboards = Dashboard().list_dashboards()
     dashboards = st.session_state.dashboards
+    
+    if not "dashboard" in st.session_state:
+        # No Dashboard? Create a new one
+        if len(dashboards) == 0:
+            st.info("Please create a new dashboard.")
+        # If there's only one dashboard, load it directly
+        elif len(dashboards) == 1:
+            st.session_state.dashboard = Dashboard(dashboards[0])
+            st.rerun()
+        # Else create Content area buttons (in addition to sidebar buttons)
+        elif len(dashboards) > 1:          
+             # Define the callback function
+            def on_select_dashboard():
+                selected_dashboard = st.session_state['selected_dashboard']
+                if "edit_dashboard" in st.session_state:
+                    del st.session_state.edit_dashboard
+                st.session_state.dashboard = Dashboard(selected_dashboard)
+                
+            # Create the selectbox with the callback
+            st.selectbox(
+                "",
+                options=['Select a dashboard'] + dashboards,
+                #index=default_index,
+                key='selected_dashboard',
+                on_change=on_select_dashboard
+            )
+
+    
     with st.sidebar:
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
@@ -58,7 +86,7 @@ def dashboard():
                 st.session_state.dashboard = Dashboard(db)
                 # dashboard = st.session_state.dashboard
                 st.rerun()
-
+                
     if "edit_dashboard" in st.session_state:
         st.session_state.dashboard.create_dashboard()
     elif "dashboard" in st.session_state:
@@ -72,8 +100,5 @@ if not is_authenticted() or is_session_state_not_initialized():
 # Page Setup
 set_page_config("Dashboards")
 st.header("Dashboards", divider="red")
-
-if not "dashboard" in st.session_state:
-    st.info("Please select a dashboard from the sidebar or create a new one.")
 
 dashboard()
