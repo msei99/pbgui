@@ -763,6 +763,11 @@ class BacktestV7Results:
                         st.session_state.edit_v7_instance.config = self.results[row].config
                         st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
                         st.switch_page(get_navi_paths()["V7_RUN"])
+                if "BT" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["BT"]:
+                        st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                        del st.session_state.bt_v7_results
+                        st.rerun()
                 if "Optimize" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["Optimize"]:
                         st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
@@ -798,6 +803,7 @@ class BacktestV7Results:
                 'Plot': False,
                 'Fills': False,
                 'Create Run': False,
+                'BT': False,
                 'Optimize': False,
                 'Delete': False,
                 'Compare': compare,  # Add Compare field
@@ -808,6 +814,7 @@ class BacktestV7Results:
             'Plot': st.column_config.CheckboxColumn(label="BE Plot"),
             'Fills': st.column_config.CheckboxColumn(label="Fills"),
             'Create Run': st.column_config.CheckboxColumn(label="Run"),
+            'BT': st.column_config.CheckboxColumn(label="BT"),
             'Optimize': st.column_config.CheckboxColumn(label="Opt"),
             'Delete': st.column_config.CheckboxColumn(label="Del"),
             'Compare': st.column_config.CheckboxColumn(label="Comp"),
