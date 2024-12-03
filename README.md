@@ -5,7 +5,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.29
+# v1.30
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -200,6 +200,20 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.30 (03-12-2024)
+- Added apply_filters for static symbol selection
+- ignored_symbols will now always added to the dynamic_ignore
+- Preview of dynamic_ignore, when enabling it
+- Added copytrading only to dynamic_ignore filter
+- Tags can be used as dynamic_ignore filter for running bots
+- Add Tags filter from CoinMarketCap (example: memes, gaming, defi, layer-2 ... much more)
+- Compare Backtests from All Results
+- Show All Results on Backtest V7
+- Update to Streamlit 1.40
+- Add Position Value to Dashboard Positions
+- Small Bugfixes
+- Small cosmetic changes
 
 ## v1.29 (29-11-2024)
 - Make PBGui passivbot v7.2.9 compatible
