@@ -369,16 +369,15 @@ class BacktestV7Queue:
 class BacktestV7Item:
     def __init__(self, backtest_path: str = None):
         self.path = backtest_path
-        # self.json = None
         self.config = ConfigV7()
         self.log = None
-        self.backtest_results = []
-        if "btv7_compare_results" not in st.session_state:
-            st.session_state.btv7_compare_results = []
+        self.results = BacktestV7Results()
         if backtest_path:
             self.config.config_file = backtest_path
             self.config.load_config()
             self.name = self.config.backtest.base_dir.split('/')[-1]
+            self.results.results_path = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}'))
+            self.results.name = self.name
         else:
             self.initialize()
 
@@ -531,161 +530,6 @@ class BacktestV7Item:
             st.multiselect('ignored_symbols_short', coindata.symbols, default=self.config.live.ignored_coins.short, key="edit_bt_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
         self.config.bot.edit()
 
-    def remove_selected_results(self):
-        ed_key = st.session_state.ed_key
-        ed = st.session_state[f'select_btv7_result_{ed_key}']
-        for row in ed["edited_rows"]:
-            if "delete" in ed["edited_rows"][row]:
-                if ed["edited_rows"][row]["delete"]:
-                    self.backtest_results[row].remove()
-        for result in self.backtest_results[:]:
-            if not Path(result.result_path).exists():
-                self.backtest_results.remove(result)
-
-    def remove_all_results(self):
-        rmtree(f'{pb7dir()}/backtests/pbgui/{self.name}', ignore_errors=True)
-        self.backtest_results = []
-
-    def view_results(self):
-        if not "ed_key" in st.session_state:
-            st.session_state.ed_key = 0
-        ed_key = st.session_state.ed_key
-        if f'select_btv7_result_{ed_key}' in st.session_state:
-            ed = st.session_state[f'select_btv7_result_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "compare" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["compare"]:
-                        self.add_compare(self.backtest_results[row])
-                    else:
-                        self.remove_compare(self.backtest_results[row])
-                if "create_run" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["create_run"]:
-                        st.session_state.edit_v7_instance = V7Instance()
-                        st.session_state.edit_v7_instance.config = self.backtest_results[row].config
-                        st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
-                        st.switch_page(get_navi_paths()["V7_RUN"])
-                if "optimize" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["optimize"]:
-                        st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
-                        st.session_state.opt_v7.config = self.backtest_results[row].config
-                        st.session_state.opt_v7.config.pbgui.starting_config = True
-                        st.session_state.opt_v7.name = self.name
-                        if "opt_v7_list" in st.session_state:
-                            del st.session_state.opt_v7_list
-                        if "opt_v7_queue" in st.session_state:
-                            del st.session_state.opt_v7_queue
-                        if "opt_v7_results" in st.session_state:    
-                            del st.session_state.opt_v7_results
-                        st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
-        d = []
-        for id, result in enumerate(self.backtest_results):
-            compare = False
-            if st.session_state.btv7_compare_results:
-                for r in st.session_state.btv7_compare_results:
-                    if r.result_path == result.result_path:
-                        compare = True
-            d.append({
-                'id': id,
-                'compare': compare,
-                'view': False,
-                'plot': False,
-                'fills': False,
-                'create_run': False,
-                'optimize': False,
-                'delete': False,
-                'Time': result.time,
-                'adg': result.adg,
-                'drawdown_worst': result.drawdown_worst,
-                'sharpe_ratio': result.sharpe_ratio,
-                'starting_balance': result.starting_balance,
-                'final_balance': result.final_balance,
-            })
-        column_config = {
-            "id": None,
-            'adg': st.column_config.NumberColumn(format="%.8f", label="ADG"),
-            'final_balance': st.column_config.NumberColumn(format="$ %.2f"),
-            "view": st.column_config.CheckboxColumn(label="View Result"),
-            "plot": st.column_config.CheckboxColumn(label="View BE Plot"),
-            "fills": st.column_config.CheckboxColumn(label="View Fills"),
-            "create_run": st.column_config.CheckboxColumn(label="Create Run"),
-            "delete": st.column_config.CheckboxColumn(label="Delete"),
-            "compare": st.column_config.CheckboxColumn(label="Compare"),
-            "optimize": st.column_config.CheckboxColumn(label="Optimize"),
-            "drawdown_worst": st.column_config.NumberColumn(format="%.8f", label="Drawdown Worst"),
-            "sharpe_ratio": st.column_config.NumberColumn(format="%.8f", label="Sharpe Ratio"),
-            "starting_balance": st.column_config.NumberColumn(format="%.0f", label="Starting Balance"),
-            "final_balance": st.column_config.NumberColumn(format="%.0f", label="Final Balance")
-            }
-        #Display Backtests
-        height = 36+(len(d))*35
-        if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
-        if st.session_state.btv7_compare_results:
-            self.view_compare()
-        if f'select_btv7_result_{ed_key}' in st.session_state:
-            ed = st.session_state[f'select_btv7_result_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "view" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["view"]:
-                        self.backtest_results[row].load_fills()
-                        self.backtest_results[row].load_be()
-                        self.backtest_results[row].view_chart_be()
-                        self.backtest_results[row].view_chart_symbol()
-                        self.backtest_results[row].view()
-                if "plot" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["plot"]:
-                        self.backtest_results[row].view_plot()
-                if "fills" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["fills"]:
-                        self.backtest_results[row].view_fills()
-
-    def remove_compare(self, result):
-        if st.session_state.btv7_compare_results:
-            for r in st.session_state.btv7_compare_results.copy():
-                if r.result_path == result.result_path:
-                    st.session_state.btv7_compare_results.remove(r)
-
-    def add_compare(self, result):
-        if st.session_state.btv7_compare_results:
-            for r in st.session_state.btv7_compare_results.copy():
-                if r.result_path == result.result_path:
-                    return
-        st.session_state.btv7_compare_results.append(result)
-
-    def view_compare(self):
-        self.compare_fig = go.Figure()
-        self.compare_fig.update_layout(yaxis_title='Balance')
-        self.compare_fig.update_layout(title_text="Compare Results", title_x=0.5)
-        self.compare_fig.update_layout(yaxis_title='Balance', height=800)
-        self.compare_fig.update_xaxes(showgrid=True, griddash="dot")
-        if st.session_state.btv7_compare_results:
-            if st.button("Clear Compare"):
-                st.session_state.btv7_compare_results = []
-                st.rerun()
-            for result in st.session_state.btv7_compare_results:
-                result.load_be()
-                if result.be is not None:
-                    name = PurePath(*result.result_path.parts[-3:-2])
-                    formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
-                    self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity'], name=f"{name} {formatted_time} equity", line=dict(width=0.75)))
-                    self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['balance'], name=f"{name} {formatted_time} balance", line=dict(width=2.5)))
-            self.compare_fig.update_yaxes(tickformat=".2f")
-            st.plotly_chart(self.compare_fig, key=f"backtest_v7_compare_be")
-
-    def calculate_results(self):
-        p = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}/{self.config.backtest.exchange}/**/analysis.json'))
-        files = glob.glob(p, recursive=False)
-        return len(files)
-
-    def load_results(self):       
-        p = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}/{self.config.backtest.exchange}/**/analysis.json'))
-        files = glob.glob(p, recursive=False)
-        self.backtest_results = []
-        for file in files:
-            result_path = PurePath(file).parent
-            bt_result = BacktestV7Result(result_path)
-            self.backtest_results.append(bt_result)
-        
     def save(self):
         self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         self.path = Path(f'{PBGDIR}/data/bt_v7/{self.name}')
@@ -753,7 +597,6 @@ class BacktestV7Item:
         with col2:
             if st.button("Cancel"):
                 st.rerun()
-
 
 class BacktestV7Result:
     def __init__(self, result_path: str = None):
@@ -879,6 +722,172 @@ class BacktestV7Result:
         else:
             st.error("No fills data found")
 
+class BacktestV7Results:
+
+    def __init__(self):
+        self.results = []
+        self.results_path = None
+        self.name = None
+        if "btv7_compare_results" not in st.session_state:
+            st.session_state.btv7_compare_results = []
+
+    def calculate_results(self):
+        p = str(Path(f'{self.results_path}/**/analysis.json'))
+        files = glob.glob(p, recursive=True)
+        return len(files)
+
+    def load(self):       
+        p = str(Path(f'{self.results_path}/**/analysis.json'))
+        files = glob.glob(p, recursive=True)
+        self.results = []
+        for file in files:
+            result_path = PurePath(file).parent
+            bt_result = BacktestV7Result(result_path)
+            self.results.append(bt_result)
+
+    def view(self):
+        if not "ed_key" in st.session_state:
+            st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
+        if f'select_btv7_result_{ed_key}' in st.session_state:
+            ed = st.session_state[f'select_btv7_result_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "Compare" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["Compare"]:
+                        self.add_compare(self.results[row])
+                    else:
+                        self.remove_compare(self.results[row])
+                if "Create Run" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["Create Run"]:
+                        st.session_state.edit_v7_instance = V7Instance()
+                        st.session_state.edit_v7_instance.config = self.results[row].config
+                        st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
+                        st.switch_page(get_navi_paths()["V7_RUN"])
+                if "Optimize" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["Optimize"]:
+                        st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
+                        st.session_state.opt_v7.config = self.results[row].config
+                        st.session_state.opt_v7.config.pbgui.starting_config = True
+                        st.session_state.opt_v7.name = self.results[row].config.backtest.base_dir.split('/')[-1]
+                        if "opt_v7_list" in st.session_state:
+                            del st.session_state.opt_v7_list
+                        if "opt_v7_queue" in st.session_state:
+                            del st.session_state.opt_v7_queue
+                        if "opt_v7_results" in st.session_state:    
+                            del st.session_state.opt_v7_results
+                        st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
+        d = []
+        for id, result in enumerate(self.results):
+            compare = False
+            if st.session_state.btv7_compare_results:
+                for r in st.session_state.btv7_compare_results:
+                    if r.result_path == result.result_path:
+                        compare = True
+            print(result.__dict__)
+            d.append({
+                'id': id,
+                'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
+                'Exch.': result.config.backtest.exchange,
+                'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
+                'ADG': result.adg,
+                'Drawdown Worst': result.drawdown_worst,
+                'Sharpe Ratio': result.sharpe_ratio,
+                'Starting Balance': result.starting_balance,
+                'Final Balance': result.final_balance,
+                'View': False,
+                'Plot': False,
+                'Fills': False,
+                'Create Run': False,
+                'Optimize': False,
+                'Delete': False,
+                'Compare': compare,  # Add Compare field
+            })
+        column_config = {
+            "id": None,
+            'View': st.column_config.CheckboxColumn(label="Results"),
+            'Plot': st.column_config.CheckboxColumn(label="BE Plot"),
+            'Fills': st.column_config.CheckboxColumn(label="Fills"),
+            'Create Run': st.column_config.CheckboxColumn(label="Run"),
+            'Optimize': st.column_config.CheckboxColumn(label="Opt"),
+            'Delete': st.column_config.CheckboxColumn(label="Del"),
+            'Compare': st.column_config.CheckboxColumn(label="Comp"),
+            'ADG': st.column_config.NumberColumn(format="%.8f"),
+            'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.8f"),
+            'Sharpe Ratio': st.column_config.NumberColumn(label="Sharpe", format="%.8f"),
+            'Starting Balance': st.column_config.NumberColumn(label="Start B.", format="%.0f"),
+            'Final Balance': st.column_config.NumberColumn(label="Final B.", format="%.0f")
+            }
+        #Display Backtests
+        height = 36+(len(d))*35
+        if height > 1000: height = 1016
+        st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
+        if st.session_state.btv7_compare_results:
+            self.view_compare()
+        if f'select_btv7_result_{ed_key}' in st.session_state:
+            ed = st.session_state[f'select_btv7_result_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "View" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["View"]:
+                        self.results[row].load_fills()
+                        self.results[row].load_be()
+                        self.results[row].view_chart_be()
+                        self.results[row].view_chart_symbol()
+                        self.results[row].view()
+                if "Plot" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["Plot"]:
+                        self.results[row].view_plot()
+                if "Fills" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["Fills"]:
+                        self.results[row].view_fills()
+
+    def remove_selected_results(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_btv7_result_{ed_key}']
+        for row in ed["edited_rows"]:
+            if "delete" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["delete"]:
+                    self.results[row].remove()
+        for result in self.results[:]:
+            if not Path(result.result_path).exists():
+                self.results.remove(result)
+
+    def remove_all_results(self):
+        rmtree(f'{self.results_path}', ignore_errors=True)
+        self.results = []
+
+    def remove_compare(self, result):
+        if st.session_state.btv7_compare_results:
+            for r in st.session_state.btv7_compare_results.copy():
+                if r.result_path == result.result_path:
+                    st.session_state.btv7_compare_results.remove(r)
+
+    def add_compare(self, result):
+        if st.session_state.btv7_compare_results:
+            for r in st.session_state.btv7_compare_results.copy():
+                if r.result_path == result.result_path:
+                    return
+        st.session_state.btv7_compare_results.append(result)
+
+    def view_compare(self):
+        self.compare_fig = go.Figure()
+        self.compare_fig.update_layout(yaxis_title='Balance')
+        self.compare_fig.update_layout(title_text="Compare Results", title_x=0.5)
+        self.compare_fig.update_layout(yaxis_title='Balance', height=800)
+        self.compare_fig.update_xaxes(showgrid=True, griddash="dot")
+        if st.session_state.btv7_compare_results:
+            if st.button("Clear Compare"):
+                st.session_state.btv7_compare_results = []
+                st.rerun()
+            for result in st.session_state.btv7_compare_results:
+                result.load_be()
+                if result.be is not None:
+                    name = PurePath(*result.result_path.parts[-3:-2])
+                    formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
+                    self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity'], name=f"{name} {formatted_time} equity", line=dict(width=0.75)))
+                    self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['balance'], name=f"{name} {formatted_time} balance", line=dict(width=2.5)))
+            self.compare_fig.update_yaxes(tickformat=".2f")
+            st.plotly_chart(self.compare_fig, key=f"backtest_v7_compare_be")
+
 class BacktestsV7:
     def __init__(self):
         self.backtests = []
@@ -897,7 +906,8 @@ class BacktestsV7:
                     st.session_state.bt_v7 = self.backtests[row]
                     st.rerun()
                 if "view" in ed["edited_rows"][row]:
-                    st.session_state.bt_v7_results = self.backtests[row]
+                    # st.session_state.bt_v7_results = self.backtests[row]
+                    st.session_state.bt_v7_results = self.backtests[row].results
                     st.rerun()
                 if 'delete' in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]['delete']:
@@ -912,7 +922,8 @@ class BacktestsV7:
                 'Name': bt.name,
                 'Exchange': bt.config.backtest.exchange,
                 'view': False,
-                'Backtests': bt.calculate_results(),
+                # 'Backtests': bt.calculate_results(),
+                'Backtests': bt.results.calculate_results(),
                 'delete' : False,
             })
         column_config = {
@@ -932,165 +943,8 @@ class BacktestsV7:
             for p in found_bt:
                 bt = BacktestV7Item(p)
                 self.backtests.append(bt)
-                
-    def view_compare(self):
-        # Create a figure
-        compare_fig = go.Figure()
-        compare_fig.update_layout(yaxis_title='Balance')
-        compare_fig.update_layout(title_text="Compare Results", title_x=0.5)
-        compare_fig.update_layout(yaxis_title='Balance', height=800)
-        compare_fig.update_xaxes(showgrid=True, griddash="dot")
-        if st.button("Clear Compare"):
-            st.session_state.btv7_compare_results = []
-            st.experimental_rerun()
-        for result in st.session_state.btv7_compare_results:
-            result.load_be()
-            if result.be is not None:
-                name = result.result_path.parts[-3]
-                formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
-                compare_fig.add_trace(go.Scatter(
-                    x=result.be['time'],
-                    y=result.be['equity'],
-                    name=f"{name} {formatted_time} equity",
-                    line=dict(width=0.75)
-                ))
-                compare_fig.add_trace(go.Scatter(
-                    x=result.be['time'],
-                    y=result.be['balance'],
-                    name=f"{name} {formatted_time} balance",
-                    line=dict(width=2.5)
-                ))
-        compare_fig.update_yaxes(tickformat=".2f")
-        st.plotly_chart(compare_fig, key="backtest_v7_compare_be")
-    
-    def view_all_results(self):
-        if not self.backtests:
-            self.find_backtests()
-        # Initialize a list to collect all results and their corresponding objects
-        all_results = []
-        results_list = []
 
-        # Ensure compare_results is in session_state
-        if 'btv7_compare_results' not in st.session_state:
-            st.session_state.btv7_compare_results = []
 
-        # Loop through each backtest
-        for backtest in self.backtests:
-            # Load the results for the backtest
-            backtest.load_results()
-            # Loop through each result in the backtest
-            for result in backtest.backtest_results:
-                # Determine if this result is in the compare list
-                compare = any(r.result_path == result.result_path for r in st.session_state.btv7_compare_results)
-                # Collect relevant data from each result
-                result_data = {
-                    'Backtest Name': backtest.name,
-                    'Exch.': backtest.config.backtest.exchange,
-                    'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
-                    'ADG': result.adg,
-                    'Drawdown Worst': result.drawdown_worst,
-                    'Sharpe Ratio': result.sharpe_ratio,
-                    'Starting Balance': result.starting_balance,
-                    'Final Balance': result.final_balance,
-                    'View': False,
-                    'Plot': False,
-                    'Fills': False,
-                    'Create Run': False,
-                    'Optimize': False,
-                    'Delete': False,
-                    'Compare': compare,  # Add Compare field
-                }
-                all_results.append(result_data)
-                results_list.append(result)
-
-        # Create a DataFrame from the list of results
-        if all_results:
-            import pandas as pd
-            
-            df = pd.DataFrame(all_results)
-        
-            # Ensure numeric columns contain only numeric data
-            numeric_columns = ['ADG', 'Drawdown Worst', 'Sharpe Ratio']
-            for col in numeric_columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')  # Convert to numeric, set errors to NaN
-                
-            # Drop rows with NaN in numeric columns
-            df.dropna(subset=numeric_columns, inplace=True)
-            
-            # Configure columns for the data editor
-            column_config = {
-                'View': st.column_config.CheckboxColumn(label="Results"),
-                'Plot': st.column_config.CheckboxColumn(label="BE Plot"),
-                'Fills': st.column_config.CheckboxColumn(label="Fills"),
-                'Create Run': st.column_config.CheckboxColumn(label="Run"),
-                'Optimize': st.column_config.CheckboxColumn(label="Opt"),
-                'Delete': st.column_config.CheckboxColumn(label="Del"),
-                'Compare': st.column_config.CheckboxColumn(label="Comp"),
-                'ADG': st.column_config.NumberColumn(format="%.8f"),
-                'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.8f"),
-                'Sharpe Ratio': st.column_config.NumberColumn(label="Sharpe", format="%.8f"),
-                'Starting Balance': st.column_config.NumberColumn(label="Start B.", format="%.0f"),
-                'Final Balance': st.column_config.NumberColumn(label="Final B.", format="%.0f"),
-            }
-            # Display the DataFrame using Streamlit's data editor
-            ed_key = 'view_all_results'
-            edited_df = st.data_editor(
-                df,
-                column_config=column_config,
-                use_container_width=True,
-                key=ed_key,
-                hide_index=True,
-                height=600
-            )
-            # Handle user interactions
-            for idx, row in edited_df.iterrows():
-                result = results_list[idx]
-                if row['View']:
-                    result.load_fills()
-                    result.load_be()
-                    result.view_chart_be()
-                    result.view_chart_symbol()
-                    result.view()
-                if row['Plot']:
-                    result.view_plot()
-                if row['Fills']:
-                    result.view_fills()
-                if row['Create Run']:
-                    st.session_state.edit_v7_instance = V7Instance()
-                    st.session_state.edit_v7_instance.config = result.config
-                    st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
-                    st.switch_page(get_navi_paths()["V7_RUN"])
-                if row['Optimize']:
-                    st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
-                    st.session_state.opt_v7.config = result.config
-                    st.session_state.opt_v7.config.pbgui.starting_config = True
-                    st.session_state.opt_v7.name = result.name
-                    if "opt_v7_list" in st.session_state:
-                        del st.session_state.opt_v7_list
-                    if "opt_v7_queue" in st.session_state:
-                        del st.session_state.opt_v7_queue
-                    if "opt_v7_results" in st.session_state:
-                        del st.session_state.opt_v7_results
-                    st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
-                if row['Delete']:
-                    result.remove()
-                    st.rerun()
-                # Handle Compare checkbox
-                if row['Compare'] != df.at[idx, 'Compare']:
-                    if row['Compare']:
-                        # Add to compare list
-                        if result not in st.session_state.btv7_compare_results:
-                            st.session_state.btv7_compare_results.append(result)
-                    else:
-                        # Remove from compare list
-                        if result in st.session_state.btv7_compare_results:
-                            st.session_state.btv7_compare_results.remove(result)
-            # After handling user interactions, if there are results to compare, display comparison plot
-            if st.session_state.btv7_compare_results:
-                self.view_compare()
-        else:
-            st.write("No results found.")
-    
 def main():
     # Disable Streamlit Warnings when running directly
     logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
