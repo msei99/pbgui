@@ -845,7 +845,7 @@ class BacktestV7Results:
         ed = st.session_state[f'select_btv7_result_{ed_key}']
         for row in ed["edited_rows"]:
             if "delete" in ed["edited_rows"][row]:
-                if ed["edited_rows"][row]["delete"]:
+                if ed["edited_rows"][row]["Delete"]:
                     self.results[row].remove()
         for result in self.results[:]:
             if not Path(result.result_path).exists():
