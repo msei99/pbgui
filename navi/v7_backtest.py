@@ -101,7 +101,7 @@ def bt_v7_results():
             bt_v7_results.remove_selected_results()
             st.rerun()
         if st.button(":material/delete: all"):
-            bt_v7_results.results.remove_all_results()
+            bt_v7_results.remove_all_results()
             st.rerun()
     st.subheader(f"Results: {bt_v7_results.name}")
     bt_v7_results.view()
