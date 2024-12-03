@@ -777,13 +777,19 @@ class Dashboard():
                     pprices += pos[3] * pos[5]
                     upnl += pos[4]
                 all_pprices += pprices
-                twe = 100 / balance['Balance'] * pprices
+                if balance['Balance'] == 0 or pprices == 0:
+                    twe = 0
+                else:
+                    twe = 100 / balance['Balance'] * pprices
                 # add twe to df as new column name we
                 df.at[index, 'WE'] = twe
                 df.at[index, 'uPnl'] = upnl
             total_balance = df['Balance'].sum()
             total_upnl = df['uPnl'].sum()
-            total_twe = 100 / total_balance * all_pprices
+            if total_balance == 0 or all_pprices == 0:
+                total_twe = 0
+            else:
+                total_twe = 100 / total_balance * all_pprices
             color = "green" if total_twe < 100 else "orange" if total_twe < 200 else "red"
             color_upnl = "red" if total_upnl < 0 else "green"
             st.markdown(f"#### :blue[Total Balance:] :green[${total_balance:.2f} USDT]&emsp; :blue[Total uPnl:] :{color_upnl}[${total_upnl:.2f}]&emsp; :blue[Total TWE:] :{color}[{total_twe:.2f} %]")
