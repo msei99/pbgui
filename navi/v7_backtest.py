@@ -1,6 +1,7 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths
-from BacktestV7 import BacktestV7Item, BacktestsV7, BacktestV7Queue
+from pbgui_func import PBGDIR, pb7dir
+from BacktestV7 import BacktestV7Item, BacktestsV7, BacktestV7Queue, BacktestV7Results
 import datetime
 from Instance import Instance
 from User import Users
@@ -52,8 +53,6 @@ def bt_v7():
                     info_popup("Name is empty")
     st.subheader(f"Create/Edit: {bt_v7.name}")
     bt_v7.edit()
-    # with st.expander("Optimize loss_allowance_pct, stuck_threshold and unstuck_close_pct", expanded=False):
-    #     bt_v7.optimize()
 
 def bt_v7_list():
     # Init bt_v7_list
@@ -66,7 +65,10 @@ def bt_v7_list():
             st.session_state.bt_v7_list = BacktestsV7()
             st.rerun()
         if st.button("All Results"):
-            st.session_state.bt_v7_all_results = BacktestsV7()
+            results =  BacktestV7Results()
+            results.results_path = f'{pb7dir()}/backtests/pbgui'
+            results.name = "All Results"
+            st.session_state.bt_v7_results = results
             st.rerun()    
         if st.button("Queue"):
             st.session_state.bt_v7_queue = BacktestV7Queue()
@@ -77,46 +79,18 @@ def bt_v7_list():
     st.subheader("Available Configs")
     bt_v7_list.view_backtests()
 
-def bt_v7_all_results():
-    # Init bt_v7_list
-    if "bt_v7_all_results" not in st.session_state:
-        st.session_state.bt_v7_all_results = BacktestsV7()
-    bt_v7_all_results = st.session_state.bt_v7_all_results
-    # Navigation
-    with st.sidebar:
-        if st.button(":material/refresh:"):
-            st.session_state.bt_v7_list = BacktestsV7()
-            st.rerun()
-        if st.button(":material/home:"):
-            del st.session_state.bt_v7_all_results
-        if st.button("All Results"):
-            st.session_state.bt_v7_all_results = BacktestsV7()
-            st.rerun()    
-        if st.button("Queue"):
-            st.session_state.bt_v7_queue = BacktestV7Queue()
-            st.rerun()
-        if st.button("Add Backtest"):
-            st.session_state.bt_v7 = BacktestV7Item()
-            st.rerun()
-    st.subheader("All Results")
-    bt_v7_all_results.view_all_results()
-    
 def bt_v7_results():
     # Init bt_v7_results
     bt_v7_results = st.session_state.bt_v7_results
-    if not bt_v7_results.backtest_results:
+    if not bt_v7_results.results:
         with st.spinner("Loading Results"):
-            st.session_state.bt_v7_results.load_results()
+            st.session_state.bt_v7_results.load()
     # Navigation
     with st.sidebar:
         if st.button(":material/refresh:"):
-            bt_v7_results.backtest_results = []
+            bt_v7_results.results.results = []
             st.rerun()
         if st.button(":material/home:"):
-            del st.session_state.bt_v7_results
-            st.rerun()
-        if st.button("Edit"):
-            st.session_state.bt_v7 = bt_v7_results
             del st.session_state.bt_v7_results
             st.rerun()
         if st.button("Queue"):
@@ -127,10 +101,10 @@ def bt_v7_results():
             bt_v7_results.remove_selected_results()
             st.rerun()
         if st.button(":material/delete: all"):
-            bt_v7_results.remove_all_results()
+            bt_v7_results.results.remove_all_results()
             st.rerun()
     st.subheader(f"Results: {bt_v7_results.name}")
-    bt_v7_results.view_results()
+    bt_v7_results.view()
 
 def bt_v7_queue():
     # Init bt_v7_queue
@@ -184,7 +158,5 @@ elif "bt_v7" in st.session_state:
     bt_v7()
 elif "bt_v7_queue" in st.session_state:
     bt_v7_queue()
-elif "bt_v7_all_results" in st.session_state:
-    bt_v7_all_results()  
 else:
     bt_v7_list()
