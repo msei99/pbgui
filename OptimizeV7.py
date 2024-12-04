@@ -10,7 +10,7 @@ import configparser
 import time
 import multiprocessing
 from Exchange import Exchange
-from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths
+from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -540,6 +540,8 @@ class OptimizeV7Item:
                 coindata.exchange = self.config.backtest.exchange
         if "edit_opt_v7_name" in st.session_state:
             if st.session_state.edit_opt_v7_name != self.name:
+                # Avoid creation of unwanted subfolders
+                st.session_state.edit_opt_v7_name = replace_special_chars(st.session_state.edit_opt_v7_name)
                 self.name = st.session_state.edit_opt_v7_name
                 self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         if "edit_opt_v7_sd" in st.session_state:
@@ -626,7 +628,7 @@ class OptimizeV7Item:
             if color:
                 st.text_input(f":{color}[Optimize Name]", value=self.name, max_chars=64, key="edit_opt_v7_name")
             else:
-                st.text_input("Optimize Name", value=self.name, max_chars=64, key="edit_opt_v7_name")
+                st.text_input("Optimize Name", value=self.name, max_chars=64, help=pbgui_help.task_name, key="edit_opt_v7_name")
         with col3:
             st.date_input("START_DATE", datetime.datetime.strptime(self.config.backtest.start_date, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_opt_v7_sd")
         with col4:
@@ -1154,6 +1156,10 @@ class OptimizeV7Item:
         self.path = Path(f'{PBGDIR}/data/opt_v7')
         if not self.path.exists():
             self.path.mkdir(parents=True)
+        
+        # Prevent creating directories with / in the name
+        self.name = self.name.replace("/", "_")
+        
         self.config.config_file = Path(f'{self.path}/{self.name}.json')
         self.config.save_config()
 
