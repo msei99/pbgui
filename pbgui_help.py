@@ -733,6 +733,12 @@ instance_note = """
     Your personal note for this instance. It is only intended to help you organise your instances.
     ```"""
 
+task_name = """
+    ```
+    Name of the task
+    The following characters are not allowed: / \ : * ? " < > |
+    ```"""
+    
 pbshare_grid = """
     ```
     enable for generate grid picture and share them on gphoto
