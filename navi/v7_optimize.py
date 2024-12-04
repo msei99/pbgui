@@ -38,7 +38,7 @@ def opt_v7():
                     info_popup(f"Added {opt_v7.name} to Queue")
                     # st.session_state.opt_v7_queue = OptimizeV7Queue()
                     # del st.session_state.opt_v7
-                    st.rerun()
+                    # st.rerun()
             else:
                 if not opt_v7.name:
                     info_popup("Name is empty")
