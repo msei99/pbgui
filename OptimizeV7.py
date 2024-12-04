@@ -509,19 +509,27 @@ class OptimizeV7Item:
         self.log = None
         self.config = ConfigV7()
         self.users = Users()
-        self.backtest_results = []
+        self.backtest_count:int = 0
         if optimize_file:
             self.name = PurePath(optimize_file).stem
             self.config.config_file = optimize_file
             self.config.load_config()
         else:
             self.initialize()
+        self._calculate_results()
 
+    def _calculate_results(self):
+        if self.name:
+            base_path = Path(f'{pb7dir()}/backtests/pbgui/{self.name}')
+            p = str(Path(f'{base_path}/**/analysis.json'))
+            files = glob.glob(p, recursive=True)
+            self.backtest_count = len(files)
+            
     def initialize(self):
         self.config.backtest.start_date = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.config.backtest.end_date = datetime.date.today().strftime("%Y-%m-%d")
         self.config.optimize.n_cpus = multiprocessing.cpu_count()
-
+        
     def edit(self):
         # Init coindata
         coindata = st.session_state.pbcoindata
@@ -1209,6 +1217,7 @@ class OptimizesV7:
                 'edit': False,
                 'Name': opt.name,
                 'Exchange': opt.config.backtest.exchange,
+                'Backtest Count': opt.backtest_count,
                 'delete' : False,
             })
         column_config = {
