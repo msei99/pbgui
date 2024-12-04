@@ -40,9 +40,10 @@ def bt_v7():
                     if "bt_v7_list" in st.session_state:
                         del st.session_state.bt_v7_list
                     bt_v7.save_queue()
-                    st.session_state.bt_v7_queue = BacktestV7Queue()
-                    del st.session_state.bt_v7
-                    st.rerun()
+                    info_popup(f"Added {bt_v7.name} to Queue")
+                    # st.session_state.bt_v7_queue = BacktestV7Queue()
+                    # del st.session_state.bt_v7
+                    # st.rerun()
             else:
                 if not bt_v7.name:
                     info_popup("Name is empty")
