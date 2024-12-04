@@ -35,8 +35,9 @@ def opt_v7():
                     if "opt_v7_list" in st.session_state:
                         del st.session_state.opt_v7_list
                     opt_v7.save_queue()
-                    st.session_state.opt_v7_queue = OptimizeV7Queue()
-                    del st.session_state.opt_v7
+                    info_popup(f"Added {opt_v7.name} to Queue")
+                    # st.session_state.opt_v7_queue = OptimizeV7Queue()
+                    # del st.session_state.opt_v7
                     st.rerun()
             else:
                 if not opt_v7.name:
