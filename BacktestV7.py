@@ -322,9 +322,8 @@ class BacktestV7Queue:
                     else:
                         self.items[row].run()
                 if "view" in ed["edited_rows"][row]:
-                    bt = BacktestV7Item(f'{PBGDIR}/data/bt_v7/{self.items[row].name}/backtest.json')
-                    # bt.load()
-                    bt.load_results()
+                    bt = BacktestV7Results()
+                    bt.results_path = f'{pb7dir()}/backtests/pbgui/{self.items[row].name}'
                     st.session_state.bt_v7_results = bt
                     del st.session_state.bt_v7_queue
                     st.rerun()
