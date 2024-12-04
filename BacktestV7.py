@@ -11,7 +11,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, get_navi_paths
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, get_navi_paths, replace_special_chars
 import uuid
 from Base import Base
 from Exchange import Exchange
@@ -404,6 +404,7 @@ class BacktestV7Item:
                 coindata.exchange = self.config.backtest.exchange
         if "edit_bt_v7_name" in st.session_state:
             if st.session_state.edit_bt_v7_name != self.name:
+                st.session_state.edit_bt_v7_name = replace_special_chars(st.session_state.edit_bt_v7_name)
                 self.name = st.session_state.edit_bt_v7_name
                 self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         if "edit_bt_v7_sd" in st.session_state:
@@ -460,7 +461,7 @@ class BacktestV7Item:
             st.selectbox('Exchange',['binance', 'bybit'], index = exchange_index, key="edit_bt_v7_exchange")
         with col2:
             if not self.name:
-                st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, key="edit_bt_v7_name")
+                st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, help=pbgui_help.task_name, key="edit_bt_v7_name")
             else:
                 st.text_input(f"Backtest Name", value=self.name, max_chars=64, key="edit_bt_v7_name")
         with col3:

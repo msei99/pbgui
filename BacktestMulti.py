@@ -16,7 +16,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pbvenv, pbdir, validateJSON, config_pretty_str
+from pbgui_func import PBGDIR, pbvenv, pbdir, validateJSON, config_pretty_str, replace_special_chars
 import uuid
 from Base import Base
 from Config import Config
@@ -638,6 +638,7 @@ class BacktestMultiItem:
                 self.exchange = st.session_state.edit_bt_multi_exchange
         if "edit_bt_multi_name" in st.session_state:
             if st.session_state.edit_bt_multi_name != self.name:
+                st.session_state.edit_bt_multi_name = replace_special_chars(st.session_state.edit_bt_multi_name)
                 self.name = st.session_state.edit_bt_multi_name
         if "edit_bt_multi_sb" in st.session_state:
             if st.session_state.edit_bt_multi_sb != self.sb:
@@ -716,7 +717,7 @@ class BacktestMultiItem:
             st.selectbox('Exchange',['binance', 'bybit'], index = exchange_index, key="edit_bt_multi_exchange")
         with col2:
             if not self.name:
-                st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, key="edit_bt_multi_name")
+                st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, help=pbgui_help.task_name, key="edit_bt_multi_name")
             else:
                 st.text_input(f"Backtest Name", value=self.name, max_chars=64, key="edit_bt_multi_name")
         with col3:
