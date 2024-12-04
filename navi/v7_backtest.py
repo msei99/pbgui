@@ -21,8 +21,6 @@ def bt_v7():
                     bt_v7.save()
                     if "bt_v7_list" in st.session_state:
                         del st.session_state.bt_v7_list
-                    if "bt_v7_all_results" in st.session_state:
-                        del st.session_state.bt_v7_all_results
             else:
                 info_popup("Name is empty")
         if st.button("Import"):
@@ -33,7 +31,6 @@ def bt_v7():
             st.rerun()
         if st.button("Queue"):
             del st.session_state.bt_v7
-            del st.session_state.bt_v7_all_results
             st.session_state.bt_v7_queue = BacktestV7Queue()
             st.rerun()
         if st.button("Add to Backtest Queue"):
@@ -42,8 +39,6 @@ def bt_v7():
                     bt_v7.save()
                     if "bt_v7_list" in st.session_state:
                         del st.session_state.bt_v7_list
-                    if "bt_v7_all_results" in st.session_state:
-                        del st.session_state.bt_v7_all_results
                     bt_v7.save_queue()
                     st.session_state.bt_v7_queue = BacktestV7Queue()
                     del st.session_state.bt_v7
