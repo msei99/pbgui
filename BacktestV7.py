@@ -726,6 +726,7 @@ class BacktestV7Results:
     def __init__(self):
         self.results = []
         self.results_d = []
+        self.filter = ""
         self.results_path = None
         self.name = None
         if "btv7_compare_results" not in st.session_state:
@@ -746,6 +747,14 @@ class BacktestV7Results:
             self.results.append(bt_result)
 
     def view(self):
+        if "select_btv7_result_filter" in st.session_state:
+            if st.session_state.select_btv7_result_filter != self.filter:
+                self.filter = st.session_state.select_btv7_result_filter
+                self.results_d = []
+                for result in self.results.copy():
+                    if self.filter not in result.config.backtest.base_dir.split('/')[-1]:
+                        self.results.remove(result)
+        st.text_input("Filter by Backtest Name", value="", key="select_btv7_result_filter")
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
