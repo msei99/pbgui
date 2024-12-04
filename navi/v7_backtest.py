@@ -84,6 +84,7 @@ def bt_v7_results():
     with st.sidebar:
         if st.button(":material/refresh:"):
             bt_v7_results.results = []
+            bt_v7_results.results_d = []
             st.rerun()
         if st.button(":material/home:"):
             del st.session_state.bt_v7_results
