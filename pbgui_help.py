@@ -1127,3 +1127,12 @@ sudo_pw = """
     This is needed to install:
     - rclone
     ```"""
+   
+smart_filter = """
+    ```
+    This filter is used for smart filter options.
+    "*": Matches all strings.
+    "abc*": Matches any string starting with "abc".
+    "*xyz": Matches any string ending with "xyz".
+    "abc*xyz": Matches any string starting with "abc" and ending with "xyz".
+    ```"""
