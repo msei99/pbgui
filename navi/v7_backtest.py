@@ -123,6 +123,13 @@ def bt_v7_queue():
             st.rerun()
         st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=bt_v7_queue.cpu, step=1, key = "backtest_v7_cpu")
         st.toggle("Autostart", value=bt_v7_queue.autostart, key="backtest_v7_autostart", help=None)
+        if st.button("All Results"):
+            results =  BacktestV7Results()
+            results.results_path = f'{pb7dir()}/backtests/pbgui'
+            results.name = "All Results"
+            del st.session_state.bt_v7_queue
+            st.session_state.bt_v7_results = results
+            st.rerun()    
         if st.button(":material/delete: selected"):
             bt_v7_queue.remove_selected()
             st.rerun()
