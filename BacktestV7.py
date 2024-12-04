@@ -751,6 +751,8 @@ class BacktestV7Results:
             if st.session_state.select_btv7_result_filter != self.filter:
                 self.filter = st.session_state.select_btv7_result_filter
                 self.results_d = []
+                self.results = []
+                self.load()
                 for result in self.results.copy():
                     if self.filter not in result.config.backtest.base_dir.split('/')[-1]:
                         self.results.remove(result)
