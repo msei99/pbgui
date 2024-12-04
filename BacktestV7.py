@@ -725,6 +725,7 @@ class BacktestV7Results:
 
     def __init__(self):
         self.results = []
+        self.results_d = []
         self.results_path = None
         self.name = None
         if "btv7_compare_results" not in st.session_state:
@@ -780,33 +781,33 @@ class BacktestV7Results:
                         if "opt_v7_results" in st.session_state:    
                             del st.session_state.opt_v7_results
                         st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
-        d = []
-        for id, result in enumerate(self.results):
-            compare = False
-            if st.session_state.btv7_compare_results:
-                for r in st.session_state.btv7_compare_results:
-                    if r.result_path == result.result_path:
-                        compare = True
-            print(result.__dict__)
-            d.append({
-                'id': id,
-                'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
-                'Exch.': result.config.backtest.exchange,
-                'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
-                'ADG': result.adg,
-                'Drawdown Worst': result.drawdown_worst,
-                'Sharpe Ratio': result.sharpe_ratio,
-                'Starting Balance': result.starting_balance,
-                'Final Balance': result.final_balance,
-                'View': False,
-                'Plot': False,
-                'Fills': False,
-                'Create Run': False,
-                'BT': False,
-                'Optimize': False,
-                'Delete': False,
-                'Compare': compare,  # Add Compare field
-            })
+        if not self.results_d:
+            for id, result in enumerate(self.results):
+                compare = False
+                if st.session_state.btv7_compare_results:
+                    for r in st.session_state.btv7_compare_results:
+                        if r.result_path == result.result_path:
+                            compare = True
+                print(result.__dict__)
+                self.results_d.append({
+                    'id': id,
+                    'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
+                    'Exch.': result.config.backtest.exchange,
+                    'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
+                    'ADG': result.adg,
+                    'Drawdown Worst': result.drawdown_worst,
+                    'Sharpe Ratio': result.sharpe_ratio,
+                    'Starting Balance': result.starting_balance,
+                    'Final Balance': result.final_balance,
+                    'View': False,
+                    'Plot': False,
+                    'Fills': False,
+                    'Create Run': False,
+                    'BT': False,
+                    'Optimize': False,
+                    'Delete': False,
+                    'Compare': compare,  # Add Compare field
+                })
         column_config = {
             "id": None,
             'View': st.column_config.CheckboxColumn(label="Results"),
@@ -824,9 +825,9 @@ class BacktestV7Results:
             'Final Balance': st.column_config.NumberColumn(label="Final B.", format="%.0f")
             }
         #Display Backtests
-        height = 36+(len(d))*35
+        height = 36+(len(self.results_d))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
+        st.data_editor(data=self.results_d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
         if st.session_state.btv7_compare_results:
             self.view_compare()
         if f'select_btv7_result_{ed_key}' in st.session_state:
@@ -874,6 +875,7 @@ class BacktestV7Results:
                     return
         st.session_state.btv7_compare_results.append(result)
 
+    @st.fragment
     def view_compare(self):
         self.compare_fig = go.Figure()
         self.compare_fig.update_layout(yaxis_title='Balance')
