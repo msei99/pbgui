@@ -24,6 +24,7 @@ import datetime
 import logging
 import os
 import datetime
+import fnmatch
 
 class BacktestV7QueueItem():
     def __init__(self):
@@ -755,9 +756,10 @@ class BacktestV7Results:
                 self.results = []
                 self.load()
                 for result in self.results.copy():
-                    if self.filter not in result.config.backtest.base_dir.split('/')[-1]:
+                    target = result.config.backtest.base_dir.split('/')[-1]
+                    if not fnmatch.fnmatch(target, self.filter):
                         self.results.remove(result)
-        st.text_input("Filter by Backtest Name", value="", key="select_btv7_result_filter")
+        st.text_input("Filter by Backtest Name", value="", help=pbgui_help.smart_filter, key="select_btv7_result_filter")
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
