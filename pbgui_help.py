@@ -1136,3 +1136,10 @@ smart_filter = """
     "*xyz": Matches any string ending with "xyz".
     "abc*xyz": Matches any string starting with "abc" and ending with "xyz".
     ```"""
+    
+change_password = """
+    ```
+    You can change your password here.
+    If you leave the new password empty, then authentication will be disabled.
+    If authentication is disabled, you can use this dailog to set a new password.
+    ```"""
