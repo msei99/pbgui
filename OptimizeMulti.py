@@ -11,7 +11,7 @@ import glob
 import configparser
 import time
 import multiprocessing
-from pbgui_func import pbdir, pbvenv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths
+from pbgui_func import pbdir, pbvenv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -500,6 +500,7 @@ class OptimizeMultiItem:
                 self.exchange = st.session_state.edit_opt_multi_exchange
         if "edit_opt_multi_name" in st.session_state:
             if st.session_state.edit_opt_multi_name != self.name:
+                st.session_state.edit_opt_multi_name = replace_special_chars(st.session_state.edit_opt_multi_name)
                 self.name = st.session_state.edit_opt_multi_name
         if "edit_opt_multi_sd" in st.session_state:
             if st.session_state.edit_opt_multi_sd.strftime("%Y-%m-%d") != self.sd:
@@ -537,7 +538,7 @@ class OptimizeMultiItem:
             st.selectbox('Exchange',['binance', 'bybit'], index = exchange_index, key="edit_opt_multi_exchange")
         with col2:
             if not self.name:
-                st.text_input(f":red[Optimize Name]", value=self.name, max_chars=64, key="edit_opt_multi_name")
+                st.text_input(f":red[Optimize Name]", value=self.name, max_chars=64, help=pbgui_help.task_name, key="edit_opt_multi_name")
             else:
                 st.text_input(f"Optimize Name", value=self.name, max_chars=64, key="edit_opt_multi_name")
         with col3:

@@ -181,6 +181,10 @@ def is_session_state_not_initialized():
         return True
     return False
 
+def replace_special_chars(input:str):
+    # Replace chars that can cause trouble in filenames
+    return input.replace(" ", "_").replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
+    
 def validateJSON(jsonData):
     try:
         json.loads(jsonData)
