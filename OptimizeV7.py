@@ -20,6 +20,7 @@ import BacktestV7
 from Config import ConfigV7, Bounds
 import logging
 import os
+import fnmatch
 
 class OptimizeV7QueueItem:
     def __init__(self):
@@ -359,6 +360,7 @@ class OptimizeV7Results:
         self.results_path = Path(f'{pb7dir()}/optimize_results')
         self.analysis_path = Path(f'{pb7dir()}/optimize_results_analysis')
         self.results = []
+        self.filter = ""
         self.initialize()
     
     def initialize(self):
@@ -404,6 +406,24 @@ class OptimizeV7Results:
         # Init
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
+        if "select_opt_v7_result_filter" in st.session_state:
+            if st.session_state.select_opt_v7_result_filter == "":
+                self.filter = ""
+                del st.session_state.select_opt_v7_result_filter
+                
+        if "select_opt_v7_result_filter" in st.session_state:
+            if st.session_state.select_opt_v7_result_filter != self.filter:
+                self.filter = st.session_state.select_opt_v7_result_filter
+                self.results = []
+                del st.session_state.opt_v7_results_d
+                self.find_results()
+                for result in self.results.copy():
+                    name = self.find_result_name(result)
+                    if not fnmatch.fnmatch(name, self.filter):
+                        self.results.remove(result)
+                        
+        st.text_input("Filter by Optimize Name", value="", help=pbgui_help.smart_filter, key="select_opt_v7_result_filter")
+        
         ed_key = st.session_state.ed_key
         if not "opt_v7_results_d" in st.session_state:
             d = []
