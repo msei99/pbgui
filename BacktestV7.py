@@ -11,7 +11,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, get_navi_paths
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, get_navi_paths, replace_special_chars
 import uuid
 from Base import Base
 from Exchange import Exchange
@@ -24,6 +24,7 @@ import datetime
 import logging
 import os
 import datetime
+import fnmatch
 
 class BacktestV7QueueItem():
     def __init__(self):
@@ -404,6 +405,7 @@ class BacktestV7Item:
                 coindata.exchange = self.config.backtest.exchange
         if "edit_bt_v7_name" in st.session_state:
             if st.session_state.edit_bt_v7_name != self.name:
+                st.session_state.edit_bt_v7_name = replace_special_chars(st.session_state.edit_bt_v7_name)
                 self.name = st.session_state.edit_bt_v7_name
                 self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         if "edit_bt_v7_sd" in st.session_state:
@@ -460,7 +462,7 @@ class BacktestV7Item:
             st.selectbox('Exchange',['binance', 'bybit'], index = exchange_index, key="edit_bt_v7_exchange")
         with col2:
             if not self.name:
-                st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, key="edit_bt_v7_name")
+                st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, help=pbgui_help.task_name, key="edit_bt_v7_name")
             else:
                 st.text_input(f"Backtest Name", value=self.name, max_chars=64, key="edit_bt_v7_name")
         with col3:
@@ -754,9 +756,10 @@ class BacktestV7Results:
                 self.results = []
                 self.load()
                 for result in self.results.copy():
-                    if self.filter not in result.config.backtest.base_dir.split('/')[-1]:
+                    target = result.config.backtest.base_dir.split('/')[-1]
+                    if not fnmatch.fnmatch(target, self.filter):
                         self.results.remove(result)
-        st.text_input("Filter by Backtest Name", value="", key="select_btv7_result_filter")
+        st.text_input("Filter by Backtest Name", value="", help=pbgui_help.smart_filter, key="select_btv7_result_filter")
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key

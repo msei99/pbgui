@@ -733,6 +733,12 @@ instance_note = """
     Your personal note for this instance. It is only intended to help you organise your instances.
     ```"""
 
+task_name = """
+    ```
+    Name of the task
+    The following characters are not allowed: / \ : * ? " < > |
+    ```"""
+    
 pbshare_grid = """
     ```
     enable for generate grid picture and share them on gphoto
@@ -1120,4 +1126,13 @@ sudo_pw = """
     The sudo password of your local user
     This is needed to install:
     - rclone
+    ```"""
+   
+smart_filter = """
+    ```
+    This filter is used for smart filter options.
+    "*": Matches all strings.
+    "abc*": Matches any string starting with "abc".
+    "*xyz": Matches any string ending with "xyz".
+    "abc*xyz": Matches any string starting with "abc" and ending with "xyz".
     ```"""
