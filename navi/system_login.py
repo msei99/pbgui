@@ -71,7 +71,7 @@ def change_password():
 def do_init():
     # Missing Password
     if "password_missing" in st.session_state:
-        st.warning('You are using PBGUI without a password! Please edit pbgui/.streamlit/secrets.toml to add a password.', icon="⚠️")
+        st.warning('You are using PBGUI without a password! Please set a password using "Change Password" below.', icon="⚠️")
     
     # Load pb6 path from pbgui.ini
     if "input_pbdir" in st.session_state:
