@@ -441,14 +441,14 @@ class OptimizeV7Results:
                 d.append({
                     'id': id,
                     'Name': name,
-                    'Result': result,
                     'Result Time': datetime.datetime.fromtimestamp(result_time),
-                    'Analysis': analysis,
-                    'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
                     'view': False,
                     "generate": False,
                     'backtest': False,
                     'delete' : False,
+                    'Result File': result,
+                    'Analysis File': analysis,
+                    'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
                 })
             st.session_state.opt_v7_results_d = d
         d = st.session_state.opt_v7_results_d
@@ -460,6 +460,8 @@ class OptimizeV7Results:
             "backtest": st.column_config.CheckboxColumn(label="Backtest"),
             "Result Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Analysis Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Analysis File": st.column_config.TextColumn("Analysis File", width="50px"),
+            "Result File": st.column_config.TextColumn("Result File", width="50px"),
             }
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
