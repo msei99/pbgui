@@ -429,6 +429,9 @@ class OptimizeV7Results:
             d = []
             for id, opt in enumerate(self.results):
                 name = self.find_result_name(opt)
+                opt_item = OptimizeV7Item(name)
+                
+                name = self.find_result_name(opt)
                 analysis = PurePath(opt).stem[0:19]
                 analysis = str(self.analysis_path) + f'/{analysis}*.json'
                 analysis = glob.glob(analysis, recursive=False)
@@ -442,6 +445,7 @@ class OptimizeV7Results:
                     'id': id,
                     'Name': name,
                     'Result Time': datetime.datetime.fromtimestamp(result_time),
+                    'BT Count': opt_item.backtest_count,
                     'view': False,
                     "generate": False,
                     'backtest': False,
@@ -1239,7 +1243,7 @@ class OptimizesV7:
                 'edit': False,
                 'Name': opt.name,
                 'Exchange': opt.config.backtest.exchange,
-                'Backtest Count': opt.backtest_count,
+                'BT Count': opt.backtest_count,
                 'delete' : False,
             })
         column_config = {
