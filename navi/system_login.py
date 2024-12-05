@@ -12,6 +12,10 @@ import os
 from pathlib import Path, PurePath
 
 def do_init():
+    # Missing Password
+    if "password_missing" in st.session_state:
+        st.warning('You are using PBGUI without a password! Please edit pbgui/.streamlit/secrets.toml to add a password.', icon="⚠️")
+    
     # Load pb6 path from pbgui.ini
     if "input_pbdir" in st.session_state:
         if st.session_state.input_pbdir != st.session_state.pbdir:
