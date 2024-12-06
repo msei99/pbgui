@@ -8,10 +8,71 @@ from Instance import Instances
 from RunV7 import V7Instances
 from Multi import MultiInstances
 from User import Users
+import toml
 import os
 from pathlib import Path, PurePath
 
+def change_password():
+    with st.expander("Change Password"):
+        with st.form("change_password_form"):
+            current_password = st.text_input("Current Password", type="password", placeholder="Enter current password", help=pbgui_help.change_password)
+            new_password = st.text_input("New Password", type="password", placeholder="Enter new password", help=pbgui_help.change_password)
+            confirm_password = st.text_input("Confirm New Password", type="password", placeholder="Re-enter new password", help=pbgui_help.change_password)
+            submit_button = st.form_submit_button("Update Password", help=pbgui_help.change_password)
+
+        if submit_button:
+            # Retrieve the current password from secrets, default to empty string if not set
+            stored_password = st.secrets.get("password", "")
+
+            # Verify current password
+            if current_password != stored_password:
+                st.error("Current password is incorrect.")
+                return
+
+            # Check if new passwords match
+            if new_password != confirm_password:
+                st.error("New passwords do not match.")
+                return
+
+            # Update the secrets.toml file
+            try:
+                secrets_path = Path(".streamlit/secrets.toml")
+                if not secrets_path.exists():
+                    st.error("secrets.toml file does not exist.")
+                    # Create empty file
+                    with open(secrets_path, "w") as f:
+                        f.write("")
+
+                # Load existing secrets
+                with open(secrets_path, "r") as f:
+                    try:
+                        secrets = toml.load(f)
+                    except toml.TomlDecodeError:
+                        st.error("secrets.toml is not a valid TOML file.")
+                        return
+
+                # Update the password
+                secrets["password"] = new_password
+
+                # Write back to the file
+                with open(secrets_path, "w") as f:
+                    toml.dump(secrets, f)
+
+                st.success("Password updated successfully. Please log in again.")
+
+                # Clear session state to force re-authentication
+                st.session_state.clear()
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"An error occurred while updating the password: {e}")
+
+            
 def do_init():
+    # Missing Password
+    if "password_missing" in st.session_state:
+        st.warning('You are using PBGUI without a password! Please set a password using "Change Password" below.', icon="⚠️")
+    
     # Load pb6 path from pbgui.ini
     if "input_pbdir" in st.session_state:
         if st.session_state.input_pbdir != st.session_state.pbdir:
@@ -181,6 +242,12 @@ def do_init():
     if not st.session_state.users.list():
         st.warning('No users configured / Go to Setup API-Keys and configure your first user', icon="⚠️")
         st.stop()
+    
+    # Add a horizontal divider
+    st.markdown("---")
+    
+    # Add the Change Password section
+    change_password()
 
 # Page Setup
 set_page_config("Welcome")
