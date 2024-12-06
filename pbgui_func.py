@@ -52,6 +52,16 @@ def is_authenticted():
 def check_password():
     """Returns `True` if the user had the correct password."""
 
+    if "password" in st.secrets:
+        if st.secrets["password"] == "":
+            st.session_state["password_correct"] = True
+            st.session_state["password_missing"] = True
+            return True
+    else:
+        st.session_state["password_correct"] = True
+        st.session_state["password_missing"] = True
+        return True
+    
     def password_entered():
         """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] == st.secrets["password"]:
