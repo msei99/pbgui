@@ -39,6 +39,13 @@
       tags: debug,never
 
   handlers:
+    - name: Install pbgui requirements
+      pip:
+        virtualenv: "{{ install_dir }}/venv_pbgui"
+        requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
+        extra_args: --upgrade pip
+      listen: "restart pbgui"
+
     - name: Restart PBRun, PBRemote and PBCoinData
       shell: |
         source "{{ install_dir }}/venv_pbgui/bin/activate"
