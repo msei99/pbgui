@@ -92,9 +92,11 @@ def list_vps():
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
         "PB7": f'{pbremote.pb7_version}',
-        "PB7 github": pb7
+        "PB7 github": pb7,
+        "API Sync": "✅"
     })
     # Add VPS
+    all_api_sync = True
     for server in sorted(st.session_state.pbremote.remote_servers, key=lambda s: s.name):
         boot = datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S")
         if server.is_online():
@@ -117,6 +119,11 @@ def list_vps():
             reboot = "❌"
         else:
             reboot = "✅"
+        if server.is_api_md5_same(pbremote.api_md5):
+            api_sync = "✅"
+        else:
+            api_sync = "❌"
+            all_api_sync = False
         d.append({
             "Name": server.name,
             "Online": online,
@@ -128,10 +135,15 @@ def list_vps():
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,
             "PB7": f'{server.pb7_version}',
-            "PB7 github": pb7
+            "PB7 github": pb7,
+            "API Sync": api_sync
         })
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
     st.info("Select your VPS in the sidebar to get a detailed VPS report.")
+    with st.sidebar:
+        if not all_api_sync:
+            if st.button("Sync API"):
+                pbremote.sync_api_up()
 
 def manage_master():
     vpsmanager = st.session_state.vpsmanager
