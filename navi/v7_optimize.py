@@ -97,7 +97,7 @@ def opt_v7_results():
             if "opt_v7_results_d" in st.session_state:
                 del st.session_state.opt_v7_results_d
             st.rerun()
-    st.subheader("Results")
+    st.subheader("All Results")
     opt_v7_results.view_results()
 
 def opt_v7_queue():

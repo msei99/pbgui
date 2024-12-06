@@ -20,6 +20,7 @@ import BacktestV7
 from Config import ConfigV7, Bounds
 import logging
 import os
+import fnmatch
 
 class OptimizeV7QueueItem:
     def __init__(self):
@@ -359,6 +360,7 @@ class OptimizeV7Results:
         self.results_path = Path(f'{pb7dir()}/optimize_results')
         self.analysis_path = Path(f'{pb7dir()}/optimize_results_analysis')
         self.results = []
+        self.filter = ""
         self.initialize()
     
     def initialize(self):
@@ -404,10 +406,31 @@ class OptimizeV7Results:
         # Init
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
+        if "select_opt_v7_result_filter" in st.session_state:
+            if st.session_state.select_opt_v7_result_filter == "":
+                self.filter = ""
+                del st.session_state.select_opt_v7_result_filter
+                
+        if "select_opt_v7_result_filter" in st.session_state:
+            if st.session_state.select_opt_v7_result_filter != self.filter:
+                self.filter = st.session_state.select_opt_v7_result_filter
+                self.results = []
+                del st.session_state.opt_v7_results_d
+                self.find_results()
+                for result in self.results.copy():
+                    name = self.find_result_name(result)
+                    if not fnmatch.fnmatch(name, self.filter):
+                        self.results.remove(result)
+                        
+        st.text_input("Filter by Optimize Name", value="", help=pbgui_help.smart_filter, key="select_opt_v7_result_filter")
+        
         ed_key = st.session_state.ed_key
         if not "opt_v7_results_d" in st.session_state:
             d = []
             for id, opt in enumerate(self.results):
+                name = self.find_result_name(opt)
+                opt_item = OptimizeV7Item(name)
+                
                 name = self.find_result_name(opt)
                 analysis = PurePath(opt).stem[0:19]
                 analysis = str(self.analysis_path) + f'/{analysis}*.json'
@@ -421,14 +444,15 @@ class OptimizeV7Results:
                 d.append({
                     'id': id,
                     'Name': name,
-                    'Result': result,
                     'Result Time': datetime.datetime.fromtimestamp(result_time),
-                    'Analysis': analysis,
-                    'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
+                    'BT Count': opt_item.backtest_count,
                     'view': False,
                     "generate": False,
                     'backtest': False,
                     'delete' : False,
+                    'Result File': result,
+                    'Analysis File': analysis,
+                    'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
                 })
             st.session_state.opt_v7_results_d = d
         d = st.session_state.opt_v7_results_d
@@ -440,6 +464,8 @@ class OptimizeV7Results:
             "backtest": st.column_config.CheckboxColumn(label="Backtest"),
             "Result Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Analysis Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Analysis File": st.column_config.TextColumn("Analysis File", width="50px"),
+            "Result File": st.column_config.TextColumn("Result File", width="50px"),
             }
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
@@ -1217,7 +1243,7 @@ class OptimizesV7:
                 'edit': False,
                 'Name': opt.name,
                 'Exchange': opt.config.backtest.exchange,
-                'Backtest Count': opt.backtest_count,
+                'BT Count': opt.backtest_count,
                 'delete' : False,
             })
         column_config = {
