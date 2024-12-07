@@ -827,11 +827,10 @@ class BacktestV7Results:
                     for r in st.session_state.btv7_compare_results:
                         if r.result_path == result.result_path:
                             compare = True
-                print(result.__dict__)
                 self.results_d.append({
                     'id': id,
                     'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
-                    'Exch.': result.config.backtest.exchanges,
+                    'Exch.': str(result.result_path).split('/')[-2],
                     'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
                     'ADG': result.adg,
                     'Drawdown Worst': result.drawdown_worst,
