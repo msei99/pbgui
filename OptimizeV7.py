@@ -450,8 +450,8 @@ class OptimizeV7Results:
                     "generate": False,
                     'backtest': False,
                     'delete' : False,
-                    'Result File': result,
-                    'Analysis File': analysis,
+                    'Result': result,
+                    'Analysis': analysis,
                     'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
                 })
             st.session_state.opt_v7_results_d = d
@@ -464,8 +464,8 @@ class OptimizeV7Results:
             "backtest": st.column_config.CheckboxColumn(label="Backtest"),
             "Result Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Analysis Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
-            "Analysis File": st.column_config.TextColumn("Analysis File", width="50px"),
-            "Result File": st.column_config.TextColumn("Result File", width="50px"),
+            "Analysis": st.column_config.TextColumn(label="Analysis File", width="50px"),
+            "Result": st.column_config.TextColumn(label="Result File", width="50px"),
             }
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
