@@ -194,7 +194,7 @@ class Config:
 # {"backtest": {"base_dir": "backtests",
 #               "compress_cache": true,
 #               "end_date": "now",
-#               "exchange": "binance",
+#               "exchanges": ["binance", "bybit"],
 #               "start_date": "2021-05-01",
 #               "starting_balance": 100000.0},
 #  "bot": {"long": {"close_grid_markup_range": 0.0013425,
@@ -334,14 +334,14 @@ class Backtest:
         self._base_dir = "backtests"
         self._compress_cache = True
         self._end_date = "now"
-        self._exchange = "binance"
+        self._exchanges = ["binance", "bybit"]
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
         self._backtest = {
             "base_dir": self._base_dir,
             "compress_cache": self._compress_cache,
             "end_date": self._end_date,
-            "exchange": self._exchange,
+            "exchanges": self._exchanges,
             "start_date": self._start_date,
             "starting_balance": self._starting_balance
         }
@@ -359,8 +359,8 @@ class Backtest:
             self.compress_cache = new_backtest["compress_cache"]
         if "end_date" in new_backtest:
             self.end_date = new_backtest["end_date"]
-        if "exchange" in new_backtest:
-            self.exchange = new_backtest["exchange"]
+        if "exchanges" in new_backtest:
+            self.exchanges = new_backtest["exchanges"]
         if "start_date" in new_backtest:
             self.start_date = new_backtest["start_date"]
         if "starting_balance" in new_backtest:
@@ -376,7 +376,7 @@ class Backtest:
             return datetime.datetime.now().strftime("%Y-%m-%d")
         return self._end_date
     @property
-    def exchange(self): return self._exchange
+    def exchanges(self): return self._exchanges
     @property
     def start_date(self): return self._start_date
     @property
@@ -394,10 +394,10 @@ class Backtest:
     def end_date(self, new_end_date):
         self._end_date = new_end_date
         self._backtest["end_date"] = self._end_date
-    @exchange.setter
-    def exchange(self, new_exchange):
-        self._exchange = new_exchange
-        self._backtest["exchange"] = self._exchange
+    @exchanges.setter
+    def exchanges(self, new_exchanges):
+        self._exchanges = new_exchanges
+        self._backtest["exchanges"] = self._exchanges
     @start_date.setter
     def start_date(self, new_start_date):
         self._start_date = new_start_date

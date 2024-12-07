@@ -10,6 +10,7 @@ import configparser
 import time
 import multiprocessing
 from Exchange import Exchange
+from PBCoinData import CoinData
 from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
 import uuid
 from pathlib import Path, PurePath
@@ -323,6 +324,8 @@ class OptimizeV7Queue:
                     st.rerun()
         d = []
         for id, opt in enumerate(self.items):
+            if type(opt.exchange) != list:
+                opt.exchange = [opt.exchange]
             d.append({
                 'id': id,
                 'run': False,
@@ -384,6 +387,7 @@ class OptimizeV7Results:
     def find_result_name(self, result_file):
         with open(result_file, "r", encoding='utf-8') as f:
             first_line = f.readline()
+            print(first_line)
             if not first_line:
                 return "Empty Result"
             try:
@@ -391,7 +395,11 @@ class OptimizeV7Results:
             except Exception as e:
                 return "Corrupt Result"
             if "config" not in config:
-                return "Corrupt Result"
+                if "backtest" not in config:
+                    return "Corrupt Result"
+                else:
+                    backtest_name = config["backtest"]["base_dir"].split("/")[-1]
+                    return backtest_name
             else:
                 backtest_name = config["config"]["backtest"]["base_dir"].split("/")[-1]
                 return backtest_name
@@ -558,20 +566,34 @@ class OptimizeV7Item:
         
     def edit(self):
         # Init coindata
-        coindata = st.session_state.pbcoindata
-        if coindata.exchange != self.config.backtest.exchange:
-            coindata.exchange = self.config.backtest.exchange
-        if coindata.market_cap != self.config.pbgui.market_cap:
-            coindata.market_cap = self.config.pbgui.market_cap
-        if coindata.vol_mcap != self.config.pbgui.vol_mcap:
-            coindata.vol_mcap = self.config.pbgui.vol_mcap
-        if coindata.tags != self.config.pbgui.tags:
-            coindata.tags = self.config.pbgui.tags
+        if "coindata_bybit" not in st.session_state:
+            st.session_state.coindata_bybit = CoinData()
+            st.session_state.coindata_bybit.exchange = "bybit"
+        if "coindata_binance" not in st.session_state:
+            st.session_state.coindata_binance = CoinData()
+            st.session_state.coindata_binance.exchange = "binance"
+        coindata_bybit = st.session_state.coindata_bybit
+        coindata_binance = st.session_state.coindata_binance
+        if coindata_bybit.market_cap != self.config.pbgui.market_cap:
+            coindata_bybit.market_cap = self.config.pbgui.market_cap
+        if coindata_bybit.vol_mcap != self.config.pbgui.vol_mcap:
+            coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
+        if coindata_bybit.tags != self.config.pbgui.tags:
+            coindata_bybit.tags = self.config.pbgui.tags
+        if coindata_binance.market_cap != self.config.pbgui.market_cap:
+            coindata_binance.market_cap = self.config.pbgui.market_cap
+        if coindata_binance.vol_mcap != self.config.pbgui.vol_mcap:
+            coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
+        if coindata_binance.tags != self.config.pbgui.tags:
+            coindata_binance.tags = self.config.pbgui.tags
         # Init session_state for keys
-        if "edit_opt_v7_exchange" in st.session_state:
-            if st.session_state.edit_opt_v7_exchange != self.config.backtest.exchange:
-                self.config.backtest.exchange = st.session_state.edit_opt_v7_exchange
-                coindata.exchange = self.config.backtest.exchange
+        if "edit_opt_v7_exchanges" in st.session_state:
+            if st.session_state.edit_opt_v7_exchanges != self.config.backtest.exchanges:
+                self.config.backtest.exchanges = st.session_state.edit_opt_v7_exchanges
+                if "bybit" in self.config.backtest.exchanges:
+                    coindata_bybit.exchange = "bybit"
+                if "binance" in self.config.backtest.exchanges:
+                    coindata_binance.exchange = "binance"
         if "edit_opt_v7_name" in st.session_state:
             if st.session_state.edit_opt_v7_name != self.name:
                 # Avoid creation of unwanted subfolders
@@ -627,19 +649,23 @@ class OptimizeV7Item:
         if "edit_opt_v7_only_cpt" in st.session_state:
             if st.session_state.edit_opt_v7_only_cpt != self.config.pbgui.only_cpt:
                 self.config.pbgui.only_cpt = st.session_state.edit_opt_v7_only_cpt
-                coindata.only_cpt = self.config.pbgui.only_cpt
+                coindata_bybit.only_cpt = self.config.pbgui.only_cpt
+                coindata_binance.only_cpt = self.config.pbgui.only_cpt
         if "edit_opt_v7_market_cap" in st.session_state:
             if st.session_state.edit_opt_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_opt_v7_market_cap
-                coindata.market_cap = self.config.pbgui.market_cap
+                coindata_bybit.market_cap = self.config.pbgui.market_cap
+                coindata_binance.market_cap = self.config.pbgui.market_cap
         if "edit_opt_v7_vol_mcap" in st.session_state:
             if st.session_state.edit_opt_v7_vol_mcap != self.config.pbgui.vol_mcap:
                 self.config.pbgui.vol_mcap = st.session_state.edit_opt_v7_vol_mcap
-                coindata.vol_mcap = self.config.pbgui.vol_mcap
+                coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
+                coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
         if "edit_opt_v7_tags" in st.session_state:
             if st.session_state.edit_opt_v7_tags != self.config.pbgui.tags:
                 self.config.pbgui.tags = st.session_state.edit_opt_v7_tags
-                coindata.tags = self.config.pbgui.tags
+                coindata_bybit.tags = self.config.pbgui.tags
+                coindata_binance.tags = self.config.pbgui.tags
         # Symbol config
         if "edit_opt_v7_approved_coins_long" in st.session_state:
             if st.session_state.edit_opt_v7_approved_coins_long != self.config.live.approved_coins.long:
@@ -650,10 +676,7 @@ class OptimizeV7Item:
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            exchange_index = 0
-            if self.config.backtest.exchange == "bybit":
-                exchange_index = 1
-            st.selectbox('Exchange',['binance', 'bybit'], index = exchange_index, key="edit_opt_v7_exchange")
+            st.multiselect('Exchanges',["binance", "bybit"], default=self.config.backtest.exchanges, key="edit_opt_v7_exchanges")
         with col2:
             if not self.name:
                 color = "red"
@@ -705,20 +728,28 @@ class OptimizeV7Item:
         with col2:
             st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
         with col3:
-            st.multiselect("Tags", coindata.all_tags, default=self.config.pbgui.tags, key="edit_opt_v7_tags", help=pbgui_help.coindata_tags)
+            st.multiselect("Tags", coindata_bybit.all_tags, default=self.config.pbgui.tags, key="edit_opt_v7_tags", help=pbgui_help.coindata_tags)
         with col4:
             st.checkbox("only_cpt", value=self.config.pbgui.only_cpt, help=pbgui_help.only_cpt, key="edit_opt_v7_only_cpt")
             st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_opt_v7_apply_filters")
         # Apply filters
         if st.session_state.edit_opt_v7_apply_filters:
-            self.config.live.approved_coins.long = coindata.approved_coins
-            self.config.live.approved_coins.short = coindata.approved_coins
+            self.config.live.approved_coins.long = list(set(coindata_bybit.approved_coins + coindata_binance.approved_coins))
+            self.config.live.approved_coins.short = list(set(coindata_bybit.approved_coins + coindata_binance.approved_coins))
         # Remove unavailable symbols
+        if "bybit" in self.config.backtest.exchanges and "binance" in self.config.backtest.exchanges:
+            symbols = list(set(coindata_bybit.symbols + coindata_binance.symbols))
+        elif "bybit" in self.config.backtest.exchanges:
+            symbols = coindata_bybit.symbols
+        elif "binance" in self.config.backtest.exchanges:
+            symbols = coindata_binance.symbols
+        else:
+            symbols = []
         for symbol in self.config.live.approved_coins.long.copy():
-            if symbol not in coindata.symbols:
+            if symbol not in symbols:
                 self.config.live.approved_coins.long.remove(symbol)
         for symbol in self.config.live.approved_coins.short.copy():
-            if symbol not in coindata.symbols:
+            if symbol not in symbols:
                 self.config.live.approved_coins.short.remove(symbol)
         # Correct Display of Symbols
         if "edit_opt_v7_approved_coins_long" in st.session_state:
@@ -727,9 +758,10 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('approved_coins_long', coindata.symbols, default=self.config.live.approved_coins.long, key="edit_opt_v7_approved_coins_long")
+            coindata_symbols = sorted(list(set(coindata_bybit.symbols + coindata_binance.symbols)))
+            st.multiselect('approved_coins_long', coindata_symbols, default=self.config.live.approved_coins.long, key="edit_opt_v7_approved_coins_long")
         with col2:
-            st.multiselect('approved_coins_short', coindata.symbols, default=self.config.live.approved_coins.short, key="edit_opt_v7_approved_coins_short")
+            st.multiselect('approved_coins_short', coindata_symbols, default=self.config.live.approved_coins.short, key="edit_opt_v7_approved_coins_short")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             # long_close_grid_markup_range
@@ -1205,7 +1237,7 @@ class OptimizeV7Item:
             "name": self.name,
             "filename": unique_filename,
             "json": str(self.config.config_file),
-            "exchange": self.config.backtest.exchange
+            "exchange": self.config.backtest.exchanges
         }
         dest.mkdir(parents=True, exist_ok=True)
         with open(file, "w", encoding='utf-8') as f:
@@ -1242,7 +1274,7 @@ class OptimizesV7:
                 'id': id,
                 'edit': False,
                 'Name': opt.name,
-                'Exchange': opt.config.backtest.exchange,
+                'Exchange': opt.config.backtest.exchanges,
                 'BT Count': opt.backtest_count,
                 'delete' : False,
             })
