@@ -780,10 +780,14 @@ class BacktestV7Results:
                 self.results_d = []
                 self.results = []
                 self.load()
-                for result in self.results.copy():
-                    target = result.config.backtest.base_dir.split('/')[-1]
-                    if not fnmatch.fnmatch(target, self.filter):
-                        self.results.remove(result)
+                if not self.filter == "":
+                    for result in self.results.copy():
+                        target = result.config.backtest.base_dir.split('/')[-1]
+                        if not fnmatch.fnmatch(target, self.filter):
+                            self.results.remove(result)
+        else:
+            st.session_state.select_btv7_result_filter = self.filter
+            
         st.text_input("Filter by Backtest Name", value="", help=pbgui_help.smart_filter, key="select_btv7_result_filter")
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
@@ -827,16 +831,21 @@ class BacktestV7Results:
                     for r in st.session_state.btv7_compare_results:
                         if r.result_path == result.result_path:
                             compare = True
+                
+                starting_balance_float = float(result.starting_balance)
+                final_balance_float = float(result.final_balance)
                 self.results_d.append({
                     'id': id,
                     'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
                     'Exch.': str(result.result_path).split('/')[-2],
                     'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
-                    'ADG': result.adg,
-                    'Drawdown Worst': result.drawdown_worst,
-                    'Sharpe Ratio': result.sharpe_ratio,
-                    'Starting Balance': result.starting_balance,
-                    'Final Balance': result.final_balance,
+                    'ADG': f"{result.adg:.4f}",
+                    'Drawdown Worst': f"{result.drawdown_worst:.4f}",
+                    'Sharpe Ratio': f"{result.sharpe_ratio:.4f}",
+                    'Starting Balance': f"{starting_balance_float:,.0f}",
+                    'Final Balance': f"{final_balance_float:,.0f}",
+                    'TWE': f"{result.config.bot.long.total_wallet_exposure_limit:.2f} / {result.config.bot.short.total_wallet_exposure_limit:.2f}",
+                    'POS': f"{result.config.bot.long.n_positions:.2f} / {result.config.bot.short.n_positions:.2f}",
                     'View': False,
                     'Plot': False,
                     'Fills': False,
@@ -856,11 +865,11 @@ class BacktestV7Results:
             'Optimize': st.column_config.CheckboxColumn(label="Opt"),
             'Delete': st.column_config.CheckboxColumn(label="Del"),
             'Compare': st.column_config.CheckboxColumn(label="Comp"),
-            'ADG': st.column_config.NumberColumn(format="%.8f"),
-            'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.8f"),
-            'Sharpe Ratio': st.column_config.NumberColumn(label="Sharpe", format="%.8f"),
-            'Starting Balance': st.column_config.NumberColumn(label="Start B.", format="%.0f"),
-            'Final Balance': st.column_config.NumberColumn(label="Final B.", format="%.0f")
+            'ADG': st.column_config.NumberColumn(format="%.4f"),
+            'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.4f"),
+            'Sharpe Ratio': st.column_config.NumberColumn(label="Sharpe", format="%.4f"),
+            'Starting Balance': st.column_config.NumberColumn(label="Start B."),
+            'Final Balance': st.column_config.NumberColumn(label="Final B."),
             }
         #Display Backtests
         height = 36+(len(self.results_d))*35
