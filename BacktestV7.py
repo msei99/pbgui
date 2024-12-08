@@ -331,6 +331,8 @@ class BacktestV7Queue:
                     st.rerun()
         d = []
         for id, bt in enumerate(self.items):
+            if type(bt.exchange) != list:
+                bt.exchange = [bt.exchange]
             d.append({
                 'id': id,
                 'run': False,
@@ -353,7 +355,7 @@ class BacktestV7Queue:
             "id": st.column_config.NumberColumn(format="%.0f", label="ID"),
             "name": st.column_config.TextColumn(label="Name"),
             "filename": st.column_config.TextColumn(label="Filename"),
-            "exchange": st.column_config.TextColumn(label="Exchange"),
+            "exchange": st.column_config.ListColumn(label="Exchange"),
             "finish": st.column_config.CheckboxColumn(label="Finished"),
             }
         #Display Queue
