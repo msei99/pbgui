@@ -438,7 +438,6 @@ class OptimizeV7Results:
             for id, opt in enumerate(self.results):
                 name = self.find_result_name(opt)
                 opt_item = OptimizeV7Item(name)
-                
                 name = self.find_result_name(opt)
                 analysis = PurePath(opt).stem[0:19]
                 analysis = str(self.analysis_path) + f'/{analysis}*.json'
