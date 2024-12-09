@@ -23,8 +23,8 @@ It has the following functions:
 
 ### Requirements
 - Python 3.10
-- Streamlit 1.38.0
-- Linux or Winodws (Windows not tested on passivbot v7)
+- Streamlit 1.40.0
+- Linux
 
 ### Recommendation
 
@@ -55,9 +55,9 @@ git clone https://github.com/enarjord/passivbot.git pb7
 ```
 Create needed venv's
 ```
-python3 -m venv venv_pbgui
-python3 -m venv venv_pb6
-python3 -m venv venv_pb7
+python3.10 -m venv venv_pbgui
+python3.10 -m venv venv_pb6
+python3.10 -m venv venv_pb7
 ```
 Install requirements for pb6, pb7 and pbgui
 ```
@@ -97,6 +97,7 @@ Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot and venv directories
 For the venv you have to enter the full path to python.
 Example path for venv_pb7: /home/mani/software/venv_pb7/bin/python
+Select Master on Welcome Screen if this System is used to send configs to VPS
 
 ## PBRun Instance Manager
 To enable the PBGui instance manager in the GUI, you can follow these steps:
