@@ -68,10 +68,10 @@ echo "python PBStat.py &" >> pbgui/start.sh
 echo "python PBData.py &" >> pbgui/start.sh
 echo "python PBCoinData.py &" >> pbgui/start.sh
 # Make the start.sh file executable
-chmod +x start.sh
+chmod +x pbgui/start.sh
 
 # Create pbgui.ini
-echo "[pbgui]" > pbgui/pbgui.ini
+echo "[main]" > pbgui/pbgui.ini
 echo "pbdir = $DIR/pb6" >> pbgui/pbgui.ini
 echo "pb7dir = $DIR/pb7" >> pbgui/pbgui.ini
 echo "pbvenv = $DIR/venv_pb6" >> pbgui/pbgui.ini
@@ -80,7 +80,7 @@ echo "role = master" >> pbgui/pbgui.ini
 
 # start pbgui
 cd pbgui
-echo "starting pbgui with command steamlit run PBGui.py"
+echo "starting pbgui with command streamlit run pbgui.py"
 echo "to stop pbgui press ctrl+c"
-echi "to start pbgui in background run streamlit run PBGui.py &"
-streamlit run PBGui.py
+echo "to start pbgui in background run streamlit run pbgui.py &"
+streamlit run pbgui.py
