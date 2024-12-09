@@ -387,7 +387,6 @@ class OptimizeV7Results:
     def find_result_name(self, result_file):
         with open(result_file, "r", encoding='utf-8') as f:
             first_line = f.readline()
-            print(first_line)
             if not first_line:
                 return "Empty Result"
             try:
