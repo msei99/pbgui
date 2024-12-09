@@ -785,7 +785,7 @@ class BacktestV7Results:
                 if not self.filter == "":
                     for result in self.results.copy():
                         target = result.config.backtest.base_dir.split('/')[-1]
-                        if not fnmatch.fnmatch(target.lower(), self.filter.lower()):
+                        if not fnmatch.fnmatch(target, self.filter):
                             self.results.remove(result)
         else:
             st.session_state.select_btv7_result_filter = self.filter
@@ -826,6 +826,11 @@ class BacktestV7Results:
                         if "opt_v7_results" in st.session_state:    
                             del st.session_state.opt_v7_results
                         st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
+                if "GridVis" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["GridVis"]:
+                        st.session_state.v7_grid_visualizer_config = self.results[row].config
+                        st.session_state.v7_grid_visualizer_config.pbgui.note = f'{self.results[row].config.backtest.base_dir.split("/")[-1]}' 
+                        st.switch_page(get_navi_paths()["V7_GRID_VISUALIZER"])
         if not self.results_d:
             for id, result in enumerate(self.results):
                 compare = False
@@ -854,6 +859,7 @@ class BacktestV7Results:
                     'Create Run': False,
                     'BT': False,
                     'Optimize': False,
+                    'GridVis': False,
                     'Delete': False,
                     'Compare': compare,  # Add Compare field
                 })
