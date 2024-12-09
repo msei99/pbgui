@@ -83,4 +83,5 @@ cd pbgui
 echo "starting pbgui with command streamlit run pbgui.py"
 echo "to stop pbgui press ctrl+c"
 echo "to start pbgui in background run streamlit run pbgui.py &"
+echo 'Login with password: PBGui$Bot!'
 streamlit run pbgui.py
