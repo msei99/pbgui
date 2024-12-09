@@ -428,7 +428,7 @@ class OptimizeV7Results:
                 if not self.filter == "":
                     for result in self.results.copy():
                         name = self.find_result_name(result)
-                        if not fnmatch.fnmatch(name, self.filter):
+                        if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
                             self.results.remove(result)
         else:
             st.session_state.select_opt_v7_result_filter = self.filter

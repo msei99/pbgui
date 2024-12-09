@@ -785,7 +785,7 @@ class BacktestV7Results:
                 if not self.filter == "":
                     for result in self.results.copy():
                         target = result.config.backtest.base_dir.split('/')[-1]
-                        if not fnmatch.fnmatch(target, self.filter):
+                        if not fnmatch.fnmatch(target.lower(), self.filter.lower()):
                             self.results.remove(result)
         else:
             st.session_state.select_btv7_result_filter = self.filter
