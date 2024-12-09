@@ -31,6 +31,10 @@ def edit_v7_instance():
             if "bt_v7_edit_symbol" in st.session_state:
                 del st.session_state.bt_v7_edit_symbol
             st.switch_page(get_navi_paths()["V7_BACKTEST"])
+        if st.button("GridVis"):
+            st.session_state.v7_grid_visualizer_config = v7_instance.config
+            st.switch_page(get_navi_paths()["V7_GRID_VISUALIZER"])
+            st.stop()
     v7_instance.edit()
 
 @st.dialog("Delete Instance?")
