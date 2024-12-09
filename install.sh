@@ -11,6 +11,9 @@ sudo add-apt-repository ppa:deadsnakes/ppa -y
 sudo apt update
 sudo apt install git python3.10-venv rclone rustc cargo -y
 
+# get current directory
+DIR=$(pwd)
+
 # Clone the pb6 repository to pb6
 git clone https://github.com/enarjord/passivbot.git pb6
 # Checkout v6.1.4b_latest_v6
@@ -18,9 +21,11 @@ cd pb6
 git checkout v6.1.4b_latest_v6
 cd ..
 # Create a virtual environment for pb6
-python3.10 -m venv ~/venv_pb6
+python3.10 -m venv $DIR/venv_pb6
 # Activate the virtual environment
-source ~/venv_pb6/bin/activate
+source $DIR/venv_pb6/bin/activate
+# Upgrade pip
+pip install --upgrade pip
 # Install the requirements for pb6
 pip install -r pb6/requirements.txt
 # deactivate the virtual environment
@@ -29,9 +34,11 @@ deactivate
 # Clone the passivbot repository pb7
 git clone https://github.com/enarjord/passivbot.git pb7
 # Create a virtual environment for pb7
-python3.10 -m venv ~/venv_pb7
+python3.10 -m venv $DIR/venv_pb7
 # Activate the virtual environment
-source ~/venv_pb7/bin/activate
+source $DIR/venv_pb7/bin/activate
+# Upgrade pip
+pip install --upgrade pip
 # Install the requirements for pb7
 pip install -r pb7/requirements.txt
 # Build passivbot-rust with maturin
@@ -44,20 +51,36 @@ deactivate
 # Clone the pbgui repository
 git clone https://github.com/msei99/pbgui.git
 # Create a virtual environment for pbgui
-python3.10 -m venv ~/venv_pbgui
+python3.10 -m venv $DIR/venv_pbgui
 # Activate the virtual environment
-source ~/venv_pbgui/bin/activate
+source $DIR/venv_pbgui/bin/activate
+# Upgrade pip
+pip install --upgrade pip
 # Install the requirements for pbgui
 pip install -r pbgui/requirements.txt
-# get current directory
-DIR=$(pwd)
+
 # Create a start.sh file to start pbgui
-echo "cd $DIR/pbgui" > start.sh
-echo "source ~/venv_pbgui/bin/activate" >> start.sh
-echo "python PBRun.py &" >> start.sh
-echo "python PBRemote.py &" >> start.sh
-echo "python PBStat.py &" >> start.sh
-echo "python PBData.py &" >> start.sh
-echo "python PBCoinData.py &" >> start.sh
+echo "cd $DIR/pbgui" > pbgui/start.sh
+echo "source $DIR/venv_pbgui/bin/activate" >> pbgui/start.sh
+echo "python PBRun.py &" >> pbgui/start.sh
+echo "python PBRemote.py &" >> pbgui/start.sh
+echo "python PBStat.py &" >> pbgui/start.sh
+echo "python PBData.py &" >> pbgui/start.sh
+echo "python PBCoinData.py &" >> pbgui/start.sh
 # Make the start.sh file executable
 chmod +x start.sh
+
+# Create pbgui.ini
+echo "[pbgui]" > pbgui/pbgui.ini
+echo "pbdir = $DIR/pb6" >> pbgui/pbgui.ini
+echo "pb7dir = $DIR/pb7" >> pbgui/pbgui.ini
+echo "pbvenv = $DIR/venv_pb6" >> pbgui/pbgui.ini
+echo "pb7venv = $DIR/venv_pb7" >> pbgui/pbgui.ini
+echo "role = master" >> pbgui/pbgui.ini
+
+# start pbgui
+cd pbgui
+echo "starting pbgui with command steamlit run PBGui.py"
+echo "to stop pbgui press ctrl+c"
+echi "to start pbgui in background run streamlit run PBGui.py &"
+streamlit run PBGui.py
