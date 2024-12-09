@@ -74,8 +74,8 @@ chmod +x pbgui/start.sh
 echo "[main]" > pbgui/pbgui.ini
 echo "pbdir = $DIR/pb6" >> pbgui/pbgui.ini
 echo "pb7dir = $DIR/pb7" >> pbgui/pbgui.ini
-echo "pbvenv = $DIR/venv_pb6/python" >> pbgui/pbgui.ini
-echo "pb7venv = $DIR/venv_pb7/python" >> pbgui/pbgui.ini
+echo "pbvenv = $DIR/venv_pb6/bin/python" >> pbgui/pbgui.ini
+echo "pb7venv = $DIR/venv_pb7/bin/python" >> pbgui/pbgui.ini
 echo "role = master" >> pbgui/pbgui.ini
 
 # start pbgui
