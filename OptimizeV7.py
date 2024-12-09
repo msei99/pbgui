@@ -427,7 +427,7 @@ class OptimizeV7Results:
                 self.find_results()
                 for result in self.results.copy():
                     name = self.find_result_name(result)
-                    if not fnmatch.fnmatch(name, self.filter):
+                    if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
                         self.results.remove(result)
                         
         st.text_input("Filter by Optimize Name", value="", help=pbgui_help.smart_filter, key="select_opt_v7_result_filter")
