@@ -376,7 +376,8 @@ class OptimizeV7Results:
         analysis = str(self.analysis_path) + f'/{analysis}*.json'
         analysis = glob.glob(analysis, recursive=False)
         if analysis:
-            Path(analysis[0]).unlink(missing_ok=True)
+            for a in analysis:
+                Path(a).unlink(missing_ok=True)
 
     def find_results(self):
         self.results = []
@@ -441,12 +442,18 @@ class OptimizeV7Results:
                 analysis = PurePath(opt).stem[0:19]
                 analysis = str(self.analysis_path) + f'/{analysis}*.json'
                 analysis = glob.glob(analysis, recursive=False)
-                analysis = analysis[0] if analysis else None
+                if analysis:
+                    # find newest analysis file
+                    analysis_time = 0
+                    for a in analysis.copy():
+                        mtime = Path(a).stat().st_mtime
+                        if mtime > analysis_time:
+                            analysis_time = mtime
+                            analysis = PurePath(a).stem
+                else:
+                    analysis = None
                 result = PurePath(opt).stem
                 result_time = Path(opt).stat().st_mtime
-                if analysis:
-                    analysis_time = Path(analysis).stat().st_mtime
-                    analysis = PurePath(analysis).stem
                 d.append({
                     'id': id,
                     'Name': name,
