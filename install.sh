@@ -14,7 +14,9 @@ sudo apt install git python3.10-venv rclone rustc cargo -y
 # Clone the pb6 repository to pb6
 git clone https://github.com/enarjord/passivbot.git pb6
 # Checkout v6.1.4b_latest_v6
-pb6/.git checkout v6.1.4b_latest_v6
+cd pb6
+git checkout v6.1.4b_latest_v6
+cd ..
 # Create a virtual environment for pb6
 python3.10 -m venv ~/venv_pb6
 # Activate the virtual environment
