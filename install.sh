@@ -1,17 +1,61 @@
 #!/usr/bin/bash
-# echo Linux release
-lsb_release -i
+# check if Linux distribution using lsb_release is ubuntu else exit
+if [ "$(lsb_release -si)" != "Ubuntu" ]; then
+    echo "This script is only for Ubuntu"
+    exit 1
+fi
+# Add deadsnakes/ppa for installing python3.10
+sudo add-apt-repository ppa:deadsnakes/ppa -y
 
-# git clone https://github.com/enarjord/passivbot.git pb6
+# Install git, python3.10-venv, rclone, rustc and cargo
+sudo apt update
+sudo apt install git python3.10-venv rclone rustc cargo -y
 
-# venv=~/software/venv_pbgui       #Path to python venv
-# pbgui=~/software/pbgui          #path to pbgui installation
+# Clone the pb6 repository to pb6
+git clone https://github.com/enarjord/passivbot.git pb6
+# Checkout v6.1.4b_latest_v6
+pb6/.git checkout v6.1.4b_latest_v6
+# Create a virtual environment for pb6
+python3.10 -m venv ~/venv_pb6
+# Activate the virtual environment
+source ~/venv_pb6/bin/activate
+# Install the requirements for pb6
+pip install -r pb6/requirements.txt
+# deactivate the virtual environment
+deactivate
 
-# source ${venv}/bin/activate
-# cd ${pbgui}
-# python PBRun.py &
-# python PBRemote.py &
-# python PBStat.py &
-# python PBData.py &
+# Clone the passivbot repository pb7
+git clone https://github.com/enarjord/passivbot.git pb7
+# Create a virtual environment for pb7
+python3.10 -m venv ~/venv_pb7
+# Activate the virtual environment
+source ~/venv_pb7/bin/activate
+# Install the requirements for pb7
+pip install -r pb7/requirements.txt
+# Build passivbot-rust with maturin
+cd pb7/passivbot-rust
+maturin develop
+cd ../..
+# deactivate the virtual environment
+deactivate
 
-# curl -sfL https://get.k3s.io | sudo -E K3S_KUBECONFIG_MODE="644" INSTALL_K3S_EXEC="--kubelet-arg "container-log-max-files=4" --kubelet-arg
+# Clone the pbgui repository
+git clone https://github.com/msei99/pbgui.git
+# Create a virtual environment for pbgui
+python3.10 -m venv ~/venv_pbgui
+# Activate the virtual environment
+source ~/venv_pbgui/bin/activate
+# Install the requirements for pbgui
+pip install -r pbgui/requirements.txt
+# get current directory
+DIR=$(pwd)
+# Create a start.sh file to start pbgui
+echo "cd $DIR/pbgui" > start.sh
+echo "source ~/venv_pbgui/bin/activate" >> start.sh
+echo "python PBRun.py &" >> start.sh
+echo "python PBRemote.py &" >> start.sh
+echo "python PBStat.py &" >> start.sh
+echo "python PBData.py &" >> start.sh
+echo "python PBCoinData.py &" >> start.sh
+# Make the start.sh file executable
+chmod +x start.sh
