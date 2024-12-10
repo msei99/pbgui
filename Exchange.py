@@ -200,7 +200,10 @@ class Exchange:
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
             if market_type == 'swap':
-                if "USDT" in balance["total"]:
+                balinfo = balance["info"]["result"]["list"][0]
+                if balinfo["accountType"] == "UNIFIED":
+                    return float(balinfo["totalWalletBalance"])
+                elif "USDT" in balance["total"]:
                     return float(balance["total"]["USDT"])
                 else:
                     return float(0)
@@ -927,7 +930,8 @@ def main():
     # exchange = Exchange("binance", users.find_user("binance_FORAGER"))
     # exchange.fetch_symbols()
     # print(exchange.fetch_copytrading_symbols())
-    # exchange = Exchange("bybit", users.find_user("noi"))
+    # exchange = Exchange("bybit", users.find_user("bybit_CPTV7HR"))
+    # print(exchange.fetch_balance("swap"))
     # exchange.fetch_symbols()
     # exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
     # exchange.fetch_symbols()
