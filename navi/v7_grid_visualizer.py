@@ -3,39 +3,87 @@ from pbgui_func import set_page_config, is_session_state_not_initialized, error_
 import numpy as np  # NumPy for numerical operations
 import pandas as pd  # Pandas for data manipulation and analysis
 import plotly.graph_objs as go  # Plotly for interactive data visualization
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+import json
 from typing import List
 from Config import ConfigV7
 
+import json
+from dataclasses import dataclass, field, asdict
+from typing import List
+
 @dataclass
 class GVData:
-    # Configuration parameters
+    # Configuration parameters (to be exported/imported to JSON)
     start_balance: int = 1000
     start_price: int = 100
-    
-    # LONG
     long_total_wallet_exposure_limit: float = 1.0
-    long_entry_grid_spacing_pct: float = 0.2
-    long_entry_grid_spacing_weight: float = 1.0
+    long_entry_grid_spacing_pct: float = 0.06
+    long_entry_grid_spacing_weight: float = 8.0
     long_entry_grid_double_down_factor: float = 1.0
     long_entry_initial_qty_pct: float = 0.05
-    long_close_grid_min_markup: float = 0.01
-    long_close_grid_markup_range: float = 0.05
+    long_close_grid_min_markup: float = 0.03
+    long_close_grid_markup_range: float = 0.03
     long_close_grid_qty_pct: float = 0.2
 
-    # Computed data (will be filled after calculations)
+    # Computed data (not to be exported/imported)
     long_entry_prices: List[float] = field(default_factory=list)
     long_entry_quantities: List[float] = field(default_factory=list)
     long_entry_costs: List[float] = field(default_factory=list)
     long_entry_exposures: List[float] = field(default_factory=list)
     long_close_grid_tp_prices: List[float] = field(default_factory=list)
     long_close_grid_tp_quantities: List[float] = field(default_factory=list)
-    
-    # TODO: SHORT
-    
-    # EverythingElse
+
+    # TODO: SHORT (not to be exported/imported)
+
+    # Everything else (not to be exported/imported)
     is_external_config: bool = False
-    title:str = ""
+    title: str = ""
+
+    def to_json(self) -> str:
+        # Include only the configuration parameters
+        allowed_fields = [
+            "start_balance",
+            "start_price",
+            "long_total_wallet_exposure_limit",
+            "long_entry_grid_spacing_pct",
+            "long_entry_grid_spacing_weight",
+            "long_entry_grid_double_down_factor",
+            "long_entry_initial_qty_pct",
+            "long_close_grid_min_markup",
+            "long_close_grid_markup_range",
+            "long_close_grid_qty_pct",
+        ]
+        
+        data_dict = asdict(self)
+        filtered_data_dict = {k: data_dict[k] for k in allowed_fields}
+        return json.dumps(filtered_data_dict, indent=4)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> 'GVData':
+        # Load JSON and filter only the allowed fields for initialization
+        allowed_fields = {
+            "start_balance": int,
+            "start_price": int,
+            "long_total_wallet_exposure_limit": float,
+            "long_entry_grid_spacing_pct": float,
+            "long_entry_grid_spacing_weight": float,
+            "long_entry_grid_double_down_factor": float,
+            "long_entry_initial_qty_pct": float,
+            "long_close_grid_min_markup": float,
+            "long_close_grid_markup_range": float,
+            "long_close_grid_qty_pct": float,
+        }
+
+        data = json.loads(json_str)
+        filtered_data = {}
+
+        for field_name, field_type in allowed_fields.items():
+            if field_name in data:
+                filtered_data[field_name] = field_type(data[field_name])
+
+        return cls(**filtered_data)
+
     
 
 # Calculation of Statistics
@@ -56,12 +104,11 @@ def calculate_statistics(data: GVData):
 
 # Function to Load Config
 def get_config() -> GVData:
-    # If there's no config in the session, use defaults
-    if "v7_grid_visualizer_config" not in st.session_state:
-        return GVData()
-    else:
+    # If there's no ConfigV7 in the session, load (probably passed from another page)
+    if "v7_grid_visualizer_config" in st.session_state:
         # Build GVData from v7 config
         config_v7: ConfigV7 = st.session_state.v7_grid_visualizer_config
+        del st.session_state.v7_grid_visualizer_config
         
         # Build Title identifying the config
         title = f"Loaded Configuration: {config_v7.pbgui.note} (v{config_v7.pbgui.version})"
@@ -80,6 +127,12 @@ def get_config() -> GVData:
             title=title,
             is_external_config=True
         )
+    
+    # If there's a data object in the session, use it (e.g. from editor)
+    if "v7_grid_visualizer_data" in st.session_state:
+        return st.session_state.v7_grid_visualizer_data
+    
+    return GVData()
 
 # Function to Calculate Entry Grid Levels
 def calculate_long_entry_grid(data: GVData) -> GVData:
@@ -427,9 +480,23 @@ def show_visualizer():
     col1, col2 = st.columns(2)
     
     with col1:
-        # Display the sliders for the parameters    
-        data = display_long_entry_grid_parameters(data)
+        # Display the sliders for the parameters   
+        options = ["Sliders", "JSON"]
+        selection = st.segmented_control("Edit Mode:", options, selection_mode="single", default="Sliders", key="v7_grid_visualizer_edit_mode")
 
+        #if "Sliders" in selection:
+        if selection == "Sliders":
+            data = display_long_entry_grid_parameters(data)
+        else:
+            json_str = st.text_area("JSON Editor", data.to_json(), height=300)
+            if st.button("Apply"):
+                data = GVData.from_json(json_str)
+                st.session_state.v7_grid_visualizer_data = data
+                st.rerun()
+
+    # Save the data object in the session
+    st.session_state.v7_grid_visualizer_data = data
+    
     # Calculate Entry Grid
     data = calculate_long_entry_grid(data)
 
@@ -444,6 +511,19 @@ def show_visualizer():
     # Call the function to build statistics
     build_statistics(data)
 
+def build_sidebar():
+    # Navigation
+    with st.sidebar:
+        # TODO: Load V7 Config (RUN)
+        # if st.button("Load V7 Config"):
+        #     st.session_state.v7_grid_visualizer_config = st.session_state.v7_instances.instances[0].config
+        #     st.rerun()
+        if st.button("Reset"):
+            if "v7_grid_visualizer_data" in st.session_state:
+                del st.session_state.v7_grid_visualizer_data
+                st.session_state.v7_grid_visualizer_edit_mode = "Sliders"
+            st.rerun()
+
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
     st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
@@ -453,4 +533,5 @@ if not is_authenticted() or is_session_state_not_initialized():
 set_page_config("PBv7 Grid Visualizer")
 st.header("PBv7 Grid Visualizer", divider="red")
 
+build_sidebar()
 show_visualizer()
