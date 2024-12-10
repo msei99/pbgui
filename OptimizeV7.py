@@ -414,11 +414,7 @@ class OptimizeV7Results:
         # Init
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
-        if "select_opt_v7_result_filter" in st.session_state:
-            if st.session_state.select_opt_v7_result_filter == "":
-                self.filter = ""
-                del st.session_state.select_opt_v7_result_filter
-                
+
         if "select_opt_v7_result_filter" in st.session_state:
             if st.session_state.select_opt_v7_result_filter != self.filter:
                 self.filter = st.session_state.select_opt_v7_result_filter
@@ -432,9 +428,9 @@ class OptimizeV7Results:
                             self.results.remove(result)
         else:
             st.session_state.select_opt_v7_result_filter = self.filter
-                        
+
         st.text_input("Filter by Optimize Name", value="", help=pbgui_help.smart_filter, key="select_opt_v7_result_filter")
-        
+
         ed_key = st.session_state.ed_key
         if not "opt_v7_results_d" in st.session_state:
             d = []
