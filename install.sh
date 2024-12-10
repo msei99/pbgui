@@ -80,8 +80,10 @@ echo "role = master" >> pbgui/pbgui.ini
 
 # start pbgui
 cd pbgui
+echo ""
 echo "starting pbgui with command streamlit run pbgui.py"
-echo "to stop pbgui press ctrl+c"
-echo "to start pbgui in background run streamlit run pbgui.py &"
+echo "press ctrl+c for stopping pbgui"
+echo "you can run pbgui in background with this command: streamlit run pbgui.py &"
+echo ""
 echo 'Login with password: PBGui$Bot!'
 streamlit run pbgui.py

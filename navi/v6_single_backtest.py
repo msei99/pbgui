@@ -2,6 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, is_pb_installed, is_authenticted, get_navi_paths
 from Backtest import BacktestItem, BacktestQueue, BacktestResults
 from Instance import Instance
+from User import Users
 import datetime
 import multiprocessing
 
@@ -229,6 +230,11 @@ st.header("PBv6 Single Backtest", divider="red")
 # Check if PB6 is installed
 if not is_pb_installed():
     st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
+
+# Check if there is as single user available
+if Users().list_single() == []:
+    st.warning('No users configured / Go to Setup API-Keys and configure your first user', icon="⚠️")
     st.stop()
 
 if "bt_queue" in st.session_state:

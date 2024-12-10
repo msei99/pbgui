@@ -18,7 +18,11 @@ class MultiInstance():
     def __init__(self):
         self.instance_path = None
         self._users = Users()
-        self._user = self._users.list()[0]
+        users = self._users.list()
+        if users:
+            self._user = self._users.list()[0]
+        else:
+            self._user = ""
         self._multi_config = {}
         self.initialize()
 
@@ -947,7 +951,11 @@ class MultiInstance():
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            st.selectbox('User',self._users.list(), index = self._users.list().index(self.user), key="edit_multi_user")
+            if self.user in self._users.list():
+                index = self._users.list().index(self.user)
+            else:
+                index = 0
+            st.selectbox('User',self._users.list(), index = index, key="edit_multi_user")
         with col2:
             enabled_on = ["disabled",self.remote.name] + sorted(self.remote.list())
             enabled_on_index = enabled_on.index(self.enabled_on)
