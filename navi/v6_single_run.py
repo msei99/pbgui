@@ -3,6 +3,7 @@ from pbgui_func import set_page_config, upload_pbconfigdb, is_session_state_not_
 from Instance import Instances, Instance
 from Backtest import BacktestItem
 from PBRemote import PBRemote
+from User import Users
 import pbgui_help
 
 @st.dialog("Delete Instance?")
@@ -271,6 +272,11 @@ st.header("PB v6 Single Run", divider="red")
 # Check if PB6 is installed
 if not is_pb_installed():
     st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
+    st.stop()
+
+# Check if there is as single user available
+if Users().list_single() == []:
+    st.warning('No users configured / Go to Setup API-Keys and configure your first user', icon="⚠️")
     st.stop()
 
 if 'edit_instance' in st.session_state:
