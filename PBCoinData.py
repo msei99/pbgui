@@ -404,6 +404,7 @@ class CoinData:
         self._symbols_data = []
         self.approved_coins = []
         self.ignored_coins = []
+        coin_data = []        
         for symbol in self.symbols:
             market_cap = 0
             sym = symbol[0:-4]
