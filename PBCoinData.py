@@ -23,6 +23,10 @@ SYMBOLMAP = {
     "1000PEPE": "PEPE",
     "1000RATS": "rats",
     "1000SHIB": "SHIB",
+    "1000SATS": "SATS",
+    "1000CHEEMS": "CHEEMS",
+    "1000WHY": "WHY",
+    "1000X": "X",
     "SHIB1000": "SHIB",
     "1000XEC": "XEC",
     "BEAMX": "BEAM",
@@ -33,11 +37,12 @@ SYMBOLMAP = {
     #Bybit
     "1000000BABYDOGE": "BabyDoge",
     "10000000AIDOGE": "AIDOGE",
+    "1000000CHEEMS": "CHEEMS",
     "1000000MOG": "MOG",
     "1000000PEIPEI": "PEIPEI",
     "10000COQ": "COQ",
     "10000LADYS": "LADYS",
-    "10000SATS": "1000SATS",
+    "10000SATS": "SATS",
     "10000WEN": "WEN",
     "10000WHY": "WHY",
     "1000APU": "APU",
@@ -48,15 +53,16 @@ SYMBOLMAP = {
     "1000MUMU": "MUMU",
     "1000NEIROCTO": "NEIRO",
     "1000TURBO": "TURBO",
+    "1000TOSHI": "TOSHI",
     "DOP1": "DOP",
-    "GOMINING": "Gomining",
     "RAYDIUM": "RAY",
     "USDE": "USDe",
     #Bitget
     "OMNI1": "OMNI",
     "VELO1": "VELO",
+    "1MCHEEMS": "CHEEMS",
     #OKX
-    "SATS": "1000SATS",
+    #
     #Hyperliquid
     "kBONK": "BONK",
     "kFLOKI": "FLOKI",
@@ -64,6 +70,7 @@ SYMBOLMAP = {
     "kPEPE": "PEPE",
     "kSHIB": "SHIB",
     "kDOGS": "DOGS",
+    "kNEIRO": "NEIRO",
     #Kucoin
     "10000CAT": "CAT",
     "1000PEPE2": "PEPE2.0",
