@@ -404,7 +404,7 @@ class CoinData:
         self._symbols_data = []
         self.approved_coins = []
         self.ignored_coins = []
-        coin_data = []        
+        coin_data = []
         for symbol in self.symbols:
             market_cap = 0
             sym = symbol[0:-4]
@@ -426,6 +426,7 @@ class CoinData:
                         "id": id,
                         "symbol": symbol,
                         "name": coin_data["name"],
+                        "tags": coin_data["tags"],
                         "price": coin_data["quote"]["USD"]["price"],
                         "volume_24h": int(coin_data["quote"]["USD"]["volume_24h"]),
                         "market_cap": int(market_cap),
@@ -438,6 +439,7 @@ class CoinData:
                         "id": 999999,
                         "symbol": symbol,
                         "name": "not found on CoinMarketCap",
+                        "tags": [],
                         "price": 0,
                         "volume_24h": 0,
                         "market_cap": 0,
@@ -445,14 +447,14 @@ class CoinData:
                         "copy_trading": symbol in self.symbols_cpt,
                         "link": None,
                     }
-                for tag in coin_data["tags"]:
+                for tag in symbol_data["tags"]:
                     if tag not in self._all_tags:
                         self._all_tags.append(tag)
                 cpt = True
                 if self.only_cpt and not symbol_data["copy_trading"]:
                     cpt = False
                 # if self.market_cap != 0 or self.vol_mcap != 10.0:
-                if cpt and market_cap > self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap and (not self.tags or any(tag in coin_data["tags"] for tag in self.tags)):
+                if cpt and market_cap >= self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap and (not self.tags or any(tag in symbol_data["tags"] for tag in self.tags)):
                     self._symbols_data.append(symbol_data)
                     self.approved_coins.append(symbol)
                 else:
