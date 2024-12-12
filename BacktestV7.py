@@ -583,7 +583,6 @@ class BacktestV7Item:
             json.dump(bt_dict, f, indent=4)
 
     def remove(self):
-        self.remove_all_results()
         path = Path(self.path).parent
         rmtree(path, ignore_errors=True)
 
