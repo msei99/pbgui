@@ -337,7 +337,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
                 trailing_entry_grid_max = normal_enty_grid_min
 
         if close_mode == GridTrailingMode.GridFirst:
-            st.info("2")
+            #st.info("2")
             trailing_close_orders = [o for o in fullgrid_close_orders if o.price > normal_close_grid_max]
             trailing_close_prices = [o.price for o in trailing_close_orders]
             
@@ -368,7 +368,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
                 trailing_entry_grid_max = max(trailing_entry_prices)
 
         if close_mode == GridTrailingMode.GridFirst:
-            st.info("4")
+            #st.info("4")
             trailing_close_orders = [o for o in fullgrid_close_orders if o.price > normal_close_grid_max]
             trailing_close_prices = [o.price for o in trailing_close_orders]
             if len(trailing_close_prices) > 0:

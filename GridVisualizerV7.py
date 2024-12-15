@@ -1405,7 +1405,7 @@ def calc_next_close_long(
     ) / bot_params.wallet_exposure_limit
     if bot_params.close_trailing_grid_ratio > 0.0:
         if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio:
-            st.error("Trailing first")
+            #st.error("Trailing first")
             return calc_trailing_close_long(
                 exchange_params,
                 state_params,
@@ -1414,7 +1414,7 @@ def calc_next_close_long(
                 trailing_price_bundle,
             )
         else:
-            st.error("Grid first")
+            #st.error("Grid first")
             trailing_allocation = cost_to_qty(
                 state_params.balance * bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio,
                 position.price,
@@ -1677,6 +1677,7 @@ def calc_next_close_short(
         position.price,
     ) / bot_params.wallet_exposure_limit
     if bot_params.close_trailing_grid_ratio > 0.0:
+        #st.error(f"wallet_exposure_ratio: {wallet_exposure_ratio}, bot_params.close_trailing_grid_ratio: {bot_params.close_trailing_grid_ratio}")
         if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio:
             return calc_trailing_close_short(
                 exchange_params,
