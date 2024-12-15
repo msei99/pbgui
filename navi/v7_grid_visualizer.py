@@ -162,10 +162,6 @@ class GVData:
         self.short_entry_mode = get_GridTrailing_mode(self.normal_bot_params_short.entry_trailing_grid_ratio)
         self.short_close_mode = get_GridTrailing_mode(self.normal_bot_params_short.close_trailing_grid_ratio)
         
-
-
-    
-    # Meaning of classmethos: https://realpython.com/instance-class-and-static-methods-demystified/
     @classmethod
     def from_json(cls, json_str: str) -> 'GVData':
         # Expect the "bot" structure with "long" and "short" keys
@@ -179,7 +175,6 @@ class GVData:
             normal_bot_params_long=BotParams(**long_data),
             normal_bot_params_short=BotParams(**short_data)
         )
-        
 
 # Function to Load Config
 def prepare_config() -> GVData:
