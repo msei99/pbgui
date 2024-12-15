@@ -293,7 +293,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
         normal_enty_grid_min = min(normal_entry_prices)
         normal_enty_grid_max = max(normal_entry_prices)
         
-        if title_side == "LONG":
+        if side == Side.Long:
             data.long_entry_grid = normal_enty_grid_max - normal_enty_grid_min
         else:
             data.short_entry_grid = normal_enty_grid_max - normal_enty_grid_min
@@ -307,7 +307,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
         normal_close_grid_min = min(normal_close_prices)
         normal_close_grid_max = max(normal_close_prices)
         
-        if title_side == "LONG":
+        if side == Side.Long:
             data.long_close_grid = normal_enty_grid_max - normal_enty_grid_min
         else:
             data.short_close_grid = normal_close_grid_max - normal_close_grid_min
@@ -325,28 +325,88 @@ def create_plotly_graph(side: OrderType, data: GVData):
         fullgrid_close_grid_min = min(fullgrid_close_prices)
         fullgrid_close_grid_max = max(fullgrid_close_prices)
     
-    # Guess Trailing Orders based on Orders minus FullGrid Orders
-    #st.error(f"side: {side}, entry_mode: {entry_mode}, close_mode: {close_mode}")
     if side == Side.Long:
         if entry_mode == GridTrailingMode.GridFirst:
-            #st.info("1")
             trailing_entry_orders = [o for o in fullgrid_entry_orders if o.price < normal_enty_grid_min]
             trailing_entry_prices = [o.price for o in trailing_entry_orders]
             if len(trailing_entry_prices) > 0:
                 trailing_entry_grid_min = min(trailing_entry_prices)
                 trailing_entry_grid_max = normal_enty_grid_min
+        
+        if entry_mode == GridTrailingMode.TrailingFirst:
+            trailing_grid_ratio = abs(data.normal_bot_params_long.entry_trailing_grid_ratio)
+            
+            # Calculate TWE
+            entry_wallet_expore_sum = 0
+            entry_twe_budegt = state_params.balance * bot_params.wallet_exposure_limit
+            entry_twe_pct = []
+            for entry in fullgrid_entry_orders:
+                entry_wallet_expore_sum += entry.qty * entry.price
+                entry_pct = int(entry_wallet_expore_sum / entry_twe_budegt * 100)
+                entry_twe_pct.append(entry_pct)
+            
+            # Check how many items are required to exceed TWE
+            count = sum(1 for x in entry_twe_pct if x < (trailing_grid_ratio * 100)) + 1
+            
+            # Copy items from fillgrid to normal
+            normal_entry_orders = fullgrid_entry_orders[:count]
+            data.normal_entries_long = normal_entry_orders
+            
+            # Update "Normal" variables (ugly, but works)
+            normal_entry_prices = [o.price for o in normal_entry_orders]
+            if len(normal_entry_prices) > 0:
+                normal_enty_grid_min = min(normal_entry_prices)
+                normal_enty_grid_max = max(normal_entry_prices)
+                
+                if side == Side.Long:
+                    data.long_entry_grid = normal_enty_grid_max - normal_enty_grid_min
+                else:
+                    data.short_entry_grid = normal_enty_grid_max - normal_enty_grid_min
+
+            # Set Trailing Range
+            trailing_entry_grid_min = fullgrid_entry_grid_min
+            trailing_entry_grid_max = normal_enty_grid_min
+            
+            twe = entry_twe_pct[count-1]
+            
+            # Calculate the current total exposure (qty * price) for the chosen orders
+            entry_wallet_exposure_sum = sum(o.qty * o.price for o in normal_entry_orders)
+
+            # Calculate the target exposure amount based on the wallet_exposure_limit
+            target_exposure = state_params.balance * bot_params.wallet_exposure_limit * trailing_grid_ratio
+
+            # Determine if we need to adjust to match the target
+            difference = entry_wallet_exposure_sum - target_exposure
+
+            if difference > 0:
+                # We are above the target; adjust the last order's qty down
+                last_order = normal_entry_orders[-1]
+                # Calculate how much qty reduction is needed
+                qty_reduction = difference / last_order.price
+                new_qty = last_order.qty - qty_reduction
+                # Ensure new_qty isn't negative
+                new_qty = max(new_qty, 0)
+
+                adjusted_order = Order(
+                    qty=new_qty,
+                    price=last_order.price,
+                    order_type=last_order.order_type
+                )
+
+                # Replace the last order in normal_entry_orders
+                normal_entry_orders[-1] = adjusted_order
+
+                # Update data (for statistics)
+                data.normal_entries_long = normal_entry_orders
+        
+        if entry_mode == GridTrailingMode.TrailingOnly:
+            trailing_entry_grid_min = fullgrid_entry_grid_min
+            trailing_entry_grid_max = fullgrid_entry_grid_max
 
         if close_mode == GridTrailingMode.GridFirst:
-            #st.info("2")
             trailing_close_orders = [o for o in fullgrid_close_orders if o.price > normal_close_grid_max]
             trailing_close_prices = [o.price for o in trailing_close_orders]
             
-            # st.error(f"normal_enty_orders: {normal_entry_orders}")
-            # st.error(f"fullgrid_entry_orders: {fullgrid_entry_orders}")
-            # st.error(f"trailing_entry_orders: {trailing_entry_orders}")
-            # st.error(f"normal_close_orders: {normal_close_orders}")
-            # st.error(f"fullgrid_close_orders: {fullgrid_close_orders}")
-            # st.error(f"trailing_close_orders: {trailing_close_orders}")
             if len(trailing_close_prices) > 0:
                 trailing_close_grid_min = max(trailing_close_prices)
                 trailing_close_grid_max = fullgrid_close_grid_max
@@ -354,6 +414,16 @@ def create_plotly_graph(side: OrderType, data: GVData):
             if len(normal_close_orders) == 0:
                 trailing_close_grid_min = fullgrid_close_grid_min
                 trailing_close_grid_max = fullgrid_close_grid_max
+        
+        if close_mode == GridTrailingMode.TrailingFirst:
+            trailing_close_grid_min = normal_close_grid_max
+            trailing_close_grid_max = normal_close_grid_max + 10
+        
+        if close_mode == GridTrailingMode.TrailingOnly:
+            trailing_close_grid_min = fullgrid_close_grid_min
+            trailing_close_grid_max = fullgrid_close_grid_max
+            
+            
 
     elif side == Side.Short:
         if entry_mode == GridTrailingMode.GridFirst:
@@ -378,6 +448,11 @@ def create_plotly_graph(side: OrderType, data: GVData):
             if len(normal_close_orders) == 0:
                 trailing_close_grid_min = fullgrid_close_grid_min
                 trailing_close_grid_max = fullgrid_close_grid_max
+        
+        if close_mode == GridTrailingMode.TrailingFirst:
+            #st.info("2")
+            trailing_close_grid_min = normal_close_grid_min
+            trailing_close_grid_max = normal_close_grid_min - 10
             
     #st.warning(f"normal_enty_grid_min: {normal_enty_grid_min}, normal_enty_grid_max: {normal_enty_grid_max}")
     #st.warning(f"fullgrid_entry_grid_min: {fullgrid_entry_grid_min}, fullgrid_entry_grid_max: {fullgrid_entry_grid_max}")

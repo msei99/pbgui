@@ -1406,6 +1406,7 @@ def calc_next_close_long(
     if bot_params.close_trailing_grid_ratio > 0.0:
         if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio:
             #st.error("Trailing first")
+            #st.error(f"wallet_exposure_ratio: {wallet_exposure_ratio}, bot_params.close_trailing_grid_ratio: {bot_params.close_trailing_grid_ratio}")
             return calc_trailing_close_long(
                 exchange_params,
                 state_params,
