@@ -86,6 +86,7 @@ class StateParams:
 @dataclass
 class BotParams:
     wallet_exposure_limit: float = 0.0
+    n_positions:float = 0.0
     entry_initial_qty_pct: float = 0.0
     entry_initial_ema_dist: float = 0.0
     entry_grid_spacing_pct: float = 0.0

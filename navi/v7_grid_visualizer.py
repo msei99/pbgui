@@ -55,6 +55,7 @@ class GVData:
         
     normal_bot_params_long: BotParams = BotParams(
         wallet_exposure_limit=1.5,
+        n_positions=1,
         entry_initial_qty_pct=0.03,
         entry_initial_ema_dist=0.03,
         entry_grid_spacing_pct=0.04,
@@ -76,6 +77,7 @@ class GVData:
     
     normal_bot_params_short: BotParams = BotParams(
         wallet_exposure_limit=1.5,
+        n_positions=1,
         entry_initial_qty_pct=0.03,
         entry_initial_ema_dist=0.03,
         entry_grid_spacing_pct=0.04,
@@ -112,7 +114,7 @@ class GVData:
     short_entry_mode = GridTrailingMode.Unknown
     short_close_mode = GridTrailingMode.Unknown
 
-    # Everything else (not to be exported/imported)
+    # Everything else
     is_external_config: bool = False
     title: str = ""
     
@@ -161,6 +163,12 @@ class GVData:
         self.long_close_mode = get_GridTrailing_mode(self.normal_bot_params_long.close_trailing_grid_ratio)
         self.short_entry_mode = get_GridTrailing_mode(self.normal_bot_params_short.entry_trailing_grid_ratio)
         self.short_close_mode = get_GridTrailing_mode(self.normal_bot_params_short.close_trailing_grid_ratio)
+    
+    def isActive(self, side: OrderType) -> bool:
+        if side == Side.Long:
+            return self.normal_bot_params_long.wallet_exposure_limit > 0.0 and self.normal_bot_params_long.n_positions > 0
+        else:
+            return self.normal_bot_params_short.wallet_exposure_limit > 0.0 and self.normal_bot_params_short.n_positions > 0
         
     @classmethod
     def from_json(cls, json_str: str) -> 'GVData':
@@ -189,6 +197,7 @@ def prepare_config() -> GVData:
         
         data.normal_bot_params_long = BotParams(
             wallet_exposure_limit=          config_v7.bot.long.total_wallet_exposure_limit,
+            n_positions=                    config_v7.bot.long.n_positions,
             entry_initial_qty_pct=          config_v7.bot.long.entry_initial_qty_pct,
             entry_initial_ema_dist=         config_v7.bot.long.entry_initial_ema_dist,
             entry_grid_spacing_pct=         config_v7.bot.long.entry_grid_spacing_pct,
@@ -209,6 +218,7 @@ def prepare_config() -> GVData:
         
         data.normal_bot_params_short = BotParams(
             wallet_exposure_limit=          config_v7.bot.short.total_wallet_exposure_limit,
+            n_positions=                    config_v7.bot.long.n_positions,
             entry_initial_qty_pct=          config_v7.bot.short.entry_initial_qty_pct,
             entry_initial_ema_dist=         config_v7.bot.short.entry_initial_ema_dist,
             entry_grid_spacing_pct=         config_v7.bot.short.entry_grid_spacing_pct,
@@ -245,6 +255,10 @@ def prepare_config() -> GVData:
 
 
 def create_plotly_graph(side: OrderType, data: GVData):
+    
+    if not data.isActive(side):
+        return None
+    
     normal_entry_orders = []
     normal_entry_prices = []
     normal_enty_grid_min = 0
@@ -684,6 +698,9 @@ def create_plotly_graph(side: OrderType, data: GVData):
 
 def create_statistics(side: OrderType, data: GVData):
     
+    if not data.isActive(side):
+        return None
+    
     entries = []
     closes = []
     wallet_exposure_limit = 0.0
@@ -858,12 +875,18 @@ def show_visualizer():
     data.gridonly_closes_short = adjust_order_quantities(gridonly_closes_short)
 
     with col2:
-        create_plotly_graph(Side.Long, data)
-        create_statistics(Side.Long, data)
+        if data.isActive(Side.Long):
+            create_plotly_graph(Side.Long, data)
+            create_statistics(Side.Long, data)
+        else:
+            st.write("LONG is inactive")
     
     with col3:
-        create_plotly_graph(Side.Short, data)
-        create_statistics(Side.Short, data)
+        if data.isActive(Side.Short):
+            create_plotly_graph(Side.Short, data)
+            create_statistics(Side.Short, data)
+        else:
+            st.write("SHORT is inactive")
 
 
 def build_sidebar():
