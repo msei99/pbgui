@@ -238,7 +238,7 @@ def prepare_config() -> GVData:
         )
         
         data.prepare_data()
-        st.session_state.v7_grid_visualizer_config = data
+        st.session_state.v7_grid_visualizer_data = data
         del st.session_state.v7_grid_visualizer_config
         return data
     
@@ -840,7 +840,7 @@ def show_visualizer():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        json_str = st.text_area("", data.to_json(), height=920)
+        json_str = st.text_area("", data.to_json(), height=1000)
         if st.button("Apply"):
             data = GVData.from_json(json_str)
             st.session_state.v7_grid_visualizer_data = data
@@ -874,6 +874,8 @@ def show_visualizer():
     gridonly_closes_short = calc_closes_short(data.exchange_params, data.state_params, data.gridonly_bot_params_short, data.position_short_close, data.trailing_price_bundle)
     data.gridonly_closes_short = adjust_order_quantities(gridonly_closes_short)
 
+    st.session_state.v7_grid_visualizer_data = data
+    
     with col2:
         if data.isActive(Side.Long):
             create_plotly_graph(Side.Long, data)
