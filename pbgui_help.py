@@ -1143,3 +1143,25 @@ change_password = """
     If you leave the new password empty, then authentication will be disabled.
     If authentication is disabled, you can use this dailog to set a new password.
     ```"""
+
+coin_flags_mode = """
+    -lm or -sm: Long or short mode. Choices:
+     [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+    Normal mode: passivbot manages the position as normal.
+    Manual mode: passivbot ignores the position.
+    Graceful stop: if there is a position, passivbot will manage it; otherwise, passivbot will not make new positions.
+    Take profit only: passivbot will only manage closing orders.
+    ```"""
+
+coin_flags_we = """
+    -lw or -sw: Long or short wallet exposure limit.
+    ```"""
+
+coin_flags_config = """
+    -lc: Path to live config. Load all of another config's bot parameters except
+     [n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct].
+    ```"""
+
+coin_flags_lev = """
+    -lev: Leverage.
+    ```"""
