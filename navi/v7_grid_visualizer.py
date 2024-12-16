@@ -176,7 +176,6 @@ class GVData:
             normal_bot_params_short=BotParams(**short_data)
         )
 
-# Function to Load Config
 def prepare_config() -> GVData:
     # If there's no ConfigV7 in the session, load (probably passed from another page)
     if "v7_grid_visualizer_config" in st.session_state:
@@ -186,27 +185,46 @@ def prepare_config() -> GVData:
         data = GVData()
         # Build Title identifying the config
         data.title = f"Loaded Configuration: {config_v7.pbgui.note} (v{config_v7.pbgui.version})"
-        data.is_external_config=True
+        data.is_external_config = True
         
         data.normal_bot_params_long = BotParams(
-            wallet_exposure_limit=config_v7.bot.long.total_wallet_exposure_limit,
-            entry_initial_qty_pct=config_v7.bot.long.entry_initial_qty_pct,
-            entry_grid_spacing_pct=config_v7.bot.long.entry_grid_spacing_pct,
-            entry_grid_spacing_weight=config_v7.bot.long.entry_grid_spacing_weight,
-            entry_grid_double_down_factor=config_v7.bot.long.entry_grid_double_down_factor,
-            close_grid_min_markup=config_v7.bot.long.close_grid_min_markup,
-            close_grid_markup_range=config_v7.bot.long.close_grid_markup_range,
-            close_grid_qty_pct=config_v7.bot.long.close_grid_qty_pct,
+            wallet_exposure_limit=          config_v7.bot.long.total_wallet_exposure_limit,
+            entry_initial_qty_pct=          config_v7.bot.long.entry_initial_qty_pct,
+            entry_initial_ema_dist=         config_v7.bot.long.entry_initial_ema_dist,
+            entry_grid_spacing_pct=         config_v7.bot.long.entry_grid_spacing_pct,
+            entry_grid_spacing_weight=      config_v7.bot.long.entry_grid_spacing_weight,
+            entry_grid_double_down_factor=  config_v7.bot.long.entry_grid_double_down_factor,
+            entry_trailing_threshold_pct=   config_v7.bot.long.entry_trailing_threshold_pct,
+            entry_trailing_retracement_pct= config_v7.bot.long.entry_trailing_retracement_pct,
+            entry_trailing_grid_ratio=      config_v7.bot.long.entry_trailing_grid_ratio,
+            
+            close_grid_min_markup=          config_v7.bot.long.close_grid_min_markup,
+            close_grid_markup_range=        config_v7.bot.long.close_grid_markup_range,
+            close_grid_qty_pct=             config_v7.bot.long.close_grid_qty_pct,
+            close_trailing_threshold_pct=   config_v7.bot.long.close_trailing_threshold_pct,
+            close_trailing_retracement_pct= config_v7.bot.long.close_trailing_retracement_pct,
+            close_trailing_qty_pct=         config_v7.bot.long.close_trailing_qty_pct,
+            close_trailing_grid_ratio=      config_v7.bot.long.close_trailing_grid_ratio,
         )
+        
         data.normal_bot_params_short = BotParams(
-            wallet_exposure_limit=config_v7.bot.short.total_wallet_exposure_limit,
-            entry_initial_qty_pct=config_v7.bot.short.entry_initial_qty_pct,
-            entry_grid_spacing_pct=config_v7.bot.short.entry_grid_spacing_pct,
-            entry_grid_spacing_weight=config_v7.bot.short.entry_grid_spacing_weight,
-            entry_grid_double_down_factor=config_v7.bot.short.entry_grid_double_down_factor,
-            close_grid_min_markup=config_v7.bot.short.close_grid_min_markup,
-            close_grid_markup_range=config_v7.bot.short.close_grid_markup_range,
-            close_grid_qty_pct=config_v7.bot.short.close_grid_qty_pct,
+            wallet_exposure_limit=          config_v7.bot.short.total_wallet_exposure_limit,
+            entry_initial_qty_pct=          config_v7.bot.short.entry_initial_qty_pct,
+            entry_initial_ema_dist=         config_v7.bot.short.entry_initial_ema_dist,
+            entry_grid_spacing_pct=         config_v7.bot.short.entry_grid_spacing_pct,
+            entry_grid_spacing_weight=      config_v7.bot.short.entry_grid_spacing_weight,
+            entry_grid_double_down_factor=  config_v7.bot.short.entry_grid_double_down_factor,
+            entry_trailing_threshold_pct=   config_v7.bot.short.entry_trailing_threshold_pct,
+            entry_trailing_retracement_pct= config_v7.bot.short.entry_trailing_retracement_pct,
+            entry_trailing_grid_ratio=      config_v7.bot.short.entry_trailing_grid_ratio,
+            
+            close_grid_min_markup=          config_v7.bot.short.close_grid_min_markup,
+            close_grid_markup_range=        config_v7.bot.short.close_grid_markup_range,
+            close_grid_qty_pct=             config_v7.bot.short.close_grid_qty_pct,
+            close_trailing_threshold_pct=   config_v7.bot.short.close_trailing_threshold_pct,
+            close_trailing_retracement_pct= config_v7.bot.short.close_trailing_retracement_pct,
+            close_trailing_qty_pct=         config_v7.bot.short.close_trailing_qty_pct,
+            close_trailing_grid_ratio=      config_v7.bot.short.close_trailing_grid_ratio,
         )
         
         data.prepare_data()
@@ -223,6 +241,7 @@ def prepare_config() -> GVData:
     data = GVData()
     data.prepare_data()
     return data
+
 
 
 def create_plotly_graph(side: OrderType, data: GVData):
