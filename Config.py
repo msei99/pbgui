@@ -489,6 +489,28 @@ class Bot:
         with col2:
             st.text_area(f'short', json.dumps(self.bot["short"], indent=4), key="edit_configv7_short", height=600)
 
+    def edit_cf(self):
+        # Init session_state for keys
+        if "edit_cf_configv7_long" in st.session_state:
+            if st.session_state.edit_cf_configv7_long != json.dumps(self.bot["long"], indent=4):
+                try:
+                    self.long = json.loads(st.session_state.edit_cf_configv7_long)
+                except:
+                    error_popup("Invalid JSON")
+            st.session_state.edit_cf_configv7_long = json.dumps(self.bot["long"], indent=4)
+        if "edit_cf_configv7_short" in st.session_state:
+            if st.session_state.edit_cf_configv7_short != json.dumps(self.bot["short"], indent=4):
+                try:
+                    self.short = json.loads(st.session_state.edit_cf_configv7_short)
+                except:
+                    error_popup("Invalid JSON")
+            st.session_state.edit_cf_configv7_short = json.dumps(self.bot["short"], indent=4)
+        col1, col2 = st.columns([1,1])
+        with col1:
+            st.text_area(f'long', json.dumps(self.bot["long"], indent=4), key="edit_cf_configv7_long", height=640)
+        with col2:
+            st.text_area(f'short', json.dumps(self.bot["short"], indent=4), key="edit_cf_configv7_short", height=640)
+
 class Long:
     def __init__(self):
         self._close_grid_markup_range = 0.0015976

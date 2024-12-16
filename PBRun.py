@@ -669,6 +669,39 @@ class RunV7():
                 self.version = self._v7_config["pbgui"]["version"]
                 self.monitor.version = self.version
                 if self.name == self._v7_config["pbgui"]["enabled_on"]:
+                    # Fix path in coin_flags
+                    if "coin_flags" in self._v7_config["live"]:
+                        coin_flags = self._v7_config["live"]["coin_flags"]
+                        for coin in coin_flags.copy():
+                            flags = coin_flags[coin]
+                            if "-lc" in flags:
+                                lc = f'-lc {self.path}/{coin}.json'
+                                lm = ""
+                                lw = ""
+                                sm = ""
+                                sw = ""
+                                lev = ""
+                                flags = coin_flags[coin]
+                                # if -nm in flags then get mode_long
+                                if "-lm" in flags:
+                                    lm = f'-lm {flags.split("-lm")[1].split()[0]} '
+                                # if -lw in flags then get we_long
+                                if "-lw" in flags:
+                                    lw = f'-lw {flags.split("-lw")[1].split()[0]} '
+                                # if -sm in flags then get mode_short
+                                if "-sm" in flags:
+                                    sm = f'-sm {flags.split("-sm")[1].split()[0]} '
+                                # if -sw in flags then get we_short
+                                if "-sw" in flags:
+                                    sw = f'-sw {flags.split("-sw")[1].split()[0]} '
+                                # if -lev in flags then get leverage
+                                if "-lev" in flags:
+                                    lev = f'-lev {flags.split("-lev")[1].split()[0]} '
+                                new_flags = f"{lm}{lw}{sm}{sw}{lev}{lc}"
+                                coin_flags[coin] = new_flags
+                        self._v7_config["live"]["coin_flags"] = coin_flags
+                        with open(file, "w", encoding='utf-8') as f:
+                            json.dump(self._v7_config, f, indent=4)
                     if "dynamic_ignore" in self._v7_config["pbgui"]:
                         if self._v7_config["pbgui"]["dynamic_ignore"]:
                             self.dynamic_ignore = DynamicIgnore()
