@@ -469,7 +469,7 @@ class V7Instance():
             if "cf_config" not in st.session_state:
                 st.session_state.cf_config = ConfigV7()
             st.session_state.cf_config.bot.edit_cf()
-        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
         with col1:
             if st.button("Save"):
                 # coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}
@@ -519,7 +519,17 @@ class V7Instance():
                 del st.session_state.edit_coin_flag
                 st.session_state.ed_key += 1
                 st.rerun()
-        
+        with col3:
+            if st.button("Remove"):
+                if self.config.live.coin_flags:
+                    if symbol in self.config.live.coin_flags:
+                        del self.config.live.coin_flags[symbol]
+                Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json').unlink(missing_ok=True)
+                self.save()
+                del st.session_state.edit_coin_flag
+                del st.session_state.cf_data
+                st.session_state.ed_key += 1
+                st.rerun()
 
     @st.dialog("Paste config", width="large")
     def import_instance(self):
