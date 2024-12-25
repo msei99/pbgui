@@ -61,6 +61,10 @@ class Monitor():
         for server in self.servers:
             if server.monitor:
                 for monitor in server.monitor:
+                    if monitor["p"] == "7":
+                        version = server.pb7_version
+                    else:
+                        version = server.pb6_version
                     info = ({
                         # u = user
                         # p = pb_version
@@ -81,9 +85,11 @@ class Monitor():
                         # py = pnl_yesterday
                         # ct = pnl_counter_today
                         # cy = pnl_counter_yesterday
+                        'Server': server.name,
+                        'Version': version,
                         'Name': monitor["u"],
                         'PB Version': monitor["p"],
-                        'Version': monitor["v"],
+                        'Version': version,
                         'Start Time': datetime.fromtimestamp(monitor["st"]),
                         'Memory': monitor["m"][0]/1024/1024,
                         'CPU': monitor["c"],
@@ -120,7 +126,7 @@ class Monitor():
             }
 
         if d_v7:
-            st.subheader(f"Running V7 Instances ({len(d_v7)}) {server.pb7_version}")
+            st.subheader(f"Running V7 Instances ({len(d_v7)})")
             df = pd.DataFrame(d_v7)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
@@ -144,7 +150,7 @@ class Monitor():
 
         
         if d_multi:
-            st.subheader(f"Running Multi Instances ({len(d_multi)}) {server.pb6_version}")
+            st.subheader(f"Running Multi Instances ({len(d_multi)})")
             df = pd.DataFrame(d_multi)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
@@ -167,7 +173,7 @@ class Monitor():
                     st.markdown(f":red[Last Traceback: ] :blue[{d_multi[row]['Last Traceback']}]")
 
         if d_single:
-            st.subheader(f"Running Single Instances ({len(d_single)}) {server.pb6_version}")
+            st.subheader(f"Running Single Instances ({len(d_single)})")
             df = pd.DataFrame(d_single)
             sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
