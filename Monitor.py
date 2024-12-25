@@ -8,6 +8,7 @@ class Monitor():
         if "mem_warning_v7" not in st.session_state:
             self.load_monitor_config()
         self.server = None
+        self.servers = []
         self.logfiles = []
 
     def view_server(self):
@@ -42,6 +43,8 @@ class Monitor():
             else:
                 cpu_color = "yellow"
             st.markdown(f"##### CPU utilization: :{cpu_color}[{server.cpu}] %  |  System boot: :blue[{boot}]")
+
+    def view_server_instances(self):
         v7_selected = None
         if f"pbremote_v7_select" in st.session_state:
             v7_selected = st.session_state.pbremote_v7_select
@@ -55,65 +58,66 @@ class Monitor():
         d_multi = []
         d_single = []
         self.logfiles = []
-        if server.monitor:
-            for monitor in server.monitor:
-                info = ({
-                    # u = user
-                    # p = pb_version
-                    # v = version
-                    # st = start_time
-                    # m = memory
-                    # c = cpu
-                    # i = info
-                    # it = infos_today
-                    # iy = infos_yesterday
-                    # e = error
-                    # et = errors_today
-                    # ey = errors_yesterday
-                    # t = traceback
-                    # tt = tracebacks_today
-                    # ty = tracebacks_yesterday
-                    # pt = pnl_today
-                    # py = pnl_yesterday
-                    # ct = pnl_counter_today
-                    # cy = pnl_counter_yesterday
-                    'Name': monitor["u"],
-                    'PB Version': monitor["p"],
-                    'Version': monitor["v"],
-                    'Start Time': datetime.fromtimestamp(monitor["st"]),
-                    'Memory': monitor["m"][0]/1024/1024,
-                    'CPU': monitor["c"],
-                    'PNLs Today': monitor["ct"],
-                    'PNL Today': monitor["pt"],
-                    'PNLs Yesterday': monitor["cy"],
-                    'PNL Yesterday': monitor["py"],
-                    'Last Info': monitor["i"],
-                    'Infos Today': monitor["it"],
-                    'Infos Yesterday': monitor["iy"],
-                    'Last Error': monitor["e"],
-                    'Errors Today': monitor["et"],
-                    'Errors Yesterday': monitor["ey"],
-                    'Last Traceback': monitor["t"],
-                    'Tracebacks Today': monitor["tt"],
-                    'Tracebacks Yesterday': monitor["ty"]
-                })
-                if info["PB Version"] == "7":
-                    d_v7.append(info)
-                    self.logfiles.append(f'run_v7/{info["Name"]}/passivbot.log')
-                elif info["PB Version"] == "6":
-                    d_multi.append(info)
-                    self.logfiles.append(f'multi/{info["Name"]}/passivbot.log')
-                elif info["PB Version"] == "s":
-                    d_single.append(info)
-                    self.logfiles.append(f'instances/{info["Name"]}/passivbot.log')
-        column_config = {
-            "PB Version": None,
-            "Last Info": None,
-            "Last Error": None,
-            "Last Traceback": None,
-            "Memory": st.column_config.NumberColumn(format="%.2f MB"),
-            "CPU": st.column_config.NumberColumn(format="%.2f %%"),
-        }
+        for server in self.servers:
+            if server.monitor:
+                for monitor in server.monitor:
+                    info = ({
+                        # u = user
+                        # p = pb_version
+                        # v = version
+                        # st = start_time
+                        # m = memory
+                        # c = cpu
+                        # i = info
+                        # it = infos_today
+                        # iy = infos_yesterday
+                        # e = error
+                        # et = errors_today
+                        # ey = errors_yesterday
+                        # t = traceback
+                        # tt = tracebacks_today
+                        # ty = tracebacks_yesterday
+                        # pt = pnl_today
+                        # py = pnl_yesterday
+                        # ct = pnl_counter_today
+                        # cy = pnl_counter_yesterday
+                        'Name': monitor["u"],
+                        'PB Version': monitor["p"],
+                        'Version': monitor["v"],
+                        'Start Time': datetime.fromtimestamp(monitor["st"]),
+                        'Memory': monitor["m"][0]/1024/1024,
+                        'CPU': monitor["c"],
+                        'PNLs Today': monitor["ct"],
+                        'PNL Today': monitor["pt"],
+                        'PNLs Yesterday': monitor["cy"],
+                        'PNL Yesterday': monitor["py"],
+                        'Last Info': monitor["i"],
+                        'Infos Today': monitor["it"],
+                        'Infos Yesterday': monitor["iy"],
+                        'Last Error': monitor["e"],
+                        'Errors Today': monitor["et"],
+                        'Errors Yesterday': monitor["ey"],
+                        'Last Traceback': monitor["t"],
+                        'Tracebacks Today': monitor["tt"],
+                        'Tracebacks Yesterday': monitor["ty"]
+                    })
+                    if info["PB Version"] == "7":
+                        d_v7.append(info)
+                        self.logfiles.append(f'run_v7/{info["Name"]}/passivbot.log')
+                    elif info["PB Version"] == "6":
+                        d_multi.append(info)
+                        self.logfiles.append(f'multi/{info["Name"]}/passivbot.log')
+                    elif info["PB Version"] == "s":
+                        d_single.append(info)
+                        self.logfiles.append(f'instances/{info["Name"]}/passivbot.log')
+            column_config = {
+                "PB Version": None,
+                "Last Info": None,
+                "Last Error": None,
+                "Last Traceback": None,
+                "Memory": st.column_config.NumberColumn(format="%.2f MB"),
+                "CPU": st.column_config.NumberColumn(format="%.2f %%"),
+            }
 
         if d_v7:
             st.subheader(f"Running V7 Instances ({len(d_v7)}) {server.pb7_version}")
@@ -127,10 +131,8 @@ class Monitor():
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
-            #PNLs green if > 0, orange if 0
-            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange', subset=['PNLs Today', 'PNLs Yesterday'])
             #PNL green if > 0, orange if 0 else red
-            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['PNL Today', 'PNL Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
             st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if v7_selected:
                 if v7_selected["selection"]["rows"]:
@@ -153,10 +155,8 @@ class Monitor():
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
-            #PNLs green if > 0, orange if 0
-            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange', subset=['PNLs Today', 'PNLs Yesterday'])
             #PNL green if > 0, orange if 0 else red
-            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['PNL Today', 'PNL Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
             st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_multi))*35, key="pbremote_multi_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if multi_selected:
                 if multi_selected["selection"]["rows"]:
@@ -178,10 +178,8 @@ class Monitor():
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
             sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
-            #PNLs green if > 0, orange if 0
-            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange', subset=['PNLs Today', 'PNLs Yesterday'])
             #PNL green if > 0, orange if 0 else red
-            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['PNL Today', 'PNL Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
             st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_single))*35, key="pbremote_single_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if single_selected:
                 if single_selected["selection"]["rows"]:
@@ -194,10 +192,10 @@ class Monitor():
     def load_monitor_config(self):
         st.session_state.mem_warning_v7 = load_ini("monitor", "mem_warning_v7")
         if st.session_state.mem_warning_v7 == "":
-            st.session_state.mem_warning_v7 = 100
+            st.session_state.mem_warning_v7 = 250
         st.session_state.mem_error_v7 = load_ini("monitor", "mem_error_v7")
         if st.session_state.mem_error_v7 == "":
-            st.session_state.mem_error_v7 = 250
+            st.session_state.mem_error_v7 = 500
         st.session_state.cpu_warning_v7 = load_ini("monitor", "cpu_warning_v7")
         if st.session_state.cpu_warning_v7 == "":
             st.session_state.cpu_warning_v7 = 10
@@ -206,23 +204,23 @@ class Monitor():
             st.session_state.cpu_error_v7 = 15
         st.session_state.error_warning_v7 = load_ini("monitor", "error_warning_v7")
         if st.session_state.error_warning_v7 == "":
-            st.session_state.error_warning_v7 = 25
+            st.session_state.error_warning_v7 = 100
         st.session_state.error_error_v7 = load_ini("monitor", "error_error_v7")
         if st.session_state.error_error_v7 == "":
-            st.session_state.error_error_v7 = 50
+            st.session_state.error_error_v7 = 250
         st.session_state.traceback_warning_v7 = load_ini("monitor", "traceback_warning_v7")
         if st.session_state.traceback_warning_v7 == "":
-            st.session_state.traceback_warning_v7 = 25
+            st.session_state.traceback_warning_v7 = 100
         st.session_state.traceback_error_v7 = load_ini("monitor", "traceback_error_v7")
         if st.session_state.traceback_error_v7 == "":
-            st.session_state.traceback_error_v7 = 50
+            st.session_state.traceback_error_v7 = 250
         # Multi
         st.session_state.mem_warning_multi = load_ini("monitor", "mem_warning_multi")
         if st.session_state.mem_warning_multi == "":
-            st.session_state.mem_warning_multi = 50
+            st.session_state.mem_warning_multi = 250
         st.session_state.mem_error_multi = load_ini("monitor", "mem_error_multi")
         if st.session_state.mem_error_multi == "":
-            st.session_state.mem_error_multi = 100
+            st.session_state.mem_error_multi = 500
         st.session_state.cpu_warning_multi = load_ini("monitor", "cpu_warning_multi")
         if st.session_state.cpu_warning_multi == "":
             st.session_state.cpu_warning_multi = 5
