@@ -188,7 +188,10 @@ class Config:
             height = 600
         if not self.config:
             color = "red"
-        st.text_area(f':{color}[config]', self.config, key="config_instance_config", height=height)
+        if color:
+            st.text_area(f':{color}[config]', self.config, key="config_instance_config", height=height)
+        else:
+            st.text_area(f'config', self.config, key="config_instance_config", height=height)
 
 # config template
 # {"backtest": {"base_dir": "backtests",
