@@ -259,7 +259,10 @@ def manage_master():
     })
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
     monitor.server = pbremote
+    monitor.servers = []
+    monitor.servers.append(monitor.server)
     monitor.view_server()
+    monitor.view_server_instances()
 
 def manage_vps():
     vpsmanager = st.session_state.vpsmanager
@@ -493,7 +496,10 @@ def manage_vps():
         })
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
         monitor.server = server
+        monitor.servers = []
+        monitor.servers.append(monitor.server)
         monitor.view_server()
+        monitor.view_server_instances()
         logs = ["logs/PBCoinData.log", "logs/PBRun.log", "logs/PBRemote.log", "logs/sync.log"] + monitor.logfiles
         view_log(vps, logs)
 
