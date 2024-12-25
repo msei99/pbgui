@@ -150,6 +150,11 @@ def pbremote_details():
         st.markdown("""---""")
         st.markdown("Remote Servers")
         api_sync = []
+        if st.button(f'View All Instances'):
+            if "server" in st.session_state:
+                del st.session_state.server
+            monitor.servers = st.session_state.pbremote.remote_servers
+            st.rerun()
         for rserver in sorted(st.session_state.pbremote.remote_servers, key=lambda s: s.name):
             if rserver.is_online():
                 color = "green"
@@ -213,6 +218,11 @@ def pbremote_details():
     if "server" in st.session_state:
         monitor.server = st.session_state.server
         monitor.view_server()
+        monitor.servers = []
+        monitor.servers.append(monitor.server)
+        monitor.view_server_instances()
+    elif monitor.servers:
+        monitor.view_server_instances()
     else:
         st.info("Please select a remote server from the sidebar to view details.")
 
