@@ -243,6 +243,23 @@ def edit_instance():
             st.number_input("PRICE_DISTANCE_THRESHOLD", key="live_price_distance_threshold", min_value=0.00, step=0.05, value=instance.price_distance_threshold, help=pbgui_help.price_distance_threshold)
             st.number_input("PRICE_PRECISION_MULTIPLIER", key="live_price_precision", format="%.4f", min_value=0.0000, step=0.0001, value=instance.price_precision, help=pbgui_help.price_precision)
             st.number_input("PRICE_STEP_CUSTOM", key="live_price_step", format="%.3f", min_value=0.000, step=0.001, value=instance.price_step, help=pbgui_help.price_step)
+    # Setup v7 config
+    if not instance.multi:
+        # Live Settings
+        instance._config._config_v7.live.approved_coins = [instance.symbol]
+        instance._config._config_v7.live.leverage = instance.leverage
+        instance._config._config_v7.live.price_distance_threshold = instance.price_distance_threshold
+        instance._config._config_v7.live.user = instance.user
+        # Long Settings
+        instance._config._config_v7.bot.long.filter_relative_volume_clip_pct = 0.0
+        instance._config._config_v7.bot.long.filter_rolling_window = 0
+        instance._config._config_v7.bot.long.unstuck_loss_allowance_pct = 0.05
+        instance._config._config_v7.bot.long.unstuck_threshold = 0.90
+        # Short Settings
+        instance._config._config_v7.bot.short.filter_relative_volume_clip_pct = 0.0
+        instance._config._config_v7.bot.short.filter_rolling_window = 0
+        instance._config._config_v7.bot.short.unstuck_loss_allowance_pct = 0.10
+        instance._config._config_v7.bot.short.unstuck_threshold = 0.90
     instance.edit_config()
     if instance.preview_grid:
         instance.view_grid()

@@ -778,6 +778,17 @@ class MultiInstance():
                 if "edit" in ed["edited_rows"][row]:
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == self._symbols[row]:
+                            instance._config._config_v7 = self.default_config._config_v7
+                            if instance._config.long_enabled:
+                                instance._config._config_v7.bot.long.n_positions = 1.0
+                            else:
+                                instance._config._config_v7.bot.long.n_positions = 0.0
+                            if instance._config.short_enabled:
+                                instance._config._config_v7.bot.short.n_positions = 1.0
+                            else:
+                                instance._config._config_v7.bot.short.n_positions = 0.0
+                            instance._config._config_v7.bot.long.total_wallet_exposure_limit = instance._config.long_we
+                            instance._config._config_v7.bot.short.total_wallet_exposure_limit = instance._config.short_we
                             st.session_state.edit_instance = instance
                             st.switch_page(get_navi_paths()["V6_SINGLE_RUN"])
                     # Edit Symbol config without single instance
@@ -787,6 +798,11 @@ class MultiInstance():
                     config_file = Path(f'{self.instance_path}/{self._symbols[row]}.json')
                     config = Config(config_file)
                     config.load_config()
+                    config._config_v7 = self.default_config._config_v7
+                    config._config_v7.bot.long.n_positions = 1.0
+                    config._config_v7.bot.short.n_positions = 1.0
+                    config._config_v7.bot.long.total_wallet_exposure_limit = config.long_we
+                    config._config_v7.bot.short.total_wallet_exposure_limit = config.short_we
                     st.session_state.edit_multi_config = config
                     st.rerun()
         slist = []
@@ -935,13 +951,17 @@ class MultiInstance():
                             slist[id]["long_we"] = self.TWE_long / (self.n_longs - inactive_long)
                         if self.n_shorts - inactive_short > 0:
                             slist[id]["short_we"] = self.TWE_short / (self.n_shorts - inactive_short)
-        # Calculate real TWE with inactive symbols
+        # Calculate real TWE with inactive symbols and n_positions for v7 config
+        v7_long_n_positions = not_defaults_long
         if self.n_longs > 0:
             if self.n_longs > not_defaults_long:
+                v7_long_n_positions = self._n_longs
                 if (self.n_longs - inactive_long) * (self.n_longs - inactive_long - not_defaults_long) > 0:
                     real_TWE_long +=  self.TWE_long / (self.n_longs - inactive_long) * (self.n_longs - inactive_long - not_defaults_long)
+        v7_short_n_positions = not_defaults_short
         if self.n_shorts > 0:
             if self.n_shorts > not_defaults_short:
+                v7_short_n_positions = self._n_shorts
                 if (self.n_shorts - inactive_short) * (self.n_shorts - inactive_short - not_defaults_short) > 0:
                     real_TWE_short +=  self.TWE_short / (self.n_shorts - inactive_short) * (self.n_shorts - inactive_short - not_defaults_short)
         column_config = {
@@ -1085,6 +1105,50 @@ class MultiInstance():
                 config_type_index = 0
             st.radio("Select config type", ["default", "universal"], index=config_type_index, key="edit_multi_config_type", help=pbgui_help.multi_config_type,  captions=None, label_visibility="visible")
             if st.session_state.edit_multi_config_type == "default":
+                # Long settings
+                self.default_config._config_v7.bot.long.n_positions = v7_long_n_positions
+                self.default_config._config_v7.bot.long.total_wallet_exposure_limit = real_TWE_long
+                self.default_config._config_v7.bot.long.filter_relative_volume_clip_pct = self.relative_volume_filter_clip_pct
+                self.default_config._config_v7.bot.long.unstuck_loss_allowance_pct = self.loss_allowance_pct
+                self.default_config._config_v7.bot.long.unstuck_threshold = self.stuck_threshold
+                # Short settings
+                self.default_config._config_v7.bot.short.n_positions = v7_short_n_positions
+                self.default_config._config_v7.bot.short.total_wallet_exposure_limit = real_TWE_short
+                self.default_config._config_v7.bot.short.filter_relative_volume_clip_pct = self.relative_volume_filter_clip_pct
+                self.default_config._config_v7.bot.short.unstuck_loss_allowance_pct = self.loss_allowance_pct
+                self.default_config._config_v7.bot.short.unstuck_threshold = self.stuck_threshold
+                # Rolling Windows for long and short
+                if self.ohlcv_interval == "5m":
+                    self.default_config._config_v7.bot.long.filter_rolling_window = self.n_ohlcvs * 5
+                    self.default_config._config_v7.bot.short.filter_rolling_window = self.n_ohlcvs * 5
+                elif self.ohlcv_interval == "15m":
+                    self.default_config._config_v7.bot.long.filter_rolling_window = self.n_ohlcvs * 15
+                    self.default_config._config_v7.bot.short.filter_rolling_window = self.n_ohlcvs * 15
+                elif self.ohlcv_interval == "1h":
+                    self.default_config._config_v7.bot.long.filter_rolling_window = self.n_ohlcvs * 60
+                    self.default_config._config_v7.bot.short.filter_rolling_window = self.n_ohlcvs * 60
+                elif self.ohlcv_interval == "4h":
+                    self.default_config._config_v7.bot.long.filter_rolling_window = self.n_ohlcvs * 240
+                    self.default_config._config_v7.bot.short.filter_rolling_window = self.n_ohlcvs * 240
+                elif self.ohlcv_interval == "1d":
+                    self.default_config._config_v7.bot.long.filter_rolling_window = self.n_ohlcvs * 1440
+                    self.default_config._config_v7.bot.short.filter_rolling_window = self.n_ohlcvs * 1440
+                # Live Settings
+                self.default_config._config_v7.live.approved_coins = self._symbols
+                self.default_config._config_v7.live.ignored_coins = self._ignored_symbols
+                self.default_config._config_v7.live.auto_gs = self.auto_gs
+                self.default_config._config_v7.live.execution_delay_seconds = self.execution_delay_seconds
+                self.default_config._config_v7.live.leverage = self.leverage
+                self.default_config._config_v7.live.max_n_cancellations_per_batch = self.max_n_cancellations_per_batch
+                self.default_config._config_v7.live.max_n_creations_per_batch = self.max_n_creations_per_batch
+                self.default_config._config_v7.live.minimum_coin_age_days = self.minimum_market_age_days
+                self.default_config._config_v7.live.pnls_max_lookback_days = self.pnls_max_lookback_days
+                self.default_config._config_v7.live.price_distance_threshold = self.price_distance_threshold
+                self.default_config._config_v7.live.user = self.user
+                # PBGui Filters
+                self.default_config._config_v7.pbgui.dynamic_ignore = self.dynamic_ignore
+                self.default_config._config_v7.pbgui.market_cap = self.market_cap
+                self.default_config._config_v7.pbgui.vol_mcap = self.vol_mcap
                 self.default_config.edit_config()
             else:
                 height = 600
