@@ -16,6 +16,9 @@ class Config:
         self._short_enabled = False
         self._type = None
         self._preview_grid = False
+        self._config_v7 = ConfigV7()
+        self._config_v7.bot.long.n_positions = 1.0
+        self._config_v7.bot.short.n_positions = 1.0
         if config:
             self.config = config
         else:
@@ -34,6 +37,60 @@ class Config:
         
     @property
     def config(self): return self._config
+
+    @property
+    def config_v7(self):
+        if self._config:
+            # long settings
+            self._config_v7.bot.long.close_grid_markup_range = json.loads(self._config)["long"]["markup_range"]
+            self._config_v7.bot.long.close_grid_min_markup = json.loads(self._config)["long"]["min_markup"]
+            self._config_v7.bot.long.close_grid_qty_pct = 1.0 / float(json.loads(self._config)["long"]["n_close_orders"])
+            self._config_v7.bot.long.close_trailing_grid_ratio = 0
+            self._config_v7.bot.long.close_trailing_qty_pct = 1
+            self._config_v7.bot.long.close_trailing_retracement_pct = 0
+            self._config_v7.bot.long.close_trailing_threshold_pct = 0
+            self._config_v7.bot.long.ema_span_0 = json.loads(self._config)["long"]["ema_span_0"]
+            self._config_v7.bot.long.ema_span_1 = json.loads(self._config)["long"]["ema_span_1"]
+            self._config_v7.bot.long.entry_grid_double_down_factor = json.loads(self._config)["long"]["ddown_factor"]
+            self._config_v7.bot.long.entry_grid_spacing_pct = json.loads(self._config)["long"]["rentry_pprice_dist"]
+            self._config_v7.bot.long.entry_grid_spacing_weight = json.loads(self._config)["long"]["rentry_pprice_dist_wallet_exposure_weighting"]
+            self._config_v7.bot.long.entry_initial_ema_dist = json.loads(self._config)["long"]["initial_eprice_ema_dist"]
+            self._config_v7.bot.long.entry_initial_qty_pct = json.loads(self._config)["long"]["initial_qty_pct"]
+            self._config_v7.bot.long.entry_trailing_grid_ratio = 0
+            self._config_v7.bot.long.entry_trailing_retracement_pct = 0
+            self._config_v7.bot.long.entry_trailing_threshold_pct = 0
+            # self._config_v7.bot.long.total_wallet_exposure_limit = json.loads(self._config)["long"]["wallet_exposure_limit"]
+            try:
+                self._config_v7.bot.long.unstuck_close_pct = json.loads(self._config)["long"]["auto_unstuck_qty_pct"]
+            except:
+                self._config_v7.bot.long.unstuck_close_pct = 0.025
+            self._config_v7.bot.long.unstuck_ema_dist = json.loads(self._config)["long"]["auto_unstuck_ema_dist"]
+            # short settings
+            self._config_v7.bot.short.close_grid_markup_range = json.loads(self._config)["short"]["markup_range"]
+            self._config_v7.bot.short.close_grid_min_markup = json.loads(self._config)["short"]["min_markup"]
+            self._config_v7.bot.short.close_grid_qty_pct = 1.0 / float(json.loads(self._config)["short"]["n_close_orders"])
+            self._config_v7.bot.short.close_trailing_grid_ratio = 0
+            self._config_v7.bot.short.close_trailing_qty_pct = 1
+            self._config_v7.bot.short.close_trailing_retracement_pct = 0
+            self._config_v7.bot.short.close_trailing_threshold_pct = 0
+            self._config_v7.bot.short.ema_span_0 = json.loads(self._config)["short"]["ema_span_0"]
+            self._config_v7.bot.short.ema_span_1 = json.loads(self._config)["short"]["ema_span_1"]
+            self._config_v7.bot.short.entry_grid_double_down_factor = json.loads(self._config)["short"]["ddown_factor"]
+            self._config_v7.bot.short.entry_grid_spacing_pct = json.loads(self._config)["short"]["rentry_pprice_dist"]
+            self._config_v7.bot.short.entry_grid_spacing_weight = json.loads(self._config)["short"]["rentry_pprice_dist_wallet_exposure_weighting"]
+            self._config_v7.bot.short.entry_initial_ema_dist = json.loads(self._config)["short"]["initial_eprice_ema_dist"]
+            self._config_v7.bot.short.entry_initial_qty_pct = json.loads(self._config)["short"]["initial_qty_pct"]
+            self._config_v7.bot.short.entry_trailing_grid_ratio = 0
+            self._config_v7.bot.short.entry_trailing_retracement_pct = 0
+            self._config_v7.bot.short.entry_trailing_threshold_pct = 0
+            # self._config_v7.bot.short.total_wallet_exposure_limit = json.loads(self._config)["short"]["wallet_exposure_limit"]
+            try:
+                self._config_v7.bot.short.unstuck_close_pct = json.loads(self._config)["short"]["auto_unstuck_qty_pct"]
+            except:
+                self._config_v7.bot.short.unstuck_close_pct = 0.025
+            self._config_v7.bot.short.unstuck_ema_dist = json.loads(self._config)["short"]["auto_unstuck_ema_dist"]
+            return json.dumps(self._config_v7.config, indent=4)
+        return None
 
     @config.setter
     def config(self, new_config):
@@ -72,6 +129,11 @@ class Config:
             t = json.loads(self._config)
             t["long"]["enabled"] = self._long_enabled
             self._config = config_pretty_str(t)
+            self._config_v7.bot.long.total_wallet_exposure_limit = self.long_we
+            if self.long_enabled:
+                self._config_v7.bot.long.n_positions = 1.0
+            else:
+                self._config_v7.bot.long.n_positions = 0.0
 
     @property
     def short_enabled(self): return self._short_enabled
@@ -83,6 +145,11 @@ class Config:
             t = json.loads(self._config)
             t["short"]["enabled"] = self._short_enabled
             self._config = config_pretty_str(t)
+            self._config_v7.bot.short.total_wallet_exposure_limit = self.short_we
+            if self.short_enabled:
+                self._config_v7.bot.short.n_positions = 1.0
+            else:
+                self._config_v7.bot.short.n_positions = 0.0
 
     @property
     def short_we(self): return self._short_we
@@ -104,8 +171,14 @@ class Config:
     def update_config(self):
         self.long_we = json.loads(self._config)["long"]["wallet_exposure_limit"]
         self.short_we = json.loads(self._config)["short"]["wallet_exposure_limit"]
+        self._config_v7.bot.long.total_wallet_exposure_limit = self.long_we
+        self._config_v7.bot.short.total_wallet_exposure_limit = self.short_we
         self.long_enabled = json.loads(self._config)["long"]["enabled"]
         self.short_enabled = json.loads(self._config)["short"]["enabled"]
+        if not self.long_enabled:
+            self._config_v7.bot.long.n_positions = 0.0
+        if not self.short_enabled:
+            self._config_v7.bot.short.n_positions = 0.0
         long = json.loads(self._config)["long"]
         if "ddown_factor" in long:
             self._type = "recursive_grid"
@@ -188,10 +261,14 @@ class Config:
             height = 600
         if not self.config:
             color = "red"
-        if color:
-            st.text_area(f':{color}[config]', self.config, key="config_instance_config", height=height)
-        else:
-            st.text_area(f'config', self.config, key="config_instance_config", height=height)
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if color:
+                st.text_area(f':{color}[config]', self.config, key="config_instance_config", height=height)
+            else:
+                st.text_area(f'config', self.config, key="config_instance_config", height=height)
+        with col2:
+            st.text_area(f'config converted to v7', self.config_v7, key="config_instance_config_v7", height=height, disabled=True)
 
 # config template
 # {"backtest": {"base_dir": "backtests",
