@@ -253,7 +253,7 @@ def edit_instance():
         # Long Settings
         instance._config._config_v7.bot.long.filter_relative_volume_clip_pct = 0.0
         instance._config._config_v7.bot.long.filter_rolling_window = 0
-        instance._config._config_v7.bot.long.unstuck_loss_allowance_pct = 0.05
+        instance._config._config_v7.bot.long.unstuck_loss_allowance_pct = 0.10
         instance._config._config_v7.bot.long.unstuck_threshold = 0.90
         # Short Settings
         instance._config._config_v7.bot.short.filter_relative_volume_clip_pct = 0.0
