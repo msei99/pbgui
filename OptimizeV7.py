@@ -724,7 +724,7 @@ class OptimizeV7Item:
         with col3:
             st.number_input("mutation_probability", min_value=0.0, max_value=1.0, value=self.config.optimize.mutation_probability, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
         with col4:
-            st.multiselect("scoring", ["adg","mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio"], max_selections=2, default=self.config.optimize.scoring, key="edit_opt_v7_scoring")
+            st.multiselect("scoring", ["adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio", "gain"], max_selections=2, default=self.config.optimize.scoring, key="edit_opt_v7_scoring")
         # Filters
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
