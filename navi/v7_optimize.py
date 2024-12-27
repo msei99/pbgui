@@ -44,6 +44,21 @@ def opt_v7():
                     info_popup("Name is empty")
                 elif not opt_v7.config.config_file:
                     info_popup("Optimize not saved")
+        
+        st.markdown("---")
+        st.selectbox('Preset...',opt_v7.find_presets(), key="opt_v7_preset_select")
+        col1, col2, col3 = st.columns(3)
+        # Load, Save, Delete Buttons 
+        if col1.button(":material/folder: Load", key="opt_v7_preset_load"):
+            opt_v7.preset_load(st.session_state.opt_v7_preset_select)
+            st.rerun()
+        if col2.button(":material/save: Save", key="opt_v7_preset_save"):
+            opt_v7.preset_save()
+            st.rerun()
+        if col3.button(":material/delete: Del", key="opt_v7_preset_delete"):
+            opt_v7.preset_remove(st.session_state.opt_v7_preset_select)
+            st.rerun()
+
     st.subheader(f"Create/Edit: {opt_v7.name}")
     opt_v7.edit()
 
