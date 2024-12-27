@@ -384,7 +384,7 @@ class OptimizeV7Results:
         if self.results_path.exists():
             p = str(self.results_path) + "/*.txt"
             self.results = glob.glob(p, recursive=False)
-
+    
     def find_result_name(self, result_file):
         with open(result_file, "r", encoding='utf-8') as f:
             first_line = f.readline()
@@ -567,7 +567,41 @@ class OptimizeV7Item:
         self.config.backtest.start_date = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.config.backtest.end_date = datetime.date.today().strftime("%Y-%m-%d")
         self.config.optimize.n_cpus = multiprocessing.cpu_count()
+    
+    def find_presets(self):
+        dest = Path(f'{PBGDIR}/data/opt_v7_presets')
+        p = str(Path(f'{dest}/*.json'))
+        presets = glob.glob(p)
+        presets = [PurePath(p).stem for p in presets]
+        return presets
+    
+    def preset_load(self, preset):
+        dest = Path(f'{PBGDIR}/data/opt_v7_presets')
+        file = Path(f'{dest}/{preset}.json')
+        self.name = PurePath(preset).stem
+        self.config = ConfigV7()
+        self.config.config_file = file
+        self.config.load_config()
         
+    def preset_save(self) -> bool:
+        dest = Path(f'{PBGDIR}/data/opt_v7_presets')
+        if not dest.exists():
+            dest.mkdir(parents=True)
+        
+        # Prevent creating directories with / in the name
+        self.name = self.name.replace("/", "_")
+        
+        file = Path(f'{dest}/{self.name}.json')
+
+        self.config.config_file = file
+        self.config.save_config()
+        return True
+    
+    def preset_remove(self, preset):
+        dest = Path(f'{PBGDIR}/data/opt_v7_presets')
+        file = Path(f'{dest}/{preset}.json')
+        file.unlink(missing_ok=True)
+                
     def edit(self):
         # Init coindata
         if "coindata_bybit" not in st.session_state:
