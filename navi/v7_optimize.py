@@ -53,8 +53,8 @@ def opt_v7():
             opt_v7.preset_load(st.session_state.opt_v7_preset_select)
             st.rerun()
         if col2.button(":material/save: Save", key="opt_v7_preset_save"):
-            opt_v7.preset_save()
-            st.rerun()
+            if opt_v7.preset_save():
+                st.rerun()
         if col3.button(":material/delete: Del", key="opt_v7_preset_delete"):
             opt_v7.preset_remove(st.session_state.opt_v7_preset_select)
             st.rerun()
