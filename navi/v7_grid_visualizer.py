@@ -840,7 +840,7 @@ def show_visualizer():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        json_str = st.text_area("", data.to_json(), height=1000)
+        json_str = st.text_area("hidden",data.to_json(), height=1000, label_visibility = "collapsed")
         if st.button("Apply"):
             data = GVData.from_json(json_str)
             st.session_state.v7_grid_visualizer_data = data
