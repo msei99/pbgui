@@ -84,7 +84,7 @@ sudo apt-get install rustc
 sudo apt-get install cargo
 maturin develop --release
 deactivate
-cd ..
+cd ../..
 source venv_pbgui/bin/activate
 cd pbgui
 pip install --upgrade pip
@@ -210,9 +210,9 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.32 (26-12-2024)
-- Coverter for pb6 to pb7 configurations
+- Converter for pb6 to pb7 configurations
 - View Monitor for all VPS on one Page
-- Small bugfixes
+- Small Bugfixes
 
 ## v1.31 (16-12-2024)
 - Added coin_flags to pb7 run
