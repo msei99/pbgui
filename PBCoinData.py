@@ -90,16 +90,20 @@ class CoinData:
         self.api_error = None
         self._fetch_limit = 5000
         self._fetch_interval = 24
+        self._metadata_interval = 1
         self.ini_ts = 0
         self.load_config()
         self.data = None
+        self.metadata = None
         self.data_ts = 0
+        self.metadata_ts = 0
         self._exchange = Exchanges.list()[0]
         self.exchanges = Exchanges.list()
         self.exchange_index = self.exchanges.index(self.exchange)
         self.update_symbols_ts = 0
         self._symbols = []
         self._symbols_cpt = []
+        self._symbols_all = []
         self._symbols_data = []
         self.approved_coins = []
         self.ignored_coins = []
@@ -132,6 +136,13 @@ class CoinData:
         self._fetch_interval = new_fetch_interval
 
     @property
+    def metadata_interval(self):
+        return self._metadata_interval
+    @metadata_interval.setter
+    def metadata_interval(self, new_metadata_interval):
+        self._metadata_interval = new_metadata_interval
+
+    @property
     def exchange(self):
         return self._exchange
     @exchange.setter
@@ -151,6 +162,12 @@ class CoinData:
         if not self._symbols_cpt:
             self.load_symbols()
         return self._symbols_cpt
+
+    @property
+    def symbols_all(self):
+        if not self._symbols_all:
+            self.load_symbols_all()
+        return self._symbols_all
 
     @property
     def symbols_data(self):
@@ -269,6 +286,17 @@ class CoinData:
                 return False
         return True
 
+    def has_new_metadata(self):
+        pbgdir = Path.cwd()
+        coin_path = f'{pbgdir}/data/coindata'
+        if Path(f'{coin_path}/metadata.json').exists():
+            metadata_ts = Path(f'{coin_path}/metadata.json').stat().st_mtime
+            if metadata_ts > self.metadata_ts:
+                return True
+            else:
+                return False
+        return True
+
     def load_config(self):
         if self.has_new_config():
             pb_config = configparser.ConfigParser()
@@ -279,6 +307,8 @@ class CoinData:
                 self._fetch_limit = int(pb_config.get("coinmarketcap", "fetch_limit"))
             if pb_config.has_option("coinmarketcap", "fetch_interval"):
                 self._fetch_interval = int(pb_config.get("coinmarketcap", "fetch_interval"))
+            if pb_config.has_option("coinmarketcap", "metadata_interval"):
+                self._metadata_interval = int(pb_config.get("coinmarketcap", "metadata_interval"))
     
     def save_config(self):
         pb_config = configparser.ConfigParser()
@@ -288,6 +318,7 @@ class CoinData:
         pb_config.set("coinmarketcap", "api_key", self.api_key)
         pb_config.set("coinmarketcap", "fetch_limit", str(self.fetch_limit))
         pb_config.set("coinmarketcap", "fetch_interval", str(self.fetch_interval))
+        pb_config.set("coinmarketcap", "metadata_interval", str(self.metadata_interval))
         with open('pbgui.ini', 'w') as pbgui_configfile:
             pb_config.write(pbgui_configfile)
 
@@ -338,6 +369,54 @@ class CoinData:
         except (ConnectionError, Timeout, TooManyRedirects) as e:
             return e
     
+    def fetch_metadata(self):
+        # make sure we have the latest coindata
+        if self.has_new_data():
+            self.load_data()
+            self.load_symbols()
+        if not self.data:
+            return
+        if "data" not in self.data:
+            return
+        # Create symbols_ids list
+        symbols_ids = []
+        for symbol in self.symbols_all:
+            sym = symbol[0:-4]
+            if sym in SYMBOLMAP:
+                sym = SYMBOLMAP[sym]
+            for coin in self.data["data"]:
+                if coin["symbol"] == sym:
+                    symbols_ids.append(coin["id"])
+        # Fetch notice from coinmarketcap
+        url = 'https://pro-api.coinmarketcap.com//v2/cryptocurrency/info'
+        parameters = {
+            'id': ','.join(map(str, symbols_ids))
+        }
+        headers = {
+            'Accepts': 'application/json',
+            'X-CMC_PRO_API_KEY': self.api_key,
+        }
+        session = Session()
+        session.headers.update(headers)
+        try:
+            response = session.get(url, params=parameters)
+            if response.status_code == 200:
+                self.metadata = json.loads(response.text)
+            else:
+                self.metadata = None
+        except (ConnectionError, Timeout, TooManyRedirects) as e:
+            return e
+
+    def save_metadata(self):
+        if not self.metadata:
+            return
+        pbgdir = Path.cwd()
+        coin_path = f'{pbgdir}/data/coindata'
+        if not Path(coin_path).exists():
+            Path(coin_path).mkdir(parents=True)
+        with Path(f'{coin_path}/metadata.json').open('w') as f:
+            json.dump(self.metadata, f)
+
     def save_data(self):
         if not self.data:
             return
@@ -351,24 +430,49 @@ class CoinData:
     def load_data(self):
         pbgdir = Path.cwd()
         coin_path = f'{pbgdir}/data/coindata'
+        data_ts = 0
         if Path(f'{coin_path}/coindata.json').exists():
             data_ts = Path(f'{coin_path}/coindata.json').stat().st_mtime
-            now_ts = datetime.now().timestamp()
-            if data_ts > now_ts - 3600*self.fetch_interval or not self.data:
-                retries = 3
-                while retries > 0:
-                    try:
-                        with Path(f'{coin_path}/coindata.json').open() as f:
-                            self.data = json.load(f)
-                            self.data_ts = data_ts
-                            return
-                    except Exception as e:
-                        print(f'Error loading coindata: {e}. Retrying in 5 seconds...')
-                        sleep(5)
-                        retries -= 1
-        self.fetch_data()
-        self.save_data()
+        now_ts = datetime.now().timestamp()
+        if data_ts < now_ts - 3600*self.fetch_interval:
+            self.fetch_data()
+            self.save_data()
+        if not self.data:
+            retries = 3
+            while retries > 0:
+                try:
+                    with Path(f'{coin_path}/coindata.json').open() as f:
+                        self.data = json.load(f)
+                        self.data_ts = data_ts
+                        return
+                except Exception as e:
+                    print(f'Error loading coindata: {e}. Retrying in 5 seconds...')
+                    sleep(5)
+                    retries -= 1
     
+    def load_metadata(self):
+        pbgdir = Path.cwd()
+        coin_path = f'{pbgdir}/data/coindata'
+        metadata_ts = 0
+        if Path(f'{coin_path}/metadata.json').exists():
+            metadata_ts = Path(f'{coin_path}/metadata.json').stat().st_mtime
+        now_ts = datetime.now().timestamp()
+        if metadata_ts < now_ts - 3600*24*self.metadata_interval:
+            self.fetch_metadata()
+            self.save_metadata()
+        if not self.metadata:
+            retries = 3
+            while retries > 0:
+                try:
+                    with Path(f'{coin_path}/metadata.json').open() as f:
+                        self.metadata = json.load(f)
+                        self.metadata_ts = metadata_ts
+                        return
+                except Exception as e:
+                    print(f'Error loading metadata: {e}. Retrying in 5 seconds...')
+                    sleep(5)
+                    retries -= 1
+
     def is_data_fresh(self):
         pbgdir = Path.cwd()
         coin_path = f'{pbgdir}/data/coindata'
@@ -379,6 +483,16 @@ class CoinData:
                 return True
         return
     
+    def is_metadata_fresh(self):
+        pbgdir = Path.cwd()
+        coin_path = f'{pbgdir}/data/coindata'
+        if Path(f'{coin_path}/metadata.json').exists():
+            data_ts = Path(f'{coin_path}/metadata.json').stat().st_mtime
+            now_ts = datetime.now().timestamp()
+            if data_ts > now_ts - 3600*24*self.metadata_interval:
+                return True
+        return
+
     def update_symbols(self):
         now_ts = datetime.now().timestamp()
         if self.update_symbols_ts < now_ts - 3600*24:
@@ -387,6 +501,9 @@ class CoinData:
                 exc.fetch_symbols()
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange}')
             self.update_symbols_ts = now_ts
+            self._symbols = []
+            self._symbols_cpt = []
+            self._symbols_all = []
 
     def load_symbols(self):
         pb_config = configparser.ConfigParser()
@@ -400,6 +517,16 @@ class CoinData:
                 return
         self._symbols_cpt = self._symbols
     
+    def load_symbols_all(self):
+        self._symbols_all = []
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        for exchange in self.exchanges:
+            if pb_config.has_option("exchanges", f'{exchange}.swap'):
+                # add symbol from symbols to symbols_all if not already in symbols_all
+                self._symbols_all += eval(pb_config.get("exchanges", f'{exchange}.swap'))
+        self._symbols_all = sorted(list(set(self._symbols_all)))
+
     def list_symbols(self):
         if self.has_new_data():
             self.load_data()
@@ -407,6 +534,12 @@ class CoinData:
         if not self.data:
             return
         if "data" not in self.data:
+            return
+        if self.has_new_metadata():
+            self.load_metadata()
+        if not self.metadata:
+            return
+        if "data" not in self.metadata:
             return
         self._symbols_data = []
         self.approved_coins = []
@@ -429,6 +562,11 @@ class CoinData:
                         break
             if symbol not in self._symbols_data:
                 if market_cap > 0:
+                    notice = None
+                    # Find metadata for coin
+                    symbol_id = str(coin_data["id"])
+                    if symbol_id in self.metadata["data"]:
+                        notice = self.metadata["data"][symbol_id]["notice"]
                     symbol_data = {
                         "id": id,
                         "symbol": symbol,
@@ -439,6 +577,7 @@ class CoinData:
                         "market_cap": int(market_cap),
                         "vol/mcap": coin_data["quote"]["USD"]["volume_24h"]/market_cap,
                         "copy_trading": symbol in self.symbols_cpt,
+                        "notice": notice,
                         "link": f'https://coinmarketcap.com/currencies/{coin_data["slug"]}',
                     }
                 else:
@@ -452,6 +591,7 @@ class CoinData:
                         "market_cap": 0,
                         "vol/mcap": 0,
                         "copy_trading": symbol in self.symbols_cpt,
+                        "notice": None,
                         "link": None,
                     }
                 for tag in symbol_data["tags"]:
@@ -497,8 +637,8 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBCoinData.log')
-    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    # sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    # sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBCoinData')
     pbcoindata = CoinData()
     if pbcoindata.is_running():
@@ -522,6 +662,13 @@ def main():
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap data. Credits left this month: {pbcoindata.credits_left}')
                 else:
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data')
+            if not pbcoindata.is_metadata_fresh():
+                pbcoindata.load_metadata()
+                if pbcoindata.is_metadata_fresh():
+                    pbcoindata.fetch_api_status()
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap metadata. Credits left this month: {pbcoindata.credits_left}')
+                else:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap metadata')
             sleep(60)
             pbcoindata.load_config()
         except Exception as e:
