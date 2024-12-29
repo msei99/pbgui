@@ -1020,6 +1020,14 @@ coindata_fetch_interval = """
     You need 1 credit for 200 coins. So count your coins and interval to not exceed the limit.
     ```"""
 
+coindata_metadata_interval = """
+    ```
+    interval in days to fetch metadata from CoinMarketCap
+    Make sure to not exceed the Basic Plan limit of 10'000 api calls per month.
+    You need 1 credit for 100 coins. So count your coins and interval to not exceed the limit.
+    ```"""
+
+
 approved_coins = """
     ```
     list of approved coins to trade

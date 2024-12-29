@@ -69,10 +69,14 @@ def setup_coindata():
     if "edit_coindata_fetch_interval" in st.session_state:
         if st.session_state.edit_coindata_fetch_interval != coindata.fetch_interval:
             coindata.fetch_interval = st.session_state.edit_coindata_fetch_interval
+    if "edit_coindata_metadata_interval" in st.session_state:
+        if st.session_state.edit_coindata_metadata_interval != coindata.metadata_interval:
+            coindata.metadata_interval = st.session_state.edit_coindata_metadata_interval
     # Edit
     st.text_input("CoinMarketCap API_Key", value=coindata.api_key, type="password", key="edit_coindata_api_key", help=pbgui_help.coindata_api_key)
     st.number_input("Fetch Limit", min_value=200, max_value=5000, value=coindata.fetch_limit, step=200, format="%.d", key="edit_coindata_fetch_limit", help=pbgui_help.coindata_fetch_limit)
     st.number_input("Fetch Interval", min_value=1, max_value=24, value=coindata.fetch_interval, step=1, format="%.d", key="edit_coindata_fetch_interval", help=pbgui_help.coindata_fetch_interval)
+    st.number_input("Metadata Interval", min_value=1, max_value=7, value=coindata.metadata_interval, step=1, format="%.d", help=pbgui_help.coindata_metadata_interval)
     if coindata.api_key:
         if coindata.fetch_api_status():
             st.success("API Key is valid", icon="✅")
