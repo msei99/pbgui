@@ -41,6 +41,11 @@ class Config:
     @property
     def config_v7(self):
         if self._config:
+            # Check if config is a recursive grid config
+            config = json.loads(self._config)
+            if "long" in config:
+                if not "ddown_factor" in config["long"]:
+                    return None
             # long settings
             self._config_v7.bot.long.close_grid_markup_range = json.loads(self._config)["long"]["markup_range"]
             self._config_v7.bot.long.close_grid_min_markup = json.loads(self._config)["long"]["min_markup"]
