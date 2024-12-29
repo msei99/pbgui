@@ -578,12 +578,19 @@ class OptimizeV7Item:
     def preset_load(self, preset):
         dest = Path(f'{PBGDIR}/data/opt_v7_presets')
         file = Path(f'{dest}/{preset}.json')
-        self.name = PurePath(preset).stem
         self.config = ConfigV7()
         self.config.config_file = file
         self.config.load_config()
         
+        self.name = ""
+        if "edit_opt_v7_name" in st.session_state:
+            st.session_state.edit_opt_v7_name = self.name
+        
     def preset_save(self) -> bool:
+        if self.name == "":
+            error_popup("Name is empty")
+            return False
+        
         dest = Path(f'{PBGDIR}/data/opt_v7_presets')
         if not dest.exists():
             dest.mkdir(parents=True)
@@ -593,6 +600,10 @@ class OptimizeV7Item:
         
         file = Path(f'{dest}/{self.name}.json')
 
+        if file.exists():
+            error_popup("File exists. Remove first.")
+            return False
+            
         self.config.config_file = file
         self.config.save_config()
         return True
