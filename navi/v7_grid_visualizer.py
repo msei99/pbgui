@@ -751,13 +751,13 @@ def create_statistics(side: OrderType, data: GVData):
             "Close: Grid Size",
         ],
         "Value": [
-            data.long_entry_mode.name if title_side == "LONG" else data.short_entry_mode.name,
-            entry_count,
-            avg_entry_price if avg_entry_price is not None else "N/A",
+            str(data.long_entry_mode.name if title_side == "LONG" else data.short_entry_mode.name),
+            str(entry_count),
+            str(avg_entry_price) if avg_entry_price is not None else "N/A", 
             f"{int(data.long_entry_grid)}%" if title_side == "LONG" else f"{int(data.short_entry_grid)}%",
-            data.long_close_mode.name if title_side == "LONG" else data.short_close_mode.name,
-            close_count,
-            avg_close_price if avg_close_price is not None else "N/A",
+            str(data.long_close_mode.name if title_side == "LONG" else data.short_close_mode.name),
+            str(close_count),
+            str(avg_close_price) if avg_close_price is not None else "N/A",
             f"{int(data.long_close_grid)}%" if title_side == "LONG" else f"{int(data.short_close_grid)}%",
         ]
     }
