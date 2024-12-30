@@ -581,8 +581,8 @@ class OptimizeV7Item:
         self.config = ConfigV7()
         self.config.config_file = file
         self.config.load_config()
+        self.name = PurePath(self.config.config_file).stem
         
-        self.name = ""
         if "edit_opt_v7_name" in st.session_state:
             st.session_state.edit_opt_v7_name = self.name
         
@@ -598,12 +598,7 @@ class OptimizeV7Item:
         # Prevent creating directories with / in the name
         self.name = self.name.replace("/", "_")
         
-        file = Path(f'{dest}/{self.name}.json')
-
-        if file.exists():
-            error_popup("File exists. Remove first.")
-            return False
-            
+        file = Path(f'{dest}/{self.name}.json')   
         self.config.config_file = file
         self.config.save_config()
         return True
