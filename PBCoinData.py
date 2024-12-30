@@ -104,6 +104,8 @@ class CoinData:
         self._symbols = []
         self._symbols_cpt = []
         self._symbols_all = []
+        self._symbols_notice = []
+        self._symbols_notices = {}
         self._symbols_data = []
         self.approved_coins = []
         self.ignored_coins = []
@@ -113,6 +115,7 @@ class CoinData:
         self._market_cap = 0
         self._vol_mcap = 10.0
         self._only_cpt = False
+        self._notices_ignore = False
     
     @property
     def api_key(self):
@@ -170,6 +173,18 @@ class CoinData:
         return self._symbols_all
 
     @property
+    def symbols_notice(self):
+        if not self._symbols_notice:
+            self.list_symbols()
+        return self._symbols_notice
+
+    @property
+    def symbols_notices(self):
+        if not self._symbols_notices:
+            self.list_symbols()
+        return self._symbols_notices
+
+    @property
     def symbols_data(self):
         if not self._symbols_data:
             self.list_symbols()
@@ -200,6 +215,15 @@ class CoinData:
     def only_cpt(self, new_only_cpt):
         if self._only_cpt != new_only_cpt:
             self._only_cpt = new_only_cpt
+            self.list_symbols()
+
+    @property
+    def notices_ignore(self):
+        return self._notices_ignore
+    @notices_ignore.setter
+    def notices_ignore(self, new_notices_ignore):
+        if self._notices_ignore != new_notices_ignore:
+            self._notices_ignore = new_notices_ignore
             self.list_symbols()
 
     @property
@@ -542,6 +566,8 @@ class CoinData:
         if "data" not in self.metadata:
             return
         self._symbols_data = []
+        self._symbols_notice = []
+        self._symbols_notices = {}
         self.approved_coins = []
         self.ignored_coins = []
         coin_data = []
@@ -567,6 +593,9 @@ class CoinData:
                     symbol_id = str(coin_data["id"])
                     if symbol_id in self.metadata["data"]:
                         notice = self.metadata["data"][symbol_id]["notice"]
+                        if notice:
+                            self._symbols_notice.append(symbol)
+                            self._symbols_notices[symbol] = notice
                     symbol_data = {
                         "id": id,
                         "symbol": symbol,
@@ -600,8 +629,11 @@ class CoinData:
                 cpt = True
                 if self.only_cpt and not symbol_data["copy_trading"]:
                     cpt = False
+                no_notice = True
+                if self.notices_ignore and symbol in self._symbols_notice:
+                    no_notice = False
                 # if self.market_cap != 0 or self.vol_mcap != 10.0:
-                if cpt and market_cap >= self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap and (not self.tags or any(tag in symbol_data["tags"] for tag in self.tags)):
+                if no_notice and cpt and market_cap >= self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap and (not self.tags or any(tag in symbol_data["tags"] for tag in self.tags)):
                     self._symbols_data.append(symbol_data)
                     self.approved_coins.append(symbol)
                 else:

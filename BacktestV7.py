@@ -412,6 +412,14 @@ class BacktestV7Item:
             coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
         if coindata_binance.tags != self.config.pbgui.tags:
             coindata_binance.tags = self.config.pbgui.tags
+        if coindata_bybit.only_cpt != self.config.pbgui.only_cpt:
+            coindata_bybit.only_cpt = self.config.pbgui.only_cpt
+        if coindata_binance.only_cpt != self.config.pbgui.only_cpt:
+            coindata_binance.only_cpt = self.config.pbgui.only_cpt
+        if coindata_bybit.notices_ignore != self.config.pbgui.notices_ignore:
+            coindata_bybit.notices_ignore = self.config.pbgui.notices_ignore
+        if coindata_binance.notices_ignore != self.config.pbgui.notices_ignore:
+            coindata_binance.notices_ignore = self.config.pbgui.notices_ignore
         # Init session_state for keys
         if "edit_bt_v7_exchanges" in st.session_state:
             if st.session_state.edit_bt_v7_exchanges != self.config.backtest.exchanges:
@@ -441,6 +449,11 @@ class BacktestV7Item:
             if st.session_state.edit_bt_v7_compress_cache != self.config.backtest.compress_cache:
                 self.config.backtest.compress_cache = st.session_state.edit_bt_v7_compress_cache
         # Filters
+        if "edit_bt_v7_notices_ignore" in st.session_state:
+            if st.session_state.edit_bt_v7_notices_ignore != self.config.pbgui.notices_ignore:
+                self.config.pbgui.notices_ignore = st.session_state.edit_bt_v7_notices_ignore
+                coindata_bybit.notices_ignore = self.config.pbgui.notices_ignore
+                coindata_binance.notices_ignore = self.config.pbgui.notices_ignore
         if "edit_bt_v7_only_cpt" in st.session_state:
             if st.session_state.edit_bt_v7_only_cpt != self.config.pbgui.only_cpt:
                 self.config.pbgui.only_cpt = st.session_state.edit_bt_v7_only_cpt
@@ -495,7 +508,7 @@ class BacktestV7Item:
         with col3:
             st.checkbox("compress_cache", value=self.config.backtest.compress_cache, key="edit_bt_v7_compress_cache", help=pbgui_help.compress_cache)
         #Filters
-        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
         with col1:
             st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_bt_v7_market_cap", help=pbgui_help.market_cap)
         with col2:
@@ -504,6 +517,8 @@ class BacktestV7Item:
             st.multiselect("Tags", coindata_bybit.all_tags, default=self.config.pbgui.tags, key="edit_bt_v7_tags", help=pbgui_help.coindata_tags)
         with col4:
             st.checkbox("only_cpt", value=self.config.pbgui.only_cpt, help=pbgui_help.only_cpt, key="edit_bt_v7_only_cpt")
+            st.checkbox("notices ignore", value=self.config.pbgui.notices_ignore, help=pbgui_help.notices_ignore, key="edit_bt_v7_notices_ignore")
+        with col5:
             st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_bt_v7_apply_filters")
         # Apply filters
         if st.session_state.edit_bt_v7_apply_filters:
@@ -548,6 +563,12 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_ignored_coins_long = self.config.live.ignored_coins.long
         if "edit_bt_v7_ignored_coins_short" in st.session_state:
             st.session_state.edit_bt_v7_ignored_coins_short = self.config.live.ignored_coins.short
+        # Find coins with notices
+        for coin in list(set(self.config.live.approved_coins.long + self.config.live.approved_coins.short)):
+            if coin in coindata_bybit.symbols_notice:
+                st.warning(f'{coin}: {coindata_bybit.symbols_notices[coin]}')
+            elif coin in coindata_binance.symbols_notice:
+                st.warning(f'{coin}: {coindata_binance.symbols_notices[coin]}')
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
             coindata_symbols = sorted(list(set(coindata_bybit.symbols + coindata_binance.symbols)))

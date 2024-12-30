@@ -223,8 +223,6 @@ class DynamicIgnore():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Added: {added_coins}')
             self.ignored_coins = self.coindata.ignored_coins
             self.save()
-            if PurePath(self.path).parts[-2] == "multi":
-                self.update_hjson()
             return True
         return False
     
@@ -242,18 +240,6 @@ class DynamicIgnore():
         with open(file, "w", encoding='utf-8') as f:
             json.dump(ignored_coins, f)
     
-    def update_hjson(self):
-        file = Path(f'{self.path}/multi_run.hjson')
-        if file.exists():
-            with open(file, "r", encoding='utf-8') as f:
-                multi_config = f.read()
-            multi_config = hjson.loads(multi_config)
-            if "ignored_symbols" in multi_config:
-                if multi_config["ignored_symbols"] != self.ignored_coins:
-                    multi_config["ignored_symbols"] = self.ignored_coins
-                    with open(file, "w", encoding='utf-8') as f:
-                        f.write(hjson.dumps(multi_config))
-
 class RunSingle():
     def __init__(self):
         self.monitor = Monitor()
@@ -453,6 +439,7 @@ class RunMulti():
         if self.dynamic_ignore is not None:
             if self.dynamic_ignore.watch():
                 self.stop()
+                self.create_multi_hjson()
                 self.start()
 
     def is_running(self):
@@ -523,10 +510,16 @@ class RunMulti():
             del self._multi_config["vol_mcap"]
         if "dynamic_ignore" in self._multi_config:
             del self._multi_config["dynamic_ignore"]
+        if "only_cpt" in self._multi_config:
+            del self._multi_config["only_cpt"]
+        if "notices_ignore" in self._multi_config:
+            del self._multi_config["notices_ignore"]
         self._multi_config["live_configs_dir"] = self.path
         if "default_config_path" in self._multi_config:
             if self._multi_config["default_config_path"] != "":
                 self._multi_config["default_config_path"] = f'{self.path}/default.json'
+        if self.dynamic_ignore is not None:
+            self._multi_config["ignored_symbols"] = self.dynamic_ignore.coindata.ignored_coins
         run_config = hjson.dumps(self._multi_config)
         config_file = Path(f'{self.path}/multi_run.hjson')
         with open(config_file, "w", encoding='utf-8') as f:
@@ -554,6 +547,10 @@ class RunMulti():
                                 self.dynamic_ignore.path = self.path
                                 self.dynamic_ignore.coindata.market_cap = self._multi_config["market_cap"]
                                 self.dynamic_ignore.coindata.vol_mcap = self._multi_config["vol_mcap"]
+                                if "only_cpt" in self._multi_config:
+                                    self.dynamic_ignore.coindata.only_cpt = self._multi_config["only_cpt"]
+                                if "notices_ignore" in self._multi_config:
+                                    self.dynamic_ignore.coindata.notices_ignore = self._multi_config["notices_ignore"]
                                 # Find Exchange from User
                                 api_path = f'{self.pbdir}/api-keys.json'
                                 if Path(api_path).exists():
@@ -682,7 +679,7 @@ class RunV7():
                                 sw = ""
                                 lev = ""
                                 flags = coin_flags[coin]
-                                # if -nm in flags then get mode_long
+                                # if -lm in flags then get mode_long
                                 if "-lm" in flags:
                                     lm = f'-lm {flags.split("-lm")[1].split()[0]} '
                                 # if -lw in flags then get we_long
@@ -710,6 +707,8 @@ class RunV7():
                             self.dynamic_ignore.coindata.vol_mcap = self._v7_config["pbgui"]["vol_mcap"]
                             if "only_cpt" in self._v7_config["pbgui"]:
                                 self.dynamic_ignore.coindata.only_cpt = self._v7_config["pbgui"]["only_cpt"]
+                            if "notices_ignore" in self._v7_config["pbgui"]:
+                                self.dynamic_ignore.coindata.notices_ignore = self._v7_config["pbgui"]["notices_ignore"]
                             if "live" in self._v7_config:
                                 if "ignored_coins" in self._v7_config["live"]:
                                     if "long" in self._v7_config["live"]["ignored_coins"]:

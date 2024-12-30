@@ -118,6 +118,10 @@ class V7Instance():
             coindata.vol_mcap = self.config.pbgui.vol_mcap
         if coindata.tags != self.config.pbgui.tags:
             coindata.tags = self.config.pbgui.tags
+        if coindata.only_cpt != self.config.pbgui.only_cpt:
+            coindata.only_cpt = self.config.pbgui.only_cpt
+        if coindata.notices_ignore != self.config.pbgui.notices_ignore:
+            coindata.notices_ignore = self.config.pbgui.notices_ignore
         # Init session_state for keys
         if "edit_run_v7_user" in st.session_state:
             if st.session_state.edit_run_v7_user != self.user:
@@ -182,6 +186,10 @@ class V7Instance():
         if "edit_run_v7_dynamic_ignore" in st.session_state:
             if st.session_state.edit_run_v7_dynamic_ignore != self.config.pbgui.dynamic_ignore:
                 self.config.pbgui.dynamic_ignore = st.session_state.edit_run_v7_dynamic_ignore
+        if "edit_run_v7_notices_ignore" in st.session_state:
+            if st.session_state.edit_run_v7_notices_ignore != self.config.pbgui.notices_ignore:
+                self.config.pbgui.notices_ignore = st.session_state.edit_run_v7_notices_ignore
+                coindata.notices_ignore = self.config.pbgui.notices_ignore
         if "edit_run_v7_empty_means_all_approved" in st.session_state:
             if st.session_state.edit_run_v7_empty_means_all_approved != self.config.live.empty_means_all_approved:
                 self.config.live.empty_means_all_approved = st.session_state.edit_run_v7_empty_means_all_approved
@@ -283,6 +291,8 @@ class V7Instance():
         with col1:
             st.checkbox("dynamic_ignore", value=self.config.pbgui.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_run_v7_dynamic_ignore")
         with col2:
+            st.checkbox("notices ignore", value=self.config.pbgui.notices_ignore, help=pbgui_help.notices_ignore, key="edit_run_v7_notices_ignore")
+        with col3:
             st.checkbox("empty_means_all_approved", value=self.config.live.empty_means_all_approved, help=pbgui_help.empty_means_all_approved, key="edit_run_v7_empty_means_all_approved")
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
@@ -329,6 +339,10 @@ class V7Instance():
             st.session_state.edit_run_v7_ignored_coins_long = self.config.live.ignored_coins.long
         if "edit_run_v7_ignored_coins_short" in st.session_state:
             st.session_state.edit_run_v7_ignored_coins_short = self.config.live.ignored_coins.short
+        # Find coins with notices
+        for coin in list(set(self.config.live.approved_coins.long + self.config.live.approved_coins.short)):
+            if coin in coindata.symbols_notice:
+                st.warning(f'{coin}: {coindata.symbols_notices[coin]}')
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
             st.multiselect('approved_coins_long', coindata.symbols, default=self.config.live.approved_coins.long, key="edit_run_v7_approved_coins_long", help=pbgui_help.approved_coins)
@@ -337,6 +351,9 @@ class V7Instance():
             st.multiselect('approved_coins_short', coindata.symbols, default=self.config.live.approved_coins.short, key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
             st.multiselect('ignored_symbols_short', coindata.symbols, default=self.config.live.ignored_coins.short, key="edit_run_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
         if self.config.pbgui.dynamic_ignore:
+            for coin in coindata.approved_coins:
+                if coin in coindata.symbols_notice:
+                    st.warning(f'{coin}: {coindata.symbols_notices[coin]}')
             st.code(f'approved_symbols: {coindata.approved_coins}', wrap_lines=True)
             st.code(f'dynamic_ignored symbols: {coindata.ignored_coins}', wrap_lines=True)
 
