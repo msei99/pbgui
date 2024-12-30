@@ -209,7 +209,7 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
-## v1.33 (26-12-2024)
+## v1.33 (30-12-2024)
 - Filter for coins with warnings on CoinMarketCap
 - Multi: Added only_cpt and apply_filter function
 - Improved GridVis by Sephral
