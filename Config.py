@@ -2673,6 +2673,7 @@ class PBGui:
         self._vol_mcap = 10.0
         self._tags = []
         self._dynamic_ignore = False
+        self._notices_ignore = False
         self._note = ''
         self._pbgui = {
             "version": self._version,
@@ -2683,6 +2684,7 @@ class PBGui:
             "vol_mcap": self._vol_mcap,
             "tags": self._tags,
             "dynamic_ignore": self._dynamic_ignore,
+            "notices_ignore": self._notices_ignore,
             "note": self._note,
         }
     
@@ -2709,6 +2711,8 @@ class PBGui:
             self.tags = new_pbgui["tags"]
         if "dynamic_ignore" in new_pbgui:
             self.dynamic_ignore = new_pbgui["dynamic_ignore"]
+        if "notices_ignore" in new_pbgui:
+            self.notices_ignore = new_pbgui["notices_ignore"]
         if "note" in new_pbgui:
             self.note = new_pbgui["note"]
     
@@ -2728,6 +2732,8 @@ class PBGui:
     def tags(self): return self._tags
     @property
     def dynamic_ignore(self): return self._dynamic_ignore
+    @property
+    def notices_ignore(self): return self._notices_ignore
     @property
     def note(self): return self._note
 
@@ -2763,6 +2769,10 @@ class PBGui:
     def dynamic_ignore(self, new_dynamic_ignore):
         self._dynamic_ignore = new_dynamic_ignore
         self._pbgui["dynamic_ignore"] = self._dynamic_ignore
+    @notices_ignore.setter
+    def notices_ignore(self, new_notices_ignore):
+        self._notices_ignore = new_notices_ignore
+        self._pbgui["notices_ignore"] = self._notices_ignore
     @note.setter
     def note(self, new_note):
         self._note = new_note

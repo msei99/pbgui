@@ -1045,11 +1045,17 @@ dynamic_ignore = """
     If enabled, PBRun will dynamically maintain the ignored_coins list.
     The list will created using the market_cap, vol_mcap and tags filters.
     If only_cpt is enabled, coins not allowed for CopyTrading will be
+    If notices_ignore is enabled, coins with notices will be added to the ignored_coins list.
     added to the ignored_coins list. Coins in ignored_symbols_long or
     ignored_symbols_short will also be added to the ignored_coins list.
     Update interval is configured in PBCoinData.
     On passivbot6 PBRun will restart the bot if needed.
     On passivbot7 PBRun creat the ignored_coins.json file and pb7 will use this list as filter.
+    ```"""
+
+notices_ignore = """
+    ```
+    If true, will only trade coins that has no notice warning on CoinMarketCap.
     ```"""
 
 empty_means_all_approved = """
