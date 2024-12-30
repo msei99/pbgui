@@ -104,12 +104,28 @@ class MultiInstance():
     @vol_mcap.setter
     def vol_mcap(self, new_vol_mcap):
         self._vol_mcap = new_vol_mcap
+
     # dynamic_ignore
     @property
     def dynamic_ignore(self): return self._dynamic_ignore
     @dynamic_ignore.setter
     def dynamic_ignore(self, new_dynamic_ignore):
         self._dynamic_ignore = new_dynamic_ignore
+
+    # notices_ignore
+    @property
+    def notices_ignore(self): return self._notices_ignore
+    @notices_ignore.setter
+    def notices_ignore(self, new_notices_ignore):
+        self._notices_ignore = new_notices_ignore
+
+    # only_cpt
+    @property
+    def only_cpt(self): return self._only_cpt
+    @only_cpt.setter
+    def only_cpt(self, new_only_cpt):
+        self._only_cpt = new_only_cpt
+
     # leverage
     @property
     def leverage(self): return self._leverage
@@ -294,6 +310,8 @@ class MultiInstance():
         self._market_cap = 0
         self._vol_mcap = 10.0
         self._dynamic_ignore = False
+        self._notices_ignore = False
+        self._only_cpt = False
         self._TWE_enabled = False
         self._leverage = 10.0
         self._loss_allowance_pct = 0.002
@@ -348,6 +366,10 @@ class MultiInstance():
             self._vol_mcap = float(self._multi_config["vol_mcap"])
         if "dynamic_ignore" in self._multi_config:
             self._dynamic_ignore = self._multi_config["dynamic_ignore"]
+        if "notices_ignore" in self._multi_config:
+            self._notices_ignore = self._multi_config["notices_ignore"]
+        if "only_cpt" in self._multi_config:
+            self._only_cpt = self._multi_config["only_cpt"]
         if "leverage" in self._multi_config:
             self._leverage = float(self._multi_config["leverage"])
         if "loss_allowance_pct" in self._multi_config:
@@ -562,6 +584,8 @@ class MultiInstance():
         self._multi_config["market_cap"] = self.market_cap
         self._multi_config["vol_mcap"] = self.vol_mcap
         self._multi_config["dynamic_ignore"] = self.dynamic_ignore
+        self._multi_config["notices_ignore"] = self.notices_ignore
+        self._multi_config["only_cpt"] = self.only_cpt
         self._multi_config["leverage"] = self.leverage
         self._multi_config["loss_allowance_pct"] = self.loss_allowance_pct
         self._multi_config["pnls_max_lookback_days"] = self.pnls_max_lookback_days
@@ -612,6 +636,10 @@ class MultiInstance():
             coindata.market_cap = self.market_cap
         if coindata.vol_mcap != self.vol_mcap:
             coindata.vol_mcap = self.vol_mcap
+        if coindata.notices_ignore != self.notices_ignore:
+            coindata.notices_ignore = self.notices_ignore
+        if coindata.only_cpt != self.only_cpt:
+            coindata.only_cpt = self.only_cpt
         # Init session_state for keys
         if "edit_multi_user" in st.session_state:
             if st.session_state.edit_multi_user != self.user:
@@ -675,15 +703,15 @@ class MultiInstance():
         if "edit_multi_approved_symbols" in st.session_state:
             if st.session_state.edit_multi_approved_symbols != self._symbols:
                 self._symbols = st.session_state.edit_multi_approved_symbols
-                if "All" in self._symbols:
-                    self._symbols = coindata.symbols.copy()
-                elif "CPT" in self._symbols:
-                    self._symbols = coindata.symbols_cpt.copy()
+                # if "All" in self._symbols:
+                #     self._symbols = coindata.symbols.copy()
+                # elif "CPT" in self._symbols:
+                #     self._symbols = coindata.symbols_cpt.copy()
         if "edit_multi_ignored_symbols" in st.session_state:
             if st.session_state.edit_multi_ignored_symbols != self._ignored_symbols:
                 self._ignored_symbols = st.session_state.edit_multi_ignored_symbols
-                if "All" in self._ignored_symbols:
-                    self._ignored_symbols = coindata.symbols.copy()
+                # if "All" in self._ignored_symbols:
+                #     self._ignored_symbols = coindata.symbols.copy()
         if "edit_multi_n_longs" in st.session_state:
             if st.session_state.edit_multi_n_longs != self.n_longs:
                 self.n_longs = st.session_state.edit_multi_n_longs
@@ -721,6 +749,14 @@ class MultiInstance():
         if "edit_multi_dynamic_ignore" in st.session_state:
             if st.session_state.edit_multi_dynamic_ignore != self.dynamic_ignore:
                 self.dynamic_ignore = st.session_state.edit_multi_dynamic_ignore
+        if "edit_multi_notices_ignore" in st.session_state:
+            if st.session_state.edit_multi_notices_ignore != self.notices_ignore:
+                self.notices_ignore = st.session_state.edit_multi_notices_ignore
+                coindata.notices_ignore = self.notices_ignore
+        if "edit_multi_only_cpt" in st.session_state:
+            if st.session_state.edit_multi_only_cpt != self.only_cpt:
+                self.only_cpt = st.session_state.edit_multi_only_cpt
+                coindata.only_cpt = self.only_cpt
         if "edit_multi_market_cap" in st.session_state:
             if st.session_state.edit_multi_market_cap != self.market_cap:
                 self.market_cap = st.session_state.edit_multi_market_cap
@@ -730,11 +766,10 @@ class MultiInstance():
                 self.vol_mcap = st.session_state.edit_multi_vol_mcap
                 coindata.vol_mcap = self.vol_mcap
         # Apply filters
-        for symbol in coindata.ignored_coins:
-            if symbol not in self._ignored_symbols:
-                self._ignored_symbols.append(symbol)
-            if symbol in self._symbols:
-                self._symbols.remove(symbol)
+        if "edit_multi_apply_filters" in st.session_state:
+            if st.session_state.edit_multi_apply_filters:
+                self._symbols = coindata.approved_coins
+                self._ignored_symbols = coindata.ignored_coins
         # Remove unavailable symbols
         for symbol in self._symbols.copy():
             if symbol not in coindata.symbols:
@@ -1068,32 +1103,31 @@ class MultiInstance():
             with col4:
                 st.empty()            
         #Filters
-        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
         with col1:
             st.number_input("market_cap", min_value=0, value=self.market_cap, step=50, format="%.d", key="edit_multi_market_cap", help=pbgui_help.market_cap)
         with col2:
             st.number_input("vol/mcap", min_value=0.0, value=self.vol_mcap, step=0.05, format="%.2f", key="edit_multi_vol_mcap", help=pbgui_help.vol_mcap)
         with col3:
             st.checkbox("dynamic_ignore", value=self.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_multi_dynamic_ignore")
+        with col4:
+            st.checkbox("only_cpt", value=self.only_cpt, help=pbgui_help.only_cpt, key="edit_multi_only_cpt")
+            st.checkbox("notices ignore", value=self.notices_ignore, help=pbgui_help.notices_ignore, key="edit_multi_notices_ignore")
+        with col5:
+            st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_multi_apply_filters")
+        # Find coins with notices
+        for coin in self._symbols:
+            if coin in coindata.symbols_notice:
+                st.warning(f'{coin}: {coindata.symbols_notices[coin]}')
         # Display Symbols
-        st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
-        # # Remove unavailable symbols
-        # for symbol in self._symbols.copy():
-        #     if symbol not in self._available_symbols:
-        #         self._symbols.remove(symbol)
-        st.multiselect('approved_symbols', ['All', 'CPT'] + coindata.symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
-        # # Add Symbol to ignored_symbols
-        # for symbol in self._ignored_symbols:
-        #     if symbol not in self._available_symbols:
-        #         self._ignored_symbols.remove(symbol)
-        col1, col2 = st.columns([3,1], vertical_alignment="bottom")
-        with col1:
-            st.multiselect('ignored_symbols', ["All"] + coindata.symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
-        with col2:
-            if st.button("Update Symbols from Exchange"):
-                exchange = self._users.find_exchange(self.user)
-                Exchange(exchange, self._users.find_user(self._user)).fetch_symbols()
-                st.rerun()
+        with st.expander("Symbols Config", expanded=True):
+            st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
+        st.multiselect('approved_symbols', coindata.symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
+        st.multiselect('ignored_symbols', coindata.symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
+        # Display dynamic ignored coins
+        if self.dynamic_ignore:
+            st.code(f'approved_symbols: {coindata.approved_coins}', wrap_lines=True)
+            st.code(f'dynamic_ignored symbols: {coindata.ignored_coins}', wrap_lines=True)
         # Import configs
         import_path = os.path.abspath(st_file_selector(st, path=pbdir(), key = 'multi_import_config', label = 'Import from directory'))
         if st.button("Import Configs"):
