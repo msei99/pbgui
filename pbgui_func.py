@@ -8,6 +8,7 @@ import configparser
 import os
 from pathlib import Path
 from pbgui_purefunc import load_ini, save_ini
+from Log import LogHandler
 
 @st.dialog("Select file")
 def change_ini(section, parameter):
@@ -111,6 +112,7 @@ def get_navi_paths():
         "SYSTEM_API_KEYS":     os.path.join(NAVI_BASE_DIR, "system_api_keys.py"),
         "SYSTEM_SERVICES":     os.path.join(NAVI_BASE_DIR, "system_services.py"),
         "SYSTEM_VPS_MANAGER":  os.path.join(NAVI_BASE_DIR, "system_vps_manager.py"),
+        "SYSTEM_DEBUGLOG":     os.path.join(NAVI_BASE_DIR, "system_debuglog.py"),
 
         "INFO_DASHBOARDS":     os.path.join(NAVI_BASE_DIR, "info_dashboards.py"),
         "INFO_COIN_DATA":      os.path.join(NAVI_BASE_DIR, "info_coin_data.py"),
@@ -139,6 +141,7 @@ def build_navigation():
     pM2 = st.Page(paths["SYSTEM_API_KEYS"], title="API-Keys", icon=":material/key:")
     pM3 = st.Page(paths["SYSTEM_SERVICES"], title="PBGUI Services", icon=":material/build:")
     pM4 = st.Page(paths["SYSTEM_VPS_MANAGER"], title="VPS Manager", icon=":material/computer:")
+    pM5 = st.Page(paths["SYSTEM_DEBUGLOG"], title="DEBUGLOG", icon=":material/terminal:")
 
     pSe1 = st.Page(paths["INFO_DASHBOARDS"], title="Dashboards", icon=":material/dashboard:")
     pSe2 = st.Page(paths["INFO_COIN_DATA"], title="Coin Data", icon=":material/monetization_on:")
@@ -160,6 +163,10 @@ def build_navigation():
        
     # Page Groups
     SystemPages = [pM1, pM2, pM3, pM4]
+    
+    if get_debuglog().logfile_exists():
+        SystemPages.append(pM5)
+                
     InfotmationPages = [pSe1, pSe2]
     v7Pages = [p71, p72, p73, p74]
     v6Pages = [p61, p62, p63]
@@ -178,6 +185,22 @@ def build_navigation():
     st.session_state.navigation = navi
     navi.run()
     
+    
+def init_debuglog():
+    if "debuglog" not in st.session_state:
+        st.session_state.debuglog = LogHandler(
+            logger_name="debug_logger",
+            log_filename="debug.log",
+            backup_filename="debug.log.old",
+            base_dir=Path(f'{PBGDIR}/data/logs'),
+            max_bytes=50_000,
+            backup_count=1,
+        )
+        
+def get_debuglog() -> LogHandler:
+    if "debuglog" not in st.session_state:
+        init_debuglog()
+    return st.session_state.debuglog
     
 def is_session_state_not_initialized():
     # Init Service5
