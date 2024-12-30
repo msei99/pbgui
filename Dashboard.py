@@ -97,7 +97,8 @@ class Dashboard():
         dashboard_keys = {key: val for key, val in st.session_state.items()
             if key.startswith("dashboard_") or key.startswith("view_orders_")}
         for key in dashboard_keys:
-            del st.session_state[key]
+            if key in st.session_state:
+                del st.session_state[key]
 
     def swap(self, from_row, to_row, from_col, to_col):
         dashboard_type_1 = st.session_state[f'dashboard_type_{from_row}_{from_col}']

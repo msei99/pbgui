@@ -5,7 +5,7 @@
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
 
-# v1.32
+# v1.33
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -208,6 +208,14 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.33 (26-12-2024)
+- Filter for coins with warnings on CoinMarketCap
+- Multi: Added only_cpt and apply_filter function
+- Improved GridVis by Sephral
+- Fetch notice from CoinMarketCap metadata for display warning messages
+- Added preset manager for optimizer v7 by Sephral
+- Small bugfixes
 
 ## v1.32 (26-12-2024)
 - Converter for pb6 to pb7 configurations
