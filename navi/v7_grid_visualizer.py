@@ -358,135 +358,94 @@ def create_plotly_graph(side: OrderType, data: GVData):
         fullgrid_close_grid_min = min(fullgrid_close_prices)
         fullgrid_close_grid_max = max(fullgrid_close_prices)
     
+    
+    # Handle Trailing Grids
+    warnings = []
+    
+    ############
+    #  LONG   #
+    ############
     if side == Side.Long:
+        ############
+        #  ENTRY   #
+        ############
+        # st.warning(f"normal_entry_orders: {normal_entry_orders}")
+        # st.warning(f"fullgrid_entry_orders: {fullgrid_entry_orders}")
+        # st.error(f"normal_close_orders: {normal_close_orders}")
+        # st.error(f"fullgrid_close_orders: {fullgrid_close_orders}")
         if entry_mode == GridTrailingMode.GridFirst:
-            trailing_entry_orders = [o for o in fullgrid_entry_orders if o.price < normal_enty_grid_min]
-            trailing_entry_prices = [o.price for o in trailing_entry_orders]
-            if len(trailing_entry_prices) > 0:
-                trailing_entry_grid_min = min(trailing_entry_prices)
-                trailing_entry_grid_max = normal_enty_grid_min
-        
+            trailing_entry_grid_min = normal_enty_grid_min
+            trailing_entry_grid_max = trailing_entry_grid_min - 10
+            warnings.append("Enty: The trailing area can't be calculated; 10% is just a placeholder.")
         if entry_mode == GridTrailingMode.TrailingFirst:
-            trailing_grid_ratio = abs(data.normal_bot_params_long.entry_trailing_grid_ratio)
-            
-            # Calculate TWE
-            entry_wallet_expore_sum = 0
-            entry_twe_budegt = state_params.balance * bot_params.wallet_exposure_limit
-            entry_twe_pct = []
-            for entry in fullgrid_entry_orders:
-                entry_wallet_expore_sum += entry.qty * entry.price
-                entry_pct = int(entry_wallet_expore_sum / entry_twe_budegt * 100)
-                entry_twe_pct.append(entry_pct)
-            
-            # Check how many items are required to exceed TWE
-            count = sum(1 for x in entry_twe_pct if x < (trailing_grid_ratio * 100)) + 1
-            
-            # Copy items from fillgrid to normal
-            normal_entry_orders = fullgrid_entry_orders[:count]
-            data.normal_entries_long = normal_entry_orders
-            
-            # Update "Normal" variables (ugly, but works)
-            normal_entry_prices = [o.price for o in normal_entry_orders]
-            if len(normal_entry_prices) > 0:
-                normal_enty_grid_min = min(normal_entry_prices)
-                normal_enty_grid_max = max(normal_entry_prices)
-                
-                if side == Side.Long:
-                    data.long_entry_grid = normal_enty_grid_max - normal_enty_grid_min
-                else:
-                    data.short_entry_grid = normal_enty_grid_max - normal_enty_grid_min
-
-            # Set Trailing Range
-            trailing_entry_grid_min = fullgrid_entry_grid_min
-            trailing_entry_grid_max = normal_enty_grid_min
-            
-            twe = entry_twe_pct[count-1]
-            
-            # Calculate the current total exposure (qty * price) for the chosen orders
-            entry_wallet_exposure_sum = sum(o.qty * o.price for o in normal_entry_orders)
-
-            # Calculate the target exposure amount based on the wallet_exposure_limit
-            target_exposure = state_params.balance * bot_params.wallet_exposure_limit * trailing_grid_ratio
-
-            # Determine if we need to adjust to match the target
-            difference = entry_wallet_exposure_sum - target_exposure
-
-            if difference > 0:
-                # We are above the target; adjust the last order's qty down
-                last_order = normal_entry_orders[-1]
-                qty_reduction = difference / last_order.price
-                new_qty = last_order.qty - qty_reduction
-                new_qty = max(new_qty, 0)
-
-                adjusted_order = Order(
-                    qty=new_qty,
-                    price=last_order.price,
-                    order_type=last_order.order_type
-                )
-                # Update data
-                normal_entry_orders[-1] = adjusted_order
-                data.normal_entries_long = normal_entry_orders
-        
+            trailing_entry_grid_min = fullgrid_entry_grid_max
+            trailing_entry_grid_max = trailing_entry_grid_min - 10
+            warnings.append("Enty: The trailing area can't be calculated; 10% is just a placeholder.")
+            warnings.append("Enty: There will be Grid-Entries after the trailing area.")
         if entry_mode == GridTrailingMode.TrailingOnly:
-            trailing_entry_grid_min = fullgrid_entry_grid_min
-            trailing_entry_grid_max = fullgrid_entry_grid_max
-
+            trailing_entry_grid_min = fullgrid_entry_grid_max
+            trailing_entry_grid_max = trailing_entry_grid_min - 10
+            warnings.append("Enty: The trailing area can't be calculated; 10% is just a placeholder.")
+        ############
+        #  CLOSE   #
+        ############
         if close_mode == GridTrailingMode.GridFirst:
-            trailing_close_orders = [o for o in fullgrid_close_orders if o.price > normal_close_grid_max]
-            trailing_close_prices = [o.price for o in trailing_close_orders]
-            
-            if len(trailing_close_prices) > 0:
-                trailing_close_grid_min = max(trailing_close_prices)
-                trailing_close_grid_max = fullgrid_close_grid_max
-            
-            if len(normal_close_orders) == 0:
-                trailing_close_grid_min = fullgrid_close_grid_min
-                trailing_close_grid_max = fullgrid_close_grid_max
-        
+            trailing_close_grid_min = fullgrid_close_grid_min
+            trailing_close_grid_max = trailing_close_grid_min + 10
+            warnings.append("Close: Since WE=100% at close start, grid comes first, then trailing.")
+            warnings.append("Close: The trailing area can't be calculated; 10% is just a placeholder.")
+            warnings.append("Close: Grid closes follow the trailing area (not displayed).")
         if close_mode == GridTrailingMode.TrailingFirst:
             trailing_close_grid_min = normal_close_grid_max
-            trailing_close_grid_max = normal_close_grid_max + 10
-        
+            trailing_close_grid_max = trailing_close_grid_min + 10
+            warnings.append("Close: Since WE=100% at close start, grid comes first, then trailing.")
+            warnings.append("Close: The trailing area can't be calculated; 10% is just a placeholder.")
         if close_mode == GridTrailingMode.TrailingOnly:
             trailing_close_grid_min = fullgrid_close_grid_min
-            trailing_close_grid_max = fullgrid_close_grid_max
-            
-            
-
+            trailing_close_grid_max = trailing_close_grid_min + 10
+            warnings.append("Close: The trailing area can't be calculated; 10% is just a placeholder.")
+    ############
+    #  SHORT   #
+    ############
     elif side == Side.Short:
+        #st.warning(f"normal_entry_orders: {normal_entry_orders}")
+        #st.warning(f"fullgrid_entry_orders: {fullgrid_entry_orders}")
+        #st.error(f"normal_close_orders: {normal_close_orders}")
+        #st.error(f"fullgrid_close_orders: {fullgrid_close_orders}")
+        ############
+        #  ENTRY   #
+        ############
         if entry_mode == GridTrailingMode.GridFirst:
-            trailing_entry_orders = [o for o in fullgrid_entry_orders if o.price > normal_enty_grid_max]
-            trailing_entry_prices = [o.price for o in trailing_entry_orders]
-            if len(trailing_entry_prices) > 0:
-                trailing_entry_grid_min = normal_enty_grid_max
-                trailing_entry_grid_max = max(trailing_entry_prices)
-
+            trailing_entry_grid_min = normal_enty_grid_max
+            trailing_entry_grid_max = trailing_entry_grid_min + 10
+            warnings.append("Entry: The trailing area can't be calculated; 10% is just a placeholder.")
+        if entry_mode == GridTrailingMode.TrailingFirst:
+            trailing_entry_grid_min = fullgrid_entry_grid_min
+            trailing_entry_grid_max = trailing_entry_grid_min + 10
+            warnings.append("Entry: The trailing area can't be calculated; 10% is just a placeholder.")
+        if entry_mode == GridTrailingMode.TrailingOnly:
+            trailing_entry_grid_min = fullgrid_entry_grid_min
+            trailing_entry_grid_max = trailing_entry_grid_min + 10
+            warnings.append("Entry: The trailing area can't be calculated; 10% is just a placeholder.")
+        ############
+        #  CLOSE   #
+        ############
         if close_mode == GridTrailingMode.GridFirst:
-            trailing_close_orders = [o for o in fullgrid_close_orders if o.price > normal_close_grid_max]
-            trailing_close_prices = [o.price for o in trailing_close_orders]
-            if len(trailing_close_prices) > 0:
-                trailing_close_grid_min = max(trailing_close_prices)
-                trailing_close_grid_max = fullgrid_close_grid_max
-            
-            if len(normal_close_orders) == 0:
-                trailing_close_grid_min = fullgrid_close_grid_min
-                trailing_close_grid_max = fullgrid_close_grid_max
-        
+            trailing_close_grid_min = fullgrid_close_grid_min
+            trailing_close_grid_max = trailing_close_grid_min -10
+            warnings.append("Close: Since WE=100% at close start, grid comes first, then trailing.")
+            warnings.append("Close: The trailing area can't be calculated; 10% is just a placeholder.")
+            warnings.append("Close: Grid closes follow the trailing area (not displayed).")
         if close_mode == GridTrailingMode.TrailingFirst:
             trailing_close_grid_min = normal_close_grid_min
-            trailing_close_grid_max = normal_close_grid_min - 10
+            trailing_close_grid_max = trailing_close_grid_min - 10
+            warnings.append("Close: Since WE=100% at close start, grid comes first, then trailing.")
+            warnings.append("Close: The trailing area can't be calculated; 10% is just a placeholder.")
+        if close_mode == GridTrailingMode.TrailingOnly:
+            trailing_close_grid_min = fullgrid_close_grid_min
+            trailing_close_grid_max = trailing_close_grid_min - 10
+            warnings.append("Close: The trailing area can't be calculated; 10% is just a placeholder.")
             
-    # If there are no entries or closes, provide some defaults to avoid errors
-    if not normal_entry_prices:
-        normal_entry_prices = [start_price]
-    if not trailing_entry_prices:
-        trailing_entry_prices = [start_price]
-    if not normal_close_prices:
-        normal_close_prices = [start_price]
-    if not trailing_close_prices:
-        trailing_close_prices = [start_price]
-
-    
     # Create Plotly Figure
     fig = go.Figure()
 
@@ -693,6 +652,13 @@ def create_plotly_graph(side: OrderType, data: GVData):
     # Render the figure using Streamlit
     st.plotly_chart(fig, use_container_width=True)
 
+    # Display warnings
+    if warnings:
+        st.info("ℹ️ **Please note:**")
+        for warning in warnings:
+            st.write(f"⚠️ {warning}")
+    
+    st.markdown("---")
     return fig
 
 
@@ -853,14 +819,14 @@ def show_visualizer():
     # GRIDONLY LONG ENTRIES
     gridonly_entries_long = calc_entries_long(data.exchange_params, data.state_params, data.gridonly_bot_params_long, data.position_long_enty, data.trailing_price_bundle)
     data.gridonly_entries_long = adjust_order_quantities(gridonly_entries_long) 
+    
     # NORMAL LONG CLOSES
-    #st.write(" START")
     normal_closes_long = calc_closes_long(data.exchange_params, data.state_params, data.normal_bot_params_long, data.position_long_close, data.trailing_price_bundle)
     data.normal_closes_long = adjust_order_quantities(normal_closes_long) 
-    #st.write(" ENDE")
     # GRIDONLY LONG CLOSES
     gridonly_closes_long = calc_closes_long(data.exchange_params, data.state_params, data.gridonly_bot_params_long, data.position_long_close, data.trailing_price_bundle)
     data.gridonly_closes_long = adjust_order_quantities(gridonly_closes_long) 
+    
     # NORMAL SHORT ENTRIES
     normal_entries_short = calc_entries_short(data.exchange_params, data.state_params, data.normal_bot_params_short, data.position_short_entry, data.trailing_price_bundle)
     data.normal_entries_short = adjust_order_quantities(normal_entries_short)
