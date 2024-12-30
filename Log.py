@@ -33,12 +33,12 @@ class LogHandler:
         :param max_bytes: Max file size (in bytes) before rotating.
         :param backup_count: Number of backup files to keep.
         """
-        self.logger_name = logger_name
-        self.log_filename = log_filename
-        self.backup_filename = backup_filename
-        self.base_dir = base_dir
-        self.max_bytes = max_bytes
-        self.backup_count = backup_count
+        self.logger_name: str = logger_name
+        self.log_filename: str = log_filename
+        self.backup_filename: str = backup_filename
+        self.base_dir: str = base_dir
+        self.max_bytes: int = max_bytes
+        self.backup_count: int = backup_count
         self.level = logging.DEBUG
         
         # Internal references
@@ -61,6 +61,8 @@ class LogHandler:
         if not self._logger.handlers:
             rotating_handler = RotatingFileHandler(
                 filename=self._log_path,
+                mode="a+",
+                encoding="utf-8",
                 maxBytes=self.max_bytes,
                 backupCount=self.backup_count,
             )
@@ -72,6 +74,8 @@ class LogHandler:
             rotating_handler.setFormatter(formatter)
 
             self._logger.addHandler(rotating_handler)
+        
+        self.rotate_if_needed()
 
     # -----------------------
     # Getter & utility methods
@@ -115,27 +119,20 @@ class LogHandler:
     def rotate_logs(self):
         """
         Manually force the rotation of logs, if you ever need that.
-        This simply copies the file to a backup and then clears the main log.
-        
-        By default, RotatingFileHandler only rotates automatically when 
-        the file size is exceeded. If you want to rename the backup to 
-        `debug.log.old`, you can do it here.
         """
         for handler in self._logger.handlers:
             if isinstance(handler, RotatingFileHandler):
-                handler.close()
-
-        main_log = self._log_path
-        backup_log = os.path.join(self.base_dir, self.backup_filename)
-
-        # Rename the current log -> backup_log
-        if os.path.exists(main_log):
-            if os.path.exists(backup_log):
-                os.remove(backup_log)
-            os.rename(main_log, backup_log)
-
-        # Reopen/reattach the handler so new logs go to a fresh main log
-        self._setup_logger()
+                handler.doRollover()
+    
+    def rotate_if_needed(self):
+        """
+        Rotate logs if the current log file exceeds the max size.
+        """
+        for handler in self._logger.handlers:
+            if isinstance(handler, RotatingFileHandler):
+                if os.path.exists(self._log_path):
+                    if os.path.getsize(self._log_path) > self.max_bytes:
+                        handler.doRollover()
 
     # -----------------------
     # Convenience log methods

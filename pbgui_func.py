@@ -193,7 +193,7 @@ def init_debuglog():
             log_filename="debug.log",
             backup_filename="debug.log.old",
             base_dir=Path(f'{PBGDIR}/data/logs'),
-            max_bytes=50_000,
+            max_bytes=100_000,
             backup_count=1,
         )
         
