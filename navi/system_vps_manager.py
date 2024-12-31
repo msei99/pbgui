@@ -1,6 +1,6 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths
+from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, sync_api
 from VPSManager import VPSManager, VPS
 import re
 from Monitor import Monitor
@@ -141,9 +141,7 @@ def list_vps():
     st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
     st.info("Select your VPS in the sidebar to get a detailed VPS report.")
     with st.sidebar:
-        if not all_api_sync:
-            if st.button("Sync API"):
-                pbremote.sync_api_up()
+        sync_api()
 
 def manage_master():
     vpsmanager = st.session_state.vpsmanager
