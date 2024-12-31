@@ -669,8 +669,8 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBCoinData.log')
-    # sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    # sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBCoinData')
     pbcoindata = CoinData()
     if pbcoindata.is_running():
