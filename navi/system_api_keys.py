@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, get_navi_paths
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, get_navi_paths, sync_api
 from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
@@ -140,12 +140,18 @@ def select_user():
     instances = st.session_state.pbgui_instances
     multi_instances = st.session_state.multi_instances
     v7_instances = st.session_state.v7_instances
+    # Check API is in Sync
+    pbremote = st.session_state.pbremote
     if not "ed_user_key" in st.session_state:
         st.session_state.ed_user_key = 0
     with st.sidebar:
+        if st.button(":material/refresh:"):
+            pbremote.update_remote_servers()
+            st.rerun()
         if st.button("Add"):
             st.session_state.edit_user = User()
             st.rerun()
+        sync_api()
     if f'editor_{st.session_state.ed_user_key}' in st.session_state:
         ed = st.session_state[f'editor_{st.session_state.ed_user_key}']
         for row in ed["edited_rows"]:

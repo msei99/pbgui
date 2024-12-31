@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, error_popup, info_popup, get_navi_paths
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, error_popup, info_popup, get_navi_paths, sync_api
 import pbgui_help
 from Monitor import Monitor
 
@@ -171,6 +171,7 @@ def pbremote_details():
                         rserver.delete_server()
                         pbremote.update_remote_servers()
                         st.rerun()
+        sync_api()
                 
     st.subheader("PBRemote Details")
     pbremote_overview()
@@ -213,8 +214,6 @@ def pbremote_details():
             api_sync_list.append(api.name)
         st.subheader("API not in sync with remote servers:")
         st.write(f"{api_sync_list}")
-        if st.button(f'Sync API-Keys to all',key="sync_api"):
-            pbremote.sync_api_up()
     if "server" in st.session_state:
         monitor.server = st.session_state.server
         monitor.view_server()

@@ -491,6 +491,15 @@ class PBRemote():
     @property
     def pb6_commit(self):
         return self.local_run.pb6_commit
+    #unsynced api
+    @property
+    def unsynced_api(self):
+        unsynced = 0
+        for server in self.remote_servers:
+            server.load()
+            if not server.is_api_md5_same(self.api_md5):
+                unsynced += 1
+        return unsynced
 
     # api_md5
     @property
@@ -652,6 +661,7 @@ class PBRemote():
     def check_if_api_synced(self):
         """Verify that the API keys are the same in PBGUI and PB folders and deletes PBGUI folder's file if api are synced."""
         for server in self.remote_servers:
+            server.load()
             if not server.is_api_md5_same(self.api_md5):
                 return False
         pbgdir = Path.cwd()
