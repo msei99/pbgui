@@ -411,6 +411,8 @@ class CoinData:
             for coin in self.data["data"]:
                 if coin["symbol"] == sym:
                     symbols_ids.append(coin["id"])
+        # filter out duplicate ids
+        symbols_ids = list(set(symbols_ids))
         # Fetch notice from coinmarketcap
         url = 'https://pro-api.coinmarketcap.com//v2/cryptocurrency/info'
         parameters = {

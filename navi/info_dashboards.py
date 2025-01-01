@@ -31,11 +31,12 @@ def dashboard():
                 
             # Create the selectbox with the callback
             st.selectbox(
-                "",
+                "select a dashboard",
                 options=['Select a dashboard'] + dashboards,
                 #index=default_index,
                 key='selected_dashboard',
-                on_change=on_select_dashboard
+                on_change=on_select_dashboard,
+                label_visibility="hidden"
             )
 
     
