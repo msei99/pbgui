@@ -1197,8 +1197,11 @@ class OptimizeV7Item:
     @st.fragment
     def fragment_short_ema_span_0(self):
         if "edit_opt_v7_short_ema_span_0" in st.session_state:
-            if st.session_state.edit_opt_v7_short_ema_span_0 != self.config.optimize.bounds.short_ema_span_0:
-                self.config.optimize.bounds.short_ema_span_0 = st.session_state.edit_opt_v7_short_ema_span_0
+            if st.session_state.edit_opt_v7_short_ema_span_0 != (self.config.optimize.bounds.short_ema_span_0_0, self.config.optimize.bounds.short_ema_span_0_1):
+                self.config.optimize.bounds.short_ema_span_0_0 = st.session_state.edit_opt_v7_short_ema_span_0[0]
+                self.config.optimize.bounds.short_ema_span_0_1 = st.session_state.edit_opt_v7_short_ema_span_0[1]
+        else:
+            st.session_state.edit_opt_v7_short_ema_span_0 = (self.config.optimize.bounds.short_ema_span_0_0, self.config.optimize.bounds.short_ema_span_0_1)
         st.slider(
             "short_ema_span_0",
             min_value=Bounds.EMA_SPAN_0_MIN,
@@ -1212,8 +1215,11 @@ class OptimizeV7Item:
     @st.fragment
     def fragment_short_ema_span_1(self):
         if "edit_opt_v7_short_ema_span_1" in st.session_state:
-            if st.session_state.edit_opt_v7_short_ema_span_1 != self.config.optimize.bounds.short_ema_span_1:
-                self.config.optimize.bounds.short_ema_span_1 = st.session_state.edit_opt_v7_short_ema_span_1
+            if st.session_state.edit_opt_v7_short_ema_span_1 != (self.config.optimize.bounds.short_ema_span_1_0, self.config.optimize.bounds.short_ema_span_1_1):
+                self.config.optimize.bounds.short_ema_span_1_0 = st.session_state.edit_opt_v7_short_ema_span_1[0]
+                self.config.optimize.bounds.short_ema_span_1_1 = st.session_state.edit_opt_v7_short_ema_span_1[1]
+        else:
+            st.session_state.edit_opt_v7_short_ema_span_1 = (self.config.optimize.bounds.short_ema_span_1_0, self.config.optimize.bounds.short_ema_span_1_1)
         st.slider(
             "short_ema_span_1",
             min_value=Bounds.EMA_SPAN_1_MIN,
