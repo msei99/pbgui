@@ -617,6 +617,7 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_scoring = self.config.optimize.scoring
         st.multiselect("scoring", ["adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio", "gain"], max_selections=2, key="edit_opt_v7_scoring")
 
+    # long_close_grid_markup_range
     @st.fragment
     def fragment_long_close_grid_markup_range(self):
         if "edit_opt_v7_long_close_grid_markup_range" in st.session_state:
@@ -633,6 +634,882 @@ class OptimizeV7Item:
             format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
             key="edit_opt_v7_long_close_grid_markup_range",
             help=pbgui_help.close_grid_parameters)
+    
+    # long_close_grid_min_markup
+    @st.fragment
+    def fragment_long_close_grid_min_markup(self):
+        if "edit_opt_v7_long_close_grid_min_markup" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_grid_min_markup != (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1):
+                self.config.optimize.bounds.long_close_grid_min_markup_0 = st.session_state.edit_opt_v7_long_close_grid_min_markup[0]
+                self.config.optimize.bounds.long_close_grid_min_markup_1 = st.session_state.edit_opt_v7_long_close_grid_min_markup[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_grid_min_markup = (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1)
+        st.slider(
+            "long_close_grid_min_markup",
+            min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
+            max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
+            step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
+            format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
+            key="edit_opt_v7_long_close_grid_min_markup",
+            help=pbgui_help.close_grid_parameters)
+
+    # long_close_grid_qty_pct
+    @st.fragment
+    def fragment_long_close_grid_qty_pct(self):
+        if "edit_opt_v7_long_close_grid_qty_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_grid_qty_pct != (self.config.optimize.bounds.long_close_grid_qty_pct_0, self.config.optimize.bounds.long_close_grid_qty_pct_1):
+                self.config.optimize.bounds.long_close_grid_qty_pct_0 = st.session_state.edit_opt_v7_long_close_grid_qty_pct[0]
+                self.config.optimize.bounds.long_close_grid_qty_pct_1 = st.session_state.edit_opt_v7_long_close_grid_qty_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_grid_qty_pct = (self.config.optimize.bounds.long_close_grid_qty_pct_0, self.config.optimize.bounds.long_close_grid_qty_pct_1)
+        st.slider(
+            "long_close_grid_qty_pct",
+            min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN,
+            max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX,
+            step=Bounds.CLOSE_GRID_QTY_PCT_STEP,
+            format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT,
+            key="edit_opt_v7_long_close_grid_qty_pct",
+            help=pbgui_help.close_grid_parameters)
+
+    # long_close_trailing_grid_ratio
+    @st.fragment
+    def fragment_long_close_trailing_grid_ratio(self):
+        if "edit_opt_v7_long_close_trailing_grid_ratio" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_trailing_grid_ratio != (self.config.optimize.bounds.long_close_trailing_grid_ratio_0, self.config.optimize.bounds.long_close_trailing_grid_ratio_1):
+                self.config.optimize.bounds.long_close_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_long_close_trailing_grid_ratio[0]
+                self.config.optimize.bounds.long_close_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_long_close_trailing_grid_ratio[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_trailing_grid_ratio = (self.config.optimize.bounds.long_close_trailing_grid_ratio_0, self.config.optimize.bounds.long_close_trailing_grid_ratio_1)
+        st.slider(
+            "long_close_trailing_grid_ratio",
+            min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN,
+            max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX,
+            step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP,
+            format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT,
+            key="edit_opt_v7_long_close_trailing_grid_ratio",
+            help=pbgui_help.close_grid_parameters)
+
+    # long_close_trailing_qty_pct
+    @st.fragment
+    def fragment_long_close_trailing_qty_pct(self):
+        if "edit_opt_v7_long_close_trailing_qty_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_trailing_qty_pct != (self.config.optimize.bounds.long_close_trailing_qty_pct_0, self.config.optimize.bounds.long_close_trailing_qty_pct_1):
+                self.config.optimize.bounds.long_close_trailing_qty_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_qty_pct[0]
+                self.config.optimize.bounds.long_close_trailing_qty_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_qty_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_trailing_qty_pct = (self.config.optimize.bounds.long_close_trailing_qty_pct_0, self.config.optimize.bounds.long_close_trailing_qty_pct_1)
+        st.slider(
+            "long_close_trailing_qty_pct",
+            min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN,
+            max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX,
+            step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP,
+            format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT,
+            key="edit_opt_v7_long_close_trailing_qty_pct",
+            help=pbgui_help.close_grid_parameters)
+
+    # long_close_trailing_retracement_pct
+    @st.fragment
+    def fragment_long_close_trailing_retracement_pct(self):
+        if "edit_opt_v7_long_close_trailing_retracement_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_trailing_retracement_pct != (self.config.optimize.bounds.long_close_trailing_retracement_pct_0, self.config.optimize.bounds.long_close_trailing_retracement_pct_1):
+                self.config.optimize.bounds.long_close_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_retracement_pct[0]
+                self.config.optimize.bounds.long_close_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_retracement_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_trailing_retracement_pct = (self.config.optimize.bounds.long_close_trailing_retracement_pct_0, self.config.optimize.bounds.long_close_trailing_retracement_pct_1)
+        st.slider(
+            "long_close_trailing_retracement_pct",
+            min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN,
+            max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX,
+            step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP,
+            format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT,
+            key="edit_opt_v7_long_close_trailing_retracement_pct",
+            help=pbgui_help.close_grid_parameters)
+
+    # long_close_trailing_threshold_pct
+    @st.fragment
+    def fragment_long_close_trailing_threshold_pct(self):
+        if "edit_opt_v7_long_close_trailing_threshold_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_trailing_threshold_pct != (self.config.optimize.bounds.long_close_trailing_threshold_pct_0, self.config.optimize.bounds.long_close_trailing_threshold_pct_1):
+                self.config.optimize.bounds.long_close_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_threshold_pct[0]
+                self.config.optimize.bounds.long_close_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_threshold_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_trailing_threshold_pct = (self.config.optimize.bounds.long_close_trailing_threshold_pct_0, self.config.optimize.bounds.long_close_trailing_threshold_pct_1)
+        st.slider(
+            "long_close_trailing_threshold_pct",
+            min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN,
+            max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX,
+            step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP,
+            format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT,
+            key="edit_opt_v7_long_close_trailing_threshold_pct",
+            help=pbgui_help.close_grid_parameters)
+
+    # long_ema_span_0
+    @st.fragment
+    def fragment_long_ema_span_0(self):
+        if "edit_opt_v7_long_ema_span_0" in st.session_state:
+            if st.session_state.edit_opt_v7_long_ema_span_0 != (self.config.optimize.bounds.long_ema_span_0_0, self.config.optimize.bounds.long_ema_span_0_1):
+                self.config.optimize.bounds.long_ema_span_0_0 = st.session_state.edit_opt_v7_long_ema_span_0[0]
+                self.config.optimize.bounds.long_ema_span_0_1 = st.session_state.edit_opt_v7_long_ema_span_0[1]
+        else:
+            st.session_state.edit_opt_v7_long_ema_span_0 = (self.config.optimize.bounds.long_ema_span_0_0, self.config.optimize.bounds.long_ema_span_0_1)
+        st.slider(
+            "long_ema_span_0",
+            min_value=Bounds.EMA_SPAN_0_MIN,
+            max_value=Bounds.EMA_SPAN_0_MAX,
+            step=Bounds.EMA_SPAN_0_STEP,
+            format=Bounds.EMA_SPAN_0_FORMAT,
+            key="edit_opt_v7_long_ema_span_0",
+            help=pbgui_help.ema_span)
+    
+    # long_ema_span_1
+    @st.fragment
+    def fragment_long_ema_span_1(self):
+        if "edit_opt_v7_long_ema_span_1" in st.session_state:
+            if st.session_state.edit_opt_v7_long_ema_span_1 != (self.config.optimize.bounds.long_ema_span_1_0, self.config.optimize.bounds.long_ema_span_1_1):
+                self.config.optimize.bounds.long_ema_span_1_0 = st.session_state.edit_opt_v7_long_ema_span_1[0]
+                self.config.optimize.bounds.long_ema_span_1_1 = st.session_state.edit_opt_v7_long_ema_span_1[1]
+        else:
+            st.session_state.edit_opt_v7_long_ema_span_1 = (self.config.optimize.bounds.long_ema_span_1_0, self.config.optimize.bounds.long_ema_span_1_1)
+        st.slider(
+            "long_ema_span_1",
+            min_value=Bounds.EMA_SPAN_1_MIN,
+            max_value=Bounds.EMA_SPAN_1_MAX,
+            step=Bounds.EMA_SPAN_1_STEP,
+            format=Bounds.EMA_SPAN_1_FORMAT,
+            key="edit_opt_v7_long_ema_span_1",
+            help=pbgui_help.ema_span)
+    
+    # long_entry_grid_double_down_factor
+    @st.fragment
+    def fragment_long_entry_grid_double_down_factor(self):
+        if "edit_opt_v7_long_entry_grid_double_down_factor" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_grid_double_down_factor != (self.config.optimize.bounds.long_entry_grid_double_down_factor_0, self.config.optimize.bounds.long_entry_grid_double_down_factor_1):
+                self.config.optimize.bounds.long_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor[0]
+                self.config.optimize.bounds.long_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_grid_double_down_factor = (self.config.optimize.bounds.long_entry_grid_double_down_factor_0, self.config.optimize.bounds.long_entry_grid_double_down_factor_1)
+        st.slider(
+            "long_entry_grid_double_down_factor",
+            min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN,
+            max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX,
+            step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP,
+            format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT,
+            key="edit_opt_v7_long_entry_grid_double_down_factor",
+            help=pbgui_help.entry_grid_double_down_factor)
+    
+    # long_entry_grid_spacing_pct
+    @st.fragment
+    def fragment_long_entry_grid_spacing_pct(self):
+        if "edit_opt_v7_long_entry_grid_spacing_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_grid_spacing_pct != (self.config.optimize.bounds.long_entry_grid_spacing_pct_0, self.config.optimize.bounds.long_entry_grid_spacing_pct_1):
+                self.config.optimize.bounds.long_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct[0]
+                self.config.optimize.bounds.long_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_grid_spacing_pct = (self.config.optimize.bounds.long_entry_grid_spacing_pct_0, self.config.optimize.bounds.long_entry_grid_spacing_pct_1)
+        st.slider(
+            "long_entry_grid_spacing_pct",
+            min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_PCT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT,
+            key="edit_opt_v7_long_entry_grid_spacing_pct",
+            help=pbgui_help.entry_grid_spacing)
+    
+    # long_entry_grid_spacing_weight
+    @st.fragment
+    def fragment_long_entry_grid_spacing_weight(self):
+        if "edit_opt_v7_long_entry_grid_spacing_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_grid_spacing_weight != (self.config.optimize.bounds.long_entry_grid_spacing_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_weight_1):
+                self.config.optimize.bounds.long_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight[0]
+                self.config.optimize.bounds.long_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_grid_spacing_weight = (self.config.optimize.bounds.long_entry_grid_spacing_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_weight_1)
+        st.slider(
+            "long_entry_grid_spacing_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_grid_spacing_weight",
+            help=pbgui_help.entry_grid_spacing)
+    
+    # long_entry_initial_ema_dist
+    @st.fragment
+    def fragment_long_entry_initial_ema_dist(self):
+        if "edit_opt_v7_long_entry_initial_ema_dist" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_initial_ema_dist != (self.config.optimize.bounds.long_entry_initial_ema_dist_0, self.config.optimize.bounds.long_entry_initial_ema_dist_1):
+                self.config.optimize.bounds.long_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist[0]
+                self.config.optimize.bounds.long_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_initial_ema_dist = (self.config.optimize.bounds.long_entry_initial_ema_dist_0, self.config.optimize.bounds.long_entry_initial_ema_dist_1)
+        st.slider(
+            "long_entry_initial_ema_dist",
+            min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN,
+            max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX,
+            step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP,
+            format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT,
+            key="edit_opt_v7_long_entry_initial_ema_dist",
+            help=pbgui_help.entry_initial_ema_dist)
+    
+    # long_entry_initial_qty_pct
+    @st.fragment
+    def fragment_long_entry_initial_qty_pct(self):
+        if "edit_opt_v7_long_entry_initial_qty_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_initial_qty_pct != (self.config.optimize.bounds.long_entry_initial_qty_pct_0, self.config.optimize.bounds.long_entry_initial_qty_pct_1):
+                self.config.optimize.bounds.long_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct[0]
+                self.config.optimize.bounds.long_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_initial_qty_pct = (self.config.optimize.bounds.long_entry_initial_qty_pct_0, self.config.optimize.bounds.long_entry_initial_qty_pct_1)
+        st.slider(
+            "long_entry_initial_qty_pct",
+            min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN,
+            max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX,
+            step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP,
+            format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT,
+            key="edit_opt_v7_long_entry_initial_qty_pct",
+            help=pbgui_help.entry_initial_qty_pct)
+    
+    # long_entry_trailing_grid_ratio
+    @st.fragment
+    def fragment_long_entry_trailing_grid_ratio(self):
+        if "edit_opt_v7_long_entry_trailing_grid_ratio" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio != (self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, self.config.optimize.bounds.long_entry_trailing_grid_ratio_1):
+                self.config.optimize.bounds.long_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio[0]
+                self.config.optimize.bounds.long_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio = (self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, self.config.optimize.bounds.long_entry_trailing_grid_ratio_1)
+        st.slider(
+            "long_entry_trailing_grid_ratio",
+            min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN,
+            max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX,
+            step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP,
+            format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_grid_ratio",
+            help=pbgui_help.trailing_parameters)
+    
+    # long_entry_trailing_retracement_pct
+    @st.fragment
+    def fragment_long_entry_trailing_retracement_pct(self):
+        if "edit_opt_v7_long_entry_trailing_retracement_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct != (self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, self.config.optimize.bounds.long_entry_trailing_retracement_pct_1):
+                self.config.optimize.bounds.long_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct[0]
+                self.config.optimize.bounds.long_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct = (self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, self.config.optimize.bounds.long_entry_trailing_retracement_pct_1)
+        st.slider(
+            "long_entry_trailing_retracement_pct",
+            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX,
+            step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP,
+            format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_retracement_pct",
+            help=pbgui_help.trailing_parameters)
+    
+    # long_entry_trailing_threshold_pct
+    @st.fragment
+    def fragment_long_entry_trailing_threshold_pct(self):
+        if "edit_opt_v7_long_entry_trailing_threshold_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct != (self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, self.config.optimize.bounds.long_entry_trailing_threshold_pct_1):
+                self.config.optimize.bounds.long_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct[0]
+                self.config.optimize.bounds.long_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct = (self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, self.config.optimize.bounds.long_entry_trailing_threshold_pct_1)
+        st.slider(
+            "long_entry_trailing_threshold_pct",
+            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX,
+            step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP,
+            format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_threshold_pct",
+            help=pbgui_help.trailing_parameters)
+    
+    # long_filter_relative_volume_clip_pct
+    @st.fragment
+    def fragment_long_filter_relative_volume_clip_pct(self):
+        if "edit_opt_v7_long_filter_relative_volume_clip_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct != (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1):
+                self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[0]
+                self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct = (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1)
+        st.slider(
+            "long_filter_relative_volume_clip_pct",
+            min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
+            max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
+            step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
+            format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
+            key="edit_opt_v7_long_filter_relative_volume_clip_pct",
+            help=pbgui_help.filter_relative_volume_clip_pct)
+
+    # long_filter_rolling_window
+    @st.fragment
+    def fragment_long_filter_rolling_window(self):
+        if "edit_opt_v7_long_filter_rolling_window" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_rolling_window != (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1):
+                self.config.optimize.bounds.long_filter_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_rolling_window[0]
+                self.config.optimize.bounds.long_filter_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_rolling_window[1]
+        else:
+            st.session_state.edit_opt_v7_long_filter_rolling_window = (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1)
+        st.slider(
+            "long_filter_rolling_window",
+            min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
+            max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
+            step=Bounds.FILTER_ROLLING_WINDOW_STEP,
+            format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
+            key="edit_opt_v7_long_filter_rolling_window",
+            help=pbgui_help.filter_rolling_window)
+
+    # long_n_positions
+    @st.fragment
+    def fragment_long_n_positions(self):
+        if "edit_opt_v7_long_n_positions" in st.session_state:
+            if st.session_state.edit_opt_v7_long_n_positions != (self.config.optimize.bounds.long_n_positions_0, self.config.optimize.bounds.long_n_positions_1):
+                self.config.optimize.bounds.long_n_positions_0 = st.session_state.edit_opt_v7_long_n_positions[0]
+                self.config.optimize.bounds.long_n_positions_1 = st.session_state.edit_opt_v7_long_n_positions[1]
+        else:
+            st.session_state.edit_opt_v7_long_n_positions = (self.config.optimize.bounds.long_n_positions_0, self.config.optimize.bounds.long_n_positions_1)
+        st.slider(
+            "long_n_positions",
+            min_value=Bounds.N_POSITIONS_MIN,
+            max_value=Bounds.N_POSITIONS_MAX,
+            step=Bounds.N_POSITIONS_STEP,
+            format=Bounds.N_POSITIONS_FORMAT,
+            key="edit_opt_v7_long_n_positions",
+            help=pbgui_help.n_positions)
+    
+    # long_total_wallet_exposure_limit
+    @st.fragment
+    def fragment_long_total_wallet_exposure_limit(self):
+        if "edit_opt_v7_long_total_wallet_exposure_limit" in st.session_state:
+            if st.session_state.edit_opt_v7_long_total_wallet_exposure_limit != (self.config.optimize.bounds.long_total_wallet_exposure_limit_0, self.config.optimize.bounds.long_total_wallet_exposure_limit_1):
+                self.config.optimize.bounds.long_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit[0]
+                self.config.optimize.bounds.long_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit[1]
+        else:
+            st.session_state.edit_opt_v7_long_total_wallet_exposure_limit = (self.config.optimize.bounds.long_total_wallet_exposure_limit_0, self.config.optimize.bounds.long_total_wallet_exposure_limit_1)
+        st.slider(
+            "long_total_wallet_exposure_limit",
+            min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN,
+            max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX,
+            step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP,
+            format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT,
+            key="edit_opt_v7_long_total_wallet_exposure_limit",
+            help=pbgui_help.total_wallet_exposure_limit)
+
+    # long_unstuck_close_pct
+    @st.fragment
+    def fragment_long_unstuck_close_pct(self):
+        if "edit_opt_v7_long_unstuck_close_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_unstuck_close_pct != (self.config.optimize.bounds.long_unstuck_close_pct_0, self.config.optimize.bounds.long_unstuck_close_pct_1):
+                self.config.optimize.bounds.long_unstuck_close_pct_0 = st.session_state.edit_opt_v7_long_unstuck_close_pct[0]
+                self.config.optimize.bounds.long_unstuck_close_pct_1 = st.session_state.edit_opt_v7_long_unstuck_close_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_unstuck_close_pct = (self.config.optimize.bounds.long_unstuck_close_pct_0, self.config.optimize.bounds.long_unstuck_close_pct_1)
+        st.slider(
+            "long_unstuck_close_pct",
+            min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN,
+            max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX,
+            step=Bounds.UNSTUCK_CLOSE_PCT_STEP,
+            format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT,
+            key="edit_opt_v7_long_unstuck_close_pct",
+            help=pbgui_help.unstuck_close_pct)
+
+    # long_unstuck_ema_dist
+    @st.fragment
+    def fragment_long_unstuck_ema_dist(self):
+        if "edit_opt_v7_long_unstuck_ema_dist" in st.session_state:
+            if st.session_state.edit_opt_v7_long_unstuck_ema_dist != (self.config.optimize.bounds.long_unstuck_ema_dist_0, self.config.optimize.bounds.long_unstuck_ema_dist_1):
+                self.config.optimize.bounds.long_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_long_unstuck_ema_dist[0]
+                self.config.optimize.bounds.long_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_long_unstuck_ema_dist[1]
+        else:
+            st.session_state.edit_opt_v7_long_unstuck_ema_dist = (self.config.optimize.bounds.long_unstuck_ema_dist_0, self.config.optimize.bounds.long_unstuck_ema_dist_1)
+        st.slider(
+            "long_unstuck_ema_dist",
+            min_value=Bounds.UNSTUCK_EMA_DIST_MIN,
+            max_value=Bounds.UNSTUCK_EMA_DIST_MAX,
+            step=Bounds.UNSTUCK_EMA_DIST_STEP,
+            format=Bounds.UNSTUCK_EMA_DIST_FORMAT,
+            key="edit_opt_v7_long_unstuck_ema_dist",
+            help=pbgui_help.unstuck_ema_dist)
+
+    # long_unstuck_loss_allowance_pct
+    @st.fragment
+    def fragment_long_unstuck_loss_allowance_pct(self):
+        if "edit_opt_v7_long_unstuck_loss_allowance_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct != (self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1):
+                self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct[0]
+                self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct = (self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1)
+        st.slider(
+            "long_unstuck_loss_allowance_pct",
+            min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN,
+            max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX,
+            step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP,
+            format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT,
+            key="edit_opt_v7_long_unstuck_loss_allowance_pct",
+            help=pbgui_help.unstuck_loss_allowance_pct)
+
+    # long_unstuck_threshold
+    @st.fragment
+    def fragment_long_unstuck_threshold(self):
+        if "edit_opt_v7_long_unstuck_threshold" in st.session_state:
+            if st.session_state.edit_opt_v7_long_unstuck_threshold != (self.config.optimize.bounds.long_unstuck_threshold_0, self.config.optimize.bounds.long_unstuck_threshold_1):
+                self.config.optimize.bounds.long_unstuck_threshold_0 = st.session_state.edit_opt_v7_long_unstuck_threshold[0]
+                self.config.optimize.bounds.long_unstuck_threshold_1 = st.session_state.edit_opt_v7_long_unstuck_threshold[1]
+        else:
+            st.session_state.edit_opt_v7_long_unstuck_threshold = (self.config.optimize.bounds.long_unstuck_threshold_0, self.config.optimize.bounds.long_unstuck_threshold_1)
+        st.slider(
+            "long_unstuck_threshold",
+            min_value=Bounds.UNSTUCK_THRESHOLD_MIN,
+            max_value=Bounds.UNSTUCK_THRESHOLD_MAX,
+            step=Bounds.UNSTUCK_THRESHOLD_STEP,
+            format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
+            key="edit_opt_v7_long_unstuck_threshold",
+            help=pbgui_help.unstuck_threshold)
+
+    # short_close_grid_markup_range
+    @st.fragment
+    def fragment_short_close_grid_markup_range(self):
+        if "edit_opt_v7_short_close_grid_markup_range" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_grid_markup_range != (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1):
+                self.config.optimize.bounds.short_close_grid_markup_range_0 = st.session_state.edit_opt_v7_short_close_grid_markup_range[0]
+                self.config.optimize.bounds.short_close_grid_markup_range_1 = st.session_state.edit_opt_v7_short_close_grid_markup_range[1]
+        else:
+            st.session_state.edit_opt_v7_short_close_grid_markup_range = (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1)
+        st.slider(
+            "short_close_grid_markup_range",
+            min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
+            max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
+            step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
+            format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
+            key="edit_opt_v7_short_close_grid_markup_range",
+            help=pbgui_help.close_grid_parameters)
+    
+    # short_close_grid_min_markup
+    @st.fragment
+    def fragment_short_close_grid_min_markup(self):
+        if "edit_opt_v7_short_close_grid_min_markup" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_grid_min_markup != (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1):
+                self.config.optimize.bounds.short_close_grid_min_markup_0 = st.session_state.edit_opt_v7_short_close_grid_min_markup[0]
+                self.config.optimize.bounds.short_close_grid_min_markup_1 = st.session_state.edit_opt_v7_short_close_grid_min_markup[1]
+        else:
+            st.session_state.edit_opt_v7_short_close_grid_min_markup = (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1)
+        st.slider(
+            "short_close_grid_min_markup",
+            min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
+            max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
+            step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
+            format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
+            key="edit_opt_v7_short_close_grid_min_markup",
+            help=pbgui_help.close_grid_parameters)
+    
+    # short_close_grid_qty_pct
+    @st.fragment
+    def fragment_short_close_grid_qty_pct(self):
+        if "edit_opt_v7_short_close_grid_qty_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_grid_qty_pct != (self.config.optimize.bounds.short_close_grid_qty_pct_0, self.config.optimize.bounds.short_close_grid_qty_pct_1):
+                self.config.optimize.bounds.short_close_grid_qty_pct_0 = st.session_state.edit_opt_v7_short_close_grid_qty_pct[0]
+                self.config.optimize.bounds.short_close_grid_qty_pct_1 = st.session_state.edit_opt_v7_short_close_grid_qty_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_close_grid_qty_pct = (self.config.optimize.bounds.short_close_grid_qty_pct_0, self.config.optimize.bounds.short_close_grid_qty_pct_1)
+        st.slider(
+            "short_close_grid_qty_pct",
+            min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN,
+            max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX,
+            step=Bounds.CLOSE_GRID_QTY_PCT_STEP,
+            format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT,
+            key="edit_opt_v7_short_close_grid_qty_pct",
+            help=pbgui_help.close_grid_parameters)
+
+    # short_close_trailing_grid_ratio
+    @st.fragment
+    def fragment_short_close_trailing_grid_ratio(self):
+        if "edit_opt_v7_short_close_trailing_grid_ratio" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_trailing_grid_ratio != (self.config.optimize.bounds.short_close_trailing_grid_ratio_0, self.config.optimize.bounds.short_close_trailing_grid_ratio_1):
+                self.config.optimize.bounds.short_close_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio[0]
+                self.config.optimize.bounds.short_close_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio[1]
+        else:
+            st.session_state.edit_opt_v7_short_close_trailing_grid_ratio = (self.config.optimize.bounds.short_close_trailing_grid_ratio_0, self.config.optimize.bounds.short_close_trailing_grid_ratio_1)
+        st.slider(
+            "short_close_trailing_grid_ratio",
+            min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN,
+            max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX,
+            step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP,
+            format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT,
+            key="edit_opt_v7_short_close_trailing_grid_ratio",
+            help=pbgui_help.close_grid_parameters)
+    
+    # short_close_trailing_qty_pct
+    @st.fragment
+    def fragment_short_close_trailing_qty_pct(self):
+        if "edit_opt_v7_short_close_trailing_qty_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_trailing_qty_pct != (self.config.optimize.bounds.short_close_trailing_qty_pct_0, self.config.optimize.bounds.short_close_trailing_qty_pct_1):
+                self.config.optimize.bounds.short_close_trailing_qty_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct[0]
+                self.config.optimize.bounds.short_close_trailing_qty_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_close_trailing_qty_pct = (self.config.optimize.bounds.short_close_trailing_qty_pct_0, self.config.optimize.bounds.short_close_trailing_qty_pct_1)
+        st.slider(
+            "short_close_trailing_qty_pct",
+            min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN,
+            max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX,
+            step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP,
+            format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT,
+            key="edit_opt_v7_short_close_trailing_qty_pct",
+            help=pbgui_help.trailing_parameters)
+    
+    # short_close_trailing_retracement_pct
+    @st.fragment
+    def fragment_short_close_trailing_retracement_pct(self):
+        if "edit_opt_v7_short_close_trailing_retracement_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_trailing_retracement_pct != (self.config.optimize.bounds.short_close_trailing_retracement_pct_0, self.config.optimize.bounds.short_close_trailing_retracement_pct_1):
+                self.config.optimize.bounds.short_close_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct[0]
+                self.config.optimize.bounds.short_close_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_close_trailing_retracement_pct = (self.config.optimize.bounds.short_close_trailing_retracement_pct_0, self.config.optimize.bounds.short_close_trailing_retracement_pct_1)
+        st.slider(
+            "short_close_trailing_retracement_pct",
+            min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN,
+            max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX,
+            step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP,
+            format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT,
+            key="edit_opt_v7_short_close_trailing_retracement_pct",
+            help=pbgui_help.trailing_parameters)
+    
+    # short_close_trailing_threshold_pct
+    @st.fragment
+    def fragment_short_close_trailing_threshold_pct(self):
+        if "edit_opt_v7_short_close_trailing_threshold_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_trailing_threshold_pct != (self.config.optimize.bounds.short_close_trailing_threshold_pct_0, self.config.optimize.bounds.short_close_trailing_threshold_pct_1):
+                self.config.optimize.bounds.short_close_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct[0]
+                self.config.optimize.bounds.short_close_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_close_trailing_threshold_pct = (self.config.optimize.bounds.short_close_trailing_threshold_pct_0, self.config.optimize.bounds.short_close_trailing_threshold_pct_1)
+        st.slider(
+            "short_close_trailing_threshold_pct",
+            min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN,
+            max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX,
+            step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP,
+            format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT,
+            key="edit_opt_v7_short_close_trailing_threshold_pct",
+            help=pbgui_help.trailing_parameters)
+    
+    # short_ema_span_0
+    @st.fragment
+    def fragment_short_ema_span_0(self):
+        if "edit_opt_v7_short_ema_span_0" in st.session_state:
+            if st.session_state.edit_opt_v7_short_ema_span_0 != self.config.optimize.bounds.short_ema_span_0:
+                self.config.optimize.bounds.short_ema_span_0 = st.session_state.edit_opt_v7_short_ema_span_0
+        st.slider(
+            "short_ema_span_0",
+            min_value=Bounds.EMA_SPAN_0_MIN,
+            max_value=Bounds.EMA_SPAN_0_MAX,
+            step=Bounds.EMA_SPAN_0_STEP,
+            format=Bounds.EMA_SPAN_0_FORMAT,
+            key="edit_opt_v7_short_ema_span_0",
+            help=pbgui_help.ema_span)
+    
+    # short_ema_span_1
+    @st.fragment
+    def fragment_short_ema_span_1(self):
+        if "edit_opt_v7_short_ema_span_1" in st.session_state:
+            if st.session_state.edit_opt_v7_short_ema_span_1 != self.config.optimize.bounds.short_ema_span_1:
+                self.config.optimize.bounds.short_ema_span_1 = st.session_state.edit_opt_v7_short_ema_span_1
+        st.slider(
+            "short_ema_span_1",
+            min_value=Bounds.EMA_SPAN_1_MIN,
+            max_value=Bounds.EMA_SPAN_1_MAX,
+            step=Bounds.EMA_SPAN_1_STEP,
+            format=Bounds.EMA_SPAN_1_FORMAT,
+            key="edit_opt_v7_short_ema_span_1",
+            help=pbgui_help.ema_span)
+    
+    # short_entry_grid_double_down_factor
+    @st.fragment
+    def fragment_short_entry_grid_double_down_factor(self):
+        if "edit_opt_v7_short_entry_grid_double_down_factor" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_grid_double_down_factor != (self.config.optimize.bounds.short_entry_grid_double_down_factor_0, self.config.optimize.bounds.short_entry_grid_double_down_factor_1):
+                self.config.optimize.bounds.short_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor[0]
+                self.config.optimize.bounds.short_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_grid_double_down_factor = (self.config.optimize.bounds.short_entry_grid_double_down_factor_0, self.config.optimize.bounds.short_entry_grid_double_down_factor_1)
+        st.slider(
+            "short_entry_grid_double_down_factor",
+            min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN,
+            max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX,
+            step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP,
+            format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT,
+            key="edit_opt_v7_short_entry_grid_double_down_factor",
+            help=pbgui_help.entry_grid_double_down_factor)
+
+    # short_entry_grid_spacing_pct
+    @st.fragment
+    def fragment_short_entry_grid_spacing_pct(self):
+        if "edit_opt_v7_short_entry_grid_spacing_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_grid_spacing_pct != (self.config.optimize.bounds.short_entry_grid_spacing_pct_0, self.config.optimize.bounds.short_entry_grid_spacing_pct_1):
+                self.config.optimize.bounds.short_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct[0]
+                self.config.optimize.bounds.short_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_grid_spacing_pct = (self.config.optimize.bounds.short_entry_grid_spacing_pct_0, self.config.optimize.bounds.short_entry_grid_spacing_pct_1)
+        st.slider(
+            "short_entry_grid_spacing_pct",
+            min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_PCT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT,
+            key="edit_opt_v7_short_entry_grid_spacing_pct",
+            help=pbgui_help.entry_grid_spacing)
+    
+    # short_entry_grid_spacing_weight
+    @st.fragment
+    def fragment_short_entry_grid_spacing_weight(self):
+        if "edit_opt_v7_short_entry_grid_spacing_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_grid_spacing_weight != (self.config.optimize.bounds.short_entry_grid_spacing_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_weight_1):
+                self.config.optimize.bounds.short_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight[0]
+                self.config.optimize.bounds.short_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_grid_spacing_weight = (self.config.optimize.bounds.short_entry_grid_spacing_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_weight_1)
+        st.slider(
+            "short_entry_grid_spacing_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_grid_spacing_weight",
+            help=pbgui_help.entry_grid_spacing)
+    
+    # short_entry_initial_ema_dist
+    @st.fragment
+    def fragment_short_entry_initial_ema_dist(self):
+        if "edit_opt_v7_short_entry_initial_ema_dist" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_initial_ema_dist != (self.config.optimize.bounds.short_entry_initial_ema_dist_0, self.config.optimize.bounds.short_entry_initial_ema_dist_1):
+                self.config.optimize.bounds.short_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist[0]
+                self.config.optimize.bounds.short_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_initial_ema_dist = (self.config.optimize.bounds.short_entry_initial_ema_dist_0, self.config.optimize.bounds.short_entry_initial_ema_dist_1)
+        st.slider(
+            "short_entry_initial_ema_dist",
+            min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN,
+            max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX,
+            step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP,
+            format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT,
+            key="edit_opt_v7_short_entry_initial_ema_dist",
+            help=pbgui_help.entry_initial_ema_dist)
+
+    # short_entry_initial_qty_pct
+    @st.fragment
+    def fragment_short_entry_initial_qty_pct(self):
+        if "edit_opt_v7_short_entry_initial_qty_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_initial_qty_pct != (self.config.optimize.bounds.short_entry_initial_qty_pct_0, self.config.optimize.bounds.short_entry_initial_qty_pct_1):
+                self.config.optimize.bounds.short_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct[0]
+                self.config.optimize.bounds.short_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_initial_qty_pct = (self.config.optimize.bounds.short_entry_initial_qty_pct_0, self.config.optimize.bounds.short_entry_initial_qty_pct_1)
+        st.slider(
+            "short_entry_initial_qty_pct",
+            min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN,
+            max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX,
+            step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP,
+            format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT,
+            key="edit_opt_v7_short_entry_initial_qty_pct",
+            help=pbgui_help.entry_initial_qty_pct)
+    
+    # short_entry_trailing_grid_ratio
+    @st.fragment
+    def fragment_short_entry_trailing_grid_ratio(self):
+        if "edit_opt_v7_short_entry_trailing_grid_ratio" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio != (self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, self.config.optimize.bounds.short_entry_trailing_grid_ratio_1):
+                self.config.optimize.bounds.short_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio[0]
+                self.config.optimize.bounds.short_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio = (self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, self.config.optimize.bounds.short_entry_trailing_grid_ratio_1)
+        st.slider(
+            "short_entry_trailing_grid_ratio",
+            min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN,
+            max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX,
+            step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP,
+            format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_grid_ratio",
+            help=pbgui_help.trailing_parameters)
+    
+    # short_entry_trailing_retracement_pct
+    @st.fragment
+    def fragment_short_entry_trailing_retracement_pct(self):
+        if "edit_opt_v7_short_entry_trailing_retracement_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct != (self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, self.config.optimize.bounds.short_entry_trailing_retracement_pct_1):
+                self.config.optimize.bounds.short_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct[0]
+                self.config.optimize.bounds.short_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct = (self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, self.config.optimize.bounds.short_entry_trailing_retracement_pct_1)
+        st.slider(
+            "short_entry_trailing_retracement_pct",
+            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX,
+            step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP,
+            format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_retracement_pct",
+            help=pbgui_help.trailing_parameters)
+    
+    # short_entry_trailing_threshold_pct
+    @st.fragment
+    def fragment_short_entry_trailing_threshold_pct(self):
+        if "edit_opt_v7_short_entry_trailing_threshold_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct != (self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, self.config.optimize.bounds.short_entry_trailing_threshold_pct_1):
+                self.config.optimize.bounds.short_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct[0]
+                self.config.optimize.bounds.short_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct = (self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, self.config.optimize.bounds.short_entry_trailing_threshold_pct_1)
+        st.slider(
+            "short_entry_trailing_threshold_pct",
+            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX,
+            step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP,
+            format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_threshold_pct",
+            help=pbgui_help.trailing_parameters)
+    
+    # short_filter_relative_volume_clip_pct
+    @st.fragment
+    def fragment_short_filter_relative_volume_clip_pct(self):
+        if "edit_opt_v7_short_filter_relative_volume_clip_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct != (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1):
+                self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[0]
+                self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct = (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1)
+        st.slider(
+            "short_filter_relative_volume_clip_pct",
+            min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
+            max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
+            step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
+            format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
+            key="edit_opt_v7_short_filter_relative_volume_clip_pct",
+            help=pbgui_help.filter_relative_volume_clip_pct)
+
+    # short_filter_rolling_window
+    @st.fragment
+    def fragment_short_filter_rolling_window(self):
+        if "edit_opt_v7_short_filter_rolling_window" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_rolling_window != (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1):
+                self.config.optimize.bounds.short_filter_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_rolling_window[0]
+                self.config.optimize.bounds.short_filter_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_rolling_window[1]
+        else:
+            st.session_state.edit_opt_v7_short_filter_rolling_window = (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1)
+        st.slider(
+            "short_filter_rolling_window",
+            min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
+            max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
+            step=Bounds.FILTER_ROLLING_WINDOW_STEP,
+            format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
+            key="edit_opt_v7_short_filter_rolling_window",
+            help=pbgui_help.filter_rolling_window)
+    
+    # short_n_positions
+    @st.fragment
+    def fragment_short_n_positions(self):
+        if "edit_opt_v7_short_n_positions" in st.session_state:
+            if st.session_state.edit_opt_v7_short_n_positions != (self.config.optimize.bounds.short_n_positions_0, self.config.optimize.bounds.short_n_positions_1):
+                self.config.optimize.bounds.short_n_positions_0 = st.session_state.edit_opt_v7_short_n_positions[0]
+                self.config.optimize.bounds.short_n_positions_1 = st.session_state.edit_opt_v7_short_n_positions[1]
+        else:
+            st.session_state.edit_opt_v7_short_n_positions = (self.config.optimize.bounds.short_n_positions_0, self.config.optimize.bounds.short_n_positions_1)
+        st.slider(
+            "short_n_positions",
+            min_value=Bounds.N_POSITIONS_MIN,
+            max_value=Bounds.N_POSITIONS_MAX,
+            step=Bounds.N_POSITIONS_STEP,
+            format=Bounds.N_POSITIONS_FORMAT,
+            key="edit_opt_v7_short_n_positions",
+            help=pbgui_help.n_positions)
+    
+    # short_total_wallet_exposure_limit
+    @st.fragment
+    def fragment_short_total_wallet_exposure_limit(self):
+        if "edit_opt_v7_short_total_wallet_exposure_limit" in st.session_state:
+            if st.session_state.edit_opt_v7_short_total_wallet_exposure_limit != (self.config.optimize.bounds.short_total_wallet_exposure_limit_0, self.config.optimize.bounds.short_total_wallet_exposure_limit_1):
+                self.config.optimize.bounds.short_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit[0]
+                self.config.optimize.bounds.short_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit[1]
+        else:
+            st.session_state.edit_opt_v7_short_total_wallet_exposure_limit = (self.config.optimize.bounds.short_total_wallet_exposure_limit_0, self.config.optimize.bounds.short_total_wallet_exposure_limit_1)
+        st.slider(
+            "short_total_wallet_exposure_limit",
+            min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN,
+            max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX,
+            step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP,
+            format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT,
+            key="edit_opt_v7_short_total_wallet_exposure_limit",
+            help=pbgui_help.total_wallet_exposure_limit)
+    
+    # short_unstuck_close_pct
+    @st.fragment
+    def fragment_short_unstuck_close_pct(self):
+        if "edit_opt_v7_short_unstuck_close_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_unstuck_close_pct != (self.config.optimize.bounds.short_unstuck_close_pct_0, self.config.optimize.bounds.short_unstuck_close_pct_1):
+                self.config.optimize.bounds.short_unstuck_close_pct_0 = st.session_state.edit_opt_v7_short_unstuck_close_pct[0]
+                self.config.optimize.bounds.short_unstuck_close_pct_1 = st.session_state.edit_opt_v7_short_unstuck_close_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_unstuck_close_pct = (self.config.optimize.bounds.short_unstuck_close_pct_0, self.config.optimize.bounds.short_unstuck_close_pct_1)
+        st.slider(
+            "short_unstuck_close_pct",
+            min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN,
+            max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX,
+            step=Bounds.UNSTUCK_CLOSE_PCT_STEP,
+            format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT,
+            key="edit_opt_v7_short_unstuck_close_pct",
+            help=pbgui_help.unstuck_close_pct)
+
+    # short_unstuck_ema_dist
+    @st.fragment
+    def fragment_short_unstuck_ema_dist(self):
+        if "edit_opt_v7_short_unstuck_ema_dist" in st.session_state:
+            if st.session_state.edit_opt_v7_short_unstuck_ema_dist != (self.config.optimize.bounds.short_unstuck_ema_dist_0, self.config.optimize.bounds.short_unstuck_ema_dist_1):
+                self.config.optimize.bounds.short_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_short_unstuck_ema_dist[0]
+                self.config.optimize.bounds.short_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_short_unstuck_ema_dist[1]
+        else:
+            st.session_state.edit_opt_v7_short_unstuck_ema_dist = (self.config.optimize.bounds.short_unstuck_ema_dist_0, self.config.optimize.bounds.short_unstuck_ema_dist_1)
+        st.slider(
+            "short_unstuck_ema_dist",
+            min_value=Bounds.UNSTUCK_EMA_DIST_MIN,
+            max_value=Bounds.UNSTUCK_EMA_DIST_MAX,
+            step=Bounds.UNSTUCK_EMA_DIST_STEP,
+            format=Bounds.UNSTUCK_EMA_DIST_FORMAT,
+            key="edit_opt_v7_short_unstuck_ema_dist",
+            help=pbgui_help.unstuck_ema_dist)
+    
+    # short_unstuck_loss_allowance_pct
+    @st.fragment
+    def fragment_short_unstuck_loss_allowance_pct(self):
+        if "edit_opt_v7_short_unstuck_loss_allowance_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct != (self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1):
+                self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct[0]
+                self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct = (self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1)
+        st.slider(
+            "short_unstuck_loss_allowance_pct",
+            min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN,
+            max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX,
+            step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP,
+            format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT,
+            key="edit_opt_v7_short_unstuck_loss_allowance_pct",
+            help=pbgui_help.unstuck_loss_allowance_pct)
+    
+    # short_unstuck_threshold
+    @st.fragment
+    def fragment_short_unstuck_threshold(self):
+        if "edit_opt_v7_short_unstuck_threshold" in st.session_state:
+            if st.session_state.edit_opt_v7_short_unstuck_threshold != (self.config.optimize.bounds.short_unstuck_threshold_0, self.config.optimize.bounds.short_unstuck_threshold_1):
+                self.config.optimize.bounds.short_unstuck_threshold_0 = st.session_state.edit_opt_v7_short_unstuck_threshold[0]
+                self.config.optimize.bounds.short_unstuck_threshold_1 = st.session_state.edit_opt_v7_short_unstuck_threshold[1]
+        else:
+            st.session_state.edit_opt_v7_short_unstuck_threshold = (self.config.optimize.bounds.short_unstuck_threshold_0, self.config.optimize.bounds.short_unstuck_threshold_1)
+        st.slider(
+            "short_unstuck_threshold",
+            min_value=Bounds.UNSTUCK_THRESHOLD_MIN,
+            max_value=Bounds.UNSTUCK_THRESHOLD_MAX,
+            step=Bounds.UNSTUCK_THRESHOLD_STEP,
+            format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
+            key="edit_opt_v7_short_unstuck_threshold",
+            help=pbgui_help.unstuck_threshold)
 
     def edit(self):
         # Init coindata
@@ -831,16 +1708,66 @@ class OptimizeV7Item:
             st.multiselect('approved_coins_short', coindata_symbols, default=self.config.live.approved_coins.short, key="edit_opt_v7_approved_coins_short")
 
         col1, col2 = st.columns([1,1])
-        st.write("Bounds long")
         with col1:
-            with st.container():
+            with st.container(border=True):
+                st.write("Bounds long")
                 self.fragment_long_close_grid_markup_range()
-        with col2:
-            with st.container():
-                st.empty()
+                self.fragment_long_close_grid_min_markup()
+                self.fragment_long_close_grid_qty_pct()
+                self.fragment_long_close_trailing_grid_ratio()
+                self.fragment_long_close_trailing_qty_pct()
+                self.fragment_long_close_trailing_retracement_pct()
+                self.fragment_long_close_trailing_threshold_pct()
+                self.fragment_long_ema_span_0()
+                self.fragment_long_ema_span_1()
+                self.fragment_long_entry_grid_double_down_factor()
+                self.fragment_long_entry_grid_spacing_pct()
+                self.fragment_long_entry_grid_spacing_weight()
+                self.fragment_long_entry_initial_ema_dist()
+                self.fragment_long_entry_initial_qty_pct()
+                self.fragment_long_entry_trailing_grid_ratio()
+                self.fragment_long_entry_trailing_retracement_pct()
+                self.fragment_long_entry_trailing_threshold_pct()
+                self.fragment_long_filter_relative_volume_clip_pct()
+                self.fragment_long_filter_rolling_window()
+                self.fragment_long_n_positions()
+                self.fragment_long_total_wallet_exposure_limit()
+                self.fragment_long_unstuck_close_pct()
+                self.fragment_long_unstuck_ema_dist()
+                self.fragment_long_unstuck_loss_allowance_pct()
+                self.fragment_long_unstuck_threshold()
 
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
-        with col1:
+        with col2:
+            with st.container(border=True):
+                st.write("Bounds short")
+                self.fragment_short_close_grid_markup_range()
+                self.fragment_short_close_grid_min_markup()
+                self.fragment_short_close_grid_qty_pct()
+                self.fragment_short_close_trailing_grid_ratio()
+                self.fragment_short_close_trailing_qty_pct()
+                self.fragment_short_close_trailing_retracement_pct()
+                self.fragment_short_close_trailing_threshold_pct()
+                self.fragment_short_ema_span_0()
+                self.fragment_short_ema_span_1()
+                self.fragment_short_entry_grid_double_down_factor()
+                self.fragment_short_entry_grid_spacing_pct()
+                self.fragment_short_entry_grid_spacing_weight()
+                self.fragment_short_entry_initial_ema_dist()
+                self.fragment_short_entry_initial_qty_pct()
+                self.fragment_short_entry_trailing_grid_ratio()
+                self.fragment_short_entry_trailing_retracement_pct()
+                self.fragment_short_entry_trailing_threshold_pct()
+                self.fragment_short_filter_relative_volume_clip_pct()
+                self.fragment_short_filter_rolling_window()
+                self.fragment_short_n_positions()
+                self.fragment_short_total_wallet_exposure_limit()
+                self.fragment_short_unstuck_close_pct()
+                self.fragment_short_unstuck_ema_dist()
+                self.fragment_short_unstuck_loss_allowance_pct()
+                self.fragment_short_unstuck_threshold()
+
+        # col1, col2, col3, col4 = st.columns([1,1,1,1])
+        # with col1:
             # # long_close_grid_markup_range
             # if "edit_opt_v7_long_close_grid_markup_range_0" in st.session_state:
             #     if st.session_state.edit_opt_v7_long_close_grid_markup_range_0 != self.config.optimize.bounds.long_close_grid_markup_range_0:
@@ -849,451 +1776,451 @@ class OptimizeV7Item:
             #     if st.session_state.edit_opt_v7_long_close_grid_markup_range_1 != self.config.optimize.bounds.long_close_grid_markup_range_1:
             #         self.config.optimize.bounds.long_close_grid_markup_range_1 = st.session_state.edit_opt_v7_long_close_grid_markup_range_1
             # long_close_grid_min_markup_0
-            if "edit_opt_v7_long_close_grid_min_markup_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_grid_min_markup_0 != self.config.optimize.bounds.long_close_grid_min_markup_0:
-                    self.config.optimize.bounds.long_close_grid_min_markup_0 = st.session_state.edit_opt_v7_long_close_grid_min_markup_0
-            if "edit_opt_v7_long_close_grid_min_markup_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_grid_min_markup_1 != self.config.optimize.bounds.long_close_grid_min_markup_1:
-                    self.config.optimize.bounds.long_close_grid_min_markup_1 = st.session_state.edit_opt_v7_long_close_grid_min_markup_1
-            # long_close_grid_qty_pct_0
-            if "edit_opt_v7_long_close_grid_qty_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_grid_qty_pct_0 != self.config.optimize.bounds.long_close_grid_qty_pct_0:
-                    self.config.optimize.bounds.long_close_grid_qty_pct_0 = st.session_state.edit_opt_v7_long_close_grid_qty_pct_0
-            if "edit_opt_v7_long_close_grid_qty_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_grid_qty_pct_1 != self.config.optimize.bounds.long_close_grid_qty_pct_1:
-                    self.config.optimize.bounds.long_close_grid_qty_pct_1 = st.session_state.edit_opt_v7_long_close_grid_qty_pct_1
-            # long_close_trailing_grid_ratio_0
-            if "edit_opt_v7_long_close_trailing_grid_ratio_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_0 != self.config.optimize.bounds.long_close_trailing_grid_ratio_0:
-                    self.config.optimize.bounds.long_close_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_0
-            if "edit_opt_v7_long_close_trailing_grid_ratio_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_1 != self.config.optimize.bounds.long_close_trailing_grid_ratio_1:
-                    self.config.optimize.bounds.long_close_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_1
-            # long_close_trailing_qty_pct_0
-            if "edit_opt_v7_long_close_trailing_qty_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_qty_pct_0 != self.config.optimize.bounds.long_close_trailing_qty_pct_0:
-                    self.config.optimize.bounds.long_close_trailing_qty_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_qty_pct_0
-            if "edit_opt_v7_long_close_trailing_qty_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_qty_pct_1 != self.config.optimize.bounds.long_close_trailing_qty_pct_1:
-                    self.config.optimize.bounds.long_close_trailing_qty_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_qty_pct_1
-            # long_close_trailing_retracement_pct_0
-            if "edit_opt_v7_long_close_trailing_retracement_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_0 != self.config.optimize.bounds.long_close_trailing_retracement_pct_0:
-                    self.config.optimize.bounds.long_close_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_0
-            if "edit_opt_v7_long_close_trailing_retracement_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_1 != self.config.optimize.bounds.long_close_trailing_retracement_pct_1:
-                    self.config.optimize.bounds.long_close_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_1
+            # if "edit_opt_v7_long_close_grid_min_markup_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_grid_min_markup_0 != self.config.optimize.bounds.long_close_grid_min_markup_0:
+            #         self.config.optimize.bounds.long_close_grid_min_markup_0 = st.session_state.edit_opt_v7_long_close_grid_min_markup_0
+            # if "edit_opt_v7_long_close_grid_min_markup_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_grid_min_markup_1 != self.config.optimize.bounds.long_close_grid_min_markup_1:
+            #         self.config.optimize.bounds.long_close_grid_min_markup_1 = st.session_state.edit_opt_v7_long_close_grid_min_markup_1
+            # # long_close_grid_qty_pct_0
+            # if "edit_opt_v7_long_close_grid_qty_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_grid_qty_pct_0 != self.config.optimize.bounds.long_close_grid_qty_pct_0:
+            #         self.config.optimize.bounds.long_close_grid_qty_pct_0 = st.session_state.edit_opt_v7_long_close_grid_qty_pct_0
+            # if "edit_opt_v7_long_close_grid_qty_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_grid_qty_pct_1 != self.config.optimize.bounds.long_close_grid_qty_pct_1:
+            #         self.config.optimize.bounds.long_close_grid_qty_pct_1 = st.session_state.edit_opt_v7_long_close_grid_qty_pct_1
+            # # long_close_trailing_grid_ratio_0
+            # if "edit_opt_v7_long_close_trailing_grid_ratio_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_0 != self.config.optimize.bounds.long_close_trailing_grid_ratio_0:
+            #         self.config.optimize.bounds.long_close_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_0
+            # if "edit_opt_v7_long_close_trailing_grid_ratio_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_1 != self.config.optimize.bounds.long_close_trailing_grid_ratio_1:
+            #         self.config.optimize.bounds.long_close_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_long_close_trailing_grid_ratio_1
+            # # long_close_trailing_qty_pct_0
+            # if "edit_opt_v7_long_close_trailing_qty_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_qty_pct_0 != self.config.optimize.bounds.long_close_trailing_qty_pct_0:
+            #         self.config.optimize.bounds.long_close_trailing_qty_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_qty_pct_0
+            # if "edit_opt_v7_long_close_trailing_qty_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_qty_pct_1 != self.config.optimize.bounds.long_close_trailing_qty_pct_1:
+            #         self.config.optimize.bounds.long_close_trailing_qty_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_qty_pct_1
+            # # long_close_trailing_retracement_pct_0
+            # if "edit_opt_v7_long_close_trailing_retracement_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_0 != self.config.optimize.bounds.long_close_trailing_retracement_pct_0:
+            #         self.config.optimize.bounds.long_close_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_0
+            # if "edit_opt_v7_long_close_trailing_retracement_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_1 != self.config.optimize.bounds.long_close_trailing_retracement_pct_1:
+            #         self.config.optimize.bounds.long_close_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_retracement_pct_1
             # long_close_trailing_threshold_pct_0
-            if "edit_opt_v7_long_close_trailing_threshold_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_0 != self.config.optimize.bounds.long_close_trailing_threshold_pct_0:
-                    self.config.optimize.bounds.long_close_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_0
-            if "edit_opt_v7_long_close_trailing_threshold_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_1 != self.config.optimize.bounds.long_close_trailing_threshold_pct_1:
-                    self.config.optimize.bounds.long_close_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_1
-            # long_ema_span_0_0
-            if "edit_opt_v7_long_ema_span_0_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_ema_span_0_0 != self.config.optimize.bounds.long_ema_span_0_0:
-                    self.config.optimize.bounds.long_ema_span_0_0 = st.session_state.edit_opt_v7_long_ema_span_0_0
-            if "edit_opt_v7_long_ema_span_0_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_ema_span_0_1 != self.config.optimize.bounds.long_ema_span_0_1:
-                    self.config.optimize.bounds.long_ema_span_0_1 = st.session_state.edit_opt_v7_long_ema_span_0_1
-            # long_ema_span_1_0
-            if "edit_opt_v7_long_ema_span_1_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_ema_span_1_0 != self.config.optimize.bounds.long_ema_span_1_0:
-                    self.config.optimize.bounds.long_ema_span_1_0 = st.session_state.edit_opt_v7_long_ema_span_1_0
-            if "edit_opt_v7_long_ema_span_1_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_ema_span_1_1 != self.config.optimize.bounds.long_ema_span_1_1:
-                    self.config.optimize.bounds.long_ema_span_1_1 = st.session_state.edit_opt_v7_long_ema_span_1_1
-            # long_entry_grid_double_down_factor_0
-            if "edit_opt_v7_long_entry_grid_double_down_factor_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_0 != self.config.optimize.bounds.long_entry_grid_double_down_factor_0:
-                    self.config.optimize.bounds.long_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_0
-            if "edit_opt_v7_long_entry_grid_double_down_factor_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_1 != self.config.optimize.bounds.long_entry_grid_double_down_factor_1:
-                    self.config.optimize.bounds.long_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_1
-            # long_entry_grid_spacing_pct_0
-            if "edit_opt_v7_long_entry_grid_spacing_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_0 != self.config.optimize.bounds.long_entry_grid_spacing_pct_0:
-                    self.config.optimize.bounds.long_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_0
-            if "edit_opt_v7_long_entry_grid_spacing_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_1 != self.config.optimize.bounds.long_entry_grid_spacing_pct_1:
-                    self.config.optimize.bounds.long_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_1
-            # long_entry_grid_spacing_weight_0
-            if "edit_opt_v7_long_entry_grid_spacing_weight_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_0 != self.config.optimize.bounds.long_entry_grid_spacing_weight_0:
-                    self.config.optimize.bounds.long_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_0
-            if "edit_opt_v7_long_entry_grid_spacing_weight_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_1 != self.config.optimize.bounds.long_entry_grid_spacing_weight_1:
-                    self.config.optimize.bounds.long_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_1
-            # long_entry_initial_ema_dist_0
-            if "edit_opt_v7_long_entry_initial_ema_dist_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_initial_ema_dist_0 != self.config.optimize.bounds.long_entry_initial_ema_dist_0:
-                    self.config.optimize.bounds.long_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist_0
-            if "edit_opt_v7_long_entry_initial_ema_dist_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_initial_ema_dist_1 != self.config.optimize.bounds.long_entry_initial_ema_dist_1:
-                    self.config.optimize.bounds.long_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist_1
-            # long_entry_initial_qty_pct_0
-            if "edit_opt_v7_long_entry_initial_qty_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_initial_qty_pct_0 != self.config.optimize.bounds.long_entry_initial_qty_pct_0:
-                    self.config.optimize.bounds.long_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct_0
-            if "edit_opt_v7_long_entry_initial_qty_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_initial_qty_pct_1 != self.config.optimize.bounds.long_entry_initial_qty_pct_1:
-                    self.config.optimize.bounds.long_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct_1
-            # long_entry_trailing_grid_ratio_0
-            if "edit_opt_v7_long_entry_trailing_grid_ratio_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_0 != self.config.optimize.bounds.long_entry_trailing_grid_ratio_0:
-                    self.config.optimize.bounds.long_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_0
-            if "edit_opt_v7_long_entry_trailing_grid_ratio_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_1 != self.config.optimize.bounds.long_entry_trailing_grid_ratio_1:
-                    self.config.optimize.bounds.long_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_1
-            # long_entry_trailing_retracement_pct_0
-            if "edit_opt_v7_long_entry_trailing_retracement_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_0 != self.config.optimize.bounds.long_entry_trailing_retracement_pct_0:
-                    self.config.optimize.bounds.long_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_0
-            if "edit_opt_v7_long_entry_trailing_retracement_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_1 != self.config.optimize.bounds.long_entry_trailing_retracement_pct_1:
-                    self.config.optimize.bounds.long_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_1
-            # long_entry_trailing_threshold_pct_0
-            if "edit_opt_v7_long_entry_trailing_threshold_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_0 != self.config.optimize.bounds.long_entry_trailing_threshold_pct_0:
-                    self.config.optimize.bounds.long_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_0
-            if "edit_opt_v7_long_entry_trailing_threshold_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_1 != self.config.optimize.bounds.long_entry_trailing_threshold_pct_1:
-                    self.config.optimize.bounds.long_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_1
-            # long_filter_relative_volume_clip_pct_0
-            if "edit_opt_v7_long_filter_relative_volume_clip_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_0 != self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0:
-                    self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_0
-            if "edit_opt_v7_long_filter_relative_volume_clip_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_1 != self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1:
-                    self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_1
-            # long_filter_rolling_window_0
-            if "edit_opt_v7_long_filter_rolling_window_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_filter_rolling_window_0 != self.config.optimize.bounds.long_filter_rolling_window_0:
-                    self.config.optimize.bounds.long_filter_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_rolling_window_0
-            if "edit_opt_v7_long_filter_rolling_window_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_filter_rolling_window_1 != self.config.optimize.bounds.long_filter_rolling_window_1:
-                    self.config.optimize.bounds.long_filter_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_rolling_window_1
-            # long_n_positions_0
-            if "edit_opt_v7_long_n_positions_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_n_positions_0 != self.config.optimize.bounds.long_n_positions_0:
-                    self.config.optimize.bounds.long_n_positions_0 = st.session_state.edit_opt_v7_long_n_positions_0
-            if "edit_opt_v7_long_n_positions_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_n_positions_1 != self.config.optimize.bounds.long_n_positions_1:
-                    self.config.optimize.bounds.long_n_positions_1 = st.session_state.edit_opt_v7_long_n_positions_1
-            # long_total_wallet_exposure_limit_0 
-            if "edit_opt_v7_long_total_wallet_exposure_limit_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_0 != self.config.optimize.bounds.long_total_wallet_exposure_limit_0:
-                    self.config.optimize.bounds.long_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_0
-            if "edit_opt_v7_long_total_wallet_exposure_limit_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_1 != self.config.optimize.bounds.long_total_wallet_exposure_limit_1:
-                    self.config.optimize.bounds.long_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_1
-            # long_unstuck_close_pct_0
-            if "edit_opt_v7_long_unstuck_close_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_close_pct_0 != self.config.optimize.bounds.long_unstuck_close_pct_0:
-                    self.config.optimize.bounds.long_unstuck_close_pct_0 = st.session_state.edit_opt_v7_long_unstuck_close_pct_0
-            if "edit_opt_v7_long_unstuck_close_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_close_pct_1 != self.config.optimize.bounds.long_unstuck_close_pct_1:
-                    self.config.optimize.bounds.long_unstuck_close_pct_1 = st.session_state.edit_opt_v7_long_unstuck_close_pct_1
-            # long_unstuck_ema_dist_0
-            if "edit_opt_v7_long_unstuck_ema_dist_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_ema_dist_0 != self.config.optimize.bounds.long_unstuck_ema_dist_0:
-                    self.config.optimize.bounds.long_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_long_unstuck_ema_dist_0
-            if "edit_opt_v7_long_unstuck_ema_dist_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_ema_dist_1 != self.config.optimize.bounds.long_unstuck_ema_dist_1:
-                    self.config.optimize.bounds.long_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_long_unstuck_ema_dist_1
-            # long_unstuck_loss_allowance_pct_0
-            if "edit_opt_v7_long_unstuck_loss_allowance_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_0 != self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0:
-                    self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_0
-            if "edit_opt_v7_long_unstuck_loss_allowance_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_1 != self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1:
-                    self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_1
-            # long_unstuck_threshold_0
-            if "edit_opt_v7_long_unstuck_threshold_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_threshold_0 != self.config.optimize.bounds.long_unstuck_threshold_0:
-                    self.config.optimize.bounds.long_unstuck_threshold_0 = st.session_state.edit_opt_v7_long_unstuck_threshold_0
-            if "edit_opt_v7_long_unstuck_threshold_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_unstuck_threshold_1 != self.config.optimize.bounds.long_unstuck_threshold_1:
-                    self.config.optimize.bounds.long_unstuck_threshold_1 = st.session_state.edit_opt_v7_long_unstuck_threshold_1
+            # if "edit_opt_v7_long_close_trailing_threshold_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_0 != self.config.optimize.bounds.long_close_trailing_threshold_pct_0:
+            #         self.config.optimize.bounds.long_close_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_0
+            # if "edit_opt_v7_long_close_trailing_threshold_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_1 != self.config.optimize.bounds.long_close_trailing_threshold_pct_1:
+            #         self.config.optimize.bounds.long_close_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_long_close_trailing_threshold_pct_1
+            # # long_ema_span_0_0
+            # if "edit_opt_v7_long_ema_span_0_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_ema_span_0_0 != self.config.optimize.bounds.long_ema_span_0_0:
+            #         self.config.optimize.bounds.long_ema_span_0_0 = st.session_state.edit_opt_v7_long_ema_span_0_0
+            # if "edit_opt_v7_long_ema_span_0_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_ema_span_0_1 != self.config.optimize.bounds.long_ema_span_0_1:
+            #         self.config.optimize.bounds.long_ema_span_0_1 = st.session_state.edit_opt_v7_long_ema_span_0_1
+            # # long_ema_span_1_0
+            # if "edit_opt_v7_long_ema_span_1_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_ema_span_1_0 != self.config.optimize.bounds.long_ema_span_1_0:
+            #         self.config.optimize.bounds.long_ema_span_1_0 = st.session_state.edit_opt_v7_long_ema_span_1_0
+            # if "edit_opt_v7_long_ema_span_1_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_ema_span_1_1 != self.config.optimize.bounds.long_ema_span_1_1:
+            #         self.config.optimize.bounds.long_ema_span_1_1 = st.session_state.edit_opt_v7_long_ema_span_1_1
+            # # long_entry_grid_double_down_factor_0
+            # if "edit_opt_v7_long_entry_grid_double_down_factor_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_0 != self.config.optimize.bounds.long_entry_grid_double_down_factor_0:
+            #         self.config.optimize.bounds.long_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_0
+            # if "edit_opt_v7_long_entry_grid_double_down_factor_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_1 != self.config.optimize.bounds.long_entry_grid_double_down_factor_1:
+            #         self.config.optimize.bounds.long_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor_1
+            # # long_entry_grid_spacing_pct_0
+            # if "edit_opt_v7_long_entry_grid_spacing_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_0 != self.config.optimize.bounds.long_entry_grid_spacing_pct_0:
+            #         self.config.optimize.bounds.long_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_0
+            # if "edit_opt_v7_long_entry_grid_spacing_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_1 != self.config.optimize.bounds.long_entry_grid_spacing_pct_1:
+            #         self.config.optimize.bounds.long_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct_1
+            # # long_entry_grid_spacing_weight_0
+            # if "edit_opt_v7_long_entry_grid_spacing_weight_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_0 != self.config.optimize.bounds.long_entry_grid_spacing_weight_0:
+            #         self.config.optimize.bounds.long_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_0
+            # if "edit_opt_v7_long_entry_grid_spacing_weight_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_1 != self.config.optimize.bounds.long_entry_grid_spacing_weight_1:
+            #         self.config.optimize.bounds.long_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight_1
+            # # long_entry_initial_ema_dist_0
+            # if "edit_opt_v7_long_entry_initial_ema_dist_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_initial_ema_dist_0 != self.config.optimize.bounds.long_entry_initial_ema_dist_0:
+            #         self.config.optimize.bounds.long_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist_0
+            # if "edit_opt_v7_long_entry_initial_ema_dist_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_initial_ema_dist_1 != self.config.optimize.bounds.long_entry_initial_ema_dist_1:
+            #         self.config.optimize.bounds.long_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist_1
+            # # long_entry_initial_qty_pct_0
+            # if "edit_opt_v7_long_entry_initial_qty_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_initial_qty_pct_0 != self.config.optimize.bounds.long_entry_initial_qty_pct_0:
+            #         self.config.optimize.bounds.long_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct_0
+            # if "edit_opt_v7_long_entry_initial_qty_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_initial_qty_pct_1 != self.config.optimize.bounds.long_entry_initial_qty_pct_1:
+            #         self.config.optimize.bounds.long_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct_1
+            # # long_entry_trailing_grid_ratio_0
+            # if "edit_opt_v7_long_entry_trailing_grid_ratio_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_0 != self.config.optimize.bounds.long_entry_trailing_grid_ratio_0:
+            #         self.config.optimize.bounds.long_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_0
+            # if "edit_opt_v7_long_entry_trailing_grid_ratio_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_1 != self.config.optimize.bounds.long_entry_trailing_grid_ratio_1:
+            #         self.config.optimize.bounds.long_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio_1
+            # # long_entry_trailing_retracement_pct_0
+            # if "edit_opt_v7_long_entry_trailing_retracement_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_0 != self.config.optimize.bounds.long_entry_trailing_retracement_pct_0:
+            #         self.config.optimize.bounds.long_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_0
+            # if "edit_opt_v7_long_entry_trailing_retracement_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_1 != self.config.optimize.bounds.long_entry_trailing_retracement_pct_1:
+            #         self.config.optimize.bounds.long_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct_1
+            # # long_entry_trailing_threshold_pct_0
+            # if "edit_opt_v7_long_entry_trailing_threshold_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_0 != self.config.optimize.bounds.long_entry_trailing_threshold_pct_0:
+            #         self.config.optimize.bounds.long_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_0
+            # if "edit_opt_v7_long_entry_trailing_threshold_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_1 != self.config.optimize.bounds.long_entry_trailing_threshold_pct_1:
+            #         self.config.optimize.bounds.long_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct_1
+            # # long_filter_relative_volume_clip_pct_0
+            # if "edit_opt_v7_long_filter_relative_volume_clip_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_0 != self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0:
+            #         self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_0
+            # if "edit_opt_v7_long_filter_relative_volume_clip_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_1 != self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1:
+            #         self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct_1
+            # # long_filter_rolling_window_0
+            # if "edit_opt_v7_long_filter_rolling_window_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_filter_rolling_window_0 != self.config.optimize.bounds.long_filter_rolling_window_0:
+            #         self.config.optimize.bounds.long_filter_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_rolling_window_0
+            # if "edit_opt_v7_long_filter_rolling_window_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_filter_rolling_window_1 != self.config.optimize.bounds.long_filter_rolling_window_1:
+            #         self.config.optimize.bounds.long_filter_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_rolling_window_1
+            # # long_n_positions_0
+            # if "edit_opt_v7_long_n_positions_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_n_positions_0 != self.config.optimize.bounds.long_n_positions_0:
+            #         self.config.optimize.bounds.long_n_positions_0 = st.session_state.edit_opt_v7_long_n_positions_0
+            # if "edit_opt_v7_long_n_positions_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_n_positions_1 != self.config.optimize.bounds.long_n_positions_1:
+            #         self.config.optimize.bounds.long_n_positions_1 = st.session_state.edit_opt_v7_long_n_positions_1
+            # # long_total_wallet_exposure_limit_0 
+            # if "edit_opt_v7_long_total_wallet_exposure_limit_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_0 != self.config.optimize.bounds.long_total_wallet_exposure_limit_0:
+            #         self.config.optimize.bounds.long_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_0
+            # if "edit_opt_v7_long_total_wallet_exposure_limit_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_1 != self.config.optimize.bounds.long_total_wallet_exposure_limit_1:
+            #         self.config.optimize.bounds.long_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit_1
+            # # long_unstuck_close_pct_0
+            # if "edit_opt_v7_long_unstuck_close_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_close_pct_0 != self.config.optimize.bounds.long_unstuck_close_pct_0:
+            #         self.config.optimize.bounds.long_unstuck_close_pct_0 = st.session_state.edit_opt_v7_long_unstuck_close_pct_0
+            # if "edit_opt_v7_long_unstuck_close_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_close_pct_1 != self.config.optimize.bounds.long_unstuck_close_pct_1:
+            #         self.config.optimize.bounds.long_unstuck_close_pct_1 = st.session_state.edit_opt_v7_long_unstuck_close_pct_1
+            # # long_unstuck_ema_dist_0
+            # if "edit_opt_v7_long_unstuck_ema_dist_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_ema_dist_0 != self.config.optimize.bounds.long_unstuck_ema_dist_0:
+            #         self.config.optimize.bounds.long_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_long_unstuck_ema_dist_0
+            # if "edit_opt_v7_long_unstuck_ema_dist_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_ema_dist_1 != self.config.optimize.bounds.long_unstuck_ema_dist_1:
+            #         self.config.optimize.bounds.long_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_long_unstuck_ema_dist_1
+            # # long_unstuck_loss_allowance_pct_0
+            # if "edit_opt_v7_long_unstuck_loss_allowance_pct_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_0 != self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0:
+            #         self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_0
+            # if "edit_opt_v7_long_unstuck_loss_allowance_pct_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_1 != self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1:
+            #         self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct_1
+            # # long_unstuck_threshold_0
+            # if "edit_opt_v7_long_unstuck_threshold_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_threshold_0 != self.config.optimize.bounds.long_unstuck_threshold_0:
+            #         self.config.optimize.bounds.long_unstuck_threshold_0 = st.session_state.edit_opt_v7_long_unstuck_threshold_0
+            # if "edit_opt_v7_long_unstuck_threshold_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_unstuck_threshold_1 != self.config.optimize.bounds.long_unstuck_threshold_1:
+            #         self.config.optimize.bounds.long_unstuck_threshold_1 = st.session_state.edit_opt_v7_long_unstuck_threshold_1
             # st.number_input("long_close_grid_markup_range min", min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_long_close_grid_markup_range_0", help=pbgui_help.close_grid_parameters)
-            st.number_input("long_close_grid_min_markup min", min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_long_close_grid_min_markup_0", help=pbgui_help.close_grid_parameters)
-            st.number_input("long_close_grid_qty_pct min", min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_grid_qty_pct_0", help=pbgui_help.close_grid_parameters)
-            st.number_input("long_close_trailing_grid_ratio min", min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_close_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
-            st.number_input("long_close_trailing_qty_pct min", min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_qty_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("long_close_trailing_retracement_pct min", min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("long_close_trailing_threshold_pct min", min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("long_ema_span_0 min", min_value=Bounds.EMA_SPAN_0_MIN, max_value=float(round(self.config.optimize.bounds.long_ema_span_0_1, Bounds.EMA_SPAN_0_ROUND)), value=float(round(self.config.optimize.bounds.long_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_long_ema_span_0_0", help=pbgui_help.ema_span)
-            st.number_input("long_ema_span_1 min", min_value=Bounds.EMA_SPAN_1_MIN, max_value=float(round(self.config.optimize.bounds.long_ema_span_1_1, Bounds.EMA_SPAN_1_ROUND)), value=float(round(self.config.optimize.bounds.long_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_long_ema_span_1_0", help=pbgui_help.ema_span)
-            st.number_input("long_entry_grid_double_down_factor min", min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_long_entry_grid_double_down_factor_0", help=pbgui_help.entry_grid_double_down_factor)
-            st.number_input("long_entry_grid_spacing_pct min", min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_pct_0", help=pbgui_help.entry_grid_spacing)
-            st.number_input("long_entry_grid_spacing_weight min", min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_weight_0", help=pbgui_help.entry_grid_spacing)
-            st.number_input("long_entry_initial_ema_dist min", min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_long_entry_initial_ema_dist_0", help=pbgui_help.entry_initial_ema_dist)
-            st.number_input("long_entry_initial_qty_pct min", min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_long_entry_initial_qty_pct_0", help=pbgui_help.entry_initial_qty_pct)
-            st.number_input("long_entry_trailing_grid_ratio min", min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_entry_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
-            st.number_input("long_entry_trailing_retracement_pct min", min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("long_entry_trailing_threshold_pct min", min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("long_filter_relative_volume_clip_pct min", min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_long_filter_relative_volume_clip_pct_0", help=pbgui_help.filter_relative_volume_clip_pct)
-            st.number_input("long_filter_rolling_window min", min_value=Bounds.FILTER_ROLLING_WINDOW_MIN, max_value=float(round(self.config.optimize.bounds.long_filter_rolling_window_1, Bounds.FILTER_ROLLING_WINDOW_ROUND)), value=float(round(self.config.optimize.bounds.long_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_long_filter_rolling_window_0", help=pbgui_help.filter_rolling_window)
-            st.number_input("long_n_positions min", min_value=Bounds.N_POSITIONS_MIN, max_value=float(round(self.config.optimize.bounds.long_n_positions_1, Bounds.N_POSITIONS_ROUND)), value=float(round(self.config.optimize.bounds.long_n_positions_0, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_long_n_positions_0", help=pbgui_help.n_positions)
-            st.number_input("long_total_wallet_exposure_limit min", min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN, max_value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_long_total_wallet_exposure_limit_0", help=pbgui_help.total_wallet_exposure_limit)
-            st.number_input("long_unstuck_close_pct min", min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_close_pct_0", help=pbgui_help.unstuck_close_pct)
-            st.number_input("long_unstuck_ema_dist min", min_value=Bounds.UNSTUCK_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_1, Bounds.UNSTUCK_EMA_DIST_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_long_unstuck_ema_dist_0", help=pbgui_help.unstuck_ema_dist)
-            st.number_input("long_unstuck_loss_allowance_pct min", min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_loss_allowance_pct_0", help=pbgui_help.unstuck_loss_allowance_pct)
-            st.number_input("long_unstuck_threshold min", min_value=Bounds.UNSTUCK_THRESHOLD_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_long_unstuck_threshold_0", help=pbgui_help.unstuck_threshold)
-        with col2:
+            # st.number_input("long_close_grid_min_markup min", min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_long_close_grid_min_markup_0", help=pbgui_help.close_grid_parameters)
+            # st.number_input("long_close_grid_qty_pct min", min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_grid_qty_pct_0", help=pbgui_help.close_grid_parameters)
+            # st.number_input("long_close_trailing_grid_ratio min", min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_close_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_close_trailing_qty_pct min", min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_qty_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_close_trailing_retracement_pct min", min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_close_trailing_threshold_pct min", min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_ema_span_0 min", min_value=Bounds.EMA_SPAN_0_MIN, max_value=float(round(self.config.optimize.bounds.long_ema_span_0_1, Bounds.EMA_SPAN_0_ROUND)), value=float(round(self.config.optimize.bounds.long_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_long_ema_span_0_0", help=pbgui_help.ema_span)
+            # st.number_input("long_ema_span_1 min", min_value=Bounds.EMA_SPAN_1_MIN, max_value=float(round(self.config.optimize.bounds.long_ema_span_1_1, Bounds.EMA_SPAN_1_ROUND)), value=float(round(self.config.optimize.bounds.long_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_long_ema_span_1_0", help=pbgui_help.ema_span)
+            # st.number_input("long_entry_grid_double_down_factor min", min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_long_entry_grid_double_down_factor_0", help=pbgui_help.entry_grid_double_down_factor)
+            # st.number_input("long_entry_grid_spacing_pct min", min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_pct_0", help=pbgui_help.entry_grid_spacing)
+            # st.number_input("long_entry_grid_spacing_weight min", min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_weight_0", help=pbgui_help.entry_grid_spacing)
+            # st.number_input("long_entry_initial_ema_dist min", min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_long_entry_initial_ema_dist_0", help=pbgui_help.entry_initial_ema_dist)
+            # st.number_input("long_entry_initial_qty_pct min", min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_long_entry_initial_qty_pct_0", help=pbgui_help.entry_initial_qty_pct)
+            # st.number_input("long_entry_trailing_grid_ratio min", min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_entry_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_entry_trailing_retracement_pct min", min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_entry_trailing_threshold_pct min", min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_filter_relative_volume_clip_pct min", min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_long_filter_relative_volume_clip_pct_0", help=pbgui_help.filter_relative_volume_clip_pct)
+            # st.number_input("long_filter_rolling_window min", min_value=Bounds.FILTER_ROLLING_WINDOW_MIN, max_value=float(round(self.config.optimize.bounds.long_filter_rolling_window_1, Bounds.FILTER_ROLLING_WINDOW_ROUND)), value=float(round(self.config.optimize.bounds.long_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_long_filter_rolling_window_0", help=pbgui_help.filter_rolling_window)
+            # st.number_input("long_n_positions min", min_value=Bounds.N_POSITIONS_MIN, max_value=float(round(self.config.optimize.bounds.long_n_positions_1, Bounds.N_POSITIONS_ROUND)), value=float(round(self.config.optimize.bounds.long_n_positions_0, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_long_n_positions_0", help=pbgui_help.n_positions)
+            # st.number_input("long_total_wallet_exposure_limit min", min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN, max_value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_long_total_wallet_exposure_limit_0", help=pbgui_help.total_wallet_exposure_limit)
+            # st.number_input("long_unstuck_close_pct min", min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_close_pct_0", help=pbgui_help.unstuck_close_pct)
+            # st.number_input("long_unstuck_ema_dist min", min_value=Bounds.UNSTUCK_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_1, Bounds.UNSTUCK_EMA_DIST_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_long_unstuck_ema_dist_0", help=pbgui_help.unstuck_ema_dist)
+            # st.number_input("long_unstuck_loss_allowance_pct min", min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_loss_allowance_pct_0", help=pbgui_help.unstuck_loss_allowance_pct)
+            # st.number_input("long_unstuck_threshold min", min_value=Bounds.UNSTUCK_THRESHOLD_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_long_unstuck_threshold_0", help=pbgui_help.unstuck_threshold)
+        # with col2:
             # st.number_input("long_close_grid_markup_range max", min_value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_long_close_grid_markup_range_1", help=pbgui_help.close_grid_parameters)
-            st.number_input("long_close_grid_min_markup max", min_value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_long_close_grid_min_markup_1", help=pbgui_help.close_grid_parameters)
-            st.number_input("long_close_grid_qty_pct max", min_value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_grid_qty_pct_1", help=pbgui_help.close_grid_parameters)
-            st.number_input("long_close_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_close_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
-            st.number_input("long_close_trailing_qty_pct max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_qty_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("long_close_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("long_close_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("long_ema_span_0 max", min_value=float(round(self.config.optimize.bounds.long_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), max_value=Bounds.EMA_SPAN_0_MAX, value=float(round(self.config.optimize.bounds.long_ema_span_0_1, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_long_ema_span_0_1", help=pbgui_help.ema_span)
-            st.number_input("long_ema_span_1 max", min_value=float(round(self.config.optimize.bounds.long_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), max_value=Bounds.EMA_SPAN_1_MAX, value=float(round(self.config.optimize.bounds.long_ema_span_1_1, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_long_ema_span_1_1", help=pbgui_help.ema_span)
-            st.number_input("long_entry_grid_double_down_factor max", min_value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX, value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_long_entry_grid_double_down_factor_1", help=pbgui_help.entry_grid_double_down_factor)
-            st.number_input("long_entry_grid_spacing_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_pct_1", help=pbgui_help.entry_grid_spacing)
-            st.number_input("long_entry_grid_spacing_weight max", min_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX, value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_weight_1", help=pbgui_help.entry_grid_spacing)
-            st.number_input("long_entry_initial_ema_dist max", min_value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_long_entry_initial_ema_dist_1", help=pbgui_help.entry_initial_ema_dist)
-            st.number_input("long_entry_initial_qty_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_long_entry_initial_qty_pct_1", help=pbgui_help.entry_initial_qty_pct)
-            st.number_input("long_entry_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_entry_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
-            st.number_input("long_entry_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("long_entry_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("long_filter_relative_volume_clip_pct max", min_value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX, value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_long_filter_relative_volume_clip_pct_1", help=pbgui_help.filter_relative_volume_clip_pct)
-            st.number_input("long_filter_rolling_window max", min_value=float(round(self.config.optimize.bounds.long_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), max_value=Bounds.FILTER_ROLLING_WINDOW_MAX, value=float(round(self.config.optimize.bounds.long_filter_rolling_window_1, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_long_filter_rolling_window_1", help=pbgui_help.filter_rolling_window)
-            st.number_input("long_n_positions max", min_value=float(round(self.config.optimize.bounds.long_n_positions_0, Bounds.N_POSITIONS_ROUND)), max_value=Bounds.N_POSITIONS_MAX, value=float(round(self.config.optimize.bounds.long_n_positions_1, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_long_n_positions_1", help=pbgui_help.n_positions)
-            st.number_input("long_total_wallet_exposure_limit max", min_value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX, value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_long_total_wallet_exposure_limit_1", help=pbgui_help.total_wallet_exposure_limit)
-            st.number_input("long_unstuck_close_pct max", min_value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_close_pct_1", help=pbgui_help.unstuck_close_pct)
-            st.number_input("long_unstuck_ema_dist max", min_value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), max_value=Bounds.UNSTUCK_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_1, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_long_unstuck_ema_dist_1", help=pbgui_help.unstuck_ema_dist)
-            st.number_input("long_unstuck_loss_allowance_pct max", min_value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_loss_allowance_pct_1", help=pbgui_help.unstuck_loss_allowance_pct)
-            st.number_input("long_unstuck_threshold max", min_value=float(round(self.config.optimize.bounds.long_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), max_value=Bounds.UNSTUCK_THRESHOLD_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_long_unstuck_threshold_1", help=pbgui_help.unstuck_threshold)
-        with col3:
-            # short_close_grid_markup_range
-            if "edit_opt_v7_short_close_grid_markup_range_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_grid_markup_range_0 != self.config.optimize.bounds.short_close_grid_markup_range_0:
-                    self.config.optimize.bounds.short_close_grid_markup_range_0 = st.session_state.edit_opt_v7_short_close_grid_markup_range_0
-            if "edit_opt_v7_short_close_grid_markup_range_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_grid_markup_range_1 != self.config.optimize.bounds.short_close_grid_markup_range_1:
-                    self.config.optimize.bounds.short_close_grid_markup_range_1 = st.session_state.edit_opt_v7_short_close_grid_markup_range_1
-            # short_close_grid_min_markup
-            if "edit_opt_v7_short_close_grid_min_markup_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_grid_min_markup_0 != self.config.optimize.bounds.short_close_grid_min_markup_0:
-                    self.config.optimize.bounds.short_close_grid_min_markup_0 = st.session_state.edit_opt_v7_short_close_grid_min_markup_0
-            if "edit_opt_v7_short_close_grid_min_markup_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_grid_min_markup_1 != self.config.optimize.bounds.short_close_grid_min_markup_1:
-                    self.config.optimize.bounds.short_close_grid_min_markup_1 = st.session_state.edit_opt_v7_short_close_grid_min_markup_1
-            # short_close_grid_qty_pct
-            if "edit_opt_v7_short_close_grid_qty_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_grid_qty_pct_0 != self.config.optimize.bounds.short_close_grid_qty_pct_0:
-                    self.config.optimize.bounds.short_close_grid_qty_pct_0 = st.session_state.edit_opt_v7_short_close_grid_qty_pct_0
-            if "edit_opt_v7_short_close_grid_qty_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_grid_qty_pct_1 != self.config.optimize.bounds.short_close_grid_qty_pct_1:
-                    self.config.optimize.bounds.short_close_grid_qty_pct_1 = st.session_state.edit_opt_v7_short_close_grid_qty_pct_1
-            # short_close_trailing_grid_ratio
-            if "edit_opt_v7_short_close_trailing_grid_ratio_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_0 != self.config.optimize.bounds.short_close_trailing_grid_ratio_0:
-                    self.config.optimize.bounds.short_close_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_0
-            if "edit_opt_v7_short_close_trailing_grid_ratio_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_1 != self.config.optimize.bounds.short_close_trailing_grid_ratio_1:
-                    self.config.optimize.bounds.short_close_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_1
-            # short_close_trailing_qty_pct
-            if "edit_opt_v7_short_close_trailing_qty_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_qty_pct_0 != self.config.optimize.bounds.short_close_trailing_qty_pct_0:
-                    self.config.optimize.bounds.short_close_trailing_qty_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct_0
-            if "edit_opt_v7_short_close_trailing_qty_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_qty_pct_1 != self.config.optimize.bounds.short_close_trailing_qty_pct_1:
-                    self.config.optimize.bounds.short_close_trailing_qty_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct_1
-            # short_close_trailing_retracement_pct
-            if "edit_opt_v7_short_close_trailing_retracement_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_0 != self.config.optimize.bounds.short_close_trailing_retracement_pct_0:
-                    self.config.optimize.bounds.short_close_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_0
-            if "edit_opt_v7_short_close_trailing_retracement_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_1 != self.config.optimize.bounds.short_close_trailing_retracement_pct_1:
-                    self.config.optimize.bounds.short_close_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_1
-            # short_close_trailing_threshold_pct
-            if "edit_opt_v7_short_close_trailing_threshold_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_0 != self.config.optimize.bounds.short_close_trailing_threshold_pct_0:
-                    self.config.optimize.bounds.short_close_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_0
-            if "edit_opt_v7_short_close_trailing_threshold_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_1 != self.config.optimize.bounds.short_close_trailing_threshold_pct_1:
-                    self.config.optimize.bounds.short_close_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_1
-            # short_ema_span_0
-            if "edit_opt_v7_short_ema_span_0_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_ema_span_0_0 != self.config.optimize.bounds.short_ema_span_0_0:
-                    self.config.optimize.bounds.short_ema_span_0_0 = st.session_state.edit_opt_v7_short_ema_span_0_0
-            if "edit_opt_v7_short_ema_span_0_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_ema_span_0_1 != self.config.optimize.bounds.short_ema_span_0_1:
-                    self.config.optimize.bounds.short_ema_span_0_1 = st.session_state.edit_opt_v7_short_ema_span_0_1
-            # short_ema_span_1
-            if "edit_opt_v7_short_ema_span_1_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_ema_span_1_0 != self.config.optimize.bounds.short_ema_span_1_0:
-                    self.config.optimize.bounds.short_ema_span_1_0 = st.session_state.edit_opt_v7_short_ema_span_1_0
-            if "edit_opt_v7_short_ema_span_1_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_ema_span_1_1 != self.config.optimize.bounds.short_ema_span_1_1:
-                    self.config.optimize.bounds.short_ema_span_1_1 = st.session_state.edit_opt_v7_short_ema_span_1_1
-            # short_entry_grid_double_down_factor
-            if "edit_opt_v7_short_entry_grid_double_down_factor_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_0 != self.config.optimize.bounds.short_entry_grid_double_down_factor_0:
-                    self.config.optimize.bounds.short_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_0
-            if "edit_opt_v7_short_entry_grid_double_down_factor_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_1 != self.config.optimize.bounds.short_entry_grid_double_down_factor_1:
-                    self.config.optimize.bounds.short_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_1
-            # short_entry_grid_spacing_pct
-            if "edit_opt_v7_short_entry_grid_spacing_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_0 != self.config.optimize.bounds.short_entry_grid_spacing_pct_0:
-                    self.config.optimize.bounds.short_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_0
-            if "edit_opt_v7_short_entry_grid_spacing_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_1 != self.config.optimize.bounds.short_entry_grid_spacing_pct_1:
-                    self.config.optimize.bounds.short_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_1
-            # short_entry_grid_spacing_weight
-            if "edit_opt_v7_short_entry_grid_spacing_weight_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_0 != self.config.optimize.bounds.short_entry_grid_spacing_weight_0:
-                    self.config.optimize.bounds.short_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_0
-            if "edit_opt_v7_short_entry_grid_spacing_weight_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_1 != self.config.optimize.bounds.short_entry_grid_spacing_weight_1:
-                    self.config.optimize.bounds.short_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_1
-            # short_entry_initial_ema_dist
-            if "edit_opt_v7_short_entry_initial_ema_dist_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_initial_ema_dist_0 != self.config.optimize.bounds.short_entry_initial_ema_dist_0:
-                    self.config.optimize.bounds.short_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist_0
-            if "edit_opt_v7_short_entry_initial_ema_dist_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_initial_ema_dist_1 != self.config.optimize.bounds.short_entry_initial_ema_dist_1:
-                    self.config.optimize.bounds.short_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist_1
-            # short_entry_initial_qty_pct
-            if "edit_opt_v7_short_entry_initial_qty_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_initial_qty_pct_0 != self.config.optimize.bounds.short_entry_initial_qty_pct_0:
-                    self.config.optimize.bounds.short_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct_0
-            if "edit_opt_v7_short_entry_initial_qty_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_initial_qty_pct_1 != self.config.optimize.bounds.short_entry_initial_qty_pct_1:
-                    self.config.optimize.bounds.short_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct_1
-            # short_entry_trailing_grid_ratio
-            if "edit_opt_v7_short_entry_trailing_grid_ratio_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_0 != self.config.optimize.bounds.short_entry_trailing_grid_ratio_0:
-                    self.config.optimize.bounds.short_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_0
-            if "edit_opt_v7_short_entry_trailing_grid_ratio_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_1 != self.config.optimize.bounds.short_entry_trailing_grid_ratio_1:
-                    self.config.optimize.bounds.short_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_1
-            # short_entry_trailing_retracement_pct
-            if "edit_opt_v7_short_entry_trailing_retracement_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_0 != self.config.optimize.bounds.short_entry_trailing_retracement_pct_0:
-                    self.config.optimize.bounds.short_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_0
-            if "edit_opt_v7_short_entry_trailing_retracement_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_1 != self.config.optimize.bounds.short_entry_trailing_retracement_pct_1:
-                    self.config.optimize.bounds.short_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_1
-            # short_entry_trailing_threshold_pct
-            if "edit_opt_v7_short_entry_trailing_threshold_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_0 != self.config.optimize.bounds.short_entry_trailing_threshold_pct_0:
-                    self.config.optimize.bounds.short_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_0
-            if "edit_opt_v7_short_entry_trailing_threshold_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_1 != self.config.optimize.bounds.short_entry_trailing_threshold_pct_1:
-                    self.config.optimize.bounds.short_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_1
-            # short_filter_relative_volume_clip_pct
-            if "edit_opt_v7_short_filter_relative_volume_clip_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_0 != self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0:
-                    self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_0
-            if "edit_opt_v7_short_filter_relative_volume_clip_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_1 != self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1:
-                    self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_1
-            # short_filter_rolling_window
-            if "edit_opt_v7_short_filter_rolling_window_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_filter_rolling_window_0 != self.config.optimize.bounds.short_filter_rolling_window_0:
-                    self.config.optimize.bounds.short_filter_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_rolling_window_0
-            if "edit_opt_v7_short_filter_rolling_window_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_filter_rolling_window_1 != self.config.optimize.bounds.short_filter_rolling_window_1:
-                    self.config.optimize.bounds.short_filter_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_rolling_window_1
-            # short_n_positions
-            if "edit_opt_v7_short_n_positions_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_n_positions_0 != self.config.optimize.bounds.short_n_positions_0:
-                    self.config.optimize.bounds.short_n_positions_0 = st.session_state.edit_opt_v7_short_n_positions_0
-            if "edit_opt_v7_short_n_positions_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_n_positions_1 != self.config.optimize.bounds.short_n_positions_1:
-                    self.config.optimize.bounds.short_n_positions_1 = st.session_state.edit_opt_v7_short_n_positions_1
-            # short_total_wallet_exposure_limit
-            if "edit_opt_v7_short_total_wallet_exposure_limit_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_0 != self.config.optimize.bounds.short_total_wallet_exposure_limit_0:
-                    self.config.optimize.bounds.short_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_0
-            if "edit_opt_v7_short_total_wallet_exposure_limit_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_1 != self.config.optimize.bounds.short_total_wallet_exposure_limit_1:
-                    self.config.optimize.bounds.short_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_1
-            # short_unstuck_close_pct
-            if "edit_opt_v7_short_unstuck_close_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_close_pct_0 != self.config.optimize.bounds.short_unstuck_close_pct_0:
-                    self.config.optimize.bounds.short_unstuck_close_pct_0 = st.session_state.edit_opt_v7_short_unstuck_close_pct_0
-            if "edit_opt_v7_short_unstuck_close_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_close_pct_1 != self.config.optimize.bounds.short_unstuck_close_pct_1:
-                    self.config.optimize.bounds.short_unstuck_close_pct_1 = st.session_state.edit_opt_v7_short_unstuck_close_pct_1
-            # short_unstuck_ema_dist
-            if "edit_opt_v7_short_unstuck_ema_dist_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_ema_dist_0 != self.config.optimize.bounds.short_unstuck_ema_dist_0:
-                    self.config.optimize.bounds.short_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_short_unstuck_ema_dist_0
-            if "edit_opt_v7_short_unstuck_ema_dist_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_ema_dist_1 != self.config.optimize.bounds.short_unstuck_ema_dist_1:
-                    self.config.optimize.bounds.short_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_short_unstuck_ema_dist_1
-            # short_unstuck_loss_allowance_pct
-            if "edit_opt_v7_short_unstuck_loss_allowance_pct_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_0 != self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0:
-                    self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_0
-            if "edit_opt_v7_short_unstuck_loss_allowance_pct_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_1 != self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1:
-                    self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_1
-            # short_unstuck_threshold
-            if "edit_opt_v7_short_unstuck_threshold_0" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_threshold_0 != self.config.optimize.bounds.short_unstuck_threshold_0:
-                    self.config.optimize.bounds.short_unstuck_threshold_0 = st.session_state.edit_opt_v7_short_unstuck_threshold_0
-            if "edit_opt_v7_short_unstuck_threshold_1" in st.session_state:
-                if st.session_state.edit_opt_v7_short_unstuck_threshold_1 != self.config.optimize.bounds.short_unstuck_threshold_1:
-                    self.config.optimize.bounds.short_unstuck_threshold_1 = st.session_state.edit_opt_v7_short_unstuck_threshold_1
-            st.number_input("short_close_grid_markup_range min", min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN, max_value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_short_close_grid_markup_range_0", help=pbgui_help.close_grid_parameters)
-            st.number_input("short_close_grid_min_markup min", min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN, max_value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_short_close_grid_min_markup_0", help=pbgui_help.close_grid_parameters)
-            st.number_input("short_close_grid_qty_pct min", min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_grid_qty_pct_0", help=pbgui_help.close_grid_parameters)
-            st.number_input("short_close_trailing_grid_ratio min", min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_close_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
-            st.number_input("short_close_trailing_qty_pct min", min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_qty_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("short_close_trailing_retracement_pct min", min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("short_close_trailing_threshold_pct min", min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("short_ema_span_0 min", min_value=Bounds.EMA_SPAN_0_MIN, max_value=float(round(self.config.optimize.bounds.short_ema_span_0_1)), value=float(round(self.config.optimize.bounds.short_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_short_ema_span_0_0", help=pbgui_help.ema_span)
-            st.number_input("short_ema_span_1 min", min_value=Bounds.EMA_SPAN_1_MIN, max_value=float(round(self.config.optimize.bounds.short_ema_span_1_1)), value=float(round(self.config.optimize.bounds.short_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_short_ema_span_1_0", help=pbgui_help.ema_span)
-            st.number_input("short_entry_grid_double_down_factor min", min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_short_entry_grid_double_down_factor_0", help=pbgui_help.entry_grid_double_down_factor)
-            st.number_input("short_entry_grid_spacing_pct min", min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_pct_0", help=pbgui_help.entry_grid_spacing)
-            st.number_input("short_entry_grid_spacing_weight min", min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_weight_0", help=pbgui_help.entry_grid_spacing)
-            st.number_input("short_entry_initial_ema_dist min", min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_short_entry_initial_ema_dist_0", help=pbgui_help.entry_initial_ema_dist)
-            st.number_input("short_entry_initial_qty_pct min", min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_short_entry_initial_qty_pct_0", help=pbgui_help.entry_initial_qty_pct)
-            st.number_input("short_entry_trailing_grid_ratio min", min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_entry_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
-            st.number_input("short_entry_trailing_retracement_pct min", min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("short_entry_trailing_threshold_pct min", min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
-            st.number_input("short_filter_relative_volume_clip_pct min", min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_short_filter_relative_volume_clip_pct_0", help=pbgui_help.filter_relative_volume_clip_pct)
-            st.number_input("short_filter_rolling_window min", min_value=Bounds.FILTER_ROLLING_WINDOW_MIN, max_value=float(round(self.config.optimize.bounds.short_filter_rolling_window_1)), value=float(round(self.config.optimize.bounds.short_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_short_filter_rolling_window_0", help=pbgui_help.filter_rolling_window)
-            st.number_input("short_n_positions min", min_value=Bounds.N_POSITIONS_MIN, max_value=float(round(self.config.optimize.bounds.short_n_positions_1, Bounds.N_POSITIONS_ROUND)), value=float(round(self.config.optimize.bounds.short_n_positions_0, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_short_n_positions_0", help=pbgui_help.n_positions)
-            st.number_input("short_total_wallet_exposure_limit min", min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN, max_value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_short_total_wallet_exposure_limit_0", help=pbgui_help.total_wallet_exposure_limit)
-            st.number_input("short_unstuck_close_pct min", min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_close_pct_0", help=pbgui_help.unstuck_close_pct)
-            st.number_input("short_unstuck_ema_dist min", min_value=Bounds.UNSTUCK_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_1)), value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_short_unstuck_ema_dist_0", help=pbgui_help.unstuck_ema_dist)
-            st.number_input("short_unstuck_loss_allowance_pct min", min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_loss_allowance_pct_0", help=pbgui_help.unstuck_loss_allowance_pct)
-            st.number_input("short_unstuck_threshold min", min_value=Bounds.UNSTUCK_THRESHOLD_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_short_unstuck_threshold_0", help=pbgui_help.unstuck_threshold)
-        with col4:
-            st.number_input("short_close_grid_markup_range max", min_value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_short_close_grid_markup_range_1", help=pbgui_help.close_grid_parameters)
-            st.number_input("short_close_grid_min_markup max", min_value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_short_close_grid_min_markup_1", help=pbgui_help.close_grid_parameters)
-            st.number_input("short_close_grid_qty_pct max", min_value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_grid_qty_pct_1", help=pbgui_help.close_grid_parameters)
-            st.number_input("short_close_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_close_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
-            st.number_input("short_close_trailing_qty_pct max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_qty_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("short_close_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("short_close_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("short_ema_span_0 max", min_value=float(round(self.config.optimize.bounds.short_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), max_value=Bounds.EMA_SPAN_0_MAX, value=float(round(self.config.optimize.bounds.short_ema_span_0_1, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_short_ema_span_0_1", help=pbgui_help.ema_span)
-            st.number_input("short_ema_span_1 max", min_value=float(round(self.config.optimize.bounds.short_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), max_value=Bounds.EMA_SPAN_1_MAX, value=float(round(self.config.optimize.bounds.short_ema_span_1_1, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_short_ema_span_1_1", help=pbgui_help.ema_span)
-            st.number_input("short_entry_grid_double_down_factor max", min_value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX, value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_short_entry_grid_double_down_factor_1", help=pbgui_help.entry_grid_double_down_factor)
-            st.number_input("short_entry_grid_spacing_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_pct_1", help=pbgui_help.entry_grid_spacing)
-            st.number_input("short_entry_grid_spacing_weight max", min_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX, value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_weight_1", help=pbgui_help.entry_grid_spacing)
-            st.number_input("short_entry_initial_ema_dist max", min_value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_short_entry_initial_ema_dist_1", help=pbgui_help.entry_initial_ema_dist)
-            st.number_input("short_entry_initial_qty_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_short_entry_initial_qty_pct_1", help=pbgui_help.entry_initial_qty_pct)
-            st.number_input("short_entry_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_entry_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
-            st.number_input("short_entry_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("short_entry_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
-            st.number_input("short_filter_relative_volume_clip_pct max", min_value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX, value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_short_filter_relative_volume_clip_pct_1", help=pbgui_help.filter_relative_volume_clip_pct)
-            st.number_input("short_filter_rolling_window max", min_value=float(round(self.config.optimize.bounds.short_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), max_value=Bounds.FILTER_ROLLING_WINDOW_MAX, value=float(round(self.config.optimize.bounds.short_filter_rolling_window_1, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_short_filter_rolling_window_1", help=pbgui_help.filter_rolling_window)
-            st.number_input("short_n_positions max", min_value=float(round(self.config.optimize.bounds.short_n_positions_0, Bounds.N_POSITIONS_ROUND)), max_value=Bounds.N_POSITIONS_MAX, value=float(round(self.config.optimize.bounds.short_n_positions_1, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_short_n_positions_1", help=pbgui_help.n_positions)
-            st.number_input("short_total_wallet_exposure_limit max", min_value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX, value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_short_total_wallet_exposure_limit_1", help=pbgui_help.total_wallet_exposure_limit)
-            st.number_input("short_unstuck_close_pct max", min_value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_close_pct_1", help=pbgui_help.unstuck_close_pct)
-            st.number_input("short_unstuck_ema_dist max", min_value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), max_value=Bounds.UNSTUCK_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_1, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_short_unstuck_ema_dist_1", help=pbgui_help.unstuck_ema_dist)
-            st.number_input("short_unstuck_loss_allowance_pct max", min_value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_loss_allowance_pct_1", help=pbgui_help.unstuck_loss_allowance_pct)
-            st.number_input("short_unstuck_threshold max", min_value=float(round(self.config.optimize.bounds.short_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), max_value=Bounds.UNSTUCK_THRESHOLD_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_short_unstuck_threshold_1", help=pbgui_help.unstuck_threshold)
+            # st.number_input("long_close_grid_min_markup max", min_value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_long_close_grid_min_markup_1", help=pbgui_help.close_grid_parameters)
+            # st.number_input("long_close_grid_qty_pct max", min_value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_grid_qty_pct_1", help=pbgui_help.close_grid_parameters)
+            # st.number_input("long_close_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_close_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_close_trailing_qty_pct max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_qty_pct_1", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_close_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_close_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_close_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_ema_span_0 max", min_value=float(round(self.config.optimize.bounds.long_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), max_value=Bounds.EMA_SPAN_0_MAX, value=float(round(self.config.optimize.bounds.long_ema_span_0_1, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_long_ema_span_0_1", help=pbgui_help.ema_span)
+            # st.number_input("long_ema_span_1 max", min_value=float(round(self.config.optimize.bounds.long_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), max_value=Bounds.EMA_SPAN_1_MAX, value=float(round(self.config.optimize.bounds.long_ema_span_1_1, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_long_ema_span_1_1", help=pbgui_help.ema_span)
+            # st.number_input("long_entry_grid_double_down_factor max", min_value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX, value=float(round(self.config.optimize.bounds.long_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_long_entry_grid_double_down_factor_1", help=pbgui_help.entry_grid_double_down_factor)
+            # st.number_input("long_entry_grid_spacing_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_pct_1", help=pbgui_help.entry_grid_spacing)
+            # st.number_input("long_entry_grid_spacing_weight max", min_value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX, value=float(round(self.config.optimize.bounds.long_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_long_entry_grid_spacing_weight_1", help=pbgui_help.entry_grid_spacing)
+            # st.number_input("long_entry_initial_ema_dist max", min_value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.long_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_long_entry_initial_ema_dist_1", help=pbgui_help.entry_initial_ema_dist)
+            # st.number_input("long_entry_initial_qty_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_long_entry_initial_qty_pct_1", help=pbgui_help.entry_initial_qty_pct)
+            # st.number_input("long_entry_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.long_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_entry_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_entry_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_entry_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.long_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_long_entry_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
+            # st.number_input("long_filter_relative_volume_clip_pct max", min_value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX, value=float(round(self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_long_filter_relative_volume_clip_pct_1", help=pbgui_help.filter_relative_volume_clip_pct)
+            # st.number_input("long_filter_rolling_window max", min_value=float(round(self.config.optimize.bounds.long_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), max_value=Bounds.FILTER_ROLLING_WINDOW_MAX, value=float(round(self.config.optimize.bounds.long_filter_rolling_window_1, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_long_filter_rolling_window_1", help=pbgui_help.filter_rolling_window)
+            # st.number_input("long_n_positions max", min_value=float(round(self.config.optimize.bounds.long_n_positions_0, Bounds.N_POSITIONS_ROUND)), max_value=Bounds.N_POSITIONS_MAX, value=float(round(self.config.optimize.bounds.long_n_positions_1, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_long_n_positions_1", help=pbgui_help.n_positions)
+            # st.number_input("long_total_wallet_exposure_limit max", min_value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX, value=float(round(self.config.optimize.bounds.long_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_long_total_wallet_exposure_limit_1", help=pbgui_help.total_wallet_exposure_limit)
+            # st.number_input("long_unstuck_close_pct max", min_value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_close_pct_1", help=pbgui_help.unstuck_close_pct)
+            # st.number_input("long_unstuck_ema_dist max", min_value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), max_value=Bounds.UNSTUCK_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_ema_dist_1, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_long_unstuck_ema_dist_1", help=pbgui_help.unstuck_ema_dist)
+            # st.number_input("long_unstuck_loss_allowance_pct max", min_value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_loss_allowance_pct_1", help=pbgui_help.unstuck_loss_allowance_pct)
+            # st.number_input("long_unstuck_threshold max", min_value=float(round(self.config.optimize.bounds.long_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), max_value=Bounds.UNSTUCK_THRESHOLD_MAX, value=float(round(self.config.optimize.bounds.long_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_long_unstuck_threshold_1", help=pbgui_help.unstuck_threshold)
+        # with col3:
+        #     # short_close_grid_markup_range
+        #     if "edit_opt_v7_short_close_grid_markup_range_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_grid_markup_range_0 != self.config.optimize.bounds.short_close_grid_markup_range_0:
+        #             self.config.optimize.bounds.short_close_grid_markup_range_0 = st.session_state.edit_opt_v7_short_close_grid_markup_range_0
+        #     if "edit_opt_v7_short_close_grid_markup_range_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_grid_markup_range_1 != self.config.optimize.bounds.short_close_grid_markup_range_1:
+        #             self.config.optimize.bounds.short_close_grid_markup_range_1 = st.session_state.edit_opt_v7_short_close_grid_markup_range_1
+        #     # short_close_grid_min_markup
+        #     if "edit_opt_v7_short_close_grid_min_markup_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_grid_min_markup_0 != self.config.optimize.bounds.short_close_grid_min_markup_0:
+        #             self.config.optimize.bounds.short_close_grid_min_markup_0 = st.session_state.edit_opt_v7_short_close_grid_min_markup_0
+        #     if "edit_opt_v7_short_close_grid_min_markup_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_grid_min_markup_1 != self.config.optimize.bounds.short_close_grid_min_markup_1:
+        #             self.config.optimize.bounds.short_close_grid_min_markup_1 = st.session_state.edit_opt_v7_short_close_grid_min_markup_1
+        #     # short_close_grid_qty_pct
+        #     if "edit_opt_v7_short_close_grid_qty_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_grid_qty_pct_0 != self.config.optimize.bounds.short_close_grid_qty_pct_0:
+        #             self.config.optimize.bounds.short_close_grid_qty_pct_0 = st.session_state.edit_opt_v7_short_close_grid_qty_pct_0
+        #     if "edit_opt_v7_short_close_grid_qty_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_grid_qty_pct_1 != self.config.optimize.bounds.short_close_grid_qty_pct_1:
+        #             self.config.optimize.bounds.short_close_grid_qty_pct_1 = st.session_state.edit_opt_v7_short_close_grid_qty_pct_1
+        #     # short_close_trailing_grid_ratio
+        #     if "edit_opt_v7_short_close_trailing_grid_ratio_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_0 != self.config.optimize.bounds.short_close_trailing_grid_ratio_0:
+        #             self.config.optimize.bounds.short_close_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_0
+        #     if "edit_opt_v7_short_close_trailing_grid_ratio_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_1 != self.config.optimize.bounds.short_close_trailing_grid_ratio_1:
+        #             self.config.optimize.bounds.short_close_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio_1
+        #     # short_close_trailing_qty_pct
+        #     if "edit_opt_v7_short_close_trailing_qty_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_qty_pct_0 != self.config.optimize.bounds.short_close_trailing_qty_pct_0:
+        #             self.config.optimize.bounds.short_close_trailing_qty_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct_0
+        #     if "edit_opt_v7_short_close_trailing_qty_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_qty_pct_1 != self.config.optimize.bounds.short_close_trailing_qty_pct_1:
+        #             self.config.optimize.bounds.short_close_trailing_qty_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct_1
+        #     # short_close_trailing_retracement_pct
+        #     if "edit_opt_v7_short_close_trailing_retracement_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_0 != self.config.optimize.bounds.short_close_trailing_retracement_pct_0:
+        #             self.config.optimize.bounds.short_close_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_0
+        #     if "edit_opt_v7_short_close_trailing_retracement_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_1 != self.config.optimize.bounds.short_close_trailing_retracement_pct_1:
+        #             self.config.optimize.bounds.short_close_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct_1
+        #     # short_close_trailing_threshold_pct
+        #     if "edit_opt_v7_short_close_trailing_threshold_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_0 != self.config.optimize.bounds.short_close_trailing_threshold_pct_0:
+        #             self.config.optimize.bounds.short_close_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_0
+        #     if "edit_opt_v7_short_close_trailing_threshold_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_1 != self.config.optimize.bounds.short_close_trailing_threshold_pct_1:
+        #             self.config.optimize.bounds.short_close_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct_1
+        #     # short_ema_span_0
+        #     if "edit_opt_v7_short_ema_span_0_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_ema_span_0_0 != self.config.optimize.bounds.short_ema_span_0_0:
+        #             self.config.optimize.bounds.short_ema_span_0_0 = st.session_state.edit_opt_v7_short_ema_span_0_0
+        #     if "edit_opt_v7_short_ema_span_0_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_ema_span_0_1 != self.config.optimize.bounds.short_ema_span_0_1:
+        #             self.config.optimize.bounds.short_ema_span_0_1 = st.session_state.edit_opt_v7_short_ema_span_0_1
+        #     # short_ema_span_1
+        #     if "edit_opt_v7_short_ema_span_1_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_ema_span_1_0 != self.config.optimize.bounds.short_ema_span_1_0:
+        #             self.config.optimize.bounds.short_ema_span_1_0 = st.session_state.edit_opt_v7_short_ema_span_1_0
+        #     if "edit_opt_v7_short_ema_span_1_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_ema_span_1_1 != self.config.optimize.bounds.short_ema_span_1_1:
+        #             self.config.optimize.bounds.short_ema_span_1_1 = st.session_state.edit_opt_v7_short_ema_span_1_1
+        #     # short_entry_grid_double_down_factor
+        #     if "edit_opt_v7_short_entry_grid_double_down_factor_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_0 != self.config.optimize.bounds.short_entry_grid_double_down_factor_0:
+        #             self.config.optimize.bounds.short_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_0
+        #     if "edit_opt_v7_short_entry_grid_double_down_factor_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_1 != self.config.optimize.bounds.short_entry_grid_double_down_factor_1:
+        #             self.config.optimize.bounds.short_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor_1
+        #     # short_entry_grid_spacing_pct
+        #     if "edit_opt_v7_short_entry_grid_spacing_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_0 != self.config.optimize.bounds.short_entry_grid_spacing_pct_0:
+        #             self.config.optimize.bounds.short_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_0
+        #     if "edit_opt_v7_short_entry_grid_spacing_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_1 != self.config.optimize.bounds.short_entry_grid_spacing_pct_1:
+        #             self.config.optimize.bounds.short_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct_1
+        #     # short_entry_grid_spacing_weight
+        #     if "edit_opt_v7_short_entry_grid_spacing_weight_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_0 != self.config.optimize.bounds.short_entry_grid_spacing_weight_0:
+        #             self.config.optimize.bounds.short_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_0
+        #     if "edit_opt_v7_short_entry_grid_spacing_weight_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_1 != self.config.optimize.bounds.short_entry_grid_spacing_weight_1:
+        #             self.config.optimize.bounds.short_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight_1
+        #     # short_entry_initial_ema_dist
+        #     if "edit_opt_v7_short_entry_initial_ema_dist_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_initial_ema_dist_0 != self.config.optimize.bounds.short_entry_initial_ema_dist_0:
+        #             self.config.optimize.bounds.short_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist_0
+        #     if "edit_opt_v7_short_entry_initial_ema_dist_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_initial_ema_dist_1 != self.config.optimize.bounds.short_entry_initial_ema_dist_1:
+        #             self.config.optimize.bounds.short_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist_1
+        #     # short_entry_initial_qty_pct
+        #     if "edit_opt_v7_short_entry_initial_qty_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_initial_qty_pct_0 != self.config.optimize.bounds.short_entry_initial_qty_pct_0:
+        #             self.config.optimize.bounds.short_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct_0
+        #     if "edit_opt_v7_short_entry_initial_qty_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_initial_qty_pct_1 != self.config.optimize.bounds.short_entry_initial_qty_pct_1:
+        #             self.config.optimize.bounds.short_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct_1
+        #     # short_entry_trailing_grid_ratio
+        #     if "edit_opt_v7_short_entry_trailing_grid_ratio_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_0 != self.config.optimize.bounds.short_entry_trailing_grid_ratio_0:
+        #             self.config.optimize.bounds.short_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_0
+        #     if "edit_opt_v7_short_entry_trailing_grid_ratio_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_1 != self.config.optimize.bounds.short_entry_trailing_grid_ratio_1:
+        #             self.config.optimize.bounds.short_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio_1
+        #     # short_entry_trailing_retracement_pct
+        #     if "edit_opt_v7_short_entry_trailing_retracement_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_0 != self.config.optimize.bounds.short_entry_trailing_retracement_pct_0:
+        #             self.config.optimize.bounds.short_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_0
+        #     if "edit_opt_v7_short_entry_trailing_retracement_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_1 != self.config.optimize.bounds.short_entry_trailing_retracement_pct_1:
+        #             self.config.optimize.bounds.short_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct_1
+        #     # short_entry_trailing_threshold_pct
+        #     if "edit_opt_v7_short_entry_trailing_threshold_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_0 != self.config.optimize.bounds.short_entry_trailing_threshold_pct_0:
+        #             self.config.optimize.bounds.short_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_0
+        #     if "edit_opt_v7_short_entry_trailing_threshold_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_1 != self.config.optimize.bounds.short_entry_trailing_threshold_pct_1:
+        #             self.config.optimize.bounds.short_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct_1
+        #     # short_filter_relative_volume_clip_pct
+        #     if "edit_opt_v7_short_filter_relative_volume_clip_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_0 != self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0:
+        #             self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_0
+        #     if "edit_opt_v7_short_filter_relative_volume_clip_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_1 != self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1:
+        #             self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct_1
+        #     # short_filter_rolling_window
+        #     if "edit_opt_v7_short_filter_rolling_window_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_filter_rolling_window_0 != self.config.optimize.bounds.short_filter_rolling_window_0:
+        #             self.config.optimize.bounds.short_filter_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_rolling_window_0
+        #     if "edit_opt_v7_short_filter_rolling_window_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_filter_rolling_window_1 != self.config.optimize.bounds.short_filter_rolling_window_1:
+        #             self.config.optimize.bounds.short_filter_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_rolling_window_1
+        #     # short_n_positions
+        #     if "edit_opt_v7_short_n_positions_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_n_positions_0 != self.config.optimize.bounds.short_n_positions_0:
+        #             self.config.optimize.bounds.short_n_positions_0 = st.session_state.edit_opt_v7_short_n_positions_0
+        #     if "edit_opt_v7_short_n_positions_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_n_positions_1 != self.config.optimize.bounds.short_n_positions_1:
+        #             self.config.optimize.bounds.short_n_positions_1 = st.session_state.edit_opt_v7_short_n_positions_1
+        #     # short_total_wallet_exposure_limit
+        #     if "edit_opt_v7_short_total_wallet_exposure_limit_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_0 != self.config.optimize.bounds.short_total_wallet_exposure_limit_0:
+        #             self.config.optimize.bounds.short_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_0
+        #     if "edit_opt_v7_short_total_wallet_exposure_limit_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_1 != self.config.optimize.bounds.short_total_wallet_exposure_limit_1:
+        #             self.config.optimize.bounds.short_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit_1
+        #     # short_unstuck_close_pct
+        #     if "edit_opt_v7_short_unstuck_close_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_close_pct_0 != self.config.optimize.bounds.short_unstuck_close_pct_0:
+        #             self.config.optimize.bounds.short_unstuck_close_pct_0 = st.session_state.edit_opt_v7_short_unstuck_close_pct_0
+        #     if "edit_opt_v7_short_unstuck_close_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_close_pct_1 != self.config.optimize.bounds.short_unstuck_close_pct_1:
+        #             self.config.optimize.bounds.short_unstuck_close_pct_1 = st.session_state.edit_opt_v7_short_unstuck_close_pct_1
+        #     # short_unstuck_ema_dist
+        #     if "edit_opt_v7_short_unstuck_ema_dist_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_ema_dist_0 != self.config.optimize.bounds.short_unstuck_ema_dist_0:
+        #             self.config.optimize.bounds.short_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_short_unstuck_ema_dist_0
+        #     if "edit_opt_v7_short_unstuck_ema_dist_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_ema_dist_1 != self.config.optimize.bounds.short_unstuck_ema_dist_1:
+        #             self.config.optimize.bounds.short_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_short_unstuck_ema_dist_1
+        #     # short_unstuck_loss_allowance_pct
+        #     if "edit_opt_v7_short_unstuck_loss_allowance_pct_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_0 != self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0:
+        #             self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_0
+        #     if "edit_opt_v7_short_unstuck_loss_allowance_pct_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_1 != self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1:
+        #             self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct_1
+        #     # short_unstuck_threshold
+        #     if "edit_opt_v7_short_unstuck_threshold_0" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_threshold_0 != self.config.optimize.bounds.short_unstuck_threshold_0:
+        #             self.config.optimize.bounds.short_unstuck_threshold_0 = st.session_state.edit_opt_v7_short_unstuck_threshold_0
+        #     if "edit_opt_v7_short_unstuck_threshold_1" in st.session_state:
+        #         if st.session_state.edit_opt_v7_short_unstuck_threshold_1 != self.config.optimize.bounds.short_unstuck_threshold_1:
+        #             self.config.optimize.bounds.short_unstuck_threshold_1 = st.session_state.edit_opt_v7_short_unstuck_threshold_1
+            # st.number_input("short_close_grid_markup_range min", min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN, max_value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_short_close_grid_markup_range_0", help=pbgui_help.close_grid_parameters)
+            # st.number_input("short_close_grid_min_markup min", min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN, max_value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_short_close_grid_min_markup_0", help=pbgui_help.close_grid_parameters)
+            # st.number_input("short_close_grid_qty_pct min", min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_grid_qty_pct_0", help=pbgui_help.close_grid_parameters)
+            # st.number_input("short_close_trailing_grid_ratio min", min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_close_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("short_close_trailing_qty_pct min", min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_qty_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("short_close_trailing_retracement_pct min", min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("short_close_trailing_threshold_pct min", min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("short_ema_span_0 min", min_value=Bounds.EMA_SPAN_0_MIN, max_value=float(round(self.config.optimize.bounds.short_ema_span_0_1)), value=float(round(self.config.optimize.bounds.short_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_short_ema_span_0_0", help=pbgui_help.ema_span)
+            # st.number_input("short_ema_span_1 min", min_value=Bounds.EMA_SPAN_1_MIN, max_value=float(round(self.config.optimize.bounds.short_ema_span_1_1)), value=float(round(self.config.optimize.bounds.short_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_short_ema_span_1_0", help=pbgui_help.ema_span)
+            # st.number_input("short_entry_grid_double_down_factor min", min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_short_entry_grid_double_down_factor_0", help=pbgui_help.entry_grid_double_down_factor)
+            # st.number_input("short_entry_grid_spacing_pct min", min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_pct_0", help=pbgui_help.entry_grid_spacing)
+            # st.number_input("short_entry_grid_spacing_weight min", min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_weight_0", help=pbgui_help.entry_grid_spacing)
+            # st.number_input("short_entry_initial_ema_dist min", min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_short_entry_initial_ema_dist_0", help=pbgui_help.entry_initial_ema_dist)
+            # st.number_input("short_entry_initial_qty_pct min", min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_short_entry_initial_qty_pct_0", help=pbgui_help.entry_initial_qty_pct)
+            # st.number_input("short_entry_trailing_grid_ratio min", min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_entry_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("short_entry_trailing_retracement_pct min", min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_retracement_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("short_entry_trailing_threshold_pct min", min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_threshold_pct_0", help=pbgui_help.trailing_parameters)
+            # st.number_input("short_filter_relative_volume_clip_pct min", min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_short_filter_relative_volume_clip_pct_0", help=pbgui_help.filter_relative_volume_clip_pct)
+            # st.number_input("short_filter_rolling_window min", min_value=Bounds.FILTER_ROLLING_WINDOW_MIN, max_value=float(round(self.config.optimize.bounds.short_filter_rolling_window_1)), value=float(round(self.config.optimize.bounds.short_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_short_filter_rolling_window_0", help=pbgui_help.filter_rolling_window)
+        #     st.number_input("short_n_positions min", min_value=Bounds.N_POSITIONS_MIN, max_value=float(round(self.config.optimize.bounds.short_n_positions_1, Bounds.N_POSITIONS_ROUND)), value=float(round(self.config.optimize.bounds.short_n_positions_0, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_short_n_positions_0", help=pbgui_help.n_positions)
+        #     st.number_input("short_total_wallet_exposure_limit min", min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN, max_value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_short_total_wallet_exposure_limit_0", help=pbgui_help.total_wallet_exposure_limit)
+        #     st.number_input("short_unstuck_close_pct min", min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_close_pct_0", help=pbgui_help.unstuck_close_pct)
+        #     st.number_input("short_unstuck_ema_dist min", min_value=Bounds.UNSTUCK_EMA_DIST_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_1)), value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_short_unstuck_ema_dist_0", help=pbgui_help.unstuck_ema_dist)
+        #     st.number_input("short_unstuck_loss_allowance_pct min", min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_loss_allowance_pct_0", help=pbgui_help.unstuck_loss_allowance_pct)
+        #     st.number_input("short_unstuck_threshold min", min_value=Bounds.UNSTUCK_THRESHOLD_MIN, max_value=float(round(self.config.optimize.bounds.short_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), value=float(round(self.config.optimize.bounds.short_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_short_unstuck_threshold_0", help=pbgui_help.unstuck_threshold)
+        # with col4:
+        #     st.number_input("short_close_grid_markup_range max", min_value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_short_close_grid_markup_range_1", help=pbgui_help.close_grid_parameters)
+        #     st.number_input("short_close_grid_min_markup max", min_value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_short_close_grid_min_markup_1", help=pbgui_help.close_grid_parameters)
+        #     st.number_input("short_close_grid_qty_pct max", min_value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_grid_qty_pct_1", help=pbgui_help.close_grid_parameters)
+        #     st.number_input("short_close_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_close_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
+        #     st.number_input("short_close_trailing_qty_pct max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_0, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_qty_pct_1, Bounds.CLOSE_TRAILING_QTY_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP, format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_qty_pct_1", help=pbgui_help.trailing_parameters)
+        #     st.number_input("short_close_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_0, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_retracement_pct_1, Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
+        #     st.number_input("short_close_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_0, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.short_close_trailing_threshold_pct_1, Bounds.CLOSE_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_close_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
+        #     st.number_input("short_ema_span_0 max", min_value=float(round(self.config.optimize.bounds.short_ema_span_0_0, Bounds.EMA_SPAN_0_ROUND)), max_value=Bounds.EMA_SPAN_0_MAX, value=float(round(self.config.optimize.bounds.short_ema_span_0_1, Bounds.EMA_SPAN_0_ROUND)), step=Bounds.EMA_SPAN_0_STEP, format=Bounds.EMA_SPAN_0_FORMAT, key="edit_opt_v7_short_ema_span_0_1", help=pbgui_help.ema_span)
+        #     st.number_input("short_ema_span_1 max", min_value=float(round(self.config.optimize.bounds.short_ema_span_1_0, Bounds.EMA_SPAN_1_ROUND)), max_value=Bounds.EMA_SPAN_1_MAX, value=float(round(self.config.optimize.bounds.short_ema_span_1_1, Bounds.EMA_SPAN_1_ROUND)), step=Bounds.EMA_SPAN_1_STEP, format=Bounds.EMA_SPAN_1_FORMAT, key="edit_opt_v7_short_ema_span_1_1", help=pbgui_help.ema_span)
+        #     st.number_input("short_entry_grid_double_down_factor max", min_value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_0, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX, value=float(round(self.config.optimize.bounds.short_entry_grid_double_down_factor_1, Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND)), step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP, format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT, key="edit_opt_v7_short_entry_grid_double_down_factor_1", help=pbgui_help.entry_grid_double_down_factor)
+        #     st.number_input("short_entry_grid_spacing_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_0, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_pct_1, Bounds.ENTRY_GRID_SPACING_PCT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_PCT_STEP, format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_pct_1", help=pbgui_help.entry_grid_spacing)
+        #     st.number_input("short_entry_grid_spacing_weight max", min_value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_0, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX, value=float(round(self.config.optimize.bounds.short_entry_grid_spacing_weight_1, Bounds.ENTRY_GRID_SPACING_WEIGHT_ROUND)), step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP, format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT, key="edit_opt_v7_short_entry_grid_spacing_weight_1", help=pbgui_help.entry_grid_spacing)
+        #     st.number_input("short_entry_initial_ema_dist max", min_value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_0, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.short_entry_initial_ema_dist_1, Bounds.ENTRY_INITIAL_EMA_DIST_ROUND)), step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP, format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT, key="edit_opt_v7_short_entry_initial_ema_dist_1", help=pbgui_help.entry_initial_ema_dist)
+        #     st.number_input("short_entry_initial_qty_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_0, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_initial_qty_pct_1, Bounds.ENTRY_INITIAL_QTY_PCT_ROUND)), step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP, format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT, key="edit_opt_v7_short_entry_initial_qty_pct_1", help=pbgui_help.entry_initial_qty_pct)
+        #     st.number_input("short_entry_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.short_entry_trailing_grid_ratio_1, Bounds.ENTRY_TRAILING_GRID_RATIO_ROUND)), step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP, format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_short_entry_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
+        #     st.number_input("short_entry_trailing_retracement_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_trailing_retracement_pct_1, Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP, format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_retracement_pct_1", help=pbgui_help.trailing_parameters)
+        #     st.number_input("short_entry_trailing_threshold_pct max", min_value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX, value=float(round(self.config.optimize.bounds.short_entry_trailing_threshold_pct_1, Bounds.ENTRY_TRAILING_THRESHOLD_PCT_ROUND)), step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP, format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT, key="edit_opt_v7_short_entry_trailing_threshold_pct_1", help=pbgui_help.trailing_parameters)
+        #     st.number_input("short_filter_relative_volume_clip_pct max", min_value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX, value=float(round(self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1, Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND)), step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP, format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT, key="edit_opt_v7_short_filter_relative_volume_clip_pct_1", help=pbgui_help.filter_relative_volume_clip_pct)
+        #     st.number_input("short_filter_rolling_window max", min_value=float(round(self.config.optimize.bounds.short_filter_rolling_window_0, Bounds.FILTER_ROLLING_WINDOW_ROUND)), max_value=Bounds.FILTER_ROLLING_WINDOW_MAX, value=float(round(self.config.optimize.bounds.short_filter_rolling_window_1, Bounds.FILTER_ROLLING_WINDOW_ROUND)), step=Bounds.FILTER_ROLLING_WINDOW_STEP, format=Bounds.FILTER_ROLLING_WINDOW_FORMAT, key="edit_opt_v7_short_filter_rolling_window_1", help=pbgui_help.filter_rolling_window)
+        #     st.number_input("short_n_positions max", min_value=float(round(self.config.optimize.bounds.short_n_positions_0, Bounds.N_POSITIONS_ROUND)), max_value=Bounds.N_POSITIONS_MAX, value=float(round(self.config.optimize.bounds.short_n_positions_1, Bounds.N_POSITIONS_ROUND)), step=Bounds.N_POSITIONS_STEP, format=Bounds.N_POSITIONS_FORMAT, key="edit_opt_v7_short_n_positions_1", help=pbgui_help.n_positions)
+        #     st.number_input("short_total_wallet_exposure_limit max", min_value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_0, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX, value=float(round(self.config.optimize.bounds.short_total_wallet_exposure_limit_1, Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_ROUND)), step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP, format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT, key="edit_opt_v7_short_total_wallet_exposure_limit_1", help=pbgui_help.total_wallet_exposure_limit)
+        #     st.number_input("short_unstuck_close_pct max", min_value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_0, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_close_pct_1, Bounds.UNSTUCK_CLOSE_PCT_ROUND)), step=Bounds.UNSTUCK_CLOSE_PCT_STEP, format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_close_pct_1", help=pbgui_help.unstuck_close_pct)
+        #     st.number_input("short_unstuck_ema_dist max", min_value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_0, Bounds.UNSTUCK_EMA_DIST_ROUND)), max_value=Bounds.UNSTUCK_EMA_DIST_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_ema_dist_1, Bounds.UNSTUCK_EMA_DIST_ROUND)), step=Bounds.UNSTUCK_EMA_DIST_STEP, format=Bounds.UNSTUCK_EMA_DIST_FORMAT, key="edit_opt_v7_short_unstuck_ema_dist_1", help=pbgui_help.unstuck_ema_dist)
+        #     st.number_input("short_unstuck_loss_allowance_pct max", min_value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_short_unstuck_loss_allowance_pct_1", help=pbgui_help.unstuck_loss_allowance_pct)
+        #     st.number_input("short_unstuck_threshold max", min_value=float(round(self.config.optimize.bounds.short_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), max_value=Bounds.UNSTUCK_THRESHOLD_MAX, value=float(round(self.config.optimize.bounds.short_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_short_unstuck_threshold_1", help=pbgui_help.unstuck_threshold)
 
     def save(self):
         self.path = Path(f'{PBGDIR}/data/opt_v7')
