@@ -608,6 +608,32 @@ class OptimizeV7Item:
         file = Path(f'{dest}/{preset}.json')
         file.unlink(missing_ok=True)
                 
+    @st.fragment
+    def fragment_scoring(self):
+        if "edit_opt_v7_scoring" in st.session_state:
+            if st.session_state.edit_opt_v7_scoring != self.config.optimize.scoring:
+                self.config.optimize.scoring = st.session_state.edit_opt_v7_scoring
+        else:
+            st.session_state.edit_opt_v7_scoring = self.config.optimize.scoring
+        st.multiselect("scoring", ["adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio", "gain"], max_selections=2, key="edit_opt_v7_scoring")
+
+    @st.fragment
+    def fragment_long_close_grid_markup_range(self):
+        if "edit_opt_v7_long_close_grid_markup_range" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_grid_markup_range != (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1):
+                self.config.optimize.bounds.long_close_grid_markup_range_0 = st.session_state.edit_opt_v7_long_close_grid_markup_range[0]
+                self.config.optimize.bounds.long_close_grid_markup_range_1 = st.session_state.edit_opt_v7_long_close_grid_markup_range[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_grid_markup_range = (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1)
+        st.slider(
+            "long_close_grid_markup_range",
+            min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
+            max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
+            step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
+            format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
+            key="edit_opt_v7_long_close_grid_markup_range",
+            help=pbgui_help.close_grid_parameters)
+
     def edit(self):
         # Init coindata
         if "coindata_bybit" not in st.session_state:
@@ -686,9 +712,6 @@ class OptimizeV7Item:
         if "edit_opt_v7_mutation_probability" in st.session_state:
             if st.session_state.edit_opt_v7_mutation_probability != self.config.optimize.mutation_probability:
                 self.config.optimize.mutation_probability = st.session_state.edit_opt_v7_mutation_probability
-        if "edit_opt_v7_scoring" in st.session_state:
-            if st.session_state.edit_opt_v7_scoring != self.config.optimize.scoring:
-                self.config.optimize.scoring = st.session_state.edit_opt_v7_scoring
         # Filters
         if "edit_opt_v7_only_cpt" in st.session_state:
             if st.session_state.edit_opt_v7_only_cpt != self.config.pbgui.only_cpt:
@@ -764,7 +787,7 @@ class OptimizeV7Item:
         with col3:
             st.number_input("mutation_probability", min_value=0.0, max_value=1.0, value=self.config.optimize.mutation_probability, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
         with col4:
-            st.multiselect("scoring", ["adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio", "gain"], max_selections=2, default=self.config.optimize.scoring, key="edit_opt_v7_scoring")
+            self.fragment_scoring()
         # Filters
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
@@ -806,15 +829,25 @@ class OptimizeV7Item:
             st.multiselect('approved_coins_long', coindata_symbols, default=self.config.live.approved_coins.long, key="edit_opt_v7_approved_coins_long")
         with col2:
             st.multiselect('approved_coins_short', coindata_symbols, default=self.config.live.approved_coins.short, key="edit_opt_v7_approved_coins_short")
+
+        col1, col2 = st.columns([1,1])
+        st.write("Bounds long")
+        with col1:
+            with st.container():
+                self.fragment_long_close_grid_markup_range()
+        with col2:
+            with st.container():
+                st.empty()
+
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            # long_close_grid_markup_range
-            if "edit_opt_v7_long_close_grid_markup_range_0" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_grid_markup_range_0 != self.config.optimize.bounds.long_close_grid_markup_range_0:
-                    self.config.optimize.bounds.long_close_grid_markup_range_0 = st.session_state.edit_opt_v7_long_close_grid_markup_range_0
-            if "edit_opt_v7_long_close_grid_markup_range_1" in st.session_state:
-                if st.session_state.edit_opt_v7_long_close_grid_markup_range_1 != self.config.optimize.bounds.long_close_grid_markup_range_1:
-                    self.config.optimize.bounds.long_close_grid_markup_range_1 = st.session_state.edit_opt_v7_long_close_grid_markup_range_1
+            # # long_close_grid_markup_range
+            # if "edit_opt_v7_long_close_grid_markup_range_0" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_grid_markup_range_0 != self.config.optimize.bounds.long_close_grid_markup_range_0:
+            #         self.config.optimize.bounds.long_close_grid_markup_range_0 = st.session_state.edit_opt_v7_long_close_grid_markup_range_0
+            # if "edit_opt_v7_long_close_grid_markup_range_1" in st.session_state:
+            #     if st.session_state.edit_opt_v7_long_close_grid_markup_range_1 != self.config.optimize.bounds.long_close_grid_markup_range_1:
+            #         self.config.optimize.bounds.long_close_grid_markup_range_1 = st.session_state.edit_opt_v7_long_close_grid_markup_range_1
             # long_close_grid_min_markup_0
             if "edit_opt_v7_long_close_grid_min_markup_0" in st.session_state:
                 if st.session_state.edit_opt_v7_long_close_grid_min_markup_0 != self.config.optimize.bounds.long_close_grid_min_markup_0:
@@ -983,7 +1016,7 @@ class OptimizeV7Item:
             if "edit_opt_v7_long_unstuck_threshold_1" in st.session_state:
                 if st.session_state.edit_opt_v7_long_unstuck_threshold_1 != self.config.optimize.bounds.long_unstuck_threshold_1:
                     self.config.optimize.bounds.long_unstuck_threshold_1 = st.session_state.edit_opt_v7_long_unstuck_threshold_1
-            st.number_input("long_close_grid_markup_range min", min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_long_close_grid_markup_range_0", help=pbgui_help.close_grid_parameters)
+            # st.number_input("long_close_grid_markup_range min", min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_long_close_grid_markup_range_0", help=pbgui_help.close_grid_parameters)
             st.number_input("long_close_grid_min_markup min", min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_long_close_grid_min_markup_0", help=pbgui_help.close_grid_parameters)
             st.number_input("long_close_grid_qty_pct min", min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_grid_qty_pct_0", help=pbgui_help.close_grid_parameters)
             st.number_input("long_close_trailing_grid_ratio min", min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN, max_value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_close_trailing_grid_ratio_0", help=pbgui_help.trailing_parameters)
@@ -1009,7 +1042,7 @@ class OptimizeV7Item:
             st.number_input("long_unstuck_loss_allowance_pct min", min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_ROUND)), step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP, format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT, key="edit_opt_v7_long_unstuck_loss_allowance_pct_0", help=pbgui_help.unstuck_loss_allowance_pct)
             st.number_input("long_unstuck_threshold min", min_value=Bounds.UNSTUCK_THRESHOLD_MIN, max_value=float(round(self.config.optimize.bounds.long_unstuck_threshold_1, Bounds.UNSTUCK_THRESHOLD_ROUND)), value=float(round(self.config.optimize.bounds.long_unstuck_threshold_0, Bounds.UNSTUCK_THRESHOLD_ROUND)), step=Bounds.UNSTUCK_THRESHOLD_STEP, format=Bounds.UNSTUCK_THRESHOLD_FORMAT, key="edit_opt_v7_long_unstuck_threshold_0", help=pbgui_help.unstuck_threshold)
         with col2:
-            st.number_input("long_close_grid_markup_range max", min_value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_long_close_grid_markup_range_1", help=pbgui_help.close_grid_parameters)
+            # st.number_input("long_close_grid_markup_range max", min_value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_0, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_markup_range_1, Bounds.CLOSE_GRID_MARKUP_RANGE_ROUND)), step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP, format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT, key="edit_opt_v7_long_close_grid_markup_range_1", help=pbgui_help.close_grid_parameters)
             st.number_input("long_close_grid_min_markup max", min_value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_0, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_min_markup_1, Bounds.CLOSE_GRID_MIN_MARKUP_ROUND)), step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP, format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT, key="edit_opt_v7_long_close_grid_min_markup_1", help=pbgui_help.close_grid_parameters)
             st.number_input("long_close_grid_qty_pct max", min_value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_0, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX, value=float(round(self.config.optimize.bounds.long_close_grid_qty_pct_1, Bounds.CLOSE_GRID_QTY_PCT_ROUND)), step=Bounds.CLOSE_GRID_QTY_PCT_STEP, format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT, key="edit_opt_v7_long_close_grid_qty_pct_1", help=pbgui_help.close_grid_parameters)
             st.number_input("long_close_trailing_grid_ratio max", min_value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_0, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX, value=float(round(self.config.optimize.bounds.long_close_trailing_grid_ratio_1, Bounds.CLOSE_TRAILING_GRID_RATIO_ROUND)), step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP, format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT, key="edit_opt_v7_long_close_trailing_grid_ratio_1", help=pbgui_help.trailing_parameters)
