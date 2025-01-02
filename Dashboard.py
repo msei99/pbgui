@@ -96,7 +96,7 @@ class Dashboard():
     def cleanup_dashboard_session_state(self):
         dashboard_keys = {key: val for key, val in st.session_state.items()
             if key.startswith("dashboard_") or key.startswith("view_orders_")}
-        for key in dashboard_keys:
+        for key in dashboard_keys.copy():
             if key in st.session_state:
                 del st.session_state[key]
 
@@ -452,7 +452,6 @@ class Dashboard():
             self.dashboard_config = dashboard_config
             self.rows = dashboard_config["rows"]
             self.cols = dashboard_config["cols"]
-            self.cleanup_dashboard_session_state()
             for row in range(1, self.rows + 1):
                 for col in range(1, self.cols + 1):
                     st.session_state[f'dashboard_type_{row}_{col}'] = dashboard_config[f'dashboard_type_{row}_{col}']
