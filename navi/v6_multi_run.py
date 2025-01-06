@@ -185,6 +185,11 @@ if not is_pb_installed():
     st.warning('Passivbot Version 6.x is not installed', icon="⚠️")
     st.stop()
 
+# Check if CoinData is configured
+if st.session_state.pbcoindata.api_error:
+    st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
+    st.stop()
+
 if 'edit_multi_config' in st.session_state:
     edit_multi_config()
 elif 'edit_multi_instance' in st.session_state:
