@@ -306,6 +306,7 @@ def sync_api():
                         timeout -= 1
                         if timeout == 0:
                             break
+                    st.text(f'{timeout} sec ({pbremote.unsynced_api} server to go)')
                 st.text(f'')
                 if timeout == 0:
                     error_popup("Syncing API failed")
