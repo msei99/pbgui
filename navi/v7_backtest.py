@@ -160,6 +160,11 @@ if not is_pb7_installed():
     st.warning('Passivbot Version 7.x is not installed', icon="⚠️")
     st.stop()
 
+# Check if CoinData is configured
+if st.session_state.pbcoindata.api_error:
+    st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
+    st.stop()
+
 if "bt_v7_results" in st.session_state:
     bt_v7_results()
 elif "bt_v7" in st.session_state:

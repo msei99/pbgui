@@ -204,13 +204,14 @@ def get_debuglog() -> LogHandler:
     return st.session_state.debuglog
     
 def is_session_state_not_initialized():
-    # Init Service5
+    # Init Services
     if (
         'pbdir' not in st.session_state or
         'services' not in st.session_state or
         'pbgui_instances' not in st.session_state or
         'multi_instances' not in st.session_state or
-        'users' not in st.session_state
+        'users' not in st.session_state or
+        'pbcoindata' not in st.session_state
     ):
         return True
     return False

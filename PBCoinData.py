@@ -364,6 +364,7 @@ class CoinData:
                 self.credits_used_day = r["data"]["usage"]["current_day"]["credits_used"]
                 self.credits_used_month = r["data"]["usage"]["current_month"]["credits_used"]
                 self.credits_left = r["data"]["usage"]["current_month"]["credits_left"]
+                self.api_error = None
                 return True
             else:
                 r = json.loads(response.text)
@@ -464,17 +465,13 @@ class CoinData:
             self.fetch_data()
             self.save_data()
         if not self.data:
-            retries = 3
-            while retries > 0:
-                try:
-                    with Path(f'{coin_path}/coindata.json').open() as f:
-                        self.data = json.load(f)
-                        self.data_ts = data_ts
-                        return
-                except Exception as e:
-                    print(f'Error loading coindata: {e}. Retrying in 5 seconds...')
-                    sleep(5)
-                    retries -= 1
+            try:
+                with Path(f'{coin_path}/coindata.json').open() as f:
+                    self.data = json.load(f)
+                    self.data_ts = data_ts
+                    return
+            except Exception as e:
+                print(f'Error loading coindata: {e}.')
     
     def load_metadata(self):
         pbgdir = Path.cwd()
@@ -487,17 +484,13 @@ class CoinData:
             self.fetch_metadata()
             self.save_metadata()
         if not self.metadata:
-            retries = 3
-            while retries > 0:
-                try:
-                    with Path(f'{coin_path}/metadata.json').open() as f:
-                        self.metadata = json.load(f)
-                        self.metadata_ts = metadata_ts
-                        return
-                except Exception as e:
-                    print(f'Error loading metadata: {e}. Retrying in 5 seconds...')
-                    sleep(5)
-                    retries -= 1
+            try:
+                with Path(f'{coin_path}/metadata.json').open() as f:
+                    self.metadata = json.load(f)
+                    self.metadata_ts = metadata_ts
+                    return
+            except Exception as e:
+                print(f'Error loading metadata: {e}. Retrying in 5 seconds...')
 
     def is_data_fresh(self):
         pbgdir = Path.cwd()
