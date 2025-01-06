@@ -5,10 +5,6 @@ from PBCoinData import CoinData
 from Exchange import Exchanges
 
 def view_coindata():
-    # Init coins
-    if not "coindata" in st.session_state:
-        st.session_state.coindata = CoinData()
-    coindata  = st.session_state.coindata
     # Navigation
     with st.sidebar:
         if st.button(":material/settings:"):
@@ -44,10 +40,6 @@ def view_coindata():
         st.dataframe(coindata.symbols_data, height=36+(len(coindata.symbols_data))*35, use_container_width=True, column_config=column_config)
 
 def setup_coindata():
-    # Init market
-    if not "coindata" in st.session_state:
-        st.session_state.coindata = CoinData()
-    coindata  = st.session_state.coindata
     # Navigation
     with st.sidebar:
         if st.button(":material/refresh:"):
@@ -96,6 +88,13 @@ if not is_authenticted() or is_session_state_not_initialized():
 # Page Setup
 set_page_config("Coin Data")
 st.header("Coin Data", divider="red")
+
+# Check if CoinData is configured
+if not "pbcoindata" in st.session_state:
+    st.session_state.pbcoindata = CoinData()
+coindata  = st.session_state.pbcoindata
+if coindata.api_error:
+    st.session_state.setup_coindata = True
 
 if 'setup_coindata' in st.session_state:
     setup_coindata()
