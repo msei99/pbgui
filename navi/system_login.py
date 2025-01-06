@@ -8,6 +8,7 @@ from Instance import Instances
 from RunV7 import V7Instances
 from Multi import MultiInstances
 from User import Users
+from PBCoinData import CoinData
 import toml
 import os
 from pathlib import Path, PurePath
@@ -241,7 +242,9 @@ def do_init():
     # Check if any users are configured
     if not st.session_state.users.list():
         st.warning('No users configured / Go to Setup API-Keys and configure your first user', icon="⚠️")
-        st.stop()
+    # Check if CoinData configured
+    if not st.session_state.pbcoindata.fetch_api_status():
+        st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
     
     # Add a horizontal divider
     st.markdown("---")

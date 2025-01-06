@@ -4,6 +4,8 @@
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
 ## Join one of my copytrading to support: https://manicpt.streamlit.app/
+I offer API-Service where I run passivbot for you as a Service.
+Just contact me on Telegram for more information.
 
 # v1.33
 
