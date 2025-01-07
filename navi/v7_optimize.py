@@ -59,7 +59,7 @@ def opt_v7():
             opt_v7.preset_remove(st.session_state.opt_v7_preset_select)
             st.rerun()
 
-    st.subheader(f"Create/Edit: {opt_v7.name}")
+    st.subheader(f"Create/Edit")
     opt_v7.edit()
 
 def opt_v7_list():
