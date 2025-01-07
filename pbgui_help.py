@@ -1069,6 +1069,16 @@ compress_cache = """
     set to true to save disk space. Set to false to load faster.
     ```"""
 
+compress_results_file = """
+    ```
+    If true, will compress optimize output results file to save space.
+    ```"""
+
+starting_config = """
+    ```
+    Start the optimizer with config.
+    ```"""
+
 vps_swap = """
     ```
     recommended swap size for VPS
