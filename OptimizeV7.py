@@ -798,6 +798,17 @@ class OptimizeV7Item:
             self.fragment_only_cpt()
         with col5:
             st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_opt_v7_apply_filters")
+        # Init session state for approved_coins
+        if "edit_opt_v7_approved_coins_long" in st.session_state:
+            if st.session_state.edit_opt_v7_approved_coins_long != self.config.live.approved_coins.long:
+                self.config.live.approved_coins.long = st.session_state.edit_opt_v7_approved_coins_long
+        else:
+            st.session_state.edit_opt_v7_approved_coins_long = self.config.live.approved_coins.long
+        if "edit_opt_v7_approved_coins_short" in st.session_state:
+            if st.session_state.edit_opt_v7_approved_coins_short != self.config.live.approved_coins.short:
+                self.config.live.approved_coins.short = st.session_state.edit_opt_v7_approved_coins_short
+        else:
+            st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
         # Apply filters
         if st.session_state.edit_opt_v7_apply_filters:
             self.config.live.approved_coins.long = list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins))
@@ -822,11 +833,12 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_approved_coins_long = self.config.live.approved_coins.long
         if "edit_opt_v7_approved_coins_short" in st.session_state:
             st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
+        # Select approved coins
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
-            self.fragment_approved_coins_long()
+            st.multiselect('approved_coins_long', symbols, key="edit_opt_v7_approved_coins_long")
         with col2:
-            self.fragment_approved_coins_short()
+            st.multiselect('approved_coins_short', symbols, key="edit_opt_v7_approved_coins_short")
 
     @st.fragment
     # market_cap
@@ -893,30 +905,6 @@ class OptimizeV7Item:
             st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", key="edit_opt_v7_only_cpt", help=pbgui_help.only_cpt)
-
-    # approved_coins_long
-    def fragment_approved_coins_long(self):
-        if "edit_opt_v7_approved_coins_long" in st.session_state:
-            if st.session_state.edit_opt_v7_approved_coins_long != self.config.live.approved_coins.long:
-                self.config.live.approved_coins.long = st.session_state.edit_opt_v7_approved_coins_long
-        else:
-            st.session_state.edit_opt_v7_approved_coins_long = self.config.live.approved_coins.long
-        coindata_bybit = st.session_state.coindata_bybit
-        coindata_binance = st.session_state.coindata_binance
-        coindata_symbols = sorted(list(set(coindata_bybit.symbols + coindata_binance.symbols)))
-        st.multiselect('approved_coins_long', coindata_symbols, key="edit_opt_v7_approved_coins_long")
-
-    # approved_coins_short
-    def fragment_approved_coins_short(self):
-        if "edit_opt_v7_approved_coins_short" in st.session_state:
-            if st.session_state.edit_opt_v7_approved_coins_short != self.config.live.approved_coins.short:
-                self.config.live.approved_coins.short = st.session_state.edit_opt_v7_approved_coins_short
-        else:
-            st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
-        coindata_bybit = st.session_state.coindata_bybit
-        coindata_binance = st.session_state.coindata_binance
-        coindata_symbols = sorted(list(set(coindata_bybit.symbols + coindata_binance.symbols)))
-        st.multiselect('approved_coins_short', coindata_symbols, key="edit_opt_v7_approved_coins_short")
 
     # long_close_grid_markup_range
     @st.fragment
