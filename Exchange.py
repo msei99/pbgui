@@ -837,6 +837,9 @@ class Exchange:
         if not self.instance: self.connect()
         # print(self.instance.__dir__())
         if self.id == 'binance':
+            users = Users()
+            self.user = users.find_binance_user()
+            self.connect()
             try:
                 symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
             except Exception as e:
@@ -896,7 +899,7 @@ class Exchange:
             self.cpt.sort()
         # print(self.spot)
         # print(self.swap)
-        # print(self.swap)
+        # print(self.cpt)
         self.save_symbols()
 
     def save_symbols(self):
@@ -924,7 +927,7 @@ class Exchange:
 
 def main():
     print("Don't Run this Class from CLI")
-    users = Users()
+    # users = Users()
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
     # exchange = Exchange("binance", users.find_user("binance_FORAGER"))
