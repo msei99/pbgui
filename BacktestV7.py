@@ -653,194 +653,26 @@ class BacktestV7Item:
         if "coindata_binance" not in st.session_state:
             st.session_state.coindata_binance = CoinData()
             st.session_state.coindata_binance.exchange = "binance"
-
-        # coindata_bybit = st.session_state.coindata_bybit
-        # coindata_binance = st.session_state.coindata_binance
-        # if coindata_bybit.market_cap != self.config.pbgui.market_cap:
-        #     coindata_bybit.market_cap = self.config.pbgui.market_cap
-        # if coindata_bybit.vol_mcap != self.config.pbgui.vol_mcap:
-        #     coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
-        # if coindata_bybit.tags != self.config.pbgui.tags:
-        #     coindata_bybit.tags = self.config.pbgui.tags
-        # if coindata_binance.market_cap != self.config.pbgui.market_cap:
-        #     coindata_binance.market_cap = self.config.pbgui.market_cap
-        # if coindata_binance.vol_mcap != self.config.pbgui.vol_mcap:
-        #     coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
-        # if coindata_binance.tags != self.config.pbgui.tags:
-        #     coindata_binance.tags = self.config.pbgui.tags
-        # if coindata_bybit.only_cpt != self.config.pbgui.only_cpt:
-        #     coindata_bybit.only_cpt = self.config.pbgui.only_cpt
-        # if coindata_binance.only_cpt != self.config.pbgui.only_cpt:
-        #     coindata_binance.only_cpt = self.config.pbgui.only_cpt
-        # if coindata_bybit.notices_ignore != self.config.pbgui.notices_ignore:
-        #     coindata_bybit.notices_ignore = self.config.pbgui.notices_ignore
-        # if coindata_binance.notices_ignore != self.config.pbgui.notices_ignore:
-        #     coindata_binance.notices_ignore = self.config.pbgui.notices_ignore
-        # Init session_state for keys
-        # if "edit_bt_v7_exchanges" in st.session_state:
-        #     if st.session_state.edit_bt_v7_exchanges != self.config.backtest.exchanges:
-        #         self.config.backtest.exchanges = st.session_state.edit_bt_v7_exchanges
-        #         if "bybit" in self.config.backtest.exchanges:
-        #             coindata_bybit.exchange = "bybit"
-        #         if "binance" in self.config.backtest.exchanges:
-        #             coindata_binance.exchange = "binance"
-        # if "edit_bt_v7_name" in st.session_state:
-        #     if st.session_state.edit_bt_v7_name != self.name:
-        #         st.session_state.edit_bt_v7_name = replace_special_chars(st.session_state.edit_bt_v7_name)
-        #         self.name = st.session_state.edit_bt_v7_name
-        #         self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
-        # if "edit_bt_v7_sd" in st.session_state:
-        #     if st.session_state.edit_bt_v7_sd.strftime("%Y-%m-%d") != self.config.backtest.start_date:
-        #         self.config.backtest.start_date = st.session_state.edit_bt_v7_sd.strftime("%Y-%m-%d")
-        # if "edit_bt_v7_ed" in st.session_state:
-        #     if st.session_state.edit_bt_v7_ed.strftime("%Y-%m-%d") != self.config.backtest.end_date:
-        #         self.config.backtest.end_date = st.session_state.edit_bt_v7_ed.strftime("%Y-%m-%d")
-        # if "edit_bt_v7_sb" in st.session_state:
-        #     if st.session_state.edit_bt_v7_sb != self.config.backtest.starting_balance:
-        #         self.config.backtest.starting_balance = st.session_state.edit_bt_v7_sb
-        # if "edit_bt_v7_minimum_coin_age_days" in st.session_state:
-        #     if st.session_state.edit_bt_v7_minimum_coin_age_days != self.config.live.minimum_coin_age_days:
-        #         self.config.live.minimum_coin_age_days = st.session_state.edit_bt_v7_minimum_coin_age_days
-        # if "edit_bt_v7_compress_cache" in st.session_state:
-        #     if st.session_state.edit_bt_v7_compress_cache != self.config.backtest.compress_cache:
-        #         self.config.backtest.compress_cache = st.session_state.edit_bt_v7_compress_cache
-        # Filters
-        # if "edit_bt_v7_notices_ignore" in st.session_state:
-        #     if st.session_state.edit_bt_v7_notices_ignore != self.config.pbgui.notices_ignore:
-        #         self.config.pbgui.notices_ignore = st.session_state.edit_bt_v7_notices_ignore
-        #         coindata_bybit.notices_ignore = self.config.pbgui.notices_ignore
-        #         coindata_binance.notices_ignore = self.config.pbgui.notices_ignore
-        # if "edit_bt_v7_only_cpt" in st.session_state:
-        #     if st.session_state.edit_bt_v7_only_cpt != self.config.pbgui.only_cpt:
-        #         self.config.pbgui.only_cpt = st.session_state.edit_bt_v7_only_cpt
-        #         coindata_bybit.only_cpt = self.config.pbgui.only_cpt
-        #         coindata_binance.only_cpt = self.config.pbgui.only_cpt
-        # if "edit_bt_v7_market_cap" in st.session_state:
-        #     if st.session_state.edit_bt_v7_market_cap != self.config.pbgui.market_cap:
-        #         self.config.pbgui.market_cap = st.session_state.edit_bt_v7_market_cap
-        #         coindata_bybit.market_cap = self.config.pbgui.market_cap
-        #         coindata_binance.market_cap = self.config.pbgui.market_cap
-        # if "edit_bt_v7_vol_mcap" in st.session_state:
-        #     if st.session_state.edit_bt_v7_vol_mcap != self.config.pbgui.vol_mcap:
-        #         self.config.pbgui.vol_mcap = st.session_state.edit_bt_v7_vol_mcap
-        #         coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
-        #         coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
-        # if "edit_bt_v7_tags" in st.session_state:
-        #     if st.session_state.edit_bt_v7_tags != self.config.pbgui.tags:
-        #         self.config.pbgui.tags = st.session_state.edit_bt_v7_tags
-        #         coindata_bybit.tags = self.config.pbgui.tags
-        #         coindata_binance.tags = self.config.pbgui.tags
-        # Symbol config
-        # if "edit_bt_v7_approved_coins_long" in st.session_state:
-        #     if st.session_state.edit_bt_v7_approved_coins_long != self.config.live.approved_coins.long:
-        #         self.config.live.approved_coins.long = st.session_state.edit_bt_v7_approved_coins_long
-        # if "edit_bt_v7_approved_coins_short" in st.session_state:
-        #     if st.session_state.edit_bt_v7_approved_coins_short != self.config.live.approved_coins.short:
-        #         self.config.live.approved_coins.short = st.session_state.edit_bt_v7_approved_coins_short
-        # if "edit_bt_v7_ignored_coins_long" in st.session_state:
-        #     if st.session_state.edit_bt_v7_ignored_coins_long != self.config.live.ignored_coins.long:
-        #         self.config.live.ignored_coins.long = st.session_state.edit_bt_v7_ignored_coins_long
-        # if "edit_bt_v7_ignored_coins_short" in st.session_state:
-        #     if st.session_state.edit_bt_v7_ignored_coins_short != self.config.live.ignored_coins.short:
-        #         self.config.live.ignored_coins.short = st.session_state.edit_bt_v7_ignored_coins_short
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             self.fragment_exchanges()
-            # st.multiselect('Exchanges',["binance", "bybit"], default=self.config.backtest.exchanges, key="edit_bt_v7_exchanges")
         with col2:
             self.fragment_name()
-            # if not self.name:
-            #     st.text_input(f":red[Backtest Name]", value=self.name, max_chars=64, help=pbgui_help.task_name, key="edit_bt_v7_name")
-            # else:
-            #     st.text_input(f"Backtest Name", value=self.name, max_chars=64, key="edit_bt_v7_name")
         with col3:
             self.fragment_start_date()
-            # st.date_input("START_DATE", datetime.datetime.strptime(self.config.backtest.start_date, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_bt_v7_sd")
         with col4:
             self.fragment_end_date()
-            # st.date_input("END_DATE", datetime.datetime.strptime(self.config.backtest.end_date, '%Y-%m-%d'), format="YYYY-MM-DD", key="edit_bt_v7_ed")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             self.fragment_starting_balance()
-            # st.number_input('STARTING_BALANCE',value=float(self.config.backtest.starting_balance),step=500.0, key="edit_bt_v7_sb")
         with col2:
             self.fragment_minimum_coin_age_days()
-            # st.number_input("minimum_coin_age_days", value=float(round(self.config.live.minimum_coin_age_days, 1)), step=1.0, format="%.1f", key="edit_bt_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
         with col3:
             self.fragment_compress_cache()
-            # st.checkbox("compress_cache", value=self.config.backtest.compress_cache, key="edit_bt_v7_compress_cache", help=pbgui_help.compress_cache)
         #Filters
         self.fragment_filter_coins()
-        # col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
-        # with col1:
-        #     st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_bt_v7_market_cap", help=pbgui_help.market_cap)
-        # with col2:
-        #     st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_bt_v7_vol_mcap", help=pbgui_help.vol_mcap)
-        # with col3:
-        #     st.multiselect("Tags", coindata_bybit.all_tags, default=self.config.pbgui.tags, key="edit_bt_v7_tags", help=pbgui_help.coindata_tags)
-        # with col4:
-        #     st.checkbox("only_cpt", value=self.config.pbgui.only_cpt, help=pbgui_help.only_cpt, key="edit_bt_v7_only_cpt")
-        #     st.checkbox("notices ignore", value=self.config.pbgui.notices_ignore, help=pbgui_help.notices_ignore, key="edit_bt_v7_notices_ignore")
-        # with col5:
-        #     st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_bt_v7_apply_filters")
-        # Apply filters
-        # if st.session_state.edit_bt_v7_apply_filters:
-        #     self.config.live.approved_coins.long = list(set(coindata_bybit.approved_coins + coindata_binance.approved_coins))
-        #     self.config.live.approved_coins.short = list(set(coindata_bybit.approved_coins + coindata_binance.approved_coins))
-        #     self.config.live.ignored_coins.long = list(set(coindata_bybit.ignored_coins + coindata_binance.ignored_coins))
-        #     self.config.live.ignored_coins.short = list(set(coindata_bybit.ignored_coins + coindata_binance.ignored_coins))
-        # Remove unavailable symbols
-        # if "bybit" in self.config.backtest.exchanges and "binance" in self.config.backtest.exchanges:
-        #     symbols = list(set(coindata_bybit.symbols + coindata_binance.symbols))
-        # elif "bybit" in self.config.backtest.exchanges:
-        #     symbols = coindata_bybit.symbols
-        # elif "binance" in self.config.backtest.exchanges:
-        #     symbols = coindata_binance.symbols
-        # else:
-        #     symbols = []
-        # for symbol in self.config.live.approved_coins.long.copy():
-        #     if symbol not in symbols:
-        #         self.config.live.approved_coins.long.remove(symbol)
-        # for symbol in self.config.live.approved_coins.short.copy():
-        #     if symbol not in symbols:
-        #         self.config.live.approved_coins.short.remove(symbol)
-        # for symbol in self.config.live.ignored_coins.long.copy():
-        #     if symbol not in symbols:
-        #         self.config.live.ignored_coins.long.remove(symbol)
-        # for symbol in self.config.live.ignored_coins.short.copy():
-        #     if symbol not in symbols:
-        #         self.config.live.ignored_coins.short.remove(symbol)
-        # Remove from approved_coins when in ignored coins
-        # for symbol in self.config.live.ignored_coins.long:
-        #     if symbol in self.config.live.approved_coins.long:
-        #         self.config.live.approved_coins.long.remove(symbol)
-        # for symbol in self.config.live.ignored_coins.short:
-        #     if symbol in self.config.live.approved_coins.short:
-        #         self.config.live.approved_coins.short.remove(symbol)
-        # Correct Display of Symbols
-        # if "edit_bt_v7_approved_coins_long" in st.session_state:
-        #     st.session_state.edit_bt_v7_approved_coins_long = self.config.live.approved_coins.long
-        # if "edit_bt_v7_approved_coins_short" in st.session_state:
-        #     st.session_state.edit_bt_v7_approved_coins_short = self.config.live.approved_coins.short
-        # if "edit_bt_v7_ignored_coins_long" in st.session_state:
-        #     st.session_state.edit_bt_v7_ignored_coins_long = self.config.live.ignored_coins.long
-        # if "edit_bt_v7_ignored_coins_short" in st.session_state:
-        #     st.session_state.edit_bt_v7_ignored_coins_short = self.config.live.ignored_coins.short
-        # Find coins with notices
-        # for coin in list(set(self.config.live.approved_coins.long + self.config.live.approved_coins.short)):
-        #     if coin in coindata_bybit.symbols_notice:
-        #         st.warning(f'{coin}: {coindata_bybit.symbols_notices[coin]}')
-        #     elif coin in coindata_binance.symbols_notice:
-        #         st.warning(f'{coin}: {coindata_binance.symbols_notices[coin]}')
-        # col1, col2 = st.columns([1,1], vertical_alignment="bottom")
-        # with col1:
-        #     coindata_symbols = sorted(list(set(coindata_bybit.symbols + coindata_binance.symbols)))
-        #     st.multiselect('approved_coins_long', coindata_symbols, default=self.config.live.approved_coins.long, key="edit_bt_v7_approved_coins_long", help=pbgui_help.approved_coins)
-        #     st.multiselect('ignored_symbols_long', coindata_symbols, default=self.config.live.ignored_coins.long, key="edit_bt_v7_ignored_coins_long", help=pbgui_help.ignored_coins)
-        # with col2:
-        #     st.multiselect('approved_coins_short', coindata_symbols, default=self.config.live.approved_coins.short, key="edit_bt_v7_approved_coins_short", help=pbgui_help.approved_coins)
-        #     st.multiselect('ignored_symbols_short', coindata_symbols, default=self.config.live.ignored_coins.short, key="edit_bt_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
+        # Config
         self.config.bot.edit()
 
     def save(self):
