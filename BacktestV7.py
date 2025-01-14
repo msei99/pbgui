@@ -720,9 +720,9 @@ class BacktestV7Item:
             if st.button("OK"):
                 del st.session_state.edit_bt_v7_exchanges
                 del st.session_state.edit_bt_v7_name
-                del st.session_state.edit_bt_v7_sd
-                del st.session_state.edit_bt_v7_ed
-                del st.session_state.edit_bt_v7_sb
+                del st.session_state.edit_bt_v7_start_date
+                del st.session_state.edit_bt_v7_end_date
+                del st.session_state.edit_bt_v7_starting_balance
                 del st.session_state.edit_bt_v7_minimum_coin_age_days
                 del st.session_state.edit_bt_v7_compress_cache
                 del st.session_state.edit_bt_v7_market_cap
