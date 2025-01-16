@@ -409,7 +409,6 @@ class V7Instance():
             if st.session_state.cf_data and not "edit_coin_flag" in st.session_state:
                 d = st.session_state.cf_data
                 st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_cf_coin_{ed_key}', disabled=['coin','flags'])
-
             if "edit_run_v7_add_coin_flag_button" in st.session_state:
                 if st.session_state.edit_run_v7_add_coin_flag_button:
                     st.session_state.edit_coin_flag = st.session_state.edit_run_v7_add_coin_flag
@@ -455,7 +454,13 @@ class V7Instance():
                     lev = float(flags.split("-lev")[1].split()[0])
                 if "-lc" in flags:
                     config = True
-                    st.session_state.cf_config = ConfigV7(file_name=f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json')
+                    if "cf_config" not in st.session_state:
+                        st.session_state.cf_config = ConfigV7(file_name=f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json')
+                        st.session_state.cf_config.load_config()
+                        if "edit_cf_configv7_long" in st.session_state:
+                            del st.session_state.edit_cf_configv7_long
+                        if "edit_cf_configv7_short" in st.session_state:
+                            del st.session_state.edit_cf_configv7_short
         # Init session_state for keys
         if "edit_run_v7_cf_config" in st.session_state:
             if st.session_state.edit_run_v7_cf_config != config:
@@ -520,21 +525,14 @@ class V7Instance():
                     if flags[-1] == " ":
                         flags = flags[:-1]
                     self.config.live.coin_flags[symbol] = flags
+                    # sort coin_flags
+                    self.config.live.coin_flags = dict(sorted(self.config.live.coin_flags.items()))
                 self.save()
-                del st.session_state.edit_run_v7_cf_mode_long
-                del st.session_state.edit_run_v7_cf_we_long
-                del st.session_state.edit_run_v7_cf_mode_short
-                del st.session_state.edit_run_v7_cf_we_short
-                del st.session_state.edit_run_v7_cf_lev
-                del st.session_state.edit_run_v7_cf_config
-                del st.session_state.edit_coin_flag
-                del st.session_state.cf_data
-                st.session_state.ed_key += 1
+                self.clean_cf_session_state()
                 st.rerun()
         with col2:
             if st.button("Cancel"):
-                del st.session_state.edit_coin_flag
-                st.session_state.ed_key += 1
+                self.clean_cf_session_state()
                 st.rerun()
         with col3:
             if st.button("Remove"):
@@ -543,10 +541,30 @@ class V7Instance():
                         del self.config.live.coin_flags[symbol]
                 Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json').unlink(missing_ok=True)
                 self.save()
-                del st.session_state.edit_coin_flag
-                del st.session_state.cf_data
-                st.session_state.ed_key += 1
+                self.clean_cf_session_state()
                 st.rerun()
+    
+    def clean_cf_session_state(self):
+        if "cf_config" in st.session_state:
+            del st.session_state.cf_config
+        if "edit_run_v7_cf_mode_long" in st.session_state:
+            del st.session_state.edit_run_v7_cf_mode_long
+        if "edit_run_v7_cf_we_long" in st.session_state:
+            del st.session_state.edit_run_v7_cf_we_long
+        if "edit_run_v7_cf_mode_short" in st.session_state:
+            del st.session_state.edit_run_v7_cf_mode_short
+        if "edit_run_v7_cf_we_short" in st.session_state:
+            del st.session_state.edit_run_v7_cf_we_short
+        if "edit_run_v7_cf_lev" in st.session_state:
+            del st.session_state.edit_run_v7_cf_lev
+        if "edit_run_v7_cf_config" in st.session_state:
+            del st.session_state.edit_run_v7_cf_config
+        if "edit_coin_flag" in st.session_state:
+            del st.session_state.edit_coin_flag
+        if "cf_data" in st.session_state:
+            del st.session_state.cf_data
+        if "ed_key" in st.session_state:
+            st.session_state.ed_key += 1
 
     @st.dialog("Paste config", width="large")
     def import_instance(self):
