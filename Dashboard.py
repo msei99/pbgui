@@ -585,7 +585,7 @@ class Dashboard():
             if user:
                 st.session_state[f'dashboard_ppl_users_{position}'] = user
                 for user in st.session_state[f'dashboard_ppl_users_{position}']:
-                    if user not in users.list():
+                    if user not in users.list() and user != 'ALL':
                         st.session_state[f'dashboard_ppl_users_{position}'].remove(user)
         if f"dashboard_ppl_period_{position}" not in st.session_state:
             if period:
@@ -682,7 +682,7 @@ class Dashboard():
             if user:
                 st.session_state[f'dashboard_income_users_{position}'] = user
                 for user in st.session_state[f'dashboard_income_users_{position}']:
-                    if user not in users.list():
+                    if user not in users.list() and user != 'ALL':
                         st.session_state[f'dashboard_income_users_{position}'].remove(user)
         if f"dashboard_income_period_{position}" not in st.session_state:
             if period:
@@ -720,7 +720,7 @@ class Dashboard():
             if user:
                 st.session_state[f'dashboard_top_symbols_users_{position}'] = user
                 for user in st.session_state[f'dashboard_top_symbols_users_{position}']:
-                    if user not in users.list():
+                    if user not in users.list() and user != 'ALL':
                         st.session_state[f'dashboard_top_symbols_users_{position}'].remove(user)
         if f"dashboard_top_symbols_period_{position}" not in st.session_state:
             if period:
@@ -763,7 +763,7 @@ class Dashboard():
             if user:
                 st.session_state[f'dashboard_balance_users_{position}'] = user
                 for user in st.session_state[f'dashboard_balance_users_{position}']:
-                    if user not in users.list():
+                    if user not in users.list() and user != 'ALL':
                         st.session_state[f'dashboard_balance_users_{position}'].remove(user)
         st.markdown("#### :blue[Balance]")
         st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_balance_users_{position}")
@@ -829,7 +829,7 @@ class Dashboard():
             if user:
                 st.session_state[f'dashboard_positions_users_{position}'] = user
                 for user in st.session_state[f'dashboard_positions_users_{position}']:
-                    if user not in users.list():
+                    if user not in users.list() and user != 'ALL':
                         st.session_state[f'dashboard_positions_users_{position}'].remove(user)
         # Init Orders View
         if f"dashboard_positions_{position}" in st.session_state:
