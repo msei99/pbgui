@@ -836,21 +836,21 @@ class Exchange:
     def fetch_copytrading_symbols(self):
         if not self.instance: self.connect()
         # print(self.instance.__dir__())
+        cpSymbols = []
         if self.id == 'binance':
             users = Users()
             self.user = users.find_binance_user()
-            self.connect()
-            try:
-                symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
-            except Exception as e:
-                return
-            cpSymbols = []
-            for symbol in symbols["data"]:
-                cpSymbols.append(symbol["symbol"])
+            if self.user:
+                self.connect()
+                try:
+                    symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
+                except Exception as e:
+                    return
+                for symbol in symbols["data"]:
+                    cpSymbols.append(symbol["symbol"])
         elif self.id == 'bybit':
             # print(self.instance.__dir__())
             symbols = self.instance.publicGetContractV3PublicCopytradingSymbolList()
-            cpSymbols = []
             for symbol in symbols["result"]["list"]:
                 cpSymbols.append(symbol["symbol"])
         cpSymbols.sort()

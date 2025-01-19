@@ -123,8 +123,11 @@ class Users:
     
     def find_binance_user(self):
         for user in self.users:
-            if user.exchange == "binance" and len(user.key) > 20 and len(user.secret) > 20:
-                return user
+            if user.exchange == "binance":
+                if user.key and user.secret:
+                    if len(user.key) > 20 and len(user.secret) > 20:
+                        return user
+        return None
 
     def load(self):
         self.users = []
