@@ -542,7 +542,7 @@ class Dashboard():
             if user:
                 st.session_state[f'dashboard_pnl_users_{position}'] = user
                 for user in st.session_state[f'dashboard_pnl_users_{position}']:
-                    if user not in users:
+                    if user not in users.list() and user != 'ALL':
                         st.session_state[f'dashboard_pnl_users_{position}'].remove(user)
         if f"dashboard_pnl_period_{position}" not in st.session_state:
             if period:
