@@ -2,7 +2,6 @@ import streamlit as st
 import pbgui_help
 from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths
 from PBCoinData import CoinData
-from Exchange import Exchanges
 
 def view_coindata():
     # Navigation
@@ -14,24 +13,35 @@ def view_coindata():
     if "view_coindata_exchange" in st.session_state:
         if st.session_state.view_coindata_exchange != coindata.exchange:
             coindata.exchange = st.session_state.view_coindata_exchange
+    else:
+        st.session_state.view_coindata_exchange = coindata.exchange
+    
     if "view_coindata_market_cap" in st.session_state:
         if st.session_state.view_coindata_market_cap != coindata.market_cap:
             coindata.market_cap = st.session_state.view_coindata_market_cap
+    else:
+        st.session_state.view_coindata_market_cap = float(coindata.market_cap)
+    
     if "view_coindata_vol_mcap" in st.session_state:
         if st.session_state.view_coindata_vol_mcap != coindata.vol_mcap:
             coindata.vol_mcap = st.session_state.view_coindata_vol_mcap
+    else:
+        st.session_state.view_coindata_vol_mcap = float(coindata.vol_mcap)
+
     if "edit_coindata_tags" in st.session_state:
         if st.session_state.edit_coindata_tags != coindata.tags:
             coindata.tags = st.session_state.edit_coindata_tags
+    else:
+        st.session_state.edit_coindata_tags = coindata.tags
     # Display
     col_1, col_2, col_3, col_4, col_5 = st.columns([1,1,1,1,1])
     with col_1:
-        st.selectbox('Exchange',coindata.exchanges, index=coindata.exchange_index, key="view_coindata_exchange")
+        st.selectbox('Exchange', options=coindata.exchanges, index=coindata.exchange_index, key="view_coindata_exchange")
     with col_2:
-        st.number_input("market_cap", min_value=0, value=coindata.market_cap, step=50, format="%.d", key="view_coindata_market_cap", help=pbgui_help.market_cap)
+        st.number_input("market_cap", min_value=0, step=50, format="%.d", key="view_coindata_market_cap", help=pbgui_help.market_cap)
     with col_3:
-        st.number_input("vol/mcap", min_value=0.0, value=coindata.vol_mcap, step=0.05, format="%.2f", key="view_coindata_vol_mcap", help=pbgui_help.vol_mcap)
-    st.multiselect("Tags", coindata.all_tags, default=[], key="edit_coindata_tags", help=pbgui_help.coindata_tags)
+        st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="view_coindata_vol_mcap", help=pbgui_help.vol_mcap)
+    st.multiselect("Tags", options=coindata.all_tags, default=[], key="edit_coindata_tags", help=pbgui_help.coindata_tags)
     column_config = {
         "price": st.column_config.NumberColumn(format="%.8f"),
         "link": st.column_config.LinkColumn(display_text="CoinMarketCap")
