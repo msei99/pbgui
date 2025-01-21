@@ -129,6 +129,17 @@ class Users:
                         return user
         return None
 
+    def find_bitget_users(self):
+        users = []
+        for user in self.users:
+            if user.exchange == "bitget":
+                if user.key and user.secret and user.passphrase:
+                    if len(user.key) > 20 and len(user.secret) > 20 and len(user.passphrase) > 20:
+                        users.append(user)
+        if users:
+            return users                        
+        return None
+
     def load(self):
         self.users = []
         users = ""
