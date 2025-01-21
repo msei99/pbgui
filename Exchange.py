@@ -845,6 +845,7 @@ class Exchange:
                 try:
                     symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
                 except Exception as e:
+                    print(f'User:{self.user.name} Error:', e)
                     return
                 for symbol in symbols["data"]:
                     cpSymbols.append(symbol["symbol"])
@@ -854,12 +855,21 @@ class Exchange:
             for symbol in symbols["result"]["list"]:
                 cpSymbols.append(symbol["symbol"])
         elif self.id == 'bitget':
-            # print(self.instance.__dir__())
-            # v2/copy/mix-trader/config-query-symbols
-            symbols = self.instance.privateCopyGetV2CopyMixTraderConfigQuerySymbols({"productType": "USDT-FUTURES"})
-            for symbol in symbols["data"]:
-                if symbol["minOpenCount"]:
-                    cpSymbols.append(symbol["symbol"])
+            users = Users()
+            users = users.find_bitget_users()
+            if users:
+                for user in users:
+                    self.user = user
+                    self.connect()
+                    try:
+                        # print(self.instance.__dir__())
+                        symbols = self.instance.privateCopyGetV2CopyMixTraderConfigQuerySymbols({"productType": "USDT-FUTURES"})
+                        if symbols:
+                            for symbol in symbols["data"]:
+                                cpSymbols.append(symbol["symbol"])
+                            break
+                    except Exception as e:
+                        print(f'User:{self.user.name} Error:', e)
         cpSymbols.sort()
         return cpSymbols
 
