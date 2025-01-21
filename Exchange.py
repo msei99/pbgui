@@ -853,6 +853,13 @@ class Exchange:
             symbols = self.instance.publicGetContractV3PublicCopytradingSymbolList()
             for symbol in symbols["result"]["list"]:
                 cpSymbols.append(symbol["symbol"])
+        elif self.id == 'bitget':
+            # print(self.instance.__dir__())
+            # v2/copy/mix-trader/config-query-symbols
+            symbols = self.instance.privateCopyGetV2CopyMixTraderConfigQuerySymbols({"productType": "USDT-FUTURES"})
+            for symbol in symbols["data"]:
+                if symbol["minOpenCount"]:
+                    cpSymbols.append(symbol["symbol"])
         cpSymbols.sort()
         return cpSymbols
 
@@ -891,7 +898,7 @@ class Exchange:
                         self.swap.append(''.join(v["id"].split("-")))
             if v["spot"] and v["active"] and (self.id == "bybit" or self.id == "binance"):
                 self.spot.append(v["id"])
-        if self.id == "binance":
+        if self.id in ["bitget", "binance"]:
             self.cpt = self.fetch_copytrading_symbols()
         self.spot.sort()
         self.swap.sort()
@@ -928,6 +935,9 @@ class Exchange:
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
+    # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
+    # exchange.fetch_symbols()
+    # print(exchange.fetch_copytrading_symbols())
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
     # exchange = Exchange("binance", users.find_user("binance_FORAGER"))
