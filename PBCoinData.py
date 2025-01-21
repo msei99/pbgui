@@ -530,7 +530,7 @@ class CoinData:
         exchange = "kucoinfutures" if self.exchange == "kucoin" else self.exchange
         if pb_config.has_option("exchanges", f'{exchange}.swap'):
             self._symbols = eval(pb_config.get("exchanges", f'{exchange}.swap'))
-        if self.exchange in ["binance", "bybit"]:
+        if self.exchange in ["binance", "bybit", "bitget"]:
             if pb_config.has_option("exchanges", f'{exchange}.cpt'):
                 self._symbols_cpt = eval(pb_config.get("exchanges", f'{exchange}.cpt'))
                 return
