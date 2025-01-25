@@ -52,6 +52,12 @@ def dashboard():
                 st.session_state.dashboard = Dashboard()
                 st.session_state.edit_dashboard = True
                 st.rerun()
+        with col3:
+            if "edit_dashboard" in st.session_state:
+                if st.button(":material/cancel:"):
+                    del st.session_state.edit_dashboard
+                    del st.session_state.dashboard
+                    st.rerun()
         col1, col2, col3 = st.columns([1, 1, 2])
         if "dashboard" in st.session_state or "edit_dashboard" in st.session_state:
             with col1:
@@ -70,16 +76,18 @@ def dashboard():
                         st.rerun()
         if "dashboard" in st.session_state:
             with col2:
-                if st.button(":material/edit:"):
-                    if "edit_dashboard" not in st.session_state:
-                        st.session_state.edit_dashboard = True
-                        st.rerun()
+                if not "edit_dashboard" in st.session_state:
+                    if st.button(":material/edit:"):
+                        if "edit_dashboard" not in st.session_state:
+                            st.session_state.edit_dashboard = True
+                            st.rerun()
             with col3:
-                if st.button(":material/delete:"):
-                    st.session_state.dashboard.delete()
-                    st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
-                    del st.session_state.dashboard
-                    info_popup("Dashboard deleted")
+                if not "edit_dashboard" in st.session_state:
+                    if st.button(":material/delete:"):
+                        st.session_state.dashboard.delete()
+                        st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
+                        del st.session_state.dashboard
+                        info_popup("Dashboard deleted")
         for db in dashboards:
             if st.button(db):
                 if "edit_dashboard" in st.session_state:
