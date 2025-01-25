@@ -11,8 +11,8 @@ def edit_v7_instance():
     # Navigation
     with st.sidebar:
         if st.button(":material/home:"):
+            v7_instance.clean_cf_session_state()
             del st.session_state.edit_v7_instance
-            del st.session_state.cf_data
             del st.session_state.v7_instances
             st.session_state.v7_instances = V7Instances()
             st.rerun()

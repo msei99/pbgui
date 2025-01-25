@@ -12,6 +12,17 @@ import json
 from shutil import rmtree
 
 class V7Instance():
+    MODE_OPTIONS = {
+        '': "",
+        'n': "normal",
+        'm': "manual",
+        'gs': "graceful_stop",
+        'p': "panic",
+        't': "take_profit_only",
+        }
+    MODE = ['','n','m','gs','p','t']
+    TIME_IN_FORCE = ['good_till_cancelled', 'post_only']
+
     def __init__(self):
         self.instance_path = None
         self._users = Users()
@@ -103,225 +114,221 @@ class V7Instance():
         if "edit_run_v7_version" in st.session_state:
             del st.session_state.edit_run_v7_version
 
-    def edit(self):
-        # Change ignored_coins back to empty list if we changed it to a path
-        if type(self.config.live.ignored_coins.long) == str:
-            self.config.live.ignored_coins.long = []
-            self.config.live.ignored_coins.short = []
-        # Init coindata
-        coindata = st.session_state.pbcoindata
-        if coindata.exchange != self._users.find_exchange(self.user):
-            coindata.exchange = self._users.find_exchange(self.user)
-        if coindata.market_cap != self.config.pbgui.market_cap:
-            coindata.market_cap = self.config.pbgui.market_cap
-        if coindata.vol_mcap != self.config.pbgui.vol_mcap:
-            coindata.vol_mcap = self.config.pbgui.vol_mcap
-        if coindata.tags != self.config.pbgui.tags:
-            coindata.tags = self.config.pbgui.tags
-        if coindata.only_cpt != self.config.pbgui.only_cpt:
-            coindata.only_cpt = self.config.pbgui.only_cpt
-        if coindata.notices_ignore != self.config.pbgui.notices_ignore:
-            coindata.notices_ignore = self.config.pbgui.notices_ignore
-        # Init session_state for keys
-        if "edit_run_v7_user" in st.session_state:
-            if st.session_state.edit_run_v7_user != self.user:
-                self.user = st.session_state.edit_run_v7_user
-                coindata.exchange = self._users.find_exchange(self.user)
+    @st.fragment
+    def fragment_enabled_on(self):
+        slist = sorted(self.remote.list())
+        enabled_on = ["disabled",self.remote.name] + slist
         if "edit_run_v7_enabled_on" in st.session_state:
             if st.session_state.edit_run_v7_enabled_on != self.config.pbgui.enabled_on:
                 self.config.pbgui.enabled_on = st.session_state.edit_run_v7_enabled_on
-        if "edit_run_v7_version" in st.session_state:
-            if st.session_state.edit_run_v7_version != self.config.pbgui.version:
-                self.config.pbgui.version = st.session_state.edit_run_v7_version
-        if "edit_run_v7_note" in st.session_state:
-            if st.session_state.edit_run_v7_note != self.config.pbgui.note:
-                self.config.pbgui.note = st.session_state.edit_run_v7_note
+        else:
+            if self.config.pbgui.enabled_on in enabled_on:
+                st.session_state.edit_run_v7_enabled_on = self.config.pbgui.enabled_on
+            else:
+                st.session_state.edit_run_v7_enabled_on = "disabled"
+        st.selectbox('Enabled on', enabled_on, key="edit_run_v7_enabled_on")
+
+    @st.fragment
+    def fragment_leverage(self):
         if "edit_run_v7_leverage" in st.session_state:
             if st.session_state.edit_run_v7_leverage != self.config.live.leverage:
                 self.config.live.leverage = st.session_state.edit_run_v7_leverage
-        if "edit_run_v7_pnls_max_lookback_days" in st.session_state:
-            if st.session_state.edit_run_v7_pnls_max_lookback_days != self.config.live.pnls_max_lookback_days:
-                self.config.live.pnls_max_lookback_days = st.session_state.edit_run_v7_pnls_max_lookback_days
+        else:
+            st.session_state.edit_run_v7_leverage = float(round(self.config.live.leverage, 0))
+        st.number_input("leverage", min_value=0.0, max_value=10.0, step=1.0, format="%.1f", key="edit_run_v7_leverage", help=pbgui_help.leverage)
+
+    @st.fragment
+    def fragment_minimum_coin_age_days(self):
         if "edit_run_v7_minimum_coin_age_days" in st.session_state:
             if st.session_state.edit_run_v7_minimum_coin_age_days != self.config.live.minimum_coin_age_days:
                 self.config.live.minimum_coin_age_days = st.session_state.edit_run_v7_minimum_coin_age_days
+        else:
+            st.session_state.edit_run_v7_minimum_coin_age_days = float(round(self.config.live.minimum_coin_age_days, 0))
+        st.number_input("minimum_coin_age_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
+
+    @st.fragment
+    def fragement_pnls_max_lookback_days(self):
+        if "edit_run_v7_pnls_max_lookback_days" in st.session_state:
+            if st.session_state.edit_run_v7_pnls_max_lookback_days != self.config.live.pnls_max_lookback_days:
+                self.config.live.pnls_max_lookback_days = st.session_state.edit_run_v7_pnls_max_lookback_days
+        else:
+            st.session_state.edit_run_v7_pnls_max_lookback_days = float(round(self.config.live.pnls_max_lookback_days, 0))
+        st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
+
+    @st.fragment
+    def fragment_note(self):
+        if "edit_run_v7_note" in st.session_state:
+            if st.session_state.edit_run_v7_note != self.config.pbgui.note:
+                self.config.pbgui.note = st.session_state.edit_run_v7_note
+        else:
+            st.session_state.edit_run_v7_note = self.config.pbgui.note
+        st.text_input("note", key="edit_run_v7_note", help=pbgui_help.instance_note)
+
+    @st.fragment
+    def fragment_price_distance_threshold(self):
         if "edit_run_v7_price_distance_threshold" in st.session_state:
             if st.session_state.edit_run_v7_price_distance_threshold != self.config.live.price_distance_threshold:
                 self.config.live.price_distance_threshold = st.session_state.edit_run_v7_price_distance_threshold
+        else:
+            st.session_state.edit_run_v7_price_distance_threshold = self.config.live.price_distance_threshold
+        st.number_input("price_distance_threshold", min_value=0.0, max_value=1.0, step=0.001, format="%.3f", key="edit_run_v7_price_distance_threshold", help=pbgui_help.price_distance_threshold)
+
+    @st.fragment
+    def fragment_execution_delay_seconds(self):
         if "edit_run_v7_execution_delay_seconds" in st.session_state:
             if st.session_state.edit_run_v7_execution_delay_seconds != self.config.live.execution_delay_seconds:
                 self.config.live.execution_delay_seconds = st.session_state.edit_run_v7_execution_delay_seconds
+        else:
+            st.session_state.edit_run_v7_execution_delay_seconds = float(self.config.live.execution_delay_seconds)
+        st.number_input("execution_delay_seconds", min_value=1.0, max_value=60.0, step=1.0, format="%.1f", key="edit_run_v7_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
+
+    @st.fragment
+    def fragment_filter_by_min_effective_cost(self):
         if "edit_run_v7_filter_by_min_effective_cost" in st.session_state:
             if st.session_state.edit_run_v7_filter_by_min_effective_cost != self.config.live.filter_by_min_effective_cost:
                 self.config.live.filter_by_min_effective_cost = st.session_state.edit_run_v7_filter_by_min_effective_cost
+        else:
+            st.session_state.edit_run_v7_filter_by_min_effective_cost = self.config.live.filter_by_min_effective_cost
+        st.checkbox("filter_by_min_effective_cost", help=pbgui_help.filter_by_min_effective_cost, key="edit_run_v7_filter_by_min_effective_cost")
+
+    @st.fragment
+    def fragment_auto_gs(self):
         if "edit_run_v7_auto_gs" in st.session_state:
             if st.session_state.edit_run_v7_auto_gs != self.config.live.auto_gs:
                 self.config.live.auto_gs = st.session_state.edit_run_v7_auto_gs
-        # Advanced Options
+        else:
+            st.session_state.edit_run_v7_auto_gs = self.config.live.auto_gs
+        st.checkbox("auto_gs", help=pbgui_help.auto_gs, key="edit_run_v7_auto_gs")
+
+    @st.fragment
+    def fragment_max_n_cancellations_per_batch(self):
         if "edit_run_v7_max_n_cancellations_per_batch" in st.session_state:
             if st.session_state.edit_run_v7_max_n_cancellations_per_batch != self.config.live.max_n_cancellations_per_batch:
                 self.config.live.max_n_cancellations_per_batch = st.session_state.edit_run_v7_max_n_cancellations_per_batch
+        else:
+            st.session_state.edit_run_v7_max_n_cancellations_per_batch = self.config.live.max_n_cancellations_per_batch
+        st.number_input("max_n_cancellations_per_batch", min_value=0, max_value=100, step=1, format="%.d", key="edit_run_v7_max_n_cancellations_per_batch", help=pbgui_help.max_n_per_batch)
+
+    @st.fragment
+    def fragment_max_n_creations_per_batch(self):
         if "edit_run_v7_max_n_creations_per_batch" in st.session_state:
             if st.session_state.edit_run_v7_max_n_creations_per_batch != self.config.live.max_n_creations_per_batch:
                 self.config.live.max_n_creations_per_batch = st.session_state.edit_run_v7_max_n_creations_per_batch
+        else:
+            st.session_state.edit_run_v7_max_n_creations_per_batch = self.config.live.max_n_creations_per_batch
+        st.number_input("max_n_creations_per_batch", min_value=0, max_value=100, step=1, format="%.d", key="edit_run_v7_max_n_creations_per_batch", help=pbgui_help.max_n_per_batch)
+
+    @st.fragment
+    def fragment_forced_mode_long(self):
         if "edit_run_v7_forced_mode_long" in st.session_state:
             if st.session_state.edit_run_v7_forced_mode_long != self.config.live.forced_mode_long:
                 self.config.live.forced_mode_long = st.session_state.edit_run_v7_forced_mode_long
+        else:
+            st.session_state.edit_run_v7_forced_mode_long = self.config.live.forced_mode_long
+        st.selectbox('forced_mode_long',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_forced_mode_long", help=pbgui_help.forced_mode_long_short)
+
+    @st.fragment
+    def fragment_forced_mode_short(self):
         if "edit_run_v7_forced_mode_short" in st.session_state:
             if st.session_state.edit_run_v7_forced_mode_short != self.config.live.forced_mode_short:
                 self.config.live.forced_mode_short = st.session_state.edit_run_v7_forced_mode_short
+        else:
+            st.session_state.edit_run_v7_forced_mode_short = self.config.live.forced_mode_short
+        st.selectbox('forced_mode_short',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_forced_mode_short", help=pbgui_help.forced_mode_long_short)
+
+    @st.fragment
+    def fragment_max_n_restarts_per_day(self):
         if "edit_run_v7_max_n_restarts_per_day" in st.session_state:
             if st.session_state.edit_run_v7_max_n_restarts_per_day != self.config.live.max_n_restarts_per_day:
                 self.config.live.max_n_restarts_per_day = st.session_state.edit_run_v7_max_n_restarts_per_day
+        else:
+            st.session_state.edit_run_v7_max_n_restarts_per_day = self.config.live.max_n_restarts_per_day
+        st.number_input("max_n_restarts_per_day", min_value=0, max_value=100, step=1, format="%.d", key="edit_run_v7_max_n_restarts_per_day", help=pbgui_help.max_n_restarts_per_day)
+
+    @st.fragment
+    def fragement_ohlcvs_1m_rolling_window_days(self):
         if "edit_run_v7_ohlcvs_1m_rolling_window_days" in st.session_state:
             if st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days != self.config.live.ohlcvs_1m_rolling_window_days:
                 self.config.live.ohlcvs_1m_rolling_window_days = st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days
+        else:
+            st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days = float(round(self.config.live.ohlcvs_1m_rolling_window_days, 0))
+        st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
+
+    @st.fragment
+    def fragment_ohlcvs_1m_update_after_minutes(self):
         if "edit_run_v7_ohlcvs_1m_update_after_minutes" in st.session_state:
             if st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes != self.config.live.ohlcvs_1m_update_after_minutes:
                 self.config.live.ohlcvs_1m_update_after_minutes = st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes
+        else:
+            st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes = float(round(self.config.live.ohlcvs_1m_update_after_minutes, 0))
+        st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, max_value=60.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
+
+    @st.fragment
+    def fragment_time_in_force(self):
         if "edit_run_v7_time_in_force" in st.session_state:
             if st.session_state.edit_run_v7_time_in_force != self.config.live.time_in_force:
                 self.config.live.time_in_force = st.session_state.edit_run_v7_time_in_force
-        # Filters
-        if "edit_run_v7_dynamic_ignore" in st.session_state:
-            if st.session_state.edit_run_v7_dynamic_ignore != self.config.pbgui.dynamic_ignore:
-                self.config.pbgui.dynamic_ignore = st.session_state.edit_run_v7_dynamic_ignore
-        if "edit_run_v7_notices_ignore" in st.session_state:
-            if st.session_state.edit_run_v7_notices_ignore != self.config.pbgui.notices_ignore:
-                self.config.pbgui.notices_ignore = st.session_state.edit_run_v7_notices_ignore
-                coindata.notices_ignore = self.config.pbgui.notices_ignore
-        if "edit_run_v7_empty_means_all_approved" in st.session_state:
-            if st.session_state.edit_run_v7_empty_means_all_approved != self.config.live.empty_means_all_approved:
-                self.config.live.empty_means_all_approved = st.session_state.edit_run_v7_empty_means_all_approved
-        if "edit_run_v7_only_cpt" in st.session_state:
-            if st.session_state.edit_run_v7_only_cpt != self.config.pbgui.only_cpt:
-                self.config.pbgui.only_cpt = st.session_state.edit_run_v7_only_cpt
-                coindata.only_cpt = self.config.pbgui.only_cpt
-        if "edit_run_v7_market_cap" in st.session_state:
-            if st.session_state.edit_run_v7_market_cap != self.config.pbgui.market_cap:
-                self.config.pbgui.market_cap = st.session_state.edit_run_v7_market_cap
-                coindata.market_cap = self.config.pbgui.market_cap
-        if "edit_run_v7_vol_mcap" in st.session_state:
-            if st.session_state.edit_run_v7_vol_mcap != self.config.pbgui.vol_mcap:
-                self.config.pbgui.vol_mcap = st.session_state.edit_run_v7_vol_mcap
-                coindata.vol_mcap = self.config.pbgui.vol_mcap
-        if "edit_run_v7_tags" in st.session_state:
-            if st.session_state.edit_run_v7_tags != self.config.pbgui.tags:
-                self.config.pbgui.tags = st.session_state.edit_run_v7_tags
-                coindata.tags = self.config.pbgui.tags
-        # Symbol config
+        else:
+            if self.config.live.time_in_force in self.TIME_IN_FORCE:
+                st.session_state.edit_run_v7_time_in_force = self.config.live.time_in_force
+            else:
+                st.session_state.edit_run_v7_time_in_force = self.TIME_IN_FORCE[0]
+        st.selectbox('time_in_force', self.TIME_IN_FORCE, key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
+
+    @st.fragment
+    def fragment_filter_coins(self):
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
+        with col1:
+            self.fragment_market_cap()
+        with col2:
+            self.fragment_vol_mcap()
+        with col3:
+            self.fragment_tags()
+        with col4:
+            self.fragment_only_cpt()
+            self.fragment_notices_ignore()
+        with col5:
+            st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_run_v7_apply_filters")
+        # Init session state for approved_coins
         if "edit_run_v7_approved_coins_long" in st.session_state:
             if st.session_state.edit_run_v7_approved_coins_long != self.config.live.approved_coins.long:
                 self.config.live.approved_coins.long = st.session_state.edit_run_v7_approved_coins_long
+        else:
+            st.session_state.edit_run_v7_approved_coins_long = self.config.live.approved_coins.long
         if "edit_run_v7_approved_coins_short" in st.session_state:
             if st.session_state.edit_run_v7_approved_coins_short != self.config.live.approved_coins.short:
                 self.config.live.approved_coins.short = st.session_state.edit_run_v7_approved_coins_short
+        else:
+            st.session_state.edit_run_v7_approved_coins_short = self.config.live.approved_coins.short
+        # Init session state for ignored_coins
         if "edit_run_v7_ignored_coins_long" in st.session_state:
             if st.session_state.edit_run_v7_ignored_coins_long != self.config.live.ignored_coins.long:
                 self.config.live.ignored_coins.long = st.session_state.edit_run_v7_ignored_coins_long
+        else:
+            st.session_state.edit_run_v7_ignored_coins_long = self.config.live.ignored_coins.long
         if "edit_run_v7_ignored_coins_short" in st.session_state:
             if st.session_state.edit_run_v7_ignored_coins_short != self.config.live.ignored_coins.short:
                 self.config.live.ignored_coins.short = st.session_state.edit_run_v7_ignored_coins_short
-        # Display Editor
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
-        with col1:
-            if self.user in self._users.list_v7():
-                index = self._users.list_v7().index(self.user)
-            else:
-                index = 0
-            st.selectbox('User',self._users.list_v7(), index = index, key="edit_run_v7_user")
-        with col2:
-            slist = sorted(self.remote.list())
-            enabled_on = ["disabled",self.remote.name] + slist
-            enabled_on_index = enabled_on.index(self.config.pbgui.enabled_on)
-            st.selectbox('Enabled on',enabled_on, index = enabled_on_index, key="edit_run_v7_enabled_on")
-        with col3:
-            st.number_input("config version", min_value=self.config.pbgui.version, value=self.config.pbgui.version, step=1, format="%.d", key="edit_run_v7_version", help=pbgui_help.config_version)
-        with col4:
-            st.number_input("leverage", min_value=0.0, max_value=10.0, value=float(round(self.config.live.leverage, 0)), step=1.0, format="%.1f", key="edit_run_v7_leverage", help=pbgui_help.leverage)
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
-        with col1:
-            st.number_input("minimum_coin_age_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.minimum_coin_age_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
-        with col2:
-            st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, value=float(round(self.config.live.pnls_max_lookback_days, 0)), step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
-        with col3:
-            st.text_input("note", value=self.config.pbgui.note, key="edit_run_v7_note", help=pbgui_help.instance_note)
-        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
-        with col1:
-            st.number_input("price_distance_threshold", min_value=0.0, max_value=1.0, value=self.config.live.price_distance_threshold, step=0.001, format="%.3f", key="edit_run_v7_price_distance_threshold", help=pbgui_help.price_distance_threshold)
-        with col2:
-            st.number_input("execution_delay_seconds", min_value=1.0, max_value=60.0, value=float(self.config.live.execution_delay_seconds), step=1.0, format="%.1f", key="edit_run_v7_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
-        with col3:
-            st.checkbox("filter_by_min_effective_cost", value=self.config.live.filter_by_min_effective_cost, help=pbgui_help.filter_by_min_effective_cost, key="edit_run_v7_filter_by_min_effective_cost")
-        with col4:
-            st.checkbox("auto_gs", value=self.config.live.auto_gs, help=pbgui_help.auto_gs, key="edit_run_v7_auto_gs")
-        # Advanced Settings
-        # Init mode
-        mode_options = {
-            '': "",
-            'n': "normal",
-            'm': "manual",
-            'gs': "graceful_stop",
-            'p': "panic",
-            't': "take_profit_only",
-            }
-        forced_mode = ['','n','m','gs','p','t']
-        with st.expander("Advanced Settings", expanded=False):
-            col1, col2, col3, col4 = st.columns([1,1,1,1])
-            with col1:
-                st.number_input("max_n_cancellations_per_batch", min_value=0, max_value=100, value=self.config.live.max_n_cancellations_per_batch, step=1, format="%.d", key="edit_run_v7_max_n_cancellations_per_batch", help=pbgui_help.max_n_per_batch)
-            with col2:
-                st.number_input("max_n_creations_per_batch", min_value=0, max_value=100, value=self.config.live.max_n_creations_per_batch, step=1, format="%.d", key="edit_run_v7_max_n_creations_per_batch", help=pbgui_help.max_n_per_batch)
-            with col3:
-                st.selectbox('forced_mode_long',forced_mode, index = forced_mode.index(self.config.live.forced_mode_long), format_func=lambda x: mode_options.get(x), key="edit_run_v7_forced_mode_long", help=pbgui_help.forced_mode_long_short)
-            with col4:
-                st.selectbox('forced_mode_short',forced_mode, index = forced_mode.index(self.config.live.forced_mode_short), format_func=lambda x: mode_options.get(x) , key="edit_run_v7_forced_mode_short", help=pbgui_help.forced_mode_long_short)
-            col1, col2, col3, col4 = st.columns([1,1,1,1])
-            with col1:
-                st.number_input("max_n_restarts_per_day", min_value=0, max_value=100, value=self.config.live.max_n_restarts_per_day, step=1, format="%.d", key="edit_run_v7_max_n_restarts_per_day", help=pbgui_help.max_n_restarts_per_day)
-            with col2:
-                st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, value=round(float(self.config.live.ohlcvs_1m_rolling_window_days),1), step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
-            with col3:
-                st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, value=round(float(self.config.live.ohlcvs_1m_update_after_minutes),1), step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
-            with col4:
-                time_in_force = ['good_till_cancelled', 'post_only']
-                st.selectbox('time_in_force', time_in_force, index = time_in_force.index(self.config.live.time_in_force), key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
-        #Filters
-        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
-        with col1:
-            st.checkbox("dynamic_ignore", value=self.config.pbgui.dynamic_ignore, help=pbgui_help.dynamic_ignore, key="edit_run_v7_dynamic_ignore")
-        with col2:
-            st.checkbox("notices ignore", value=self.config.pbgui.notices_ignore, help=pbgui_help.notices_ignore, key="edit_run_v7_notices_ignore")
-        with col3:
-            st.checkbox("empty_means_all_approved", value=self.config.live.empty_means_all_approved, help=pbgui_help.empty_means_all_approved, key="edit_run_v7_empty_means_all_approved")
-        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
-        with col1:
-            st.number_input("market_cap", min_value=0, value=self.config.pbgui.market_cap, step=50, format="%.d", key="edit_run_v7_market_cap", help=pbgui_help.market_cap)
-        with col2:
-            st.number_input("vol/mcap", min_value=0.0, value=round(float(self.config.pbgui.vol_mcap),2), step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
-        with col3:
-            st.multiselect("Tags", coindata.all_tags, default=self.config.pbgui.tags, key="edit_run_v7_tags", help=pbgui_help.coindata_tags)
-        with col4:
-            st.checkbox("only_cpt", value=self.config.pbgui.only_cpt, help=pbgui_help.only_cpt, key="edit_run_v7_only_cpt")
-            st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_run_v7_apply_filters")
-        # Apply filters
+        else:
+            st.session_state.edit_run_v7_ignored_coins_short = self.config.live.ignored_coins.short
+        # Appliy filters
         if st.session_state.edit_run_v7_apply_filters:
-            self.config.live.approved_coins.long = coindata.approved_coins
-            self.config.live.approved_coins.short = coindata.approved_coins
-            self.config.live.ignored_coins.long = coindata.ignored_coins
-            self.config.live.ignored_coins.short = coindata.ignored_coins
-        # # Remove unavailable symbols
+            self.config.live.approved_coins.long = st.session_state.pbcoindata.approved_coins
+            self.config.live.approved_coins.short = st.session_state.pbcoindata.approved_coins
+            self.config.live.ignored_coins.long = st.session_state.pbcoindata.ignored_coins
+            self.config.live.ignored_coins.short = st.session_state.pbcoindata.ignored_coins
+        # Remove unavailable coins
         for symbol in self.config.live.approved_coins.long.copy():
-            if symbol not in coindata.symbols:
+            if symbol not in st.session_state.pbcoindata.symbols:
                 self.config.live.approved_coins.long.remove(symbol)
         for symbol in self.config.live.approved_coins.short.copy():
-            if symbol not in coindata.symbols:
+            if symbol not in st.session_state.pbcoindata.symbols:
                 self.config.live.approved_coins.short.remove(symbol)
         for symbol in self.config.live.ignored_coins.long.copy():
-            if symbol not in coindata.symbols:
+            if symbol not in st.session_state.pbcoindata.symbols:
                 self.config.live.ignored_coins.long.remove(symbol)
         for symbol in self.config.live.ignored_coins.short.copy():
-            if symbol not in coindata.symbols:
+            if symbol not in st.session_state.pbcoindata.symbols:
                 self.config.live.ignored_coins.short.remove(symbol)
         # Remove from approved_coins when in ignored coins
         for symbol in self.config.live.ignored_coins.long:
@@ -341,21 +348,187 @@ class V7Instance():
             st.session_state.edit_run_v7_ignored_coins_short = self.config.live.ignored_coins.short
         # Find coins with notices
         for coin in list(set(self.config.live.approved_coins.long + self.config.live.approved_coins.short)):
-            if coin in coindata.symbols_notice:
-                st.warning(f'{coin}: {coindata.symbols_notices[coin]}')
+            if coin in st.session_state.pbcoindata.symbols_notices:
+                st.warning(f'{coin}: {st.session_state.pbcoindata.symbols_notices[coin]}')
+        # Select approved and ignored coins
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
-            st.multiselect('approved_coins_long', coindata.symbols, default=self.config.live.approved_coins.long, key="edit_run_v7_approved_coins_long", help=pbgui_help.approved_coins)
-            st.multiselect('ignored_symbols_long', coindata.symbols, default=self.config.live.ignored_coins.long, key="edit_run_v7_ignored_coins_long", help=pbgui_help.ignored_coins)
+            st.multiselect('approved_coins_long', st.session_state.pbcoindata.symbols, key="edit_run_v7_approved_coins_long", help=pbgui_help.approved_coins)
+            st.multiselect('ignored_symbols_long', st.session_state.pbcoindata.symbols, key="edit_run_v7_ignored_coins_long", help=pbgui_help.ignored_coins)
         with col2:
-            st.multiselect('approved_coins_short', coindata.symbols, default=self.config.live.approved_coins.short, key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
-            st.multiselect('ignored_symbols_short', coindata.symbols, default=self.config.live.ignored_coins.short, key="edit_run_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
+            st.multiselect('approved_coins_short', st.session_state.pbcoindata.symbols, key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
+            st.multiselect('ignored_symbols_short', st.session_state.pbcoindata.symbols, key="edit_run_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
+
+    @st.fragment
+    def fragment_market_cap(self):
+        if "edit_run_v7_market_cap" in st.session_state:
+            if st.session_state.edit_run_v7_market_cap != self.config.pbgui.market_cap:
+                self.config.pbgui.market_cap = st.session_state.edit_run_v7_market_cap
+                st.session_state.pbcoindata.market_cap = self.config.pbgui.market_cap
+                if st.session_state.edit_run_v7_apply_filters:
+                    st.rerun()
+        else:
+            st.session_state.edit_run_v7_market_cap = round(self.config.pbgui.market_cap, 2)
+            st.session_state.pbcoindata.market_cap = self.config.pbgui.market_cap
+        st.number_input("market_cap", min_value=0, step=50, format="%.d", key="edit_run_v7_market_cap", help=pbgui_help.market_cap)
+
+    @st.fragment
+    def fragment_vol_mcap(self):
+        if "edit_run_v7_vol_mcap" in st.session_state:
+            if st.session_state.edit_run_v7_vol_mcap != self.config.pbgui.vol_mcap:
+                self.config.pbgui.vol_mcap = st.session_state.edit_run_v7_vol_mcap
+                st.session_state.pbcoindata.vol_mcap = self.config.pbgui.vol_mcap
+                if st.session_state.edit_run_v7_apply_filters:
+                    st.rerun()
+        else:
+            st.session_state.edit_run_v7_vol_mcap = round(self.config.pbgui.vol_mcap, 2)
+            st.session_state.pbcoindata.vol_mcap = self.config.pbgui.vol_mcap
+        st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
+
+    @st.fragment
+    def fragment_tags(self):
+        if "edit_run_v7_tags" in st.session_state:
+            if st.session_state.edit_run_v7_tags != self.config.pbgui.tags:
+                self.config.pbgui.tags = st.session_state.edit_run_v7_tags
+                st.session_state.pbcoindata.tags = self.config.pbgui.tags
+                if st.session_state.edit_run_v7_apply_filters:
+                    st.rerun()
+        else:
+            # Remove tags that are no longer available
+            for tag in self.config.pbgui.tags:
+                if tag not in st.session_state.pbcoindata.all_tags:
+                    self.config.pbgui.tags.remove(tag)
+            st.session_state.edit_run_v7_tags = self.config.pbgui.tags
+            st.session_state.pbcoindata.tags = self.config.pbgui.tags
+        st.multiselect("Tags", st.session_state.pbcoindata.all_tags, key="edit_run_v7_tags", help=pbgui_help.coindata_tags)
+
+    @st.fragment
+    def fragment_only_cpt(self):
+        if "edit_run_v7_only_cpt" in st.session_state:
+            if st.session_state.edit_run_v7_only_cpt != self.config.pbgui.only_cpt:
+                self.config.pbgui.only_cpt = st.session_state.edit_run_v7_only_cpt
+                st.session_state.pbcoindata.only_cpt = self.config.pbgui.only_cpt
+                if st.session_state.edit_run_v7_apply_filters:
+                    st.rerun()
+        else:
+            st.session_state.edit_run_v7_only_cpt = self.config.pbgui.only_cpt
+            st.session_state.pbcoindata.only_cpt = self.config.pbgui.only_cpt
+        st.checkbox("only_cpt", help=pbgui_help.only_cpt, key="edit_run_v7_only_cpt")
+    
+    @st.fragment
+    def fragment_notices_ignore(self):
+        if "edit_run_v7_notices_ignore" in st.session_state:
+            if st.session_state.edit_run_v7_notices_ignore != self.config.pbgui.notices_ignore:
+                self.config.pbgui.notices_ignore = st.session_state.edit_run_v7_notices_ignore
+                st.session_state.pbcoindata.notices_ignore = self.config.pbgui.notices_ignore
+                if st.session_state.edit_run_v7_apply_filters:
+                    st.rerun()
+        else:
+            st.session_state.edit_run_v7_notices_ignore = self.config.pbgui.notices_ignore
+            st.session_state.pbcoindata.notices_ignore = self.config.pbgui.notices_ignore
+        st.checkbox("notices ignore", help=pbgui_help.notices_ignore, key="edit_run_v7_notices_ignore")
+
+    @st.fragment
+    def fragment_empty_means_all_approved(self):
+        if "edit_run_v7_empty_means_all_approved" in st.session_state:
+            if st.session_state.edit_run_v7_empty_means_all_approved != self.config.live.empty_means_all_approved:
+                self.config.live.empty_means_all_approved = st.session_state.edit_run_v7_empty_means_all_approved
+        else:
+            st.session_state.edit_run_v7_empty_means_all_approved = self.config.live.empty_means_all_approved
+        st.checkbox("empty_means_all_approved", help=pbgui_help.empty_means_all_approved, key="edit_run_v7_empty_means_all_approved")
+
+    def edit(self):
+        # Change ignored_coins back to empty list if we changed it to a path
+        if type(self.config.live.ignored_coins.long) == str:
+            self.config.live.ignored_coins.long = []
+            self.config.live.ignored_coins.short = []
+        # Display Editor
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            # Select User
+            if "edit_run_v7_user" in st.session_state:
+                if st.session_state.edit_run_v7_user != self.user:
+                    self.user = st.session_state.edit_run_v7_user
+                    st.session_state.pbcoindata.exchange = self._users.find_exchange(self.user)
+            else:
+                if self.user in self._users.list_v7():
+                    st.session_state.edit_run_v7_user = self.user
+                else:
+                    st.session_state.edit_run_v7_user = self._users.list_v7()[0]
+                st.session_state.pbcoindata.exchange = self._users.find_exchange(self.user)
+            st.selectbox('User',self._users.list_v7(), key="edit_run_v7_user")
+        with col2:
+            self.fragment_enabled_on()
+        with col3:
+            # Config Version
+            if "edit_run_v7_version" in st.session_state:
+                if st.session_state.edit_run_v7_version != self.config.pbgui.version:
+                    self.config.pbgui.version = st.session_state.edit_run_v7_version
+            else:
+                st.session_state.edit_run_v7_version = self.config.pbgui.version
+            st.number_input("config version", min_value=self.config.pbgui.version, step=1, format="%.d", key="edit_run_v7_version", help=pbgui_help.config_version)
+        with col4:
+            self.fragment_leverage()
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            self.fragment_minimum_coin_age_days()
+        with col2:
+            self.fragement_pnls_max_lookback_days()
+        with col3:
+            self.fragment_note()
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        with col1:
+            self.fragment_price_distance_threshold()
+        with col2:
+            self.fragment_execution_delay_seconds()
+        with col3:
+            self.fragment_filter_by_min_effective_cost()
+        with col4:
+            self.fragment_auto_gs()
+
+        # Advanced Settings
+        with st.expander("Advanced Settings", expanded=False):
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                self.fragment_max_n_cancellations_per_batch()
+            with col2:
+                self.fragment_max_n_creations_per_batch()
+            with col3:
+                self.fragment_forced_mode_long()
+            with col4:  
+                self.fragment_forced_mode_short()
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                self.fragment_max_n_restarts_per_day()
+            with col2:
+                self.fragement_ohlcvs_1m_rolling_window_days()
+            with col3:
+                self.fragment_ohlcvs_1m_update_after_minutes()
+            with col4:
+                self.fragment_time_in_force()
+
+        #Filters
+        self.fragment_filter_coins()
+
+        # Dynamic Ignore
+        if "edit_run_v7_dynamic_ignore" in st.session_state:
+            if st.session_state.edit_run_v7_dynamic_ignore != self.config.pbgui.dynamic_ignore:
+                self.config.pbgui.dynamic_ignore = st.session_state.edit_run_v7_dynamic_ignore
+        else:
+            st.session_state.edit_run_v7_dynamic_ignore = self.config.pbgui.dynamic_ignore
+        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        with col1:
+            st.checkbox("dynamic_ignore", help=pbgui_help.dynamic_ignore, key="edit_run_v7_dynamic_ignore")
+        with col2:
+            self.fragment_empty_means_all_approved()
+       
+        # Display dynamic_ignore
         if self.config.pbgui.dynamic_ignore:
-            for coin in coindata.approved_coins:
-                if coin in coindata.symbols_notice:
-                    st.warning(f'{coin}: {coindata.symbols_notices[coin]}')
-            st.code(f'approved_symbols: {coindata.approved_coins}', wrap_lines=True)
-            st.code(f'dynamic_ignored symbols: {coindata.ignored_coins}', wrap_lines=True)
+            for coin in st.session_state.pbcoindata.symbols:
+                if coin in st.session_state.pbcoindata.symbols_notices:
+                    st.warning(f'{coin}: {st.session_state.pbcoindata.symbols_notices[coin]}')
+            st.code(f'approved_symbols: {st.session_state.pbcoindata.approved_coins}', wrap_lines=True)
+            st.code(f'dynamic_ignored symbols: {st.session_state.pbcoindata.ignored_coins}', wrap_lines=True)
 
         # Edit coin_flags
         if self.config.live.coin_flags:
@@ -417,7 +590,7 @@ class V7Instance():
             else:
                 col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
                 with col1:
-                    st.selectbox('Symbol', coindata.symbols, key='edit_run_v7_add_coin_flag')
+                    st.selectbox('Symbol', st.session_state.pbcoindata.symbols, key="edit_run_v7_add_coin_flag")
                 with col2:
                     st.button("Add Coin Flag", key="edit_run_v7_add_coin_flag_button")
         # Edit long / short
@@ -439,19 +612,19 @@ class V7Instance():
                 flags = self.config.live.coin_flags[symbol]
                 # if -nm in flags then get mode_long
                 if "-lm" in flags:
-                    mode_long = flags.split("-lm")[1].split()[0]
+                    st.session_state.edit_run_v7_cf_mode_long = flags.split("-lm")[1].split()[0]
                 # if -lw in flags then get we_long
                 if "-lw" in flags:
-                    we_long = float(flags.split("-lw")[1].split()[0])
+                    st.session_state.edit_run_v7_cf_we_long = float(flags.split("-lw")[1].split()[0])
                 # if -sm in flags then get mode_short
                 if "-sm" in flags:
-                    mode_short = flags.split("-sm")[1].split()[0]
+                    st.session_state.edit_run_v7_cf_mode_short = flags.split("-sm")[1].split()[0]
                 # if -sw in flags then get we_short
                 if "-sw" in flags:
-                    we_short = float(flags.split("-sw")[1].split()[0])
+                    st.session_state.edit_run_v7_cf_we_short = float(flags.split("-sw")[1].split()[0])
                 # if -lev in flags then get leverage
                 if "-lev" in flags:
-                    lev = float(flags.split("-lev")[1].split()[0])
+                    st.session_state.edit_run_v7_cf_lev = float(flags.split("-lev")[1].split()[0])
                 if "-lc" in flags:
                     config = True
                     if "cf_config" not in st.session_state:
@@ -465,27 +638,18 @@ class V7Instance():
         if "edit_run_v7_cf_config" in st.session_state:
             if st.session_state.edit_run_v7_cf_config != config:
                 config = st.session_state.edit_run_v7_cf_config
-        mode_options = {
-            '': "",
-            'n': "normal",
-            'm': "manual",
-            'gs': "graceful_stop",
-            'p': "panic",
-            't': "take_profit_only",
-            }
-        mode = ['','n','m','gs','p','t']
         st.write(f"{symbol}")
         col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
         with col1:
-            st.selectbox('mode_long',mode, index = mode.index(mode_long), format_func=lambda x: mode_options.get(x), key="edit_run_v7_cf_mode_long", help=pbgui_help.coin_flags_mode)
+            st.selectbox('mode_long',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_long", help=pbgui_help.coin_flags_mode)
         with col2:
-            st.number_input("long_we", value=we_long, step=0.05, format="%.2f", key="edit_run_v7_cf_we_long", help=pbgui_help.coin_flags_we)
+            st.number_input("long_we", step=0.05, format="%.2f", key="edit_run_v7_cf_we_long", help=pbgui_help.coin_flags_we)
         with col3:
-            st.selectbox('mode_short',mode, index = mode.index(mode_short), format_func=lambda x: mode_options.get(x), key="edit_run_v7_cf_mode_short", help=pbgui_help.coin_flags_mode)
+            st.selectbox('mode_short',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_short", help=pbgui_help.coin_flags_mode)
         with col4:
-            st.number_input("short_we", value=we_short, step=0.05, format="%.2f", key="edit_run_v7_cf_we_short", help=pbgui_help.coin_flags_we)
+            st.number_input("short_we", step=0.05, format="%.2f", key="edit_run_v7_cf_we_short", help=pbgui_help.coin_flags_we)
         with col5:
-            st.number_input("leverage", min_value=0.0, max_value=10.0, value=lev, step=1.0, format="%.1f", key="edit_run_v7_cf_lev", help=pbgui_help.coin_flags_lev)
+            st.number_input("leverage", min_value=0.0, max_value=10.0, step=1.0, format="%.1f", key="edit_run_v7_cf_lev", help=pbgui_help.coin_flags_lev)
         st.checkbox("Config", value=config, key="edit_run_v7_cf_config", help=pbgui_help.coin_flags_config)
         if config:
             if "cf_config" not in st.session_state:
@@ -573,6 +737,8 @@ class V7Instance():
             if st.session_state.import_run_v7_user != self.user:
                 self.user = st.session_state.import_run_v7_user
                 st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
+        else:
+            st.session_state.import_run_v7_user = self.user
         if "import_run_v7_config" in st.session_state:
             if st.session_state.import_run_v7_config != json.dumps(self.config.config, indent=4):
                 try:
@@ -582,9 +748,12 @@ class V7Instance():
             st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
             if self.config.live.user in self._users.list_v7():
                 self._user = self.config.live.user
+        else:
+            st.session_state.import_run_v7_config = ""
         # Display import
-        st.selectbox('User',self._users.list_v7(), index = self._users.list_v7().index(self.user), key="import_run_v7_user")
-        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_run_v7_config", height=500)
+        st.selectbox('User',self._users.list_v7(), key="import_run_v7_user")
+        st.text_area(f'config', key="import_run_v7_config", height=500)
+        # st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_run_v7_config", height=500)
         col1, col2 = st.columns([1,1])
         with col1:
             if st.button("OK"):
