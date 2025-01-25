@@ -227,23 +227,29 @@ class Dashboard():
         if "dashboard_cols" in st.session_state:
             if st.session_state.dashboard_cols != self.cols:
                 self.cols = st.session_state.dashboard_cols
+        else:
+            st.session_state.dashboard_cols = self.cols
         if "dashboard_rows" in st.session_state:
             if st.session_state.dashboard_rows != self.rows:
                 self.rows = st.session_state.dashboard_rows
+        else:
+            st.session_state.dashboard_rows = self.rows
         if "dashboard_name" in st.session_state:
             if st.session_state.dashboard_name != self.name:
                 self.name = st.session_state.dashboard_name
+        else:
+            st.session_state.dashboard_name = self.name
         col1, col2, col3 = st.columns([1,1,2])
         with col1:
             if not self.name:
                 color = "red"
             else:
                 color = None
-            st.number_input('cols', value=self.cols, min_value=1, max_value=2, step=1, key="dashboard_cols")
+            st.number_input('cols', min_value=1, max_value=2, step=1, key="dashboard_cols")
         with col2:
-            st.number_input('rows', value=self.rows, min_value=1, max_value=5, step=1, key="dashboard_rows")
+            st.number_input('rows', min_value=1, max_value=6, step=1, key="dashboard_rows")
         with col3:
-            st.text_input(f":{color}[Dashboard Name]", value=self.name, max_chars=32, key="dashboard_name")
+            st.text_input(f":{color}[Dashboard Name]", max_chars=32, key="dashboard_name")
         if st.session_state.dashboard_cols == 2:
             for row in range(1, self.rows + 1):
                 db_col1, db_col2 = st.columns([1,1])
@@ -261,11 +267,11 @@ class Dashboard():
                             if st.button(":material/arrow_downward_alt:", key=f"swap_vert_{row}_col1"):
                                 self.swap(row, row +1, 1, 1)
                     if f'dashboard_type_{row}_1' in st.session_state:
-                        index = self.DASHBOARD_TYPES.index(st.session_state[f'dashboard_type_{row}_1'])
-                        del st.session_state[f'dashboard_type_{row}_1']
+                        if st.session_state[f'dashboard_type_{row}_1'] != self.dashboard_config.get(f'dashboard_type_{row}_1'):
+                            self.dashboard_config[f'dashboard_type_{row}_1'] = st.session_state[f'dashboard_type_{row}_1']
                     else:
-                        index = 0
-                    st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, index=index, key=f"dashboard_type_{row}_1")
+                        self.dashboard_config[f'dashboard_type_{row}_1'] = "NONE"
+                    st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_1")
                     if st.session_state[f'dashboard_type_{row}_1'] == "PNL":
                         if f'dashboard_pnl_users_{row}_1' in self.dashboard_config and f'dashboard_pnl_period_{row}_1' in self.dashboard_config and f'dashboard_pnl_mode_{row}_1' in self.dashboard_config:
                             self.view_pnl(f'{row}_1', self.dashboard_config[f'dashboard_pnl_users_{row}_1'], self.dashboard_config[f'dashboard_pnl_period_{row}_1'], self.dashboard_config[f'dashboard_pnl_mode_{row}_1'])
@@ -314,11 +320,11 @@ class Dashboard():
                             if st.button(":material/arrow_downward_alt:", key=f"swap_vert_{row}_col2"):
                                 self.swap(row, row +1, 2, 2)
                     if f'dashboard_type_{row}_2' in st.session_state:
-                        index = self.DASHBOARD_TYPES.index(st.session_state[f'dashboard_type_{row}_2'])
-                        del st.session_state[f'dashboard_type_{row}_2']
+                        if st.session_state[f'dashboard_type_{row}_2'] != self.dashboard_config.get(f'dashboard_type_{row}_2'):
+                            self.dashboard_config[f'dashboard_type_{row}_2'] = st.session_state[f'dashboard_type_{row}_2']
                     else:
-                        index = 0
-                    st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, index=index, key=f"dashboard_type_{row}_2")
+                        self.dashboard_config[f'dashboard_type_{row}_2'] = "NONE"
+                    st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_2")
                     if st.session_state[f'dashboard_type_{row}_2'] == "PNL":
                         if f'dashboard_pnl_users_{row}_2' in self.dashboard_config and f'dashboard_pnl_period_{row}_2' in self.dashboard_config and f'dashboard_pnl_mode_{row}_2' in self.dashboard_config:
                             self.view_pnl(f'{row}_2', self.dashboard_config[f'dashboard_pnl_users_{row}_2'], self.dashboard_config[f'dashboard_pnl_period_{row}_2'], self.dashboard_config[f'dashboard_pnl_mode_{row}_2'])
@@ -360,11 +366,11 @@ class Dashboard():
                     if st.button(":material/swap_vert:", key=f"swap_vert_{row}_col1"):
                         self.swap(row, row -1, 1, 1)
                 if f'dashboard_type_{row}_1' in st.session_state:
-                    index = self.DASHBOARD_TYPES.index(st.session_state[f'dashboard_type_{row}_1'])
-                    del st.session_state[f'dashboard_type_{row}_1']
+                    if st.session_state[f'dashboard_type_{row}_1'] != self.dashboard_config.get(f'dashboard_type_{row}_1'):
+                        self.dashboard_config[f'dashboard_type_{row}_1'] = st.session_state[f'dashboard_type_{row}_1']
                 else:
-                    index = 0
-                st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, index=index, key=f"dashboard_type_{row}_1")
+                    self.dashboard_config[f'dashboard_type_{row}_1'] = "NONE"
+                st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_1")
                 if st.session_state[f'dashboard_type_{row}_1'] == "PNL":
                     if f'dashboard_pnl_users_{row}_1' in self.dashboard_config and f'dashboard_pnl_period_{row}_1' in self.dashboard_config and f'dashboard_pnl_mode_{row}_1' in self.dashboard_config:
                         self.view_pnl(f'{row}_1', self.dashboard_config[f'dashboard_pnl_users_{row}_1'], self.dashboard_config[f'dashboard_pnl_period_{row}_1'], self.dashboard_config[f'dashboard_pnl_mode_{row}_1'])
