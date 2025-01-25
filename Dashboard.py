@@ -237,19 +237,16 @@ class Dashboard():
         if "dashboard_name" in st.session_state:
             if st.session_state.dashboard_name != self.name:
                 self.name = st.session_state.dashboard_name
-        else:
-            st.session_state.dashboard_name = self.name
         col1, col2, col3 = st.columns([1,1,2])
         with col1:
-            if not self.name:
-                color = "red"
-            else:
-                color = None
             st.number_input('cols', min_value=1, max_value=2, step=1, key="dashboard_cols")
         with col2:
             st.number_input('rows', min_value=1, max_value=6, step=1, key="dashboard_rows")
         with col3:
-            st.text_input(f":{color}[Dashboard Name]", max_chars=32, key="dashboard_name")
+            if not self.name:
+                st.text_input(f":red[Dashboard Name]", self.name, max_chars=32, key="dashboard_name")
+            else:
+                st.text_input(f"Dashboard Name", self.name, max_chars=32, key="dashboard_name")
         if st.session_state.dashboard_cols == 2:
             for row in range(1, self.rows + 1):
                 db_col1, db_col2 = st.columns([1,1])
