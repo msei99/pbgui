@@ -524,7 +524,7 @@ class V7Instance():
        
         # Display dynamic_ignore
         if self.config.pbgui.dynamic_ignore:
-            for coin in st.session_state.pbcoindata.symbols:
+            for coin in st.session_state.pbcoindata.approved_coins:
                 if coin in st.session_state.pbcoindata.symbols_notices:
                     st.warning(f'{coin}: {st.session_state.pbcoindata.symbols_notices[coin]}')
             st.code(f'approved_symbols: {st.session_state.pbcoindata.approved_coins}', wrap_lines=True)
