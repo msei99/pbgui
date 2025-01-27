@@ -192,6 +192,15 @@ class V7Instance():
         st.checkbox("filter_by_min_effective_cost", help=pbgui_help.filter_by_min_effective_cost, key="edit_run_v7_filter_by_min_effective_cost")
 
     @st.fragment
+    def fragment_market_orders_allowed(self):
+        if "edit_run_v7_market_orders_allowed" in st.session_state:
+            if st.session_state.edit_run_v7_market_orders_allowed != self.config.live.market_orders_allowed:
+                self.config.live.market_orders_allowed = st.session_state.edit_run_v7_market_orders_allowed
+        else:
+            st.session_state.edit_run_v7_market_orders_allowed = self.config.live.market_orders_allowed
+        st.checkbox("market_orders_allowed", help=pbgui_help.market_orders_allowed, key="edit_run_v7_market_orders_allowed")
+
+    @st.fragment
     def fragment_auto_gs(self):
         if "edit_run_v7_auto_gs" in st.session_state:
             if st.session_state.edit_run_v7_auto_gs != self.config.live.auto_gs:
@@ -483,6 +492,7 @@ class V7Instance():
             self.fragment_execution_delay_seconds()
         with col3:
             self.fragment_filter_by_min_effective_cost()
+            self.fragment_market_orders_allowed()
         with col4:
             self.fragment_auto_gs()
 
@@ -762,6 +772,7 @@ class V7Instance():
                 del st.session_state.edit_run_v7_enabled_on
                 del st.session_state.edit_run_v7_version
                 del st.session_state.edit_run_v7_leverage
+                del st.session_state.edit_run_v7_market_orders_allowed
                 del st.session_state.edit_run_v7_pnls_max_lookback_days
                 del st.session_state.edit_run_v7_minimum_coin_age_days
                 del st.session_state.edit_run_v7_price_distance_threshold
