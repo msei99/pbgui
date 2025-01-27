@@ -276,12 +276,15 @@ class Config:
             st.text_area(f'config converted to v7', self.config_v7, key="config_instance_config_v7", height=height, disabled=True)
 
 # config template
-# {"backtest": {"base_dir": "backtests",
+#  "backtest": {"base_dir": "backtests/pbgui/sol_only",
+#               "cache_dir": {"combined": "caches/hlcvs_data/afeeb0341e0bd822"},
+#               "coins": {"combined": ["SOL"]},
+#               "combine_ohlcvs": true,
 #               "compress_cache": true,
-#               "end_date": "now",
+#               "end_date": "2022-01-01",
 #               "exchanges": ["binance", "bybit"],
-#               "start_date": "2021-05-01",
-#               "starting_balance": 100000.0},
+#               "start_date": "2021-01-01",
+#               "starting_balance": 1000},
 #  "bot": {"long": {"close_grid_markup_range": 0.0013425,
 #                   "close_grid_min_markup": 0.0047292,
 #                   "close_grid_qty_pct": 0.85073,
@@ -342,6 +345,7 @@ class Config:
 #           "forced_mode_short": "",
 #           "ignored_coins": [],
 #           "leverage": 10.0,
+#           "market_orders_allowed": true,
 #           "max_n_cancellations_per_batch": 5,
 #           "max_n_creations_per_batch": 3,
 #           "max_n_restarts_per_day": 10,
@@ -417,6 +421,7 @@ class Config:
 class Backtest:
     def __init__(self):
         self._base_dir = "backtests"
+        self._combine_ohlcvs = True
         self._compress_cache = True
         self._end_date = "now"
         self._exchanges = ["binance", "bybit"]
@@ -424,6 +429,7 @@ class Backtest:
         self._starting_balance = 1000.0
         self._backtest = {
             "base_dir": self._base_dir,
+            "combine_ohlcvs": self._combine_ohlcvs,
             "compress_cache": self._compress_cache,
             "end_date": self._end_date,
             "exchanges": self._exchanges,
@@ -440,6 +446,8 @@ class Backtest:
     def backtest(self, new_backtest):
         if "base_dir" in new_backtest:
             self.base_dir = new_backtest["base_dir"]
+        if "combine_ohlcvs" in new_backtest:
+            self.combine_ohlcvs = new_backtest["combine_ohlcvs"]
         if "compress_cache" in new_backtest:
             self.compress_cache = new_backtest["compress_cache"]
         if "end_date" in new_backtest:
@@ -453,6 +461,8 @@ class Backtest:
     
     @property
     def base_dir(self): return self._base_dir
+    @property
+    def combine_ohlcvs(self): return self._combine_ohlcvs
     @property
     def compress_cache(self): return self._compress_cache
     @property
@@ -471,6 +481,10 @@ class Backtest:
     def base_dir(self, new_base_dir):
         self._base_dir = new_base_dir
         self._backtest["base_dir"] = self._base_dir
+    @combine_ohlcvs.setter
+    def combine_ohlcvs(self, new_combine_ohlcvs):
+        self._combine_ohlcvs = new_combine_ohlcvs
+        self._backtest["combine_ohlcvs"] = self._combine_ohlcvs
     @compress_cache.setter
     def compress_cache(self, new_compress_cache):
         self._compress_cache = new_compress_cache

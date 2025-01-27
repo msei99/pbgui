@@ -1060,8 +1060,14 @@ notices_ignore = """
 
 empty_means_all_approved = """
     ```
-    If true, will interpret approved_coins=[] as all coins approved.
-    If false, will interpret approved_coins=[] as no coins approved.
+    To combine the ohlcv data from multiple exchanges into a single array.
+    Otherwise, backtest for each exchange individually
+    ```"""
+
+combine_ohlcvs = """
+    ```
+    If true, will combine ohlcvs from all exchanges.
+    If false, will use ohlcvs from the exchange with the highest volume.
     ```"""
 
 compress_cache = """
