@@ -1027,6 +1027,11 @@ coindata_metadata_interval = """
     You need 1 credit for 100 coins. So count your coins and interval to not exceed the limit.
     ```"""
 
+market_orders_allowed = """
+    ```
+    If true, allow Passivbot to place market orders when order price is very close to current
+    market price. If false, will only place limit orders. Default is true.
+    ```"""
 
 approved_coins = """
     ```

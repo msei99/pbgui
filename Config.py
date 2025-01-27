@@ -1281,6 +1281,7 @@ class Live:
         self._forced_mode_short = ""
         self._ignored_coins = IgnoredCoins()
         self._leverage = 10.0
+        self._market_orders_allowed = True
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3
         self._max_n_restarts_per_day = 10
@@ -1303,6 +1304,7 @@ class Live:
             "forced_mode_short": self._forced_mode_short,
             "ignored_coins": self._ignored_coins._ignored_coins,
             "leverage": self._leverage,
+            "market_orders_allowed": self._market_orders_allowed,
             "max_n_cancellations_per_batch": self._max_n_cancellations_per_batch,
             "max_n_creations_per_batch": self._max_n_creations_per_batch,
             "max_n_restarts_per_day": self._max_n_restarts_per_day,
@@ -1342,6 +1344,8 @@ class Live:
             self.ignored_coins = new_live["ignored_coins"]
         if "leverage" in new_live:
             self.leverage = new_live["leverage"]
+        if "market_orders_allowed" in new_live:
+            self.market_orders_allowed = new_live["market_orders_allowed"]
         if "max_n_cancellations_per_batch" in new_live:
             self.max_n_cancellations_per_batch = new_live["max_n_cancellations_per_batch"]
         if "max_n_creations_per_batch" in new_live:
@@ -1383,6 +1387,8 @@ class Live:
     def ignored_coins(self): return self._ignored_coins
     @property
     def leverage(self): return self._leverage
+    @property
+    def market_orders_allowed(self): return self._market_orders_allowed
     @property
     def max_n_cancellations_per_batch(self): return self._max_n_cancellations_per_batch
     @property
@@ -1444,6 +1450,10 @@ class Live:
     def leverage(self, new_leverage):
         self._leverage = new_leverage
         self._live["leverage"] = self._leverage
+    @market_orders_allowed.setter
+    def market_orders_allowed(self, new_market_orders_allowed):
+        self._market_orders_allowed = new_market_orders_allowed
+        self._live["market_orders_allowed"] = self._market_orders_allowed
     @max_n_cancellations_per_batch.setter
     def max_n_cancellations_per_batch(self, new_max_n_cancellations_per_batch):
         self._max_n_cancellations_per_batch = new_max_n_cancellations_per_batch
