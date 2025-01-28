@@ -979,7 +979,9 @@ class PBRun():
         if run_v7:
             for v7 in self.run_v7:
                 if v7.path == run_v7.path:
-                    v7.version = run_v7.version
+                    self.run_v7.remove(v7)
+                    self.run_v7.append(run_v7)
+                    # v7.version = run_v7.version
                     return
             self.run_v7.append(run_v7)
     
@@ -994,7 +996,9 @@ class PBRun():
         if run_multi:
             for multi in self.run_multi:
                 if multi.path == run_multi.path:
-                    multi.version = run_multi.version
+                    self.run_multi.remove(multi)
+                    self.run_multi.append(run_multi)
+                    # multi.version = run_multi.version
                     return
             self.run_multi.append(run_multi)
 
