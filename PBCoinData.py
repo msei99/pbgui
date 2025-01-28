@@ -389,7 +389,10 @@ class CoinData:
             response = session.get(url, params=parameters)
             if response.status_code == 200:
                 self.data = json.loads(response.text)
+                self.fetch_api_status()
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap data. Credits left this month: {self.credits_left}')
             else:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data')
                 self.data = None
         except (ConnectionError, Timeout, TooManyRedirects) as e:
             return e
@@ -429,7 +432,10 @@ class CoinData:
             response = session.get(url, params=parameters)
             if response.status_code == 200:
                 self.metadata = json.loads(response.text)
+                self.fetch_api_status()
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap metadata. Credits left this month: {self.credits_left}')
             else:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap metadata')
                 self.metadata = None
         except (ConnectionError, Timeout, TooManyRedirects) as e:
             return e
@@ -682,20 +688,8 @@ def main():
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             pbcoindata.update_symbols()
-            if not pbcoindata.is_data_fresh():
-                pbcoindata.load_data()
-                if pbcoindata.is_data_fresh():
-                    pbcoindata.fetch_api_status()
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap data. Credits left this month: {pbcoindata.credits_left}')
-                else:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data')
-            if not pbcoindata.is_metadata_fresh():
-                pbcoindata.load_metadata()
-                if pbcoindata.is_metadata_fresh():
-                    pbcoindata.fetch_api_status()
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap metadata. Credits left this month: {pbcoindata.credits_left}')
-                else:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap metadata')
+            pbcoindata.load_data()
+            pbcoindata.load_metadata()
             sleep(60)
             pbcoindata.load_config()
         except Exception as e:
