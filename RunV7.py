@@ -284,7 +284,6 @@ class V7Instance():
                 st.session_state.edit_run_v7_time_in_force = self.TIME_IN_FORCE[0]
         st.selectbox('time_in_force', self.TIME_IN_FORCE, key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
 
-    @st.fragment
     def fragment_filter_coins(self):
         col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
         with col1:
@@ -368,7 +367,6 @@ class V7Instance():
             st.multiselect('approved_coins_short', st.session_state.pbcoindata.symbols, key="edit_run_v7_approved_coins_short", help=pbgui_help.approved_coins)
             st.multiselect('ignored_symbols_short', st.session_state.pbcoindata.symbols, key="edit_run_v7_ignored_coins_short", help=pbgui_help.ignored_coins)
 
-    @st.fragment
     def fragment_market_cap(self):
         if "edit_run_v7_market_cap" in st.session_state:
             if st.session_state.edit_run_v7_market_cap != self.config.pbgui.market_cap:
@@ -381,7 +379,6 @@ class V7Instance():
             st.session_state.pbcoindata.market_cap = self.config.pbgui.market_cap
         st.number_input("market_cap", min_value=0, step=50, format="%.d", key="edit_run_v7_market_cap", help=pbgui_help.market_cap)
 
-    @st.fragment
     def fragment_vol_mcap(self):
         if "edit_run_v7_vol_mcap" in st.session_state:
             if st.session_state.edit_run_v7_vol_mcap != self.config.pbgui.vol_mcap:
@@ -394,7 +391,6 @@ class V7Instance():
             st.session_state.pbcoindata.vol_mcap = self.config.pbgui.vol_mcap
         st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="edit_run_v7_vol_mcap", help=pbgui_help.vol_mcap)
 
-    @st.fragment
     def fragment_tags(self):
         if "edit_run_v7_tags" in st.session_state:
             if st.session_state.edit_run_v7_tags != self.config.pbgui.tags:
@@ -411,7 +407,6 @@ class V7Instance():
             st.session_state.pbcoindata.tags = self.config.pbgui.tags
         st.multiselect("Tags", st.session_state.pbcoindata.all_tags, key="edit_run_v7_tags", help=pbgui_help.coindata_tags)
 
-    @st.fragment
     def fragment_only_cpt(self):
         if "edit_run_v7_only_cpt" in st.session_state:
             if st.session_state.edit_run_v7_only_cpt != self.config.pbgui.only_cpt:
@@ -424,7 +419,6 @@ class V7Instance():
             st.session_state.pbcoindata.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", help=pbgui_help.only_cpt, key="edit_run_v7_only_cpt")
     
-    @st.fragment
     def fragment_notices_ignore(self):
         if "edit_run_v7_notices_ignore" in st.session_state:
             if st.session_state.edit_run_v7_notices_ignore != self.config.pbgui.notices_ignore:
