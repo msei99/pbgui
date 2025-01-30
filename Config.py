@@ -283,6 +283,7 @@ class Config:
 #               "compress_cache": true,
 #               "end_date": "2022-01-01",
 #               "exchanges": ["binance", "bybit"],
+#               "gap_tolerance_ohlcvs_minutes": 120.0,
 #               "start_date": "2021-01-01",
 #               "starting_balance": 1000},
 #  "bot": {"long": {"close_grid_markup_range": 0.0013425,
@@ -425,6 +426,7 @@ class Backtest:
         self._compress_cache = True
         self._end_date = "now"
         self._exchanges = ["binance", "bybit"]
+        self._gap_tolerance_ohlcvs_minutes = 120.0
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
         self._backtest = {
@@ -433,6 +435,7 @@ class Backtest:
             "compress_cache": self._compress_cache,
             "end_date": self._end_date,
             "exchanges": self._exchanges,
+            "gap_tolerance_ohlcvs_minutes": self._gap_tolerance_ohlcvs_minutes,
             "start_date": self._start_date,
             "starting_balance": self._starting_balance
         }
@@ -454,6 +457,8 @@ class Backtest:
             self.end_date = new_backtest["end_date"]
         if "exchanges" in new_backtest:
             self.exchanges = new_backtest["exchanges"]
+        if "gap_tolerance_ohlcvs_minutes" in new_backtest:
+            self.gap_tolerance_ohlcvs_minutes = new_backtest["gap_tolerance_ohlcvs_minutes"]
         if "start_date" in new_backtest:
             self.start_date = new_backtest["start_date"]
         if "starting_balance" in new_backtest:
@@ -472,6 +477,8 @@ class Backtest:
         return self._end_date
     @property
     def exchanges(self): return self._exchanges
+    @property
+    def gap_tolerance_ohlcvs_minutes(self): return self._gap_tolerance_ohlcvs_minutes
     @property
     def start_date(self): return self._start_date
     @property
@@ -497,6 +504,10 @@ class Backtest:
     def exchanges(self, new_exchanges):
         self._exchanges = new_exchanges
         self._backtest["exchanges"] = self._exchanges
+    @gap_tolerance_ohlcvs_minutes.setter
+    def gap_tolerance_ohlcvs_minutes(self, new_gap_tolerance_ohlcvs_minutes):
+        self._gap_tolerance_ohlcvs_minutes = new_gap_tolerance_ohlcvs_minutes
+        self._backtest["gap_tolerance_ohlcvs_minutes"] = self._gap_tolerance_ohlcvs_minutes
     @start_date.setter
     def start_date(self, new_start_date):
         self._start_date = new_start_date

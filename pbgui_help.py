@@ -1069,6 +1069,11 @@ empty_means_all_approved = """
     Otherwise, backtest for each exchange individually
     ```"""
 
+gap_tolerance_ohlcvs_minutes = """
+    ```
+    If the gap between two consecutive ohlcvs is greater than this value, the bot will not backtest.
+    ```"""
+
 combine_ohlcvs = """
     ```
     If true, will combine ohlcvs from all exchanges.

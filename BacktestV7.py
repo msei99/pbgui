@@ -457,6 +457,16 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_minimum_coin_age_days = self.config.live.minimum_coin_age_days
         st.number_input("minimum_coin_age_days", min_value=0, step=1, key="edit_bt_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
 
+    # gap_tolerance_ohlcvs_minutes
+    @st.fragment
+    def fragment_gap_tolerance_ohlcvs_minutes(self):
+        if "edit_bt_v7_gap_tolerance_ohlcvs_minutes" in st.session_state:
+            if st.session_state.edit_bt_v7_gap_tolerance_ohlcvs_minutes != self.config.backtest.gap_tolerance_ohlcvs_minutes:
+                self.config.backtest.gap_tolerance_ohlcvs_minutes = st.session_state.edit_bt_v7_gap_tolerance_ohlcvs_minutes
+        else:
+            st.session_state.edit_bt_v7_gap_tolerance_ohlcvs_minutes = self.config.backtest.gap_tolerance_ohlcvs_minutes
+        st.number_input("gap_tolerance_ohlcvs_minutes", min_value=0, step=1, key="edit_bt_v7_gap_tolerance_ohlcvs_minutes", help=pbgui_help.gap_tolerance_ohlcvs_minutes)
+
     # combine_ohlcvs
     @st.fragment
     def fragment_combine_ohlcvs(self):
@@ -679,6 +689,8 @@ class BacktestV7Item:
         with col2:
             self.fragment_minimum_coin_age_days()
         with col3:
+            self.fragment_gap_tolerance_ohlcvs_minutes()
+        with col4:
             self.fragment_combine_ohlcvs()
             self.fragment_compress_cache()
         #Filters
