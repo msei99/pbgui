@@ -12,6 +12,7 @@ class Exchanges(Enum):
     BINANCE = 'binance'
     BYBIT = 'bybit'
     BITGET = 'bitget'
+    GATEIO = 'gateio'
     HYPERLIQUID = 'hyperliquid'
     OKX = 'okx'
     KUCOIN = 'kucoin'
@@ -45,8 +46,9 @@ class V7(Enum):
     BINANCE = 'binance'
     BYBIT = 'bybit'
     BITGET = 'bitget'
-    OKX = 'okx'
+    GATEIO = 'gateio'
     HYPERLIQUID = 'hyperliquid'
+    OKX = 'okx'
 
     @staticmethod
     def list():
@@ -906,6 +908,10 @@ class Exchange:
                 elif self.id == "bingx":
                     if v["id"].endswith('USDT'):
                         self.swap.append(''.join(v["id"].split("-")))
+                elif self.id == "gateio":
+                    if v["id"].endswith('USDT'):
+                        self.swap.append(''.join(v["id"].split("_")))
+                        # print(v)
             if v["spot"] and v["active"] and (self.id == "bybit" or self.id == "binance"):
                 self.spot.append(v["id"])
         if self.id in ["bitget", "binance"]:
@@ -944,6 +950,9 @@ class Exchange:
 
 def main():
     print("Don't Run this Class from CLI")
+    # exchange = Exchange("gateio", None)
+    # exchange.fetch_symbols()
+    # print(exchange.swap)
     # users = Users()
     # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
     # exchange.fetch_symbols()
