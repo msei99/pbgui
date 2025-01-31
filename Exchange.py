@@ -521,6 +521,44 @@ class Exchange:
                         all.append(income)
                     else: 
                         self.save_income_other(history, self.user.name)
+        elif self.id == "gateio":
+            day = 24 * 60 * 60
+            week = 7 * day
+            max = 365 * day
+            now = self.instance.seconds()
+            if not since:
+                since = now - max
+            else:
+                since = int(since / 1000)
+            limit = 100
+            end = since + week
+            while True:
+                ledgers = self.instance.fetch_ledger(since=since, limit=limit, params = {"type": "swap", "to": end})
+                if ledgers:
+                    first_ledger = ledgers[0]
+                    last_ledger = ledgers[-1]
+                    all_histories = ledgers + all_histories
+                if len(ledgers) == limit:
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
+                    end = int(ledgers[0]['timestamp']/1000)
+                else:
+                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(since*1000), 'till', self.instance.iso8601(end*1000))
+                    since = since + week
+                    end = since + week
+                if since > now:
+                    print(f'User:{self.user.name} Done')
+                    break
+            for history in all_histories:
+                if history["info"]["contract"] and history["amount"] != "0":
+                    if history["type"] in ["trade","fee"]:
+                        income = {}
+                        income["symbol"] = history["info"]["contract"].replace("_", "")
+                        income["timestamp"] = history["timestamp"]
+                        income["income"] = history["amount"]
+                        income["uniqueid"] = history["info"]["id"]
+                        all.append(income)
+                    else: 
+                        self.save_income_other(history, self.user.name)
         elif self.id == "binance":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
