@@ -159,7 +159,6 @@ class Monitor():
                                 while version != v7_instances.fetch_instance_version(d_v7[row]['Name']):
                                     st.text(f'{timeout} seconds left')
                                     sleep(1)
-                                    print(v7_instances.fetch_instance_version(d_v7[row]['Name']))
                                     timeout -= 1
                                     if timeout == 0:
                                         break

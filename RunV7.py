@@ -51,6 +51,7 @@ class V7Instance():
         if self.enabled_on == self.remote.name:
             version = self.remote.local_run.instances_status_v7.find_version(self.user)
         elif self.enabled_on in self.remote.list():
+            self.remote.find_server(self.enabled_on).instances_status_v7.load()
             version = self.remote.find_server(self.enabled_on).instances_status_v7.find_version(self.user)
         else:
             version = 0
@@ -839,12 +840,9 @@ class V7Instances:
     def restart_instance(self, user: str):
         for instance in self.instances:
             if user == instance.user:
-                print(f"Restarting {instance.user}")
-                # Version + 1
-                # instance.config.pbgui.version += 1
-                # instance.save()
-                # # Restart
-                # instance.remote.local_run.activate(user, True, "7")
+                # Restart
+                instance.save()
+                instance.remote.local_run.activate(user, True, "7")
     
     def fetch_instance_version(self, user: str):
         for instance in self.instances:
