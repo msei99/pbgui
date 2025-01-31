@@ -106,6 +106,8 @@ class Database():
                         position['symbol'][0:-5].replace("/", "").replace("-", ""),
                         user.name
                     ]
+                    if pos[1] == 0:
+                        continue
                     # Use current timestamp if timestamp is None
                     if not pos[0]:
                         pos[0] = int(datetime.now().timestamp() * 1000)
@@ -586,22 +588,26 @@ class Database():
 
 def main():
     print("Don't Run this Class from CLI")
-    # users = Users()
-    # user2 = users.find_user("bybit_CPT1")
-    # exchange = Exchange("bybit", user)
-    # db = Database()
+    users = Users()
+    user = users.find_user("gateio_cpt")
+    exchange = Exchange("gateio", user)
+    # balance = exchange.fetch_balance("swap")
+    # print(balance)
+    # positions = exchange.fetch_positions()
+    # print(positions)
+    db = Database()
     # db.update_history(user)
-    # db.update_positions(user)
-    # db.update_orders(user)
-    # db.update_prices(user)
-    # db.update_balances(user)
+    db.update_positions(user)
+    db.update_orders(user)
+    db.update_prices(user)
+    db.update_balances(user)
     # exchange.connect()
     # print(db.find_last_timestamp(user))
     # history = db.fetch_history2(user)
     # print(history)
     # history = db.fetch_history2(user2)
     # print(history)
-    # balances = db.fetch_balance(['bitget_CRASH','binance_CPT'])
+    # balances = db.fetch_balances(['gateio_cpt'])
     # print(balances)
     # db.update_positions(user)
     # db.update_prices(user)
