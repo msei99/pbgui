@@ -836,6 +836,22 @@ class V7Instances:
             elif instance.is_running() and (instance.version != instance.running_version):
                 instance.remote.local_run.activate(instance.user, True, "7")
 
+    def restart_instance(self, user: str):
+        for instance in self.instances:
+            if user == instance.user:
+                print(f"Restarting {instance.user}")
+                # Version + 1
+                # instance.config.pbgui.version += 1
+                # instance.save()
+                # # Restart
+                # instance.remote.local_run.activate(user, True, "7")
+    
+    def fetch_instance_version(self, user: str):
+        for instance in self.instances:
+            if user == instance.user:
+                return instance.running_version
+        return 0
+
     def load(self):
         p = str(Path(f'{self.instances_path}/*'))
         instances = glob.glob(p)

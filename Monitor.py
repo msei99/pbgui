@@ -2,6 +2,8 @@ import streamlit as st
 from pbgui_purefunc import load_ini, save_ini
 from datetime import datetime
 import pandas as pd
+from time import sleep
+from pbgui_func import error_popup, info_popup
 
 class Monitor():
     def __init__(self):
@@ -147,6 +149,27 @@ class Monitor():
                     st.markdown(f":green[Last Info: ] :blue[{d_v7[row]['Last Info']}]")
                     st.markdown(f":orange[Last Error: ] :blue[{d_v7[row]['Last Error']}]")
                     st.markdown(f":red[Last Traceback: ] :blue[{d_v7[row]['Last Traceback']}]")
+                    if st.button("Restart", key=f"restart_{d_v7[row]['Name']}"):
+                        v7_instances = st.session_state.v7_instances
+                        version = v7_instances.fetch_instance_version(d_v7[row]['Name']) + 1
+                        v7_instances.restart_instance(d_v7[row]['Name'])
+                        timeout = 120
+                        with st.spinner(f'Restarting {d_v7[row]["Name"]}...'):
+                            with st.empty():
+                                while version != v7_instances.fetch_instance_version(d_v7[row]['Name']):
+                                    st.text(f'{timeout} seconds left')
+                                    sleep(1)
+                                    print(v7_instances.fetch_instance_version(d_v7[row]['Name']))
+                                    timeout -= 1
+                                    if timeout == 0:
+                                        break
+                                st.text(f'{timeout} seconds left')
+                            st.text(f'')
+                            if timeout == 0:
+                                error_popup("Restart failed")
+                            else:
+                                info_popup(f"{d_v7[row]['Name']} restarted")
+
 
         
         if d_multi:
