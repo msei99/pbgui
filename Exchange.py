@@ -331,7 +331,7 @@ class Exchange:
                 if since > now:
                     print(f'User:{self.user.name} Done')
                     break
-                sleep(1)
+                sleep(5)
             for history in all_histories:
                 if history["type"] in ["TRADE","SETTLEMENT"]:
                     income = {}
