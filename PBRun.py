@@ -500,8 +500,10 @@ class RunMulti():
         with open(version_file, "w", encoding='utf-8') as f:
             f.write(version)
         # Generate clean multi_run.hjson file
-        del self._multi_config["enabled_on"]
-        del self._multi_config["version"]
+        if "enabled_on" in self._multi_config:
+            del self._multi_config["enabled_on"]
+        if "version" in self._multi_config:
+            del self._multi_config["version"]
         if "note" in self._multi_config:
             del self._multi_config["note"]
         if "market_cap" in self._multi_config:
