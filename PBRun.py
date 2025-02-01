@@ -224,14 +224,14 @@ class DynamicIgnore():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {removed_coins} Added: {added_coins}')
             self.ignored_coins = self.coindata.ignored_coins
         if self.approved_coins != self.coindata.approved_coins:
-            approved_coins = set(self.approved_coins) - set(self.coindata.approved_coins)
-            approved_coins = [*approved_coins]
-            approved_coins.sort()
+            removed_coins = set(self.approved_coins) - set(self.coindata.approved_coins)
+            removed_coins = [*removed_coins]
+            removed_coins.sort()
             added_coins = set(self.coindata.approved_coins) - set(self.approved_coins)
-            added_coins = [*approved_coins]
+            added_coins = [*added_coins]
             added_coins.sort()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change approved_coins {self.path} Removed: {removed_coins} Added: {added_coins}')
-            self.ignored_coins = self.coindata.ignored_coins
+            self.approved_coins = self.coindata.approved_coins
             self.save()
             return True
         return False
