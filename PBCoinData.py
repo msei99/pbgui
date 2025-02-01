@@ -489,7 +489,7 @@ class CoinData:
         if metadata_ts < now_ts - 3600*24*self.metadata_interval:
             self.fetch_metadata()
             self.save_metadata()
-        if not self.metadata:
+        if not self.metadata and Path(f'{coin_path}/metadata.json').exists():
             try:
                 with Path(f'{coin_path}/metadata.json').open() as f:
                     self.metadata = json.load(f)
