@@ -85,6 +85,8 @@ class Database():
         positions = exchange.fetch_positions()
         symbols = []
         for symbol in positions:
+            if positions[symbol]['contracts'] * positions[symbol]['contractSize'] == 0:
+                continue
             symbols.append(symbol['symbol'][0:-5].replace("/", "").replace("-", ""))
         symbols_db = []
         for position in positions_db:
@@ -588,15 +590,15 @@ class Database():
 
 def main():
     print("Don't Run this Class from CLI")
-    # users = Users()
-    # user = users.find_user("gateio_cpt")
-    # exchange = Exchange("gateio", user)
+    users = Users()
+    user = users.find_user("gateio_cpt")
+    exchange = Exchange("gateio", user)
     # history = exchange.fetch_history()
     # print(history)
     # balance = exchange.fetch_balance("swap")
     # print(balance)
-    # positions = exchange.fetch_positions()
-    # print(positions)
+    positions = exchange.fetch_positions()
+    print(positions)
     # db = Database()
     # db.update_history(user)
     # db.update_positions(user)
