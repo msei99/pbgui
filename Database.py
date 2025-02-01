@@ -84,10 +84,10 @@ class Database():
         exchange = Exchange(user.exchange, user)
         positions = exchange.fetch_positions()
         symbols = []
-        for symbol in positions:
-            if positions[symbol]['contracts'] * positions[symbol]['contractSize'] == 0:
+        for position in positions:
+            if position['contracts'] == 0:
                 continue
-            symbols.append(symbol['symbol'][0:-5].replace("/", "").replace("-", ""))
+            symbols.append(position['symbol'][0:-5].replace("/", "").replace("-", ""))
         symbols_db = []
         for position in positions_db:
             symbols_db.append(position[1])
@@ -599,9 +599,9 @@ def main():
     # print(balance)
     positions = exchange.fetch_positions()
     print(positions)
-    # db = Database()
+    db = Database()
     # db.update_history(user)
-    # db.update_positions(user)
+    db.update_positions(user)
     # db.update_orders(user)
     # db.update_prices(user)
     # db.update_balances(user)
