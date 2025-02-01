@@ -312,10 +312,17 @@ class Exchange:
                 UTA = False
             cursor = None
             while True:
-                if UTA:
-                    transactions = self.instance.privateGetV5AccountTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
-                else:
-                    transactions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
+                for i in range(5):
+                    try:
+                        if UTA:
+                            transactions = self.instance.privateGetV5AccountTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
+                        else:
+                            transactions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
+                    except Exception as e:
+                        print(e)
+                        print(f'User:{self.user.name} Fetching transactions failed. Retry in 5 seconds')
+                        sleep(5)
+                        continue
                 cursor = transactions["result"]["nextPageCursor"]
                 positions = transactions["result"]["list"]
                 if positions:
@@ -331,7 +338,6 @@ class Exchange:
                 if since > now:
                     print(f'User:{self.user.name} Done')
                     break
-                sleep(5)
             for history in all_histories:
                 if history["type"] in ["TRADE","SETTLEMENT"]:
                     income = {}
