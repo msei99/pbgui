@@ -446,6 +446,10 @@ class V7Instance():
         if type(self.config.live.ignored_coins.long) == str:
             self.config.live.ignored_coins.long = []
             self.config.live.ignored_coins.short = []
+        # Change approved_coins back to empty list if we changed it to a path
+        if type(self.config.live.approved_coins.long) == str:
+            self.config.live.approved_coins.long = []
+            self.config.live.approved_coins.short = []
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:

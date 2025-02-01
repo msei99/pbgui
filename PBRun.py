@@ -207,6 +207,9 @@ class DynamicIgnore():
         self.ignored_coins = []
         self.ignored_coins_long = []
         self.ignored_coins_short = []
+        self.approved_coins = []
+        self.approved_coins_long = []
+        self.approved_coins_short = []
     
     def watch(self):
         if self.coindata.has_new_data():
@@ -218,9 +221,16 @@ class DynamicIgnore():
             added_coins = set(self.coindata.ignored_coins) - set(self.ignored_coins)
             added_coins = [*added_coins]
             added_coins.sort()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_symbols {self.path}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Removed: {removed_coins}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Added: {added_coins}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {removed_coins} Added: {added_coins}')
+            self.ignored_coins = self.coindata.ignored_coins
+        if self.approved_coins != self.coindata.approved_coins:
+            approved_coins = set(self.approved_coins) - set(self.coindata.approved_coins)
+            approved_coins = [*approved_coins]
+            approved_coins.sort()
+            added_coins = set(self.coindata.approved_coins) - set(self.approved_coins)
+            added_coins = [*approved_coins]
+            added_coins.sort()
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change approved_coins {self.path} Removed: {removed_coins} Added: {added_coins}')
             self.ignored_coins = self.coindata.ignored_coins
             self.save()
             return True
@@ -239,6 +249,18 @@ class DynamicIgnore():
                     ignored_coins.append(symbol)
         with open(file, "w", encoding='utf-8') as f:
             json.dump(ignored_coins, f)
+        file = Path(f'{self.path}/approved_coins.json')
+        approved_coins = self.approved_coins
+        if self.approved_coins_long:
+            for symbol in self.approved_coins_long:
+                if symbol not in approved_coins:
+                    approved_coins.append(symbol)
+        if self.approved_coins_short:
+            for symbol in self.approved_coins_short:
+                if symbol not in approved_coins:
+                    approved_coins.append(symbol)
+        with open(file, "w", encoding='utf-8') as f:
+            json.dump(approved_coins, f)
     
 class RunSingle():
     def __init__(self):
@@ -717,7 +739,13 @@ class RunV7():
                                         self.dynamic_ignore.ignored_coins_long = self._v7_config["live"]["ignored_coins"]["long"]
                                     if "short" in self._v7_config["live"]["ignored_coins"]:
                                         self.dynamic_ignore.ignored_coins_short = self._v7_config["live"]["ignored_coins"]["short"]
+                                if "approved_coins" in self._v7_config["live"]:
+                                    if "long" in self._v7_config["live"]["approved_coins"]:
+                                        self.dynamic_ignore.approved_coins_long = self._v7_config["live"]["approved_coins"]["long"]
+                                    if "short" in self._v7_config["live"]["approved_coins"]:
+                                        self.dynamic_ignore.approved_coins_short = self._v7_config["live"]["approved_coins"]["short"]
                             self._v7_config["live"]["ignored_coins"] = str(PurePath(f'{self.path}/ignored_coins.json'))
+                            self._v7_config["live"]["approved_coins"] = str(PurePath(f'{self.path}/approved_coins.json'))
                             with open(file, "w", encoding='utf-8') as f:
                                 json.dump(self._v7_config, f, indent=4)
                             # Find Exchange from User
