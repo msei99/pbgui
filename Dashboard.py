@@ -267,8 +267,11 @@ class Dashboard():
                         if st.session_state[f'dashboard_type_{row}_1'] != self.dashboard_config.get(f'dashboard_type_{row}_1'):
                             self.dashboard_config[f'dashboard_type_{row}_1'] = st.session_state[f'dashboard_type_{row}_1']
                     else:
-                        self.dashboard_config[f'dashboard_type_{row}_1'] = "NONE"
-                    st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_1")
+                        if f'dashboard_type_{row}_1' in self.dashboard_config:
+                            st.session_state[f'dashboard_type_{row}_1'] = self.dashboard_config[f'dashboard_type_{row}_1']
+                        else:
+                            st.session_state[f'dashboard_type_{row}_1'] = "NONE"
+                    st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f'dashboard_type_{row}_1')
                     if st.session_state[f'dashboard_type_{row}_1'] == "PNL":
                         if f'dashboard_pnl_users_{row}_1' in self.dashboard_config and f'dashboard_pnl_period_{row}_1' in self.dashboard_config and f'dashboard_pnl_mode_{row}_1' in self.dashboard_config:
                             self.view_pnl(f'{row}_1', self.dashboard_config[f'dashboard_pnl_users_{row}_1'], self.dashboard_config[f'dashboard_pnl_period_{row}_1'], self.dashboard_config[f'dashboard_pnl_mode_{row}_1'])
@@ -320,7 +323,10 @@ class Dashboard():
                         if st.session_state[f'dashboard_type_{row}_2'] != self.dashboard_config.get(f'dashboard_type_{row}_2'):
                             self.dashboard_config[f'dashboard_type_{row}_2'] = st.session_state[f'dashboard_type_{row}_2']
                     else:
-                        self.dashboard_config[f'dashboard_type_{row}_2'] = "NONE"
+                        if f'dashboard_type_{row}_2' in self.dashboard_config:
+                            st.session_state[f'dashboard_type_{row}_2'] = self.dashboard_config[f'dashboard_type_{row}_2']
+                        else:
+                            st.session_state[f'dashboard_type_{row}_2'] = "NONE"
                     st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_2")
                     if st.session_state[f'dashboard_type_{row}_2'] == "PNL":
                         if f'dashboard_pnl_users_{row}_2' in self.dashboard_config and f'dashboard_pnl_period_{row}_2' in self.dashboard_config and f'dashboard_pnl_mode_{row}_2' in self.dashboard_config:
@@ -366,7 +372,10 @@ class Dashboard():
                     if st.session_state[f'dashboard_type_{row}_1'] != self.dashboard_config.get(f'dashboard_type_{row}_1'):
                         self.dashboard_config[f'dashboard_type_{row}_1'] = st.session_state[f'dashboard_type_{row}_1']
                 else:
-                    self.dashboard_config[f'dashboard_type_{row}_1'] = "NONE"
+                    if f'dashboard_type_{row}_1' in self.dashboard_config:
+                        st.session_state[f'dashboard_type_{row}_1'] = self.dashboard_config[f'dashboard_type_{row}_1']
+                    else:
+                        st.session_state[f'dashboard_type_{row}_1'] = "NONE"
                 st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_1")
                 if st.session_state[f'dashboard_type_{row}_1'] == "PNL":
                     if f'dashboard_pnl_users_{row}_1' in self.dashboard_config and f'dashboard_pnl_period_{row}_1' in self.dashboard_config and f'dashboard_pnl_mode_{row}_1' in self.dashboard_config:
@@ -455,9 +464,9 @@ class Dashboard():
             self.dashboard_config = dashboard_config
             self.rows = dashboard_config["rows"]
             self.cols = dashboard_config["cols"]
-            for row in range(1, self.rows + 1):
-                for col in range(1, self.cols + 1):
-                    st.session_state[f'dashboard_type_{row}_{col}'] = dashboard_config[f'dashboard_type_{row}_{col}']
+            # for row in range(1, self.rows + 1):
+            #     for col in range(1, self.cols + 1):
+            #         st.session_state[f'dashboard_type_{row}_{col}'] = dashboard_config[f'dashboard_type_{row}_{col}']
 
     def delete(self):
         dashboard_path = Path(f'{PBGDIR}/data/dashboards')
