@@ -561,7 +561,7 @@ class Exchange:
                         income = {}
                         income["symbol"] = history["info"]["contract"].replace("_", "")
                         income["timestamp"] = history["timestamp"]
-                        income["income"] = history["amount"]
+                        income["income"] = history["info"]["change"]
                         income["uniqueid"] = history["info"]["id"]
                         all.append(income)
                     else: 
