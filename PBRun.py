@@ -546,7 +546,7 @@ class RunMulti():
             self._multi_config["ignored_symbols"] = self.dynamic_ignore.coindata.ignored_coins
             if self.dynamic_ignore.coindata.approved_coins:
                 for coin in self.dynamic_ignore.coindata.approved_coins:
-                    self._multi_config["approved_symbols"][{coin}] = ''
+                    self._multi_config["approved_symbols"][coin] = ''
         run_config = hjson.dumps(self._multi_config)
         config_file = Path(f'{self.path}/multi_run.hjson')
         with open(config_file, "w", encoding='utf-8') as f:
