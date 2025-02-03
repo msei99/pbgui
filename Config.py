@@ -276,75 +276,75 @@ class Config:
             st.text_area(f'config converted to v7', self.config_v7, key="config_instance_config_v7", height=height, disabled=True)
 
 # config template
-#  "backtest": {"base_dir": "backtests/pbgui/sol_only",
-#               "cache_dir": {"combined": "caches/hlcvs_data/afeeb0341e0bd822"},
-#               "coins": {"combined": ["SOL"]},
+# {"backtest": {"base_dir": "backtests",
 #               "combine_ohlcvs": true,
 #               "compress_cache": true,
-#               "end_date": "2022-01-01",
-#               "exchanges": ["binance", "bybit"],
+#               "end_date": "now",
+#               "exchanges": ["binance", "bybit", "gateio", "bitget"],
 #               "gap_tolerance_ohlcvs_minutes": 120.0,
-#               "start_date": "2021-01-01",
-#               "starting_balance": 1000},
-#  "bot": {"long": {"close_grid_markup_range": 0.0013425,
-#                   "close_grid_min_markup": 0.0047292,
-#                   "close_grid_qty_pct": 0.85073,
-#                   "close_trailing_grid_ratio": 0.037504,
-#                   "close_trailing_qty_pct": 0.54254,
-#                   "close_trailing_retracement_pct": 0.021623,
-#                   "close_trailing_threshold_pct": 0.065009,
-#                   "ema_span_0": 469.33,
-#                   "ema_span_1": 1120.5,
-#                   "entry_grid_double_down_factor": 2.2661,
-#                   "entry_grid_spacing_pct": 0.05224,
-#                   "entry_grid_spacing_weight": 0.070246,
-#                   "entry_initial_ema_dist": -0.015187,
-#                   "entry_initial_qty_pct": 0.032679,
-#                   "entry_trailing_grid_ratio": -0.29357,
-#                   "entry_trailing_retracement_pct": 0.002646,
-#                   "entry_trailing_threshold_pct": -0.043522,
-#                   "filter_relative_volume_clip_pct": 0.51429,
-#                   "filter_rolling_window": 330.17,
-#                   "n_positions": 5.2399,
-#                   "total_wallet_exposure_limit": 1.2788,
-#                   "unstuck_close_pct": 0.05968,
-#                   "unstuck_ema_dist": -0.027416,
-#                   "unstuck_loss_allowance_pct": 0.035915,
-#                   "unstuck_threshold": 0.45572},
-#          "short": {"close_grid_markup_range": 0.0020933,
-#                    "close_grid_min_markup": 0.016488,
-#                    "close_grid_qty_pct": 0.93256,
-#                    "close_trailing_grid_ratio": 0.035892,
-#                    "close_trailing_qty_pct": 0.98975,
-#                    "close_trailing_retracement_pct": 0.0042704,
-#                    "close_trailing_threshold_pct": -0.046918,
-#                    "ema_span_0": 1174.4,
-#                    "ema_span_1": 1217.3,
-#                    "entry_grid_double_down_factor": 2.0966,
-#                    "entry_grid_spacing_pct": 0.070355,
-#                    "entry_grid_spacing_weight": 1.5293,
-#                    "entry_initial_ema_dist": -0.090036,
-#                    "entry_initial_qty_pct": 0.07003,
-#                    "entry_trailing_grid_ratio": 0.075994,
-#                    "entry_trailing_retracement_pct": 0.023943,
-#                    "entry_trailing_threshold_pct": -0.079098,
-#                    "filter_relative_volume_clip_pct": 0.49361,
-#                    "filter_rolling_window": 57.016,
-#                    "n_positions": 1.1103,
+#               "start_date": "2021-04-01",
+#               "starting_balance": 100000},
+#  "bot": {"long": {"close_grid_markup_range": 0.0050591,
+#                   "close_grid_min_markup": 0.0050351,
+#                   "close_grid_qty_pct": 0.94386,
+#                   "close_trailing_grid_ratio": -0.048287,
+#                   "close_trailing_qty_pct": 0.66612,
+#                   "close_trailing_retracement_pct": 0.0090063,
+#                   "close_trailing_threshold_pct": 0.0070056,
+#                   "ema_span_0": 591.53,
+#                   "ema_span_1": 251.56,
+#                   "enforce_exposure_limit": 1.0,
+#                   "entry_grid_double_down_factor": 1.6344,
+#                   "entry_grid_spacing_pct": 0.029537,
+#                   "entry_grid_spacing_weight": 0.27803,
+#                   "entry_initial_ema_dist": -0.07151,
+#                   "entry_initial_qty_pct": 0.013548,
+#                   "entry_trailing_grid_ratio": -0.13036,
+#                   "entry_trailing_retracement_pct": 0.014867,
+#                   "entry_trailing_threshold_pct": 0.072569,
+#                   "filter_relative_volume_clip_pct": 0.035543,
+#                   "filter_rolling_window": 263.66,
+#                   "n_positions": 6.4463,
+#                   "total_wallet_exposure_limit": 1.6091,
+#                   "unstuck_close_pct": 0.066952,
+#                   "unstuck_ema_dist": -0.098354,
+#                   "unstuck_loss_allowance_pct": 0.012308,
+#                   "unstuck_threshold": 0.50078},
+#          "short": {"close_grid_markup_range": 0.027427,
+#                    "close_grid_min_markup": 0.0088639,
+#                    "close_grid_qty_pct": 0.38146,
+#                    "close_trailing_grid_ratio": -0.48905,
+#                    "close_trailing_qty_pct": 0.80056,
+#                    "close_trailing_retracement_pct": 0.002552,
+#                    "close_trailing_threshold_pct": -0.0075215,
+#                    "ema_span_0": 1242.6,
+#                    "ema_span_1": 717.7,
+#                    "enforce_exposure_limit": 1.0,
+#                    "entry_grid_double_down_factor": 0.36883,
+#                    "entry_grid_spacing_pct": 0.020096,
+#                    "entry_grid_spacing_weight": 5.7436,
+#                    "entry_initial_ema_dist": -0.082084,
+#                    "entry_initial_qty_pct": 0.017122,
+#                    "entry_trailing_grid_ratio": -0.90061,
+#                    "entry_trailing_retracement_pct": 0.023083,
+#                    "entry_trailing_threshold_pct": 0.078399,
+#                    "filter_relative_volume_clip_pct": 0.47361,
+#                    "filter_rolling_window": 251.65,
+#                    "n_positions": 7.2456,
 #                    "total_wallet_exposure_limit": 0.0,
-#                    "unstuck_close_pct": 0.063395,
-#                    "unstuck_ema_dist": -0.025704,
-#                    "unstuck_loss_allowance_pct": 0.04867,
-#                    "unstuck_threshold": 0.58437}},
-#  "live": {"approved_coins": [],
+#                    "unstuck_close_pct": 0.08722,
+#                    "unstuck_ema_dist": -0.089717,
+#                    "unstuck_loss_allowance_pct": 0.028372,
+#                    "unstuck_threshold": 0.64427}},
+#  "live": {"approved_coins": "configs/approved_coins_top20mcap.json",
 #           "auto_gs": true,
 #           "coin_flags": {},
-#           "empty_means_all_approved": false,
+#           "empty_means_all_approved": true,
 #           "execution_delay_seconds": 2.0,
 #           "filter_by_min_effective_cost": true,
 #           "forced_mode_long": "",
 #           "forced_mode_short": "",
-#           "ignored_coins": [],
+#           "ignored_coins": {"long": [], "short": []},
 #           "leverage": 10.0,
 #           "market_orders_allowed": true,
 #           "max_n_cancellations_per_batch": 5,
@@ -357,67 +357,70 @@ class Config:
 #           "price_distance_threshold": 0.002,
 #           "time_in_force": "good_till_cancelled",
 #           "user": "bybit_01"},
-#  "optimize": {"bounds": {"long_close_grid_markup_range": [0.0, 0.03],
+#  "optimize": {"bounds": {"long_close_grid_markup_range": [0, 0.03],
 #                          "long_close_grid_min_markup": [0.001, 0.03],
 #                          "long_close_grid_qty_pct": [0.05, 1.0],
-#                          "long_close_trailing_grid_ratio": [-1.0, 1.0],
+#                          "long_close_trailing_grid_ratio": [-1, 1],
 #                          "long_close_trailing_qty_pct": [0.05, 1.0],
-#                          "long_close_trailing_retracement_pct": [0.0, 0.1],
-#                          "long_close_trailing_threshold_pct": [-0.1, 0.1],
-#                          "long_ema_span_0": [200.0, 1440.0],
-#                          "long_ema_span_1": [200.0, 1440.0],
-#                          "long_entry_grid_double_down_factor": [0.1, 3.0],
-#                          "long_entry_grid_spacing_pct": [0.001, 0.12],
-#                          "long_entry_grid_spacing_weight": [0.0, 10.0],
+#                          "long_close_trailing_retracement_pct": [0.0001, 0.1],
+#                          "long_close_trailing_threshold_pct": [-0.01, 0.1],
+#                          "long_ema_span_0": [200, 1440],
+#                          "long_ema_span_1": [200, 1440],
+#                          "long_entry_grid_double_down_factor": [0.1, 3],
+#                          "long_entry_grid_spacing_pct": [0.001, 0.06],
+#                          "long_entry_grid_spacing_weight": [0, 10],
 #                          "long_entry_initial_ema_dist": [-0.1, 0.003],
-#                          "long_entry_initial_qty_pct": [0.005, 0.1],
-#                          "long_entry_trailing_grid_ratio": [-1.0, 1.0],
-#                          "long_entry_trailing_retracement_pct": [0.0, 0.1],
-#                          "long_entry_trailing_threshold_pct": [-0.1, 0.1],
-#                          "long_filter_relative_volume_clip_pct": [0.0, 1.0],
-#                          "long_filter_rolling_window": [10.0, 360.0],
-#                          "long_n_positions": [1.0, 20.0],
-#                          "long_total_wallet_exposure_limit": [0.0, 5.0],
+#                          "long_entry_initial_qty_pct": [0.004, 0.02],
+#                          "long_entry_trailing_grid_ratio": [-1, 1],
+#                          "long_entry_trailing_retracement_pct": [0.0001, 0.1],
+#                          "long_entry_trailing_threshold_pct": [-0.01, 0.1],
+#                          "long_filter_relative_volume_clip_pct": [0, 1],
+#                          "long_filter_rolling_window": [10, 360],
+#                          "long_n_positions": [6.4, 12.0],
+#                          "long_total_wallet_exposure_limit": [0.0, 2.0],
 #                          "long_unstuck_close_pct": [0.001, 0.1],
 #                          "long_unstuck_ema_dist": [-0.1, 0.01],
-#                          "long_unstuck_loss_allowance_pct": [0.0, 0.05],
+#                          "long_unstuck_loss_allowance_pct": [0.001, 0.05],
 #                          "long_unstuck_threshold": [0.4, 0.95],
-#                          "short_close_grid_markup_range": [0.0, 0.03],
+#                          "short_close_grid_markup_range": [0, 0.03],
 #                          "short_close_grid_min_markup": [0.001, 0.03],
 #                          "short_close_grid_qty_pct": [0.05, 1.0],
-#                          "short_close_trailing_grid_ratio": [-1.0, 1.0],
+#                          "short_close_trailing_grid_ratio": [-1, 1],
 #                          "short_close_trailing_qty_pct": [0.05, 1.0],
-#                          "short_close_trailing_retracement_pct": [0.0, 0.1],
-#                          "short_close_trailing_threshold_pct": [-0.1, 0.1],
-#                          "short_ema_span_0": [200.0, 1440.0],
-#                          "short_ema_span_1": [200.0, 1440.0],
-#                          "short_entry_grid_double_down_factor": [0.1, 3.0],
-#                          "short_entry_grid_spacing_pct": [0.001, 0.12],
-#                          "short_entry_grid_spacing_weight": [0.0, 10.0],
+#                          "short_close_trailing_retracement_pct": [0.0001, 0.1],
+#                          "short_close_trailing_threshold_pct": [-0.01, 0.1],
+#                          "short_ema_span_0": [200, 1440],
+#                          "short_ema_span_1": [200, 1440],
+#                          "short_entry_grid_double_down_factor": [0.1, 3],
+#                          "short_entry_grid_spacing_pct": [0.001, 0.06],
+#                          "short_entry_grid_spacing_weight": [0, 10],
 #                          "short_entry_initial_ema_dist": [-0.1, 0.003],
-#                          "short_entry_initial_qty_pct": [0.005, 0.1],
-#                          "short_entry_trailing_grid_ratio": [-1.0, 1.0],
-#                          "short_entry_trailing_retracement_pct": [0.0, 0.1],
-#                          "short_entry_trailing_threshold_pct": [-0.1, 0.1],
-#                          "short_filter_relative_volume_clip_pct": [0.0, 1.0],
-#                          "short_filter_rolling_window": [10.0, 360.0],
-#                          "short_n_positions": [1.0, 20.0],
-#                          "short_total_wallet_exposure_limit": [0.0, 5.0],
+#                          "short_entry_initial_qty_pct": [0.004, 0.02],
+#                          "short_entry_trailing_grid_ratio": [-1, 1],
+#                          "short_entry_trailing_retracement_pct": [0.0001, 0.1],
+#                          "short_entry_trailing_threshold_pct": [-0.01, 0.1],
+#                          "short_filter_relative_volume_clip_pct": [0, 1],
+#                          "short_filter_rolling_window": [10, 360],
+#                          "short_n_positions": [6.4, 12.0],
+#                          "short_total_wallet_exposure_limit": [0.0, 2.0],
 #                          "short_unstuck_close_pct": [0.001, 0.1],
 #                          "short_unstuck_ema_dist": [-0.1, 0.01],
-#                          "short_unstuck_loss_allowance_pct": [0.0, 0.05],
+#                          "short_unstuck_loss_allowance_pct": [0.001, 0.05],
 #                          "short_unstuck_threshold": [0.4, 0.95]},
 #               "compress_results_file": true,
 #               "crossover_probability": 0.7,
-#               "iters": 30000,
-#               "limits": {"lower_bound_drawdown_worst": 0.25,
-#                          "lower_bound_drawdown_worst_mean_1pct": 0.15,
-#                          "lower_bound_equity_balance_diff_mean": 0.02,
-#                          "lower_bound_loss_profit_ratio": 0.6},
+#               "iters": 300000,
+#               "limits": {"lower_bound_drawdown_worst": 0.333,
+#                          "lower_bound_drawdown_worst_mean_1pct": 0.2,
+#                          "lower_bound_equity_balance_diff_neg_max": 0.4,
+#                          "lower_bound_equity_balance_diff_neg_mean": 0.01,
+#                          "lower_bound_equity_balance_diff_pos_max": 0.5,
+#                          "lower_bound_equity_balance_diff_pos_mean": 0.02,
+#                          "lower_bound_loss_profit_ratio": 0.5},
 #               "mutation_probability": 0.2,
 #               "n_cpus": 5,
 #               "population_size": 500,
-#               "scoring": ["mdg", "sortino_ratio"]}}
+#               "scoring": ["mdg", "sterling_ratio"]}}
 
 class Backtest:
     def __init__(self):
@@ -685,6 +688,7 @@ class Long:
         self._close_trailing_threshold_pct = 0.06726
         self._ema_span_0 = 469.02
         self._ema_span_1 = 1118.9
+        self._enforce_exposure_limit = 1.0
         self._entry_grid_double_down_factor = 2.3738
         self._entry_grid_spacing_pct = 0.052372
         self._entry_grid_spacing_weight = 0.17715
@@ -711,6 +715,7 @@ class Long:
             "close_trailing_threshold_pct": self._close_trailing_threshold_pct,
             "ema_span_0": self._ema_span_0,
             "ema_span_1": self._ema_span_1,
+            "enforce_exposure_limit": self._enforce_exposure_limit,
             "entry_grid_double_down_factor": self._entry_grid_double_down_factor,
             "entry_grid_spacing_pct": self._entry_grid_spacing_pct,
             "entry_grid_spacing_weight": self._entry_grid_spacing_weight,
@@ -754,6 +759,8 @@ class Long:
             self.ema_span_0 = new_long["ema_span_0"]
         if "ema_span_1" in new_long:
             self.ema_span_1 = new_long["ema_span_1"]
+        if "enforce_exposure_limit" in new_long:
+            self.enforce_exposure_limit = new_long["enforce_exposure_limit"]
         if "entry_grid_double_down_factor" in new_long:
             self.entry_grid_double_down_factor = new_long["entry_grid_double_down_factor"]
         if "entry_grid_spacing_pct" in new_long:
@@ -805,6 +812,8 @@ class Long:
     def ema_span_0(self): return self._ema_span_0
     @property
     def ema_span_1(self): return self._ema_span_1
+    @property
+    def enforce_exposure_limit(self): return self._enforce_exposure_limit
     @property
     def entry_grid_double_down_factor(self): return self._entry_grid_double_down_factor
     @property
@@ -874,6 +883,10 @@ class Long:
     def ema_span_1(self, new_ema_span_1):
         self._ema_span_1 = new_ema_span_1
         self._long["ema_span_1"] = self._ema_span_1
+    @enforce_exposure_limit.setter
+    def enforce_exposure_limit(self, new_enforce_exposure_limit):
+        self._enforce_exposure_limit = new_enforce_exposure_limit
+        self._long["enforce_exposure_limit"] = self._enforce_exposure_limit
     @entry_grid_double_down_factor.setter
     def entry_grid_double_down_factor(self, new_entry_grid_double_down_factor):
         self._entry_grid_double_down_factor = new_entry_grid_double_down_factor
@@ -950,6 +963,7 @@ class Short:
         self._close_trailing_threshold_pct = -0.059383
         self._ema_span_0 = 794.32
         self._ema_span_1 = 1176.7
+        self._enforce_exposure_limit = 1.0
         self._entry_grid_double_down_factor = 2.1256
         self._entry_grid_spacing_pct = 0.072906
         self._entry_grid_spacing_weight = 0.98867
@@ -976,6 +990,7 @@ class Short:
             "close_trailing_threshold_pct": self._close_trailing_threshold_pct,
             "ema_span_0": self._ema_span_0,
             "ema_span_1": self._ema_span_1,
+            "enforce_exposure_limit": self._enforce_exposure_limit,
             "entry_grid_double_down_factor": self._entry_grid_double_down_factor,
             "entry_grid_spacing_pct": self._entry_grid_spacing_pct,
             "entry_grid_spacing_weight": self._entry_grid_spacing_weight,
@@ -1019,6 +1034,8 @@ class Short:
             self.ema_span_0 = new_short["ema_span_0"]
         if "ema_span_1" in new_short:
             self.ema_span_1 = new_short["ema_span_1"]
+        if "enforce_exposure_limit" in new_short:
+            self.enforce_exposure_limit = new_short["enforce_exposure_limit"]
         if "entry_grid_double_down_factor" in new_short:
             self.entry_grid_double_down_factor = new_short["entry_grid_double_down_factor"]
         if "entry_grid_spacing_pct" in new_short:
@@ -1070,6 +1087,8 @@ class Short:
     def ema_span_0(self): return self._ema_span_0
     @property
     def ema_span_1(self): return self._ema_span_1
+    @property
+    def enforce_exposure_limit(self): return self._enforce_exposure_limit
     @property
     def entry_grid_double_down_factor(self): return self._entry_grid_double_down_factor
     @property
@@ -1139,6 +1158,10 @@ class Short:
     def ema_span_1(self, new_ema_span_1):
         self._ema_span_1 = new_ema_span_1
         self._short["ema_span_1"] = self._ema_span_1
+    @enforce_exposure_limit.setter
+    def enforce_exposure_limit(self, new_enforce_exposure_limit):
+        self._enforce_exposure_limit = new_enforce_exposure_limit
+        self._short["enforce_exposure_limit"] = self._enforce_exposure_limit
     @entry_grid_double_down_factor.setter
     def entry_grid_double_down_factor(self, new_entry_grid_double_down_factor):
         self._entry_grid_double_down_factor = new_entry_grid_double_down_factor
