@@ -1011,7 +1011,7 @@ class Dashboard():
                                     mode='lines',
                                     line=dict(color=color, width=2, dash = 'dot'), name=legend))
         fig.update_layout(legend = dict(font = dict(size = 14)))
-        st.plotly_chart(fig, key=f"dashboard_orders_{pos}")
+        st.plotly_chart(fig, key=f"dashboard_orders_plot_{pos}")
 
 
 def main():
