@@ -214,7 +214,9 @@ class DynamicIgnore():
     def watch(self):
         if self.coindata.has_new_data():
             self.coindata.list_symbols()
-        if self.ignored_coins != self.coindata.ignored_coins:
+        # create list of self.coindata.ignored_coins + self.ignored_coins_long + self.ignored_coins_short
+        ignored_coins = list(set(self.coindata.ignored_coins + self.ignored_coins_long + self.ignored_coins_short))
+        if self.ignored_coins != ignored_coins:
             removed_coins = set(self.ignored_coins) - set(self.coindata.ignored_coins)
             removed_coins = [*removed_coins]
             removed_coins.sort()
@@ -223,7 +225,9 @@ class DynamicIgnore():
             added_coins.sort()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {removed_coins} Added: {added_coins}')
             self.ignored_coins = self.coindata.ignored_coins
-        if self.approved_coins != self.coindata.approved_coins:
+        # create list of self.coindata.approved_coins + self.approved_coins_long + self.approved_coins_short
+        approved_coins = list(set(self.coindata.approved_coins + self.approved_coins_long + self.approved_coins_short))
+        if self.approved_coins != approved_coins:
             removed_coins = set(self.approved_coins) - set(self.coindata.approved_coins)
             removed_coins = [*removed_coins]
             removed_coins.sort()
