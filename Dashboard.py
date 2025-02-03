@@ -848,7 +848,8 @@ class Dashboard():
             if st.session_state[f'dashboard_positions_{position}']["selection"]["rows"]:
                 row = st.session_state[f'dashboard_positions_{position}']["selection"]["rows"][0]
                 st.session_state[f'view_orders_{position}'] = st.session_state[f'dashboard_positions_sdf_{position}'].iloc[row]
-                st.rerun()
+                if not "edit_dashboard" in st.session_state:
+                    st.rerun()
         st.markdown("#### :blue[Positions]")
         col1, col2 = st.columns([5,0.2], vertical_alignment="bottom")
         with col1:
