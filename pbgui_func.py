@@ -52,8 +52,13 @@ def is_authenticted():
     return False
 
 def check_password():
-    """Returns `True` if the user had the correct password."""
+    # if secrets file is missing, crate it with password = "PBGui$Data!"
+    secrets_path = Path(".streamlit/secrets.toml")
+    if not secrets_path.exists():
+        with open(secrets_path, "w") as f:
+            f.write('password = "PBGui$Bot!"')
 
+    """Returns `True` if the user had the correct password."""
     if "password" in st.secrets:
         if st.secrets["password"] == "":
             st.session_state["password_correct"] = True
