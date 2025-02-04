@@ -635,7 +635,7 @@ class RunV7():
             except psutil.AccessDenied:
                 pass
             if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
-                if cmdline[-1].endswith(f'/{self.user}/config.json') or cmdline[-1].endswith(f'\{self.user}\config.json'):
+                if cmdline[-1].endswith(f'/{self.user}/config_run.json') or cmdline[-1].endswith(f'\{self.user}\config_run.json'):
                     self.monitor.start_time = process.create_time()
                     self.monitor.memory = process.memory_info()
                     self.monitor.cpu = process.cpu_percent()
@@ -643,7 +643,7 @@ class RunV7():
 
     def stop(self):
         if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: passivbot v7 {self.path}/config.json')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: passivbot v7 {self.path}/config_run.json')
             self.pid().kill()
 
     def start(self):
@@ -651,7 +651,7 @@ class RunV7():
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(self.pbvenv) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
-            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/src/main.py'), PurePath(f'{self.path}/config.json')]
+            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/src/main.py'), PurePath(f'{self.path}/config_run.json')]
             logfile = Path(f'{self.path}/passivbot.log')
             log = open(logfile,"ab")
             if platform.system() == "Windows":
@@ -661,7 +661,7 @@ class RunV7():
             else:
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
             os.environ['PATH'] = old_os_path
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_v7 {self.path}/config.json')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_v7 {self.path}/config_run.json')
         # wait until passivbot is running
         for i in range(10):
             if self.is_running():
@@ -686,6 +686,7 @@ class RunV7():
     def load(self):
         """Load version for PB v7."""
         file = Path(f'{self.path}/config.json')
+        file_run = Path(f'{self.path}/config_run.json')
         self.monitor.path = self.path
         self.monitor.user = self.user
         self.monitor.pb_version = "7"
@@ -728,7 +729,7 @@ class RunV7():
                                 new_flags = f"{lm}{lw}{sm}{sw}{lev}{lc}"
                                 coin_flags[coin] = new_flags
                         self._v7_config["live"]["coin_flags"] = coin_flags
-                        with open(file, "w", encoding='utf-8') as f:
+                        with open(file_run, "w", encoding='utf-8') as f:
                             json.dump(self._v7_config, f, indent=4)
                     if "dynamic_ignore" in self._v7_config["pbgui"]:
                         if self._v7_config["pbgui"]["dynamic_ignore"]:
@@ -753,7 +754,7 @@ class RunV7():
                                         self.dynamic_ignore.approved_coins_short = self._v7_config["live"]["approved_coins"]["short"]
                             self._v7_config["live"]["ignored_coins"] = str(PurePath(f'{self.path}/ignored_coins.json'))
                             self._v7_config["live"]["approved_coins"] = str(PurePath(f'{self.path}/approved_coins.json'))
-                            with open(file, "w", encoding='utf-8') as f:
+                            with open(file_run, "w", encoding='utf-8') as f:
                                 json.dump(self._v7_config, f, indent=4)
                             # Find Exchange from User
                             api_path = f'{self.pbdir}/api-keys.json'
