@@ -422,32 +422,36 @@ class Dashboard():
         dashboard_config["cols"] = self.cols
         for row in range(1, self.rows + 1):
             for col in range(1, self.cols + 1):
-                dashboard_config[f'dashboard_type_{row}_{col}'] = st.session_state[f'dashboard_type_{row}_{col}']
-                if st.session_state[f'dashboard_type_{row}_{col}'] == "PNL":
-                    dashboard_config[f'dashboard_pnl_users_{row}_{col}'] = st.session_state[f'dashboard_pnl_users_{row}_{col}']
-                    dashboard_config[f'dashboard_pnl_period_{row}_{col}'] = st.session_state[f'dashboard_pnl_period_{row}_{col}']
-                    dashboard_config[f'dashboard_pnl_mode_{row}_{col}'] = st.session_state[f'dashboard_pnl_mode_{row}_{col}']
-                if st.session_state[f'dashboard_type_{row}_{col}'] == "INCOME":
-                    dashboard_config[f'dashboard_income_users_{row}_{col}'] = st.session_state[f'dashboard_income_users_{row}_{col}']
-                    dashboard_config[f'dashboard_income_period_{row}_{col}'] = st.session_state[f'dashboard_income_period_{row}_{col}']
-                if st.session_state[f'dashboard_type_{row}_{col}'] == "TOP":
-                    dashboard_config[f'dashboard_top_symbols_users_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_users_{row}_{col}']
-                    dashboard_config[f'dashboard_top_symbols_period_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_period_{row}_{col}']
-                    dashboard_config[f'dashboard_top_symbols_top_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_top_{row}_{col}']
-                if st.session_state[f'dashboard_type_{row}_{col}'] == "POSITIONS":
-                    dashboard_config[f'dashboard_positions_users_{row}_{col}'] = st.session_state[f'dashboard_positions_users_{row}_{col}']
-                if st.session_state[f'dashboard_type_{row}_{col}'] == "ORDERS":
-                    if f'dashboard_orders_{row}_{col}' in st.session_state:
-                        dashboard_config[f'dashboard_orders_{row}_{col}'] = st.session_state[f'dashboard_orders_{row}_{col}']
-                    else:
-                        dashboard_config[f'dashboard_orders_{row}_{col}'] = None
-                if st.session_state[f'dashboard_type_{row}_{col}'] == "BALANCE":
-                    dashboard_config[f'dashboard_balance_users_{row}_{col}'] = st.session_state[f'dashboard_balance_users_{row}_{col}']
-                if st.session_state[f'dashboard_type_{row}_{col}'] == "P+L":
-                    dashboard_config[f'dashboard_ppl_users_{row}_{col}'] = st.session_state[f'dashboard_ppl_users_{row}_{col}']
-                    dashboard_config[f'dashboard_ppl_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_period_{row}_{col}']
-                    dashboard_config[f'dashboard_ppl_sum_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_sum_period_{row}_{col}']
+                if f'dashboard_type_{row}_{col}' in st.session_state:
+                    dashboard_config[f'dashboard_type_{row}_{col}'] = st.session_state[f'dashboard_type_{row}_{col}']
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "PNL":
+                        dashboard_config[f'dashboard_pnl_users_{row}_{col}'] = st.session_state[f'dashboard_pnl_users_{row}_{col}']
+                        dashboard_config[f'dashboard_pnl_period_{row}_{col}'] = st.session_state[f'dashboard_pnl_period_{row}_{col}']
+                        dashboard_config[f'dashboard_pnl_mode_{row}_{col}'] = st.session_state[f'dashboard_pnl_mode_{row}_{col}']
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "INCOME":
+                        dashboard_config[f'dashboard_income_users_{row}_{col}'] = st.session_state[f'dashboard_income_users_{row}_{col}']
+                        dashboard_config[f'dashboard_income_period_{row}_{col}'] = st.session_state[f'dashboard_income_period_{row}_{col}']
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "TOP":
+                        dashboard_config[f'dashboard_top_symbols_users_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_users_{row}_{col}']
+                        dashboard_config[f'dashboard_top_symbols_period_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_period_{row}_{col}']
+                        dashboard_config[f'dashboard_top_symbols_top_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_top_{row}_{col}']
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "POSITIONS":
+                        dashboard_config[f'dashboard_positions_users_{row}_{col}'] = st.session_state[f'dashboard_positions_users_{row}_{col}']
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "ORDERS":
+                        if f'dashboard_orders_{row}_{col}' in st.session_state:
+                            dashboard_config[f'dashboard_orders_{row}_{col}'] = st.session_state[f'dashboard_orders_{row}_{col}']
+                        else:
+                            dashboard_config[f'dashboard_orders_{row}_{col}'] = None
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "BALANCE":
+                        dashboard_config[f'dashboard_balance_users_{row}_{col}'] = st.session_state[f'dashboard_balance_users_{row}_{col}']
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "P+L":
+                        dashboard_config[f'dashboard_ppl_users_{row}_{col}'] = st.session_state[f'dashboard_ppl_users_{row}_{col}']
+                        dashboard_config[f'dashboard_ppl_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_period_{row}_{col}']
+                        dashboard_config[f'dashboard_ppl_sum_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_sum_period_{row}_{col}']
+                else:
+                    dashboard_config[f'dashboard_type_{row}_{col}'] = "NONE"
         self.dashboard_config = dashboard_config
+        print(self.dashboard_config)
         dashboard_path = Path(f'{PBGDIR}/data/dashboards')
         dashboard_path.mkdir(parents=True, exist_ok=True)
         dashboard_file = Path(f'{dashboard_path}/{self.name}.json')
@@ -464,9 +468,6 @@ class Dashboard():
             self.dashboard_config = dashboard_config
             self.rows = dashboard_config["rows"]
             self.cols = dashboard_config["cols"]
-            # for row in range(1, self.rows + 1):
-            #     for col in range(1, self.cols + 1):
-            #         st.session_state[f'dashboard_type_{row}_{col}'] = dashboard_config[f'dashboard_type_{row}_{col}']
 
     def delete(self):
         dashboard_path = Path(f'{PBGDIR}/data/dashboards')
