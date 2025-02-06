@@ -4,14 +4,40 @@ from datetime import datetime
 import pandas as pd
 from time import sleep
 from pbgui_func import error_popup, info_popup
+from MonitorConfig import MonitorConfig
 
 class Monitor():
     def __init__(self):
-        if "mem_warning_v7" not in st.session_state:
-            self.load_monitor_config()
         self.server = None
         self.servers = []
         self.logfiles = []
+        self.monitor_config = MonitorConfig()
+
+        # self.mem_warning_v7 = 250.0
+        # self.mem_error_v7 = 500.0
+        # self.cpu_warning_v7 = 10.0
+        # self.cpu_error_v7 = 15.0
+        # self.error_warning_v7 = 100.0
+        # self.error_error_v7 = 250.0
+        # self.traceback_warning_v7 = 100.0
+        # self.traceback_error_v7 = 250.0
+        # self.mem_warning_multi = 250.0
+        # self.mem_error_multi = 500.0
+        # self.cpu_warning_multi = 5.0
+        # self.cpu_error_multi = 10.0
+        # self.error_warning_multi = 25.0
+        # self.error_error_multi = 50.0
+        # self.traceback_warning_multi = 25.0
+        # self.traceback_error_multi = 50.0
+        # self.mem_warning_single = 50.0
+        # self.mem_error_single = 100.0
+        # self.cpu_warning_single = 5.0
+        # self.cpu_error_single = 10.0
+        # self.error_warning_single = 25.0
+        # self.error_error_single = 50.0
+        # self.traceback_warning_single = 25.0
+        # self.traceback_error_single = 50.0
+        # self.load_monitor_config()
 
     def view_server(self):
         server = self.server
@@ -130,15 +156,15 @@ class Monitor():
         if d_v7:
             st.subheader(f"Running V7 Instances ({len(d_v7)})")
             df = pd.DataFrame(d_v7)
-            sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
+            sdf = df.style.map(lambda x: 'color: green' if x < self.monitor_config.cpu_warning_v7 else 'color: orange' if x < self.monitor_config.cpu_error_v7 else 'color: red', subset=['CPU'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.mem_warning_v7 else 'color: orange' if x < self.monitor_config.mem_error_v7 else 'color: red', subset=['Memory'])
             sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.error_warning_v7 else 'color: orange' if x < self.monitor_config.error_error_v7 else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.traceback_warning_v7 else 'color: orange' if x < self.monitor_config.traceback_error_v7 else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
             #PNL green if > 0, orange if 0 else red
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
             st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
@@ -168,21 +194,18 @@ class Monitor():
                                 error_popup("Restart failed")
                             else:
                                 info_popup(f"{d_v7[row]['Name']} restarted")
-
-
-        
         if d_multi:
             st.subheader(f"Running Multi Instances ({len(d_multi)})")
             df = pd.DataFrame(d_multi)
-            sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
+            sdf = df.style.map(lambda x: 'color: green' if x < self.monitor_config.cpu_warning_multi else 'color: orange' if x < self.monitor_config.cpu_error_multi else 'color: red', subset=['CPU'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.mem_warning_multi else 'color: orange' if x < self.monitor_config.mem_error_multi else 'color: red', subset=['Memory'])
             sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.error_warning_multi else 'color: orange' if x < self.monitor_config.error_error_multi else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.traceback_warning_multi else 'color: orange' if x < self.monitor_config.traceback_error_multi else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
             #PNL green if > 0, orange if 0 else red
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
             st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_multi))*35, key="pbremote_multi_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
@@ -197,15 +220,15 @@ class Monitor():
         if d_single:
             st.subheader(f"Running Single Instances ({len(d_single)})")
             df = pd.DataFrame(d_single)
-            sdf = df.style.map(lambda x: 'color: green' if x < float(st.session_state.cpu_warning_v7) else 'color: orange' if x < float(st.session_state.cpu_error_v7) else 'color: red', subset=['CPU'])
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.mem_warning_v7) else 'color: orange' if x < float(st.session_state.mem_error_v7) else 'color: red', subset=['Memory'])
+            sdf = df.style.map(lambda x: 'color: green' if x < self.monitor_config.cpu_warning_single else 'color: orange' if x < self.monitor_config.cpu_error_single else 'color: red', subset=['CPU'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.mem_warning_single else 'color: orange' if x < self.monitor_config.mem_error_single else 'color: red', subset=['Memory'])
             sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.error_warning_v7) else 'color: orange' if x < float(st.session_state.error_error_v7) else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.error_warning_single else 'color: orange' if x < self.monitor_config.error_error_single else 'color: red', subset=['Errors Today', 'Errors Yesterday'])
             #Tracebacks green if 0, orange if <5 else red
-            sdf = sdf.map(lambda x: 'color: green' if x < float(st.session_state.traceback_warning_v7) else 'color: orange' if x < float(st.session_state.traceback_error_v7) else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.traceback_warning_single else 'color: orange' if x < self.monitor_config.traceback_error_single else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
             #PNL green if > 0, orange if 0 else red
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
             st.dataframe(data=sdf, use_container_width=True, height=36+(len(d_single))*35, key="pbremote_single_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
@@ -217,260 +240,208 @@ class Monitor():
                     st.markdown(f":orange[Last Error: ] :blue[{d_single[row]['Last Error']}]")
                     st.markdown(f":red[Last Traceback: ] :blue[{d_single[row]['Last Traceback']}]")
 
-    def load_monitor_config(self):
-        st.session_state.mem_warning_v7 = load_ini("monitor", "mem_warning_v7")
-        if st.session_state.mem_warning_v7 == "":
-            st.session_state.mem_warning_v7 = 250
-        st.session_state.mem_error_v7 = load_ini("monitor", "mem_error_v7")
-        if st.session_state.mem_error_v7 == "":
-            st.session_state.mem_error_v7 = 500
-        st.session_state.cpu_warning_v7 = load_ini("monitor", "cpu_warning_v7")
-        if st.session_state.cpu_warning_v7 == "":
-            st.session_state.cpu_warning_v7 = 10
-        st.session_state.cpu_error_v7 = load_ini("monitor", "cpu_error_v7")
-        if st.session_state.cpu_error_v7 == "":
-            st.session_state.cpu_error_v7 = 15
-        st.session_state.error_warning_v7 = load_ini("monitor", "error_warning_v7")
-        if st.session_state.error_warning_v7 == "":
-            st.session_state.error_warning_v7 = 100
-        st.session_state.error_error_v7 = load_ini("monitor", "error_error_v7")
-        if st.session_state.error_error_v7 == "":
-            st.session_state.error_error_v7 = 250
-        st.session_state.traceback_warning_v7 = load_ini("monitor", "traceback_warning_v7")
-        if st.session_state.traceback_warning_v7 == "":
-            st.session_state.traceback_warning_v7 = 100
-        st.session_state.traceback_error_v7 = load_ini("monitor", "traceback_error_v7")
-        if st.session_state.traceback_error_v7 == "":
-            st.session_state.traceback_error_v7 = 250
-        # Multi
-        st.session_state.mem_warning_multi = load_ini("monitor", "mem_warning_multi")
-        if st.session_state.mem_warning_multi == "":
-            st.session_state.mem_warning_multi = 250
-        st.session_state.mem_error_multi = load_ini("monitor", "mem_error_multi")
-        if st.session_state.mem_error_multi == "":
-            st.session_state.mem_error_multi = 500
-        st.session_state.cpu_warning_multi = load_ini("monitor", "cpu_warning_multi")
-        if st.session_state.cpu_warning_multi == "":
-            st.session_state.cpu_warning_multi = 5
-        st.session_state.cpu_error_multi = load_ini("monitor", "cpu_error_multi")
-        if st.session_state.cpu_error_multi == "":
-            st.session_state.cpu_error_multi = 10
-        st.session_state.error_warning_multi = load_ini("monitor", "error_warning_multi")
-        if st.session_state.error_warning_multi == "":
-            st.session_state.error_warning_multi = 25
-        st.session_state.error_error_multi = load_ini("monitor", "error_error_multi")
-        if st.session_state.error_error_multi == "":
-            st.session_state.error_error_multi = 50
-        st.session_state.traceback_warning_multi = load_ini("monitor", "traceback_warning_multi")
-        if st.session_state.traceback_warning_multi == "":
-            st.session_state.traceback_warning_multi = 25
-        st.session_state.traceback_error_multi = load_ini("monitor", "traceback_error_multi")
-        if st.session_state.traceback_error_multi == "":
-            st.session_state.traceback_error_multi = 50
-        # Single
-        st.session_state.mem_warning_single = load_ini("monitor", "mem_warning_single")
-        if st.session_state.mem_warning_single == "":
-            st.session_state.mem_warning_single = 50
-        st.session_state.mem_error_single = load_ini("monitor", "mem_error_single")
-        if st.session_state.mem_error_single == "":
-            st.session_state.mem_error_single = 100
-        st.session_state.cpu_warning_single = load_ini("monitor", "cpu_warning_single")
-        if st.session_state.cpu_warning_single == "":
-            st.session_state.cpu_warning_single = 5
-        st.session_state.cpu_error_single = load_ini("monitor", "cpu_error_single")
-        if st.session_state.cpu_error_single == "":
-            st.session_state.cpu_error_single = 10
-        st.session_state.error_warning_single = load_ini("monitor", "error_warning_single")
-        if st.session_state.error_warning_single == "":
-            st.session_state.error_warning_single = 25
-        st.session_state.error_error_single = load_ini("monitor", "error_error_single")
-        if st.session_state.error_error_single == "":
-            st.session_state.error_error_single = 50
-        st.session_state.traceback_warning_single = load_ini("monitor", "traceback_warning_single")
-        if st.session_state.traceback_warning_single == "":
-            st.session_state.traceback_warning_single = 25
-        st.session_state.traceback_error_single = load_ini("monitor", "traceback_error_single")
-        if st.session_state.traceback_error_single == "":
-            st.session_state.traceback_error_single = 50
-
     def edit_monitor_config(self):
         # Load config
         if "edit_mem_warning_v7" in st.session_state:
-            if st.session_state.mem_warning_v7 != st.session_state.edit_mem_warning_v7:
-                st.session_state.mem_warning_v7 = st.session_state.edit_mem_warning_v7
+            if self.monitor_config.mem_warning_v7 != st.session_state.edit_mem_warning_v7:
+                self.monitor_config.mem_warning_v7 = st.session_state.edit_mem_warning_v7
+        else:
+            st.session_state.edit_mem_warning_v7 = self.monitor_config.mem_warning_v7
         if "edit_mem_error_v7" in st.session_state:
-            if st.session_state.mem_error_v7 != st.session_state.edit_mem_error_v7:
-                st.session_state.mem_error_v7 = st.session_state.edit_mem_error_v7
+            if self.monitor_config.mem_error_v7 != st.session_state.edit_mem_error_v7:
+                self.monitor_config.mem_error_v7 = st.session_state.edit_mem_error_v7
+        else:
+            st.session_state.edit_mem_error_v7 = self.monitor_config.mem_error_v7
         if "edit_cpu_warning_v7" in st.session_state:
-            if st.session_state.cpu_warning_v7 != st.session_state.edit_cpu_warning_v7:
-                st.session_state.cpu_warning_v7 = st.session_state.edit_cpu_warning_v7
+            if self.monitor_config.cpu_warning_v7 != st.session_state.edit_cpu_warning_v7:
+                self.monitor_config.cpu_warning_v7 = st.session_state.edit_cpu_warning_v7
+        else:
+            st.session_state.edit_cpu_warning_v7 = self.monitor_config.cpu_warning_v7
         if "edit_cpu_error_v7" in st.session_state:
-            if st.session_state.cpu_error_v7 != st.session_state.edit_cpu_error_v7:
-                st.session_state.cpu_error_v7 = st.session_state.edit_cpu_error_v7
+            if self.monitor_config.cpu_error_v7 != st.session_state.edit_cpu_error_v7:
+                self.monitor_config.cpu_error_v7 = st.session_state.edit_cpu_error_v7
+        else:
+            st.session_state.edit_cpu_error_v7 = self.monitor_config.cpu_error_v7
         if "edit_error_warning_v7" in st.session_state:
-            if st.session_state.error_warning_v7 != st.session_state.edit_error_warning_v7:
-                st.session_state.error_warning_v7 = st.session_state.edit_error_warning_v7
+            if self.monitor_config.error_warning_v7 != st.session_state.edit_error_warning_v7:
+                self.monitor_config.error_warning_v7 = st.session_state.edit_error_warning_v7
+        else:
+            st.session_state.edit_error_warning_v7 = self.monitor_config.error_warning_v7
         if "edit_error_error_v7" in st.session_state:
-            if st.session_state.error_error_v7 != st.session_state.edit_error_error_v7:
-                st.session_state.error_error_v7 = st.session_state.edit_error_error_v7
+            if self.monitor_config.error_error_v7 != st.session_state.edit_error_error_v7:
+                self.monitor_config.error_error_v7 = st.session_state.edit_error_error_v7
+        else:
+            st.session_state.edit_error_error_v7 = self.monitor_config.error_error_v7
         if "edit_traceback_warning_v7" in st.session_state:
-            if st.session_state.traceback_warning_v7 != st.session_state.edit_traceback_warning_v7:
-                st.session_state.traceback_warning_v7 = st.session_state.edit_traceback_warning_v7
+            if self.monitor_config.traceback_warning_v7 != st.session_state.edit_traceback_warning_v7:
+                self.monitor_config.traceback_warning_v7 = st.session_state.edit_traceback_warning_v7
+        else:
+            st.session_state.edit_traceback_warning_v7 = self.monitor_config.traceback_warning_v7
         if "edit_traceback_error_v7" in st.session_state:
-            if st.session_state.traceback_error_v7 != st.session_state.edit_traceback_error_v7:
-                st.session_state.traceback_error_v7 = st.session_state.edit_traceback_error_v7
+            if self.monitor_config.traceback_error_v7 != st.session_state.edit_traceback_error_v7:
+                self.monitor_config.traceback_error_v7 = st.session_state.edit_traceback_error_v7
+        else:
+            st.session_state.edit_traceback_error_v7 = self.monitor_config.traceback_error_v7
         # Multi
         if "edit_mem_warning_multi" in st.session_state:
-            if st.session_state.mem_warning_multi != st.session_state.edit_mem_warning_multi:
-                st.session_state.mem_warning_multi = st.session_state.edit_mem_warning_multi
+            if self.monitor_config.mem_warning_multi != st.session_state.edit_mem_warning_multi:
+                self.monitor_config.mem_warning_multi = st.session_state.edit_mem_warning_multi
+        else:
+            st.session_state.edit_mem_warning_multi = self.monitor_config.mem_warning_multi
         if "edit_mem_error_multi" in st.session_state:
-            if st.session_state.mem_error_multi != st.session_state.edit_mem_error_multi:
-                st.session_state.mem_error_multi = st.session_state.edit_mem_error_multi
+            if self.monitor_config.mem_error_multi != st.session_state.edit_mem_error_multi:
+                self.monitor_config.mem_error_multi = st.session_state.edit_mem_error_multi
+        else:
+            st.session_state.edit_mem_error_multi = self.monitor_config.mem_error_multi
         if "edit_cpu_warning_multi" in st.session_state:
-            if st.session_state.cpu_warning_multi != st.session_state.edit_cpu_warning_multi:
-                st.session_state.cpu_warning_multi = st.session_state.edit_cpu_warning_multi
+            if self.monitor_config.cpu_warning_multi != st.session_state.edit_cpu_warning_multi:
+                self.monitor_config.cpu_warning_multi = st.session_state.edit_cpu_warning_multi
+        else:
+            st.session_state.edit_cpu_warning_multi = self.monitor_config.cpu_warning_multi
         if "edit_cpu_error_multi" in st.session_state:
-            if st.session_state.cpu_error_multi != st.session_state.edit_cpu_error_multi:
-                st.session_state.cpu_error_multi = st.session_state.edit_cpu_error_multi
+            if self.monitor_config.cpu_error_multi != st.session_state.edit_cpu_error_multi:
+                self.monitor_config.cpu_error_multi = st.session_state.edit_cpu_error_multi
+        else:
+            st.session_state.edit_cpu_error_multi = self.monitor_config.cpu_error_multi
         if "edit_error_warning_multi" in st.session_state:
-            if st.session_state.error_warning_multi != st.session_state.edit_error_warning_multi:
-                st.session_state.error_warning_multi = st.session_state.edit_error_warning_multi
+            if self.monitor_config.error_warning_multi != st.session_state.edit_error_warning_multi:
+                self.monitor_config.error_warning_multi = st.session_state.edit_error_warning_multi
+        else:
+            st.session_state.edit_error_warning_multi = self.monitor_config.error_warning_multi
         if "edit_error_error_multi" in st.session_state:
-            if st.session_state.error_error_multi != st.session_state.edit_error_error_multi:
-                st.session_state.error_error_multi = st.session_state.edit_error_error_multi
+            if self.monitor_config.error_error_multi != st.session_state.edit_error_error_multi:
+                self.monitor_config.error_error_multi = st.session_state.edit_error_error_multi
+        else:
+            st.session_state.edit_error_error_multi = self.monitor_config.error_error_multi
         if "edit_traceback_warning_multi" in st.session_state:
-            if st.session_state.traceback_warning_multi != st.session_state.edit_traceback_warning_multi:
-                st.session_state.traceback_warning_multi = st.session_state.edit_traceback_warning_multi
+            if self.monitor_config.traceback_warning_multi != st.session_state.edit_traceback_warning_multi:
+                self.monitor_config.traceback_warning_multi = st.session_state.edit_traceback_warning_multi
+        else:
+            st.session_state.edit_traceback_warning_multi = self.monitor_config.traceback_warning_multi
         if "edit_traceback_error_multi" in st.session_state:
-            if st.session_state.traceback_error_multi != st.session_state.edit_traceback_error_multi:
-                st.session_state.traceback_error_multi = st.session_state.edit_traceback_error_multi
+            if self.monitor_config.traceback_error_multi != st.session_state.edit_traceback_error_multi:
+                self.monitor_config.traceback_error_multi = st.session_state.edit_traceback_error_multi
+        else:
+            st.session_state.edit_traceback_error_multi = self.monitor_config.traceback_error_multi
         # Single
         if "edit_mem_warning_single" in st.session_state:
-            if st.session_state.mem_warning_single != st.session_state.edit_mem_warning_single:
-                st.session_state.mem_warning_single = st.session_state.edit_mem_warning_single
+            if self.monitor_config.mem_warning_single != st.session_state.edit_mem_warning_single:
+                self.monitor_config.mem_warning_single = st.session_state.edit_mem_warning_single
+        else:
+            st.session_state.edit_mem_warning_single = self.monitor_config.mem_warning_single
         if "edit_mem_error_single" in st.session_state:
-            if st.session_state.mem_error_single != st.session_state.edit_mem_error_single:
-                st.session_state.mem_error_single = st.session_state.edit_mem_error_single
+            if self.monitor_config.mem_error_single != st.session_state.edit_mem_error_single:
+                self.monitor_config.mem_error_single = st.session_state.edit_mem_error_single
+        else:
+            st.session_state.edit_mem_error_single = self.monitor_config.mem_error_single
         if "edit_cpu_warning_single" in st.session_state:
-            if st.session_state.cpu_warning_single != st.session_state.edit_cpu_warning_single:
-                st.session_state.cpu_warning_single = st.session_state.edit_cpu_warning_single
+            if self.monitor_config.cpu_warning_single != st.session_state.edit_cpu_warning_single:
+                self.monitor_config.cpu_warning_single = st.session_state.edit_cpu_warning_single
+        else:
+            st.session_state.edit_cpu_warning_single = self.monitor_config.cpu_warning_single
         if "edit_cpu_error_single" in st.session_state:
-            if st.session_state.cpu_error_single != st.session_state.edit_cpu_error_single:
-                st.session_state.cpu_error_single = st.session_state.edit_cpu_error_single
+            if self.monitor_config.cpu_error_single != st.session_state.edit_cpu_error_single:
+                self.monitor_config.cpu_error_single = st.session_state.edit_cpu_error_single
+        else:
+            st.session_state.edit_cpu_error_single = self.monitor_config.cpu_error_single
         if "edit_error_warning_single" in st.session_state:
-            if st.session_state.error_warning_single != st.session_state.edit_error_warning_single:
-                st.session_state.error_warning_single = st.session_state.edit_error_warning_single
+            if self.monitor_config.error_warning_single != st.session_state.edit_error_warning_single:
+                self.monitor_config.error_warning_single = st.session_state.edit_error_warning_single
+        else:
+            st.session_state.edit_error_warning_single = self.monitor_config.error_warning_single
         if "edit_error_error_single" in st.session_state:
-            if st.session_state.error_error_single != st.session_state.edit_error_error_single:
-                st.session_state.error_error_single = st.session_state.edit_error_error_single
+            if self.monitor_config.error_error_single != st.session_state.edit_error_error_single:
+                self.monitor_config.error_error_single = st.session_state.edit_error_error_single
+        else:
+            st.session_state.edit_error_error_single = self.monitor_config.error_error_single
         if "edit_traceback_warning_single" in st.session_state:
-            if st.session_state.traceback_warning_single != st.session_state.edit_traceback_warning_single:
-                st.session_state.traceback_warning_single = st.session_state.edit_traceback_warning_single
+            if self.monitor_config.traceback_warning_single != st.session_state.edit_traceback_warning_single:
+                self.monitor_config.traceback_warning_single = st.session_state.edit_traceback_warning_single
+        else:
+            st.session_state.edit_traceback_warning_single = self.monitor_config.traceback_warning_single
         if "edit_traceback_error_single" in st.session_state:
-            if st.session_state.traceback_error_single != st.session_state.edit_traceback_error_single:
-                st.session_state.traceback_error_single = st.session_state.edit_traceback_error_single
+            if self.monitor_config.traceback_error_single != st.session_state.edit_traceback_error_single:
+                self.monitor_config.traceback_error_single = st.session_state.edit_traceback_error_single
+        else:
+            st.session_state.edit_traceback_error_single = self.monitor_config.traceback_error_single
         # Navigation
         with st.sidebar:
             if st.button(":material/home:"):
-                del st.session_state.mem_warning_v7
-                del st.session_state.mem_error_v7
-                del st.session_state.cpu_warning_v7
-                del st.session_state.cpu_error_v7
-                del st.session_state.error_warning_v7
-                del st.session_state.error_error_v7
-                del st.session_state.traceback_warning_v7
-                del st.session_state.traceback_error_v7
-                del st.session_state.mem_warning_multi
-                del st.session_state.mem_error_multi
-                del st.session_state.cpu_warning_multi
-                del st.session_state.cpu_error_multi
-                del st.session_state.error_warning_multi
-                del st.session_state.error_error_multi
-                del st.session_state.traceback_warning_multi
-                del st.session_state.traceback_error_multi
-                del st.session_state.mem_warning_single
-                del st.session_state.mem_error_single
-                del st.session_state.cpu_warning_single
-                del st.session_state.cpu_error_single
-                del st.session_state.error_warning_single
-                del st.session_state.error_error_single
-                del st.session_state.traceback_warning_single
-                del st.session_state.traceback_error_single
+                del st.session_state.edit_mem_warning_v7
+                del st.session_state.edit_mem_error_v7
+                del st.session_state.edit_cpu_warning_v7
+                del st.session_state.edit_cpu_error_v7
+                del st.session_state.edit_error_warning_v7
+                del st.session_state.edit_error_error_v7
+                del st.session_state.edit_traceback_warning_v7
+                del st.session_state.edit_traceback_error_v7
+                del st.session_state.edit_mem_warning_multi
+                del st.session_state.edit_mem_error_multi
+                del st.session_state.edit_cpu_warning_multi
+                del st.session_state.edit_cpu_error_multi
+                del st.session_state.edit_error_warning_multi
+                del st.session_state.edit_error_error_multi
+                del st.session_state.edit_traceback_warning_multi
+                del st.session_state.edit_traceback_error_multi
+                del st.session_state.edit_mem_warning_single
+                del st.session_state.edit_mem_error_single
+                del st.session_state.edit_cpu_warning_single
+                del st.session_state.edit_cpu_error_single
+                del st.session_state.edit_error_warning_single
+                del st.session_state.edit_error_error_single
+                del st.session_state.edit_traceback_warning_single
+                del st.session_state.edit_traceback_error_single
+                self.monitor_config.load_monitor_config()
                 del st.session_state.monitor_edit
                 del st.session_state.monitor
                 st.rerun()
             if st.button(":material/save:"):
-                save_ini("monitor", "mem_warning_v7", str(st.session_state.mem_warning_v7))
-                save_ini("monitor", "mem_error_v7", str(st.session_state.mem_error_v7))
-                save_ini("monitor", "cpu_warning_v7", str(st.session_state.cpu_warning_v7))
-                save_ini("monitor", "cpu_error_v7", str(st.session_state.cpu_error_v7))
-                save_ini("monitor", "error_warning_v7", str(st.session_state.error_warning_v7))
-                save_ini("monitor", "error_error_v7", str(st.session_state.error_error_v7))
-                save_ini("monitor", "traceback_warning_v7", str(st.session_state.traceback_warning_v7))
-                save_ini("monitor", "traceback_error_v7", str(st.session_state.traceback_error_v7))
-                save_ini("monitor", "mem_warning_multi", str(st.session_state.mem_warning_multi))
-                save_ini("monitor", "mem_error_multi", str(st.session_state.mem_error_multi))
-                save_ini("monitor", "cpu_warning_multi", str(st.session_state.cpu_warning_multi))
-                save_ini("monitor", "cpu_error_multi", str(st.session_state.cpu_error_multi))
-                save_ini("monitor", "error_warning_multi", str(st.session_state.error_warning_multi))
-                save_ini("monitor", "error_error_multi", str(st.session_state.error_error_multi))
-                save_ini("monitor", "traceback_warning_multi", str(st.session_state.traceback_warning_multi))
-                save_ini("monitor", "traceback_error_multi", str(st.session_state.traceback_error_multi))
-                save_ini("monitor", "mem_warning_single", str(st.session_state.mem_warning_single))
-                save_ini("monitor", "mem_error_single", str(st.session_state.mem_error_single))
-                save_ini("monitor", "cpu_warning_single", str(st.session_state.cpu_warning_single))
-                save_ini("monitor", "cpu_error_single", str(st.session_state.cpu_error_single))
-                save_ini("monitor", "error_warning_single", str(st.session_state.error_warning_single))
-                save_ini("monitor", "error_error_single", str(st.session_state.error_error_single))
-                save_ini("monitor", "traceback_warning_single", str(st.session_state.traceback_warning_single))
-                save_ini("monitor", "traceback_error_single", str(st.session_state.traceback_error_single))
+                self.monitor_config.save_monitor_config()
                 del st.session_state.monitor_edit
                 st.rerun()
         st.header("Edit Monitor Settings")
         st.subheader("V7 Monitor Settings")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            st.number_input('Memory Warning',value=int(st.session_state.mem_warning_v7),step=10, key="edit_mem_warning_v7")
-            st.number_input('Error Warning',value=int(st.session_state.error_warning_v7),step=1, key="edit_error_warning_v7")
+            st.number_input('Memory Warning', step=10.0, format="%.1f", key="edit_mem_warning_v7")
+            st.number_input('Error Warning', step=1.0, format="%.1f", key="edit_error_warning_v7")
         with col2:
-            st.number_input('Memory Error',value=int(st.session_state.mem_error_v7),step=10, key="edit_mem_error_v7")
-            st.number_input('Error Error',value=int(st.session_state.error_error_v7),step=1, key="edit_error_error_v7")
+            st.number_input('Memory Error', step=10.0, format="%.1f", key="edit_mem_error_v7")
+            st.number_input('Error Error', step=1.0, format="%.1f", key="edit_error_error_v7")
         with col3:
-            st.number_input('CPU Warning',value=int(st.session_state.cpu_warning_v7),step=1, key="edit_cpu_warning_v7")
-            st.number_input('Traceback Warning',value=int(st.session_state.traceback_warning_v7),step=1, key="edit_traceback_warning_v7")
+            st.number_input('CPU Warning', step=1.0, format="%.1f", key="edit_cpu_warning_v7")
+            st.number_input('Traceback Warning', step=1.0, format="%.1f", key="edit_traceback_warning_v7")
         with col4:
-            st.number_input('CPU Error',value=int(st.session_state.cpu_error_v7),step=1, key="edit_cpu_error_v7")
-            st.number_input('Traceback Error',value=int(st.session_state.traceback_error_v7),step=1, key="edit_traceback_error_v7")
+            st.number_input('CPU Error', step=1.0, format="%.1f", key="edit_cpu_error_v7")
+            st.number_input('Traceback Error', step=1.0, format="%.1f", key="edit_traceback_error_v7")
         st.subheader("Multi Monitor Settings")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            st.number_input('Memory Warning',value=int(st.session_state.mem_warning_multi),step=10, key="edit_mem_warning_multi")
-            st.number_input('Error Warning',value=int(st.session_state.error_warning_multi),step=1, key="edit_error_warning_multi")
+            st.number_input('Memory Warning', step=10.0, format="%.1f", key="edit_mem_warning_multi")
+            st.number_input('Error Warning', step=1.0, format="%.1f", key="edit_error_warning_multi")
         with col2:
-            st.number_input('Memory Error',value=int(st.session_state.mem_error_multi),step=10, key="edit_mem_error_multi")
-            st.number_input('Error Error',value=int(st.session_state.error_error_multi),step=1, key="edit_error_error_multi")
+            st.number_input('Memory Error', step=10.0, format="%.1f", key="edit_mem_error_multi")
+            st.number_input('Error Error', step=1.0, format="%.1f", key="edit_error_error_multi")
         with col3:
-            st.number_input('CPU Warning',value=int(st.session_state.cpu_warning_multi),step=1, key="edit_cpu_warning_multi")
-            st.number_input('Traceback Warning',value=int(st.session_state.traceback_warning_multi),step=1, key="edit_traceback_warning_multi")
+            st.number_input('CPU Warning', step=1.0, format="%.1f", key="edit_cpu_warning_multi")
+            st.number_input('Traceback Warning', step=1.0, format="%.1f", key="edit_traceback_warning_multi")
         with col4:
-            st.number_input('CPU Error',value=int(st.session_state.cpu_error_multi),step=1, key="edit_cpu_error_multi")
-            st.number_input('Traceback Error',value=int(st.session_state.traceback_error_multi),step=1, key="edit_traceback_error_multi")
+            st.number_input('CPU Error', step=1.0, format="%.1f", key="edit_cpu_error_multi")
+            st.number_input('Traceback Error', step=1.0, format="%.1f", key="edit_traceback_error_multi")
         st.subheader("Single Monitor Settings")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            st.number_input('Memory Warning',value=int(st.session_state.mem_warning_single),step=10, key="edit_mem_warning_single")
-            st.number_input('Error Warning',value=int(st.session_state.error_warning_single),step=1, key="edit_error_warning_single")
+            st.number_input('Memory Warning', step=10.0, format="%.1f", key="edit_mem_warning_single")
+            st.number_input('Error Warning', step=1.0, format="%.1f", key="edit_error_warning_single")
         with col2:
-            st.number_input('Memory Error',value=int(st.session_state.mem_error_single),step=10, key="edit_mem_error_single")
-            st.number_input('Error Error',value=int(st.session_state.error_error_single),step=1, key="edit_error_error_single")
+            st.number_input('Memory Error', step=10.0, format="%.1f", key="edit_mem_error_single")
+            st.number_input('Error Error', step=1.0, format="%.1f", key="edit_error_error_single")
         with col3:
-            st.number_input('CPU Warning',value=int(st.session_state.cpu_warning_single),step=1, key="edit_cpu_warning_single")
-            st.number_input('Traceback Warning',value=int(st.session_state.traceback_warning_single),step=1, key="edit_traceback_warning_single")
+            st.number_input('CPU Warning', step=1.0, format="%.1f", key="edit_cpu_warning_single")
+            st.number_input('Traceback Warning', step=1.0, format="%.1f", key="edit_traceback_warning_single")
         with col4:
-            st.number_input('CPU Error',value=int(st.session_state.cpu_error_single),step=1, key="edit_cpu_error_single")
-            st.number_input('Traceback Error',value=int(st.session_state.traceback_error_single),step=1, key="edit_traceback_error_single")
-
-
+            st.number_input('CPU Error', step=1.0, format="%.1f", key="edit_cpu_error_single")
+            st.number_input('Traceback Error', step=1.0, format="%.1f", key="edit_traceback_error_single")
 
 def main():
     print("Don't Run this Class from CLI")

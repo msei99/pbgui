@@ -10,6 +10,7 @@ from time import sleep
 from pathlib import Path
 from pbgui_purefunc import load_ini, save_ini
 from Log import LogHandler
+from PBRemote import PBRemote
 
 @st.dialog("Select file")
 def change_ini(section, parameter):
@@ -107,6 +108,8 @@ def set_page_config(page : str = "Start"):
             'About': "Passivbot GUI v1.33 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
+    # Check VPS Errors
+    has_vps_errors()
     
     with st.sidebar:
         st.write(f"### {page} Options")
@@ -332,3 +335,10 @@ def info_popup(message):
     st.info(f'{message}', icon="✅")
     if st.button(":green[OK]"):
         st.rerun()
+
+def has_vps_errors():
+    if "pbremote" not in st.session_state:
+        st.session_state.pbremote = PBRemote()
+    errors = st.session_state.pbremote.has_error()
+    if errors:
+        st.error(f'VPS Errors: {errors}', icon="⚠️")    
