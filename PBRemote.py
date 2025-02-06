@@ -23,6 +23,7 @@ import shutil
 import hashlib
 import traceback
 import gzip
+from MonitorConfig import MonitorConfig
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -530,6 +531,64 @@ class PBRemote():
     def remove(self, remote_servers: RemoteServer):
         if remote_servers:
             self.remote_servers.remove(remote_servers)
+
+    def has_error(self):
+        # Load MonitorConfig
+        monitor_config = MonitorConfig()
+        # Check if servers has errors or tracebacks
+        errors = []
+        for server in self.remote_servers:
+            if server.monitor:
+                for monitor in server.monitor:
+                    if monitor["p"] == "7":
+                        if (
+                            monitor["m"][0]/1024/1024 > monitor_config.mem_error_v7 or
+                            monitor["c"] > monitor_config.cpu_error_v7 or
+                            monitor["et"] > monitor_config.error_error_v7 or
+                            monitor["tt"] > monitor_config.traceback_error_v7
+                        ):
+                            error = ({
+                                "server": server.name,
+                                "name": monitor["u"],
+                                "mem": monitor["m"][0]/1024/1024,
+                                "cpu": monitor["c"],
+                                "error": monitor["et"],
+                                "traceback": monitor["tt"]
+                            })
+                            errors.append(error)
+                    elif monitor["p"] == "6":
+                        if (
+                            monitor["m"][0]/1024/1024 > monitor_config.mem_error_multi or
+                            monitor["c"] > monitor_config.cpu_error_multi or
+                            monitor["et"] > monitor_config.error_error_multi or
+                            monitor["tt"] > monitor_config.traceback_error_multi
+                        ):
+                            error = ({
+                                "server": server.name,
+                                "name": monitor["u"],
+                                "mem": monitor["m"][0]/1024/1024,
+                                "cpu": monitor["c"],
+                                "error": monitor["et"],
+                                "traceback": monitor["tt"]
+                            })
+                            errors.append(error)
+                    elif monitor["p"] == "s":
+                        if (
+                            monitor["m"][0]/1024/1024 > monitor_config.mem_error_single or
+                            monitor["c"] > monitor_config.cpu_error_single or
+                            monitor["et"] > monitor_config.error_error_single or
+                            monitor["tt"] > monitor_config.traceback_error_single
+                        ):
+                            error = ({
+                                "server": server.name,
+                                "name": monitor["u"],
+                                "mem": monitor["m"][0]/1024/1024,
+                                "cpu": monitor["c"],
+                                "error": monitor["et"],
+                                "traceback": monitor["tt"]
+                            })
+                            errors.append(error)
+        return errors
 
     def is_sync_running(self):
         if self.sync_pid():
