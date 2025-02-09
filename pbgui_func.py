@@ -11,6 +11,7 @@ from pathlib import Path
 from pbgui_purefunc import load_ini, save_ini
 from Log import LogHandler
 from PBRemote import PBRemote
+from MonitorConfig import MonitorConfig
 
 @st.dialog("Select file")
 def change_ini(section, parameter):
@@ -341,4 +342,6 @@ def has_vps_errors():
         st.session_state.pbremote = PBRemote()
     errors = st.session_state.pbremote.has_error()
     if errors:
-        st.error(f'VPS Errors: {errors}', icon="⚠️")    
+        monitor_config = MonitorConfig()
+        for error in errors:
+            st.error(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}')
