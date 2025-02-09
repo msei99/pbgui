@@ -340,6 +340,7 @@ def info_popup(message):
 def has_vps_errors():
     if "pbremote" not in st.session_state:
         st.session_state.pbremote = PBRemote()
+    st.session_state.pbremote.update_remote_servers()
     errors = st.session_state.pbremote.has_error()
     if errors:
         with st.expander("VPS Errors", expanded=True):
