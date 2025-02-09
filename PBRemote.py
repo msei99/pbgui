@@ -538,6 +538,48 @@ class PBRemote():
         # Check if servers has errors or tracebacks
         errors = []
         for server in self.remote_servers:
+            if not server.is_online():
+                error = ({
+                    "server": server.name,
+                    "name": "offline",
+                    "mem": 0,
+                    "cpu": 0,
+                    "error": 0,
+                    "traceback": 0
+                })
+                errors.append(error)
+            else:
+                if (
+                    int(server.mem[1] / 1024 / 1024) <= 25 or
+                    int(server.swap[2] / 1024 / 1024) <= 250 or
+                    int(server.disk[2] / 1024 / 1024) <= 500 or
+                    server.cpu >= 80
+                ):
+                    if int(server.mem[1] / 1024 / 1024) <= 25:
+                        color_mem = "red"
+                    else:
+                        color_mem = "green"
+                    if int(server.swap[2] / 1024 / 1024) <= 250:
+                        color_swap = "red"
+                    else:
+                        color_swap = "green"
+                    if int(server.disk[2] / 1024 / 1024) <= 500:
+                        color_disk = "red"
+                    else:
+                        color_disk = "green"
+                    if server.cpu >= 80:
+                        color_cpu = "red"
+                    else:
+                        color_cpu = "green"
+                    error = ({
+                        "server": server.name,
+                        "name": "system",
+                        "mem": f':{color_mem}[{int(server.mem[1] / 1024 / 1024)}]',
+                        "cpu": f':{color_cpu}[{server.cpu}]',
+                        "swap": f':{color_swap}[{int(server.swap[2] / 1024 / 1024)}]',
+                        "disk": f':{color_disk}[{int(server.disk[2] / 1024 / 1024)}]'
+                    })
+                    errors.append(error)
             if server.monitor:
                 for monitor in server.monitor:
                     if monitor["p"] == "7":
