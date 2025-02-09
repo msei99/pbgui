@@ -895,11 +895,11 @@ class Dashboard():
                     # cals pos value
                     pos_value = pos[3] * price
                     all_positions.append(tuple(pos) + (price,) + (dca,) + (next_dca,) + (next_tp, pos_value))
-            df = pd.DataFrame(all_positions, columns =['Id', 'Symbol', 'PosId', 'Size', 'uPnl', 'Entry', 'User', 'Price', 'DCA', 'Next DCA', 'Next TP', 'Pos Value'])
+            df = pd.DataFrame(all_positions, columns =['Id', 'Symbol', 'PosId', 'Size', 'uPnl', 'Entry', 'User', 'Side', 'Price', 'DCA', 'Next DCA', 'Next TP', 'Pos Value'])
             # sorty df by User, Symbol
             df = df.sort_values(by=['User', 'Symbol'])
             # Move User to second column
-            df = df[['Id', 'User', 'Symbol', 'PosId', 'Size', 'uPnl', 'Entry', 'Price', 'DCA', 'Next DCA', 'Next TP', 'Pos Value']]
+            df = df[['Id', 'User', 'Symbol', 'Side', 'PosId', 'Size', 'uPnl', 'Entry', 'Price', 'DCA', 'Next DCA', 'Next TP', 'Pos Value']]
             sdf = df.style.map(self.color_upnl, subset=['uPnl']).format({'Size': "{:.3f}"}).format({'Pos Value': "{:.2f}"})
             st.session_state[f'dashboard_positions_sdf_{position}'] = df
             column_config = {
