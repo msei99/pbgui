@@ -547,13 +547,37 @@ class PBRemote():
                             monitor["et"] > monitor_config.error_error_v7 or
                             monitor["tt"] > monitor_config.traceback_error_v7
                         ):
+                            if monitor["m"][0]/1024/1024 > monitor_config.mem_error_v7:
+                                color_mem = "red"
+                            elif monitor["m"][0]/1024/1024 > monitor_config.mem_warning_v7:
+                                color_mem = "orange"
+                            else:
+                                color_mem = "green"
+                            if monitor["c"] > monitor_config.cpu_error_v7:
+                                color_cpu = "red"
+                            elif monitor["c"] > monitor_config.cpu_warning_v7:
+                                color_cpu = "orange"
+                            else:
+                                color_cpu = "green"
+                            if monitor["et"] > monitor_config.error_error_v7:
+                                color_error = "red"
+                            elif monitor["et"] > monitor_config.error_warning_v7:
+                                color_error = "orange"
+                            else:
+                                color_error = "green"
+                            if monitor["tt"] > monitor_config.traceback_error_v7:
+                                color_traceback = "red"
+                            elif monitor["tt"] > monitor_config.traceback_warning_v7:
+                                color_traceback = "orange"
+                            else:
+                                color_traceback = "green"
                             error = ({
-                                "server": server.name,
-                                "name": monitor["u"],
-                                "mem": monitor["m"][0]/1024/1024,
-                                "cpu": monitor["c"],
-                                "error": monitor["et"],
-                                "traceback": monitor["tt"]
+                                "server": f':blue[{server.name}]',
+                                "name": f':blue[{monitor["u"]}]',
+                                "mem": f':{color_mem}[{monitor["m"][0]/1024/1024}]',
+                                "cpu": f':{color_cpu}[{monitor["c"]}]',
+                                "error": f':{color_error}[{monitor["et"]}]',
+                                "traceback": f':{color_traceback}[{monitor["tt"]}]'
                             })
                             errors.append(error)
                     elif monitor["p"] == "6":
