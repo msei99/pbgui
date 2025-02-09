@@ -342,6 +342,11 @@ def has_vps_errors():
         st.session_state.pbremote = PBRemote()
     errors = st.session_state.pbremote.has_error()
     if errors:
-        monitor_config = MonitorConfig()
-        for error in errors:
-            st.error(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}')
+        with st.expander("VPS Errors", expanded=True):
+            for error in errors:
+                if error["name"] == "offline":
+                    st.error(f'Server: {error["server"]} is offline')
+                elif error["name"] == "system":
+                    st.error(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} CPU: {error["cpu"]} Swap: {error["swap"]} Disk: {error["disk"]}')
+                else:
+                    st.error(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}')
