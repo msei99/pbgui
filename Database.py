@@ -60,6 +60,17 @@ class Database():
                 for statement in sql_statements:
                     cursor.execute(statement)
                 conn.commit()
+                # Bugfix old database
+                # Check if the 'side' column exists in the 'position' table
+                cursor.execute("PRAGMA table_info(position);")
+                columns = [column[1] for column in cursor.fetchall()]
+                if 'side' not in columns:
+                    # Add the 'side' column if it does not exist
+                    cursor.execute("ALTER TABLE position ADD COLUMN side TEXT;")
+                    conn.commit()
+                    # Update existing records in the 'position' table to set 'side' to 'long'
+                    cursor.execute("UPDATE position SET side = 'long';")
+                    conn.commit()
         except sqlite3.Error as e:
             print(e)
 
@@ -87,17 +98,20 @@ class Database():
         for position in positions:
             if position['contracts'] == 0:
                 continue
-            symbols.append(position['symbol'][0:-5].replace("/", "").replace("-", ""))
+            symbols.append([position['symbol'][0:-5].replace("/", "").replace("-", ""), position['side']])
         symbols_db = []
         for position in positions_db:
-            symbols_db.append(position[1])
+            symbols_db.append([position[1], position[7]])
         try:
             with sqlite3.connect(self.db) as conn:
                 # Remove positions that are not in the exchange
                 for position in positions_db:
-                    if position[1] not in symbols:
+                    if (position[1], position[7]) not in symbols:
                         print(f"Removing {position[1]}")
                         self.remove_position(conn, position[0])
+                    # if position[1] not in symbols:
+                    #     print(f"Removing {position[1]}")
+                    #     self.remove_position(conn, position[0])
                 # Update positions
                 for position in positions:
                     pos = [
@@ -106,19 +120,26 @@ class Database():
                         position['unrealizedPnl'],
                         position['entryPrice'],
                         position['symbol'][0:-5].replace("/", "").replace("-", ""),
-                        user.name
+                        user.name,
+                        position['side']
                     ]
                     if pos[1] == 0:
                         continue
                     # Use current timestamp if timestamp is None
                     if not pos[0]:
                         pos[0] = int(datetime.now().timestamp() * 1000)
-                    if pos[4] in symbols_db:
+                    if (pos[4], pos[6]) in symbols_db:
                         print(f"Updating {pos[4]}")
                         self.update_position(conn, pos)
                     else:
                         print(f"Adding {pos[4]}")
                         self.add_position(conn, pos)
+                    # if pos[4] in symbols_db:
+                    #     print(f"Updating {pos[4]}")
+                    #     self.update_position(conn, pos)
+                    # else:
+                    #     print(f"Adding {pos[4]}")
+                    #     self.add_position(conn, pos)
         except sqlite3.Error as e:
             print(e)
     
@@ -245,8 +266,8 @@ class Database():
             print(e, history)
     
     def add_position(self, conn: sqlite3.Connection, position: list):
-        sql = '''INSERT INTO position(timestamp,psize,upnl,entry,symbol,user)
-                VALUES(?,?,?,?,?,?) '''
+        sql = '''INSERT INTO position(timestamp,psize,upnl,entry,symbol,user,side)
+                VALUES(?,?,?,?,?,?,?) '''
         try:
             cur = conn.cursor()
             cur.execute(sql, position)
