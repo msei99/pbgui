@@ -19,7 +19,7 @@
 # 16. Restart PBRun, PBRemote and PBCoinData
 
 - hosts: "{{ hostname }}"
-  gather_facts: "{{ debug }}"
+  gather_facts: yes
 
   vars:
     # ansible_ssh_common_args: '-o StrictHostKeyChecking=no'

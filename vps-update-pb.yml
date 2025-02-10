@@ -9,7 +9,7 @@
 # 6. Restart all pb7 bots if pb7 repository was updated
 
 - hosts: "{{ hostname }}"
-  gather_facts: "{{ debug }}"
+  gather_facts: yes
 
   vars:
     # ansible_ssh_pass: "{{ user_pw }}"
@@ -25,7 +25,7 @@
 
     - name: get install_dir
       set_fact:
-        install_dir: "{{ lookup('env', 'HOME') + '/software' }}"
+        install_dir: "{{ ansible_env.HOME + '/software' }}"
 
     - name: clone pbgui repository
       git:
