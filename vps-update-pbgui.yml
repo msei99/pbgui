@@ -21,7 +21,7 @@
 
     - name: get install_dir
       set_fact:
-        install_dir: "{{ lookup('env', 'HOME') + '/software' }}"
+        install_dir: "{{ ansible_env.HOME + '/software' }}"
 
     - name: clone pbgui repository
       git:

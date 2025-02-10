@@ -23,7 +23,7 @@
 
     - name: get logs_dir
       set_fact:
-        logs_dir: "{{ lookup('env', 'HOME') + '/software/pbgui/data' }}"
+        logs_dir: "{{ ansible_env.HOME + '/software/pbgui/data' }}"
 
     - name: fetch logfile from vps
       fetch:
