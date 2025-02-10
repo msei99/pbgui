@@ -52,8 +52,8 @@
 
     - name: get remote_home and install_dir
       set_fact:
-        remote_home: "{{ lookup('env', 'HOME') }}"
-        install_dir: "{{ lookup('env', 'HOME') + '/software' }}"
+        remote_home: "{{ ansible_env.HOME }}"
+        install_dir: "{{ ansible_env.HOME + '/software' }}"
     
     - name: print install_dir
       debug:
