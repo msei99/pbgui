@@ -5,7 +5,7 @@
 # 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
 
 - hosts: "{{ hostname }}"
-  gather_facts: "{{ debug }}"
+  gather_facts: yes
 
   vars:
     # ansible_ssh_pass: "{{ user_pw }}"
