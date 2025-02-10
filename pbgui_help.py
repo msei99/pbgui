@@ -797,6 +797,12 @@ limits_lower_bound_loss_profit_ratio = """
     abs(sum(losses)) / sum(profit)
     ```"""
 
+limits_lower_bound_position_held_hours_max = """
+    ```
+    The optimizer will penalize backtests whose metrics exceed the given values
+    max hours a position is held
+    ```"""
+
 population_size = """
     ```
     size of population for genetic optimization algorithm

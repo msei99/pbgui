@@ -617,7 +617,7 @@ class OptimizeV7Item:
                 st.rerun()
         else:
             st.session_state.edit_opt_v7_exchanges = self.config.backtest.exchanges
-        st.multiselect('Exchanges',["binance", "bybit"], key="edit_opt_v7_exchanges")
+        st.multiselect('Exchanges',["binance", "bybit", "gateio", "bitget"], key="edit_opt_v7_exchanges")
 
     # name
     @st.fragment
@@ -775,6 +775,16 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_lower_bound_loss_profit_ratio = self.config.optimize.limits.lower_bound_loss_profit_ratio
         st.number_input("lower_bound_loss_profit_ratio", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_loss_profit_ratio", help=pbgui_help.limits_lower_bound_loss_profit_ratio)
 
+    # lower_bound_position_held_hours_max
+    @st.fragment
+    def fragment_lower_bound_position_held_hours_max(self):
+        if "edit_opt_v7_lower_bound_position_held_hours_max" in st.session_state:
+            if st.session_state.edit_opt_v7_lower_bound_position_held_hours_max != self.config.optimize.limits.lower_bound_position_held_hours_max:
+                self.config.optimize.limits.lower_bound_position_held_hours_max = st.session_state.edit_opt_v7_lower_bound_position_held_hours_max
+        else:
+            st.session_state.edit_opt_v7_lower_bound_position_held_hours_max = self.config.optimize.limits.lower_bound_position_held_hours_max
+        st.number_input("lower_bound_position_held_hours_max", step=1.0, format="%.1f", key="edit_opt_v7_lower_bound_position_held_hours_max", help=pbgui_help.limits_lower_bound_position_held_hours_max)
+
     # mutation_probability
     @st.fragment
     def fragment_mutation_probability(self):
@@ -841,17 +851,21 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
         # Apply filters
         if st.session_state.edit_opt_v7_apply_filters:
-            self.config.live.approved_coins.long = list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins))
-            self.config.live.approved_coins.short = list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins))
+            self.config.live.approved_coins.long = list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins + st.session_state.coindata_gateio.approved_coins + st.session_state.coindata_bitget.approved_coins))
+            self.config.live.approved_coins.short = list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins + st.session_state.coindata_gateio.approved_coins + st.session_state.coindata_bitget.approved_coins))
         # Remove unavailable symbols
-        if "bybit" in self.config.backtest.exchanges and "binance" in self.config.backtest.exchanges:
-            symbols = list(set(st.session_state.coindata_bybit.symbols + st.session_state.coindata_binance.symbols))
-        elif "bybit" in self.config.backtest.exchanges:
-            symbols = st.session_state.coindata_bybit.symbols
-        elif "binance" in self.config.backtest.exchanges:
-            symbols = st.session_state.coindata_binance.symbols
-        else:
-            symbols = []
+        symbols = []
+        if "bybit" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_bybit.symbols)
+        if "binance" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_binance.symbols)
+        if "gateio" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_gateio.symbols)
+        if "bitget" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_bitget.symbols)
+        symbols = list(set(symbols))
+        # sort symbols
+        symbols.sort()
         for symbol in self.config.live.approved_coins.long.copy():
             if symbol not in symbols:
                 self.config.live.approved_coins.long.remove(symbol)
@@ -876,14 +890,18 @@ class OptimizeV7Item:
         if "edit_opt_v7_market_cap" in st.session_state:
             if st.session_state.edit_opt_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_opt_v7_market_cap
-                st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
                 st.session_state.coindata_binance.market_cap = self.config.pbgui.market_cap
+                st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
+                st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
+                st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_market_cap = self.config.pbgui.market_cap
-            st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
             st.session_state.coindata_binance.market_cap = self.config.pbgui.market_cap
+            st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
+            st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
+            st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
         st.number_input("market_cap", min_value=0, step=50, format="%.d", key="edit_opt_v7_market_cap", help=pbgui_help.market_cap)
     
     @st.fragment
@@ -894,12 +912,16 @@ class OptimizeV7Item:
                 self.config.pbgui.vol_mcap = st.session_state.edit_opt_v7_vol_mcap
                 st.session_state.coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
                 st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
+                st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
+                st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_vol_mcap = round(float(self.config.pbgui.vol_mcap),2)
             st.session_state.coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
             st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
+            st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
+            st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
         st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
 
     @st.fragment
@@ -910,14 +932,18 @@ class OptimizeV7Item:
                 self.config.pbgui.tags = st.session_state.edit_opt_v7_tags
                 st.session_state.coindata_bybit.tags = self.config.pbgui.tags
                 st.session_state.coindata_binance.tags = self.config.pbgui.tags
+                st.session_state.coindata_gateio.tags = self.config.pbgui.tags
+                st.session_state.coindata_bitget.tags = self.config.pbgui.tags
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_tags = self.config.pbgui.tags
             st.session_state.coindata_bybit.tags = self.config.pbgui.tags
             st.session_state.coindata_binance.tags = self.config.pbgui.tags
+            st.session_state.coindata_gateio.tags = self.config.pbgui.tags
+            st.session_state.coindata_bitget.tags = self.config.pbgui.tags
         # remove duplicates from tags and sort them
-        tags = sorted(list(set(st.session_state.coindata_bybit.all_tags + st.session_state.coindata_binance.all_tags)))
+        tags = sorted(list(set(st.session_state.coindata_bybit.all_tags + st.session_state.coindata_binance.all_tags + st.session_state.coindata_gateio.all_tags + st.session_state.coindata_bitget.all_tags)))
         st.multiselect("tags", tags, key="edit_opt_v7_tags", help=pbgui_help.coindata_tags)
 
     # only_cpt
@@ -928,12 +954,14 @@ class OptimizeV7Item:
                 self.config.pbgui.only_cpt = st.session_state.edit_opt_v7_only_cpt
                 st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
                 st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
+                st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
+            st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", key="edit_opt_v7_only_cpt", help=pbgui_help.only_cpt)
 
     # long_close_grid_markup_range
@@ -1844,6 +1872,12 @@ class OptimizeV7Item:
         if "coindata_binance" not in st.session_state:
             st.session_state.coindata_binance = CoinData()
             st.session_state.coindata_binance.exchange = "binance"
+        if "coindata_gateio" not in st.session_state:
+            st.session_state.coindata_gateio = CoinData()
+            st.session_state.coindata_gateio.exchange = "gateio"
+        if "coindata_bitget" not in st.session_state:
+            st.session_state.coindata_bitget = CoinData()
+            st.session_state.coindata_bitget.exchange = "bitget"
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
@@ -1874,6 +1908,8 @@ class OptimizeV7Item:
             self.fragment_lower_bound_drawdown_worst_mean_1pct()
         with col3:
             self.fragment_lower_bound_loss_profit_ratio()
+        with col4:
+            self.fragment_lower_bound_position_held_hours_max()
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             self.fragment_lower_bound_equity_balance_diff_neg_max()

@@ -284,58 +284,58 @@ class Config:
 #               "gap_tolerance_ohlcvs_minutes": 120.0,
 #               "start_date": "2021-04-01",
 #               "starting_balance": 100000},
-#  "bot": {"long": {"close_grid_markup_range": 0.0050591,
-#                   "close_grid_min_markup": 0.0050351,
-#                   "close_grid_qty_pct": 0.94386,
-#                   "close_trailing_grid_ratio": -0.048287,
-#                   "close_trailing_qty_pct": 0.66612,
-#                   "close_trailing_retracement_pct": 0.0090063,
-#                   "close_trailing_threshold_pct": 0.0070056,
-#                   "ema_span_0": 591.53,
-#                   "ema_span_1": 251.56,
-#                   "enforce_exposure_limit": 1.0,
-#                   "entry_grid_double_down_factor": 1.6344,
-#                   "entry_grid_spacing_pct": 0.029537,
-#                   "entry_grid_spacing_weight": 0.27803,
-#                   "entry_initial_ema_dist": -0.07151,
-#                   "entry_initial_qty_pct": 0.013548,
-#                   "entry_trailing_grid_ratio": -0.13036,
-#                   "entry_trailing_retracement_pct": 0.014867,
-#                   "entry_trailing_threshold_pct": 0.072569,
-#                   "filter_relative_volume_clip_pct": 0.035543,
-#                   "filter_rolling_window": 263.66,
-#                   "n_positions": 6.4463,
-#                   "total_wallet_exposure_limit": 1.6091,
-#                   "unstuck_close_pct": 0.066952,
-#                   "unstuck_ema_dist": -0.098354,
-#                   "unstuck_loss_allowance_pct": 0.012308,
-#                   "unstuck_threshold": 0.50078},
-#          "short": {"close_grid_markup_range": 0.027427,
-#                    "close_grid_min_markup": 0.0088639,
-#                    "close_grid_qty_pct": 0.38146,
-#                    "close_trailing_grid_ratio": -0.48905,
-#                    "close_trailing_qty_pct": 0.80056,
-#                    "close_trailing_retracement_pct": 0.002552,
-#                    "close_trailing_threshold_pct": -0.0075215,
-#                    "ema_span_0": 1242.6,
-#                    "ema_span_1": 717.7,
-#                    "enforce_exposure_limit": 1.0,
-#                    "entry_grid_double_down_factor": 0.36883,
-#                    "entry_grid_spacing_pct": 0.020096,
-#                    "entry_grid_spacing_weight": 5.7436,
-#                    "entry_initial_ema_dist": -0.082084,
-#                    "entry_initial_qty_pct": 0.017122,
-#                    "entry_trailing_grid_ratio": -0.90061,
-#                    "entry_trailing_retracement_pct": 0.023083,
-#                    "entry_trailing_threshold_pct": 0.078399,
-#                    "filter_relative_volume_clip_pct": 0.47361,
-#                    "filter_rolling_window": 251.65,
-#                    "n_positions": 7.2456,
+#  "bot": {"long": {"close_grid_markup_range": 0.0049352,
+#                   "close_grid_min_markup": 0.0010187,
+#                   "close_grid_qty_pct": 0.99988,
+#                   "close_trailing_grid_ratio": -0.047595,
+#                   "close_trailing_qty_pct": 0.65397,
+#                   "close_trailing_retracement_pct": 0.087726,
+#                   "close_trailing_threshold_pct": 0.054134,
+#                   "ema_span_0": 736.69,
+#                   "ema_span_1": 234.87,
+#                   "enforce_exposure_limit": true,
+#                   "entry_grid_double_down_factor": 1.6927,
+#                   "entry_grid_spacing_pct": 0.029524,
+#                   "entry_grid_spacing_weight": 1.2461,
+#                   "entry_initial_ema_dist": -0.087569,
+#                   "entry_initial_qty_pct": 0.019263,
+#                   "entry_trailing_grid_ratio": -0.11611,
+#                   "entry_trailing_retracement_pct": 0.012595,
+#                   "entry_trailing_threshold_pct": 0.078207,
+#                   "filter_relative_volume_clip_pct": 0.16837,
+#                   "filter_rolling_window": 304.38,
+#                   "n_positions": 6.4025,
+#                   "total_wallet_exposure_limit": 1.9999,
+#                   "unstuck_close_pct": 0.055819,
+#                   "unstuck_ema_dist": -0.095984,
+#                   "unstuck_loss_allowance_pct": 0.013268,
+#                   "unstuck_threshold": 0.54944},
+#          "short": {"close_grid_markup_range": 0.021648,
+#                    "close_grid_min_markup": 0.01214,
+#                    "close_grid_qty_pct": 0.725,
+#                    "close_trailing_grid_ratio": 0.35701,
+#                    "close_trailing_qty_pct": 0.68703,
+#                    "close_trailing_retracement_pct": 0.020607,
+#                    "close_trailing_threshold_pct": -0.0043591,
+#                    "ema_span_0": 1226.9,
+#                    "ema_span_1": 975.48,
+#                    "enforce_exposure_limit": true,
+#                    "entry_grid_double_down_factor": 0.93282,
+#                    "entry_grid_spacing_pct": 0.016287,
+#                    "entry_grid_spacing_weight": 5.2376,
+#                    "entry_initial_ema_dist": -0.016642,
+#                    "entry_initial_qty_pct": 0.014245,
+#                    "entry_trailing_grid_ratio": 0.20993,
+#                    "entry_trailing_retracement_pct": 0.025544,
+#                    "entry_trailing_threshold_pct": 0.063268,
+#                    "filter_relative_volume_clip_pct": 0.46558,
+#                    "filter_rolling_window": 288.05,
+#                    "n_positions": 7.1941,
 #                    "total_wallet_exposure_limit": 0.0,
-#                    "unstuck_close_pct": 0.08722,
-#                    "unstuck_ema_dist": -0.089717,
-#                    "unstuck_loss_allowance_pct": 0.028372,
-#                    "unstuck_threshold": 0.64427}},
+#                    "unstuck_close_pct": 0.081342,
+#                    "unstuck_ema_dist": -0.015041,
+#                    "unstuck_loss_allowance_pct": 0.040395,
+#                    "unstuck_threshold": 0.52387}},
 #  "live": {"approved_coins": "configs/approved_coins_top20mcap.json",
 #           "auto_gs": true,
 #           "coin_flags": {},
@@ -416,7 +416,8 @@ class Config:
 #                          "lower_bound_equity_balance_diff_neg_mean": 0.01,
 #                          "lower_bound_equity_balance_diff_pos_max": 0.5,
 #                          "lower_bound_equity_balance_diff_pos_mean": 0.02,
-#                          "lower_bound_loss_profit_ratio": 0.5},
+#                          "lower_bound_loss_profit_ratio": 0.5,
+#                          "lower_bound_position_held_hours_max": 336.0},
 #               "mutation_probability": 0.2,
 #               "n_cpus": 5,
 #               "population_size": 500,
@@ -688,7 +689,7 @@ class Long:
         self._close_trailing_threshold_pct = 0.06726
         self._ema_span_0 = 469.02
         self._ema_span_1 = 1118.9
-        self._enforce_exposure_limit = 1.0
+        self._enforce_exposure_limit = True
         self._entry_grid_double_down_factor = 2.3738
         self._entry_grid_spacing_pct = 0.052372
         self._entry_grid_spacing_weight = 0.17715
@@ -963,7 +964,7 @@ class Short:
         self._close_trailing_threshold_pct = -0.059383
         self._ema_span_0 = 794.32
         self._ema_span_1 = 1176.7
-        self._enforce_exposure_limit = 1.0
+        self._enforce_exposure_limit = True
         self._entry_grid_double_down_factor = 2.1256
         self._entry_grid_spacing_pct = 0.072906
         self._entry_grid_spacing_weight = 0.98867
@@ -1650,8 +1651,8 @@ class Limits:
         self._lower_bound_equity_balance_diff_neg_mean = 0.01
         self._lower_bound_equity_balance_diff_pos_max = 0.5
         self._lower_bound_equity_balance_diff_pos_mean = 0.02
-        # self._lower_bound_equity_balance_diff_mean = 0.02
         self._lower_bound_loss_profit_ratio = 0.6
+        self._lower_bound_position_held_hours_max = 336.0
         self._limits = {
             "lower_bound_drawdown_worst": self._lower_bound_drawdown_worst,
             "lower_bound_drawdown_worst_mean_1pct": self._lower_bound_drawdown_worst_mean_1pct,
@@ -1659,8 +1660,8 @@ class Limits:
             "lower_bound_equity_balance_diff_neg_mean": self._lower_bound_equity_balance_diff_neg_mean,
             "lower_bound_equity_balance_diff_pos_max": self._lower_bound_equity_balance_diff_pos_max,
             "lower_bound_equity_balance_diff_pos_mean": self._lower_bound_equity_balance_diff_pos_mean,
-            # "lower_bound_equity_balance_diff_mean": self._lower_bound_equity_balance_diff_mean,
-            "lower_bound_loss_profit_ratio": self._lower_bound_loss_profit_ratio
+            "lower_bound_loss_profit_ratio": self._lower_bound_loss_profit_ratio,
+            "lower_bound_position_held_hours_max": self._lower_bound_position_held_hours_max
         }
     
     def __repr__(self):
@@ -1682,10 +1683,10 @@ class Limits:
             self.lower_bound_equity_balance_diff_pos_max = new_limits["lower_bound_equity_balance_diff_pos_max"]
         if "lower_bound_equity_balance_diff_pos_mean" in new_limits:
             self.lower_bound_equity_balance_diff_pos_mean = new_limits["lower_bound_equity_balance_diff_pos_mean"]
-        # if "lower_bound_equity_balance_diff_mean" in new_limits:
-        #     self.lower_bound_equity_balance_diff_mean = new_limits["lower_bound_equity_balance_diff_mean"]
         if "lower_bound_loss_profit_ratio" in new_limits:
             self.lower_bound_loss_profit_ratio = new_limits["lower_bound_loss_profit_ratio"]
+        if "lower_bound_position_held_hours_max" in new_limits:
+            self.lower_bound_position_held_hours_max = new_limits["lower_bound_position_held_hours_max"]
     
     @property
     def lower_bound_drawdown_worst(self): return self._lower_bound_drawdown_worst
@@ -1699,10 +1700,10 @@ class Limits:
     def lower_bound_equity_balance_diff_pos_max(self): return self._lower_bound_equity_balance_diff_pos_max
     @property
     def lower_bound_equity_balance_diff_pos_mean(self): return self._lower_bound_equity_balance_diff_pos_mean
-    # @property
-    # def lower_bound_equity_balance_diff_mean(self): return self._lower_bound_equity_balance_diff_mean
     @property
     def lower_bound_loss_profit_ratio(self): return self._lower_bound_loss_profit_ratio
+    @property
+    def lower_bound_position_held_hours_max(self): return self._lower_bound_position_held_hours_max
 
     @lower_bound_drawdown_worst.setter
     def lower_bound_drawdown_worst(self, new_lower_bound_drawdown_worst):
@@ -1728,14 +1729,14 @@ class Limits:
     def lower_bound_equity_balance_diff_pos_mean(self, new_lower_bound_equity_balance_diff_pos_mean):
         self._lower_bound_equity_balance_diff_pos_mean = new_lower_bound_equity_balance_diff_pos_mean
         self._limits["lower_bound_equity_balance_diff_pos_mean"] = self._lower_bound_equity_balance_diff_pos_mean
-    # @lower_bound_equity_balance_diff_mean.setter
-    # def lower_bound_equity_balance_diff_mean(self, new_lower_bound_equity_balance_diff_mean):
-    #     self._lower_bound_equity_balance_diff_mean = new_lower_bound_equity_balance_diff_mean
-    #     self._limits["lower_bound_equity_balance_diff_mean"] = self._lower_bound_equity_balance_diff_mean
     @lower_bound_loss_profit_ratio.setter
     def lower_bound_loss_profit_ratio(self, new_lower_bound_loss_profit_ratio):
         self._lower_bound_loss_profit_ratio = new_lower_bound_loss_profit_ratio
         self._limits["lower_bound_loss_profit_ratio"] = self._lower_bound_loss_profit_ratio
+    @lower_bound_position_held_hours_max.setter
+    def lower_bound_position_held_hours_max(self, new_lower_bound_position_held_hours_max):
+        self._lower_bound_position_held_hours_max = new_lower_bound_position_held_hours_max
+        self._limits["lower_bound_position_held_hours_max"] = self._lower_bound_position_held_hours_max
 
 class Bounds:
 

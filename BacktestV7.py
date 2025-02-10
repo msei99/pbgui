@@ -399,7 +399,7 @@ class BacktestV7Item:
                 st.rerun()
         else:
             st.session_state.edit_bt_v7_exchanges = self.config.backtest.exchanges
-        st.multiselect('Exchanges',["binance", "bybit"], key="edit_bt_v7_exchanges")
+        st.multiselect('Exchanges',["binance", "bybit", "gateio", "bitget"], key="edit_bt_v7_exchanges")
 
     # name
     @st.fragment
@@ -525,19 +525,21 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_ignored_coins_short = self.config.live.ignored_coins.short
         # Apply filters
         if st.session_state.edit_bt_v7_apply_filters:
-            self.config.live.approved_coins.long = sorted(list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins)))
-            self.config.live.approved_coins.short = sorted(list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins)))
-            self.config.live.ignored_coins.long = sorted(list(set(st.session_state.coindata_bybit.ignored_coins + st.session_state.coindata_binance.ignored_coins)))
-            self.config.live.ignored_coins.short = sorted(list(set(st.session_state.coindata_bybit.ignored_coins + st.session_state.coindata_binance.ignored_coins)))
+            self.config.live.approved_coins.long = sorted(list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins + st.session_state.coindata_gateio.approved_coins + st.session_state.coindata_bitget.approved_coins)))
+            self.config.live.approved_coins.short = sorted(list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins + st.session_state.coindata_gateio.approved_coins + st.session_state.coindata_bitget.approved_coins)))
+            self.config.live.ignored_coins.long = sorted(list(set(st.session_state.coindata_bybit.ignored_coins + st.session_state.coindata_binance.ignored_coins + st.session_state.coindata_gateio.ignored_coins + st.session_state.coindata_bitget.ignored_coins)))
+            self.config.live.ignored_coins.short = sorted(list(set(st.session_state.coindata_bybit.ignored_coins + st.session_state.coindata_binance.ignored_coins + st.session_state.coindata_gateio.ignored_coins + st.session_state.coindata_bitget.ignored_coins)))
         # Remove unavailable symbols
-        if "bybit" in self.config.backtest.exchanges and "binance" in self.config.backtest.exchanges:
-            symbols = list(set(st.session_state.coindata_bybit.symbols + st.session_state.coindata_binance.symbols))
-        elif "bybit" in self.config.backtest.exchanges:
-            symbols = st.session_state.coindata_bybit.symbols
-        elif "binance" in self.config.backtest.exchanges:
-            symbols = st.session_state.coindata_binance.symbols
-        else:
-            symbols = []
+        symbols = []
+        if "bybit" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_bybit.symbols)
+        if "binance" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_binance.symbols)
+        if "gateio" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_gateio.symbols)
+        if "bitget" in self.config.backtest.exchanges:
+            symbols.extend(st.session_state.coindata_bitget.symbols)
+        symbols = list(set(symbols))
         # sort symbols
         symbols = sorted(symbols)
         for symbol in self.config.live.approved_coins.long.copy():
@@ -574,6 +576,10 @@ class BacktestV7Item:
                 st.warning(f'{coin}: {st.session_state.coindata_bybit.symbols_notices[coin]}')
             elif coin in st.session_state.coindata_binance.symbols_notices:
                 st.warning(f'{coin}: {st.session_state.coindata_binance.symbols_notices[coin]}')
+            elif coin in st.session_state.coindata_gateio.symbols_notices:
+                st.warning(f'{coin}: {st.session_state.coindata_gateio.symbols_notices[coin]}')
+            elif coin in st.session_state.coindata_bitget.symbols_notices:
+                st.warning(f'{coin}: {st.session_state.coindata_bitget.symbols_notices[coin]}')
         # Select approved coins
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
@@ -589,14 +595,18 @@ class BacktestV7Item:
         if "edit_bt_v7_market_cap" in st.session_state:
             if st.session_state.edit_bt_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_bt_v7_market_cap
-                st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
                 st.session_state.coindata_binance.market_cap = self.config.pbgui.market_cap
+                st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
+                st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
+                st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
                 if st.session_state.edit_bt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_bt_v7_market_cap = self.config.pbgui.market_cap
             st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
             st.session_state.coindata_binance.market_cap = self.config.pbgui.market_cap
+            st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
+            st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
         st.number_input("market_cap", min_value=0, step=50, format="%.d", key="edit_bt_v7_market_cap", help=pbgui_help.market_cap)
     
     @st.fragment
@@ -607,12 +617,16 @@ class BacktestV7Item:
                 self.config.pbgui.vol_mcap = st.session_state.edit_bt_v7_vol_mcap
                 st.session_state.coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
                 st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
+                st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
+                st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
                 if st.session_state.edit_bt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_bt_v7_vol_mcap = round(float(self.config.pbgui.vol_mcap),2)
             st.session_state.coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
             st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
+            st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
+            st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
         st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="edit_bt_v7_vol_mcap", help=pbgui_help.vol_mcap)
 
     @st.fragment
@@ -623,14 +637,18 @@ class BacktestV7Item:
                 self.config.pbgui.tags = st.session_state.edit_bt_v7_tags
                 st.session_state.coindata_bybit.tags = self.config.pbgui.tags
                 st.session_state.coindata_binance.tags = self.config.pbgui.tags
+                st.session_state.coindata_gateio.tags = self.config.pbgui.tags
+                st.session_state.coindata_bitget.tags = self.config.pbgui.tags
                 if st.session_state.edit_bt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_bt_v7_tags = self.config.pbgui.tags
             st.session_state.coindata_bybit.tags = self.config.pbgui.tags
             st.session_state.coindata_binance.tags = self.config.pbgui.tags
+            st.session_state.coindata_gateio.tags = self.config.pbgui.tags
+            st.session_state.coindata_bitget.tags = self.config.pbgui.tags
         # remove duplicates from tags and sort them
-        tags = sorted(list(set(st.session_state.coindata_bybit.all_tags + st.session_state.coindata_binance.all_tags)))
+        tags = sorted(list(set(st.session_state.coindata_bybit.all_tags + st.session_state.coindata_binance.all_tags + st.session_state.coindata_gateio.all_tags + st.session_state.coindata_bitget.all_tags)))
         st.multiselect("tags", tags, key="edit_bt_v7_tags", help=pbgui_help.coindata_tags)
 
     # only_cpt
@@ -641,12 +659,14 @@ class BacktestV7Item:
                 self.config.pbgui.only_cpt = st.session_state.edit_bt_v7_only_cpt
                 st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
                 st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
+                st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
                 if st.session_state.edit_bt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_bt_v7_only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
+            st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", key="edit_bt_v7_only_cpt", help=pbgui_help.only_cpt)
     
     # notices_ignore
@@ -657,12 +677,16 @@ class BacktestV7Item:
                 self.config.pbgui.notices_ignore = st.session_state.edit_bt_v7_notices_ignore
                 st.session_state.coindata_bybit.notices_ignore = self.config.pbgui.notices_ignore
                 st.session_state.coindata_binance.notices_ignore = self.config.pbgui.notices_ignore
+                st.session_state.coindata_gateio.notices_ignore = self.config.pbgui.notices_ignore
+                st.session_state.coindata_bitget.notices_ignore = self.config.pbgui.notices_ignore
                 if st.session_state.edit_bt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_bt_v7_notices_ignore = self.config.pbgui.notices_ignore
             st.session_state.coindata_bybit.notices_ignore = self.config.pbgui.notices_ignore
             st.session_state.coindata_binance.notices_ignore = self.config.pbgui.notices_ignore
+            st.session_state.coindata_gateio.notices_ignore = self.config.pbgui.notices_ignore
+            st.session_state.coindata_bitget.notices_ignore = self.config.pbgui.notices_ignore
         st.checkbox("notices_ignore", key="edit_bt_v7_notices_ignore", help=pbgui_help.notices_ignore)
 
     def edit(self):
@@ -673,6 +697,12 @@ class BacktestV7Item:
         if "coindata_binance" not in st.session_state:
             st.session_state.coindata_binance = CoinData()
             st.session_state.coindata_binance.exchange = "binance"
+        if "coindata_gateio" not in st.session_state:
+            st.session_state.coindata_gateio = CoinData()
+            st.session_state.coindata_gateio.exchange = "gateio"
+        if "coindata_bitget" not in st.session_state:
+            st.session_state.coindata_bitget = CoinData()
+            st.session_state.coindata_bitget.exchange = "bitget"
         # Display Editor
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
