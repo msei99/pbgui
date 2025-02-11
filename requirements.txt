@@ -12,4 +12,4 @@ ccxt==4.3.98
 ansible==8.7.0
 ansible-runner==2.4.0
 passlib==1.7.4
-python-telegram-bot=21.10
+python-telegram-bot==21.10
