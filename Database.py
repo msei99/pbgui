@@ -615,29 +615,32 @@ class Database():
         data = []
         src = Path(f'{PBGDIR}/data/logs')
         with open(f'{src}/income_other_{user.name}.json', 'r') as file:
-            data = json.load(file)
-        print(data)
-
-        # try:
-        #     with sqlite3.connect(self.db) as conn:
-        #         for line in data:
-        #             income = [
-        #                 line['symbol'],
-        #                 line['timestamp'],
-        #                 line['income'],
-        #                 line['uniqueid'],
-        #                 user.name
-        #             ]
-        #             self.add_history(conn, income)
-        # except sqlite3.Error as e:
-        #     print(e)
+            data = file.read()
+            data = '[' + data.replace('}{', '},{') + ']'
+            for item in json.loads(data):
+                if item['incomeType'] in ['COMMISSION', 'FUNDING_FEE']:
+                    try:
+                        with sqlite3.connect(self.db) as conn:
+                            income = [
+                                item['symbol'],
+                                item['time'],
+                                item['income'],
+                                item['tranId'],
+                                user.name
+                            ]
+                            self.add_history(conn, income)
+                    except sqlite3.Error as e:
+                        print(e)
+                else:
+                    print("not import")
+                    print(item)
 
 def main():
     print("Don't Run this Class from CLI")
-    users = Users()
-    user = users.find_user("c10005_api001")
-    db = Database()
-    db.import_from_save_income_other(user)
+    # users = Users()
+    # user = users.find_user("c10006_api001")
+    # db = Database()
+    # db.import_from_save_income_other(user)
     # exchange = Exchange("gateio", user)
     # history = exchange.fetch_history()
     # print(history)
