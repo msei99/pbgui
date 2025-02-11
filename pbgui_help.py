@@ -153,6 +153,7 @@ pbrun = """
     cd ${pbgui}
     python PBRun.py
     # python PBRemote.py
+    # python PBMon.py
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -181,6 +182,36 @@ pbremote = """
     cd ${pbgui}
     # python PBRun.py
     python PBRemote.py
+    # python PBMOn.py
+    # python PBStat.py
+    # python PBShare.py
+    # python PBData.py
+    # python PBCoinData.py
+
+    Run "chmod 755 start.sh" and change the path to your needs
+    Run "crontab -e" and add the @reboot with your path
+    ```"""
+
+pbmon = """
+    ```
+    This is the Monitoring Manager from PBGUI.
+    Enable, to start monitoring your Bots.
+    To start the Monitoring Manager after reboot your server, you have to
+    start PBMon.py when your Server starts.
+    This can be done in your crontab with @reboot
+
+    Example crontab
+    @reboot ~/software/pbgui/start.sh
+
+    Example start.sh
+    #!/usr/bin/bash
+    venv=~/software/venv_pb39       #Path to python venv
+    pbgui=~/software/pbgui          #path to pbgui installation
+    source ${venv}/bin/activate
+    cd ${pbgui}
+    # python PBRun.py
+    # python PBRemote.py
+    python PBMon.py
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -210,36 +241,9 @@ pbstat = """
     cd ${pbgui}
     # python PBRun.py
     # python PBRemote.py
+    # python PBMon.py
     python PBStat.py
     # python PBShare.py
-    # python PBData.py
-    # python PBCoinData.py
-
-    Run "chmod 755 start.sh" and change the path to your needs
-    Run "crontab -e" and add the @reboot with your path
-    ```"""
-
-pbshare = """
-    ```
-    This is the Data Sharing Manager from PBGUI.
-    Enable, to start generating live grid and other statistics to share.
-    To start the Data Sharing Manager after reboot your server, you have to
-    start PBShare.py when your Server starts.
-    This can be done in your crontab with @reboot
-
-    Example crontab
-    @reboot ~/software/pbgui/start.sh
-
-    Example start.sh
-    #!/usr/bin/bash
-    venv=~/software/venv_pb39       #Path to python venv
-    pbgui=~/software/pbgui          #path to pbgui installation
-    source ${venv}/bin/activate
-    cd ${pbgui}
-    # python PBRun.py
-    # python PBRemote.py
-    # python PBStat.py
-    python PBShare.py
     # python PBData.py
     # python PBCoinData.py
 
@@ -267,6 +271,7 @@ pbdata = """
     cd ${pbgui}
     # python PBRun.py
     # python PBRemote.py
+    # python PBMon.py
     # python PBStat.py
     # python PBShare.py
     python PBData.py
@@ -296,6 +301,7 @@ pbcoindata = """
     cd ${pbgui}
     # python PBRun.py
     # python PBRemote.py
+    # python PBMon.py
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -1210,4 +1216,20 @@ coin_flags_config = """
 
 coin_flags_lev = """
     -lev: Leverage.
+    ```"""
+
+pbmon_telegram_token = """
+    ```
+    Your Telegram Bot Token
+
+    Create a Telegram bot and obtain its API key. You can do this by talking to the BotFather in Telegram. To do this:
+    Open the Telegram app on your smartphone or desktop.
+    Search for the “BotFather” username in the search bar.
+    Click on the “Start” button to start a conversation with the BotFather.
+    Type “/newbot” and follow the prompts to create a new bot. The BotFather will give you an API key that you will add as Telgram Bot Token.
+    ```"""  
+
+pbmon_telegram_chat_id = """
+    ```
+    Your Telegram Chat ID
     ```"""
