@@ -4,6 +4,7 @@ from User import Users, User
 from Exchange import Exchange
 from pbgui_func import PBGDIR
 import sqlite3
+import json
 
 class Database():
     def __init__(self):
@@ -608,11 +609,35 @@ class Database():
     def fetch_futures(self, user: User):
         exchange = Exchange(user.exchange, user)
         return exchange.fetch_futures(1724390528161)
+    
+    def import_from_save_income_other(self, user: User):
+        # Load data from file
+        data = []
+        src = Path(f'{PBGDIR}/data/logs')
+        with open(f'{src}/income_other_{user.name}.json', 'r') as file:
+            data = json.load(file)
+        print(data)
+
+        # try:
+        #     with sqlite3.connect(self.db) as conn:
+        #         for line in data:
+        #             income = [
+        #                 line['symbol'],
+        #                 line['timestamp'],
+        #                 line['income'],
+        #                 line['uniqueid'],
+        #                 user.name
+        #             ]
+        #             self.add_history(conn, income)
+        # except sqlite3.Error as e:
+        #     print(e)
 
 def main():
     print("Don't Run this Class from CLI")
-    # users = Users()
-    # user = users.find_user("gateio_cpt")
+    users = Users()
+    user = users.find_user("c10005_api001")
+    db = Database()
+    db.import_from_save_income_other(user)
     # exchange = Exchange("gateio", user)
     # history = exchange.fetch_history()
     # print(history)
