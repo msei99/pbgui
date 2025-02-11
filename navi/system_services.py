@@ -34,6 +34,21 @@ def pbremote_overview():
         pbremote_icon = '❌'
     st.metric(label="PBRemote", value=pbremote_icon)
 
+def pbmon_overview():
+    pbmon = st.session_state.pbmon
+    pbmon_status = pbmon.is_running()
+    if "service_pbmon" in st.session_state:
+        if st.session_state.service_pbmon != pbmon_status:
+            pbmon_status = st.session_state.service_pbmon
+    st.toggle("PBMon", value=pbmon_status, key="service_pbmon", help=pbgui_help.pbmon)
+    if pbmon_status:
+        pbmon.run()
+        pbmon_icon = '✅'
+    else:
+        pbmon.stop()
+        pbmon_icon = '❌'
+    st.metric(label="PBMon", value=pbmon_icon)
+
 def pbstat_overview():
     pbstat = st.session_state.pbstat
     pbstat_status = pbstat.is_running()
@@ -80,7 +95,7 @@ def pbcoindata_overview():
     st.metric(label="PBCoinData", value=pbcoindata_icon)
     
 def overview():
-    col_1, col_2, col_3, col_4, col_5 = st.columns([1,1,1,1,1])
+    col_1, col_2, col_3, col_4, col_5, col_6 = st.columns([1,1,1,1,1,1])
     with col_1:
         pbrun_overview()
         if st.button("Show Details", key="button_pbrun_details"):
@@ -92,16 +107,21 @@ def overview():
             st.session_state.pbremote_details = True
             st.rerun()
     with col_3:
+        pbmon_overview()
+        if st.button("Show Details", key="button_pbmon_details"):
+            st.session_state.pbmon_details = True
+            st.rerun()
+    with col_4:
         pbstat_overview()
         if st.button("Show Details", key="button_pbstat_details"):
             st.session_state.pbstat_details = True
             st.rerun()
-    with col_4:
+    with col_5:
         pbdata_overview()
         if st.button("Show Details", key="button_pbdata_details"):
             st.session_state.pbdata_details = True
             st.rerun()
-    with col_5:
+    with col_6:
         pbcoindata_overview()
         if st.button("Show Details", key="button_pbcoindata_details"):
             st.session_state.pbcoindata_details = True
@@ -306,6 +326,33 @@ def result_popup(message, result):
     if st.button(":green[OK]"):
         st.rerun()
 
+def pbmon_details():
+    pbmon = st.session_state.pbmon
+    # Navigation
+    with st.sidebar:
+        if st.button(":back:", key="button_pbmon_back"):
+            del st.session_state.pbmon_details
+            st.rerun()
+    st.subheader("PBMon Details")
+    pbmon_overview()
+
+    if "pbmon_telegram_token" in st.session_state:
+        if st.session_state.pbmon_telegram_token != pbmon.telegram_token:
+            pbmon.telegram_token = st.session_state.pbmon_telegram_token
+    else:
+        st.session_state.pbmon_telegram_token = pbmon.telegram_token
+
+    if "pbmon_telegram_chat_id" in st.session_state:
+        if st.session_state.pbmon_telegram_chat_id != pbmon.telegram_chat_id:
+            pbmon.telegram_chat_id = st.session_state.pbmon_telegram_chat_id
+    else:
+        st.session_state.pbmon_telegram_chat_id = pbmon.telegram_chat_id
+
+    st.text_input("Telegram Bot Token", type="password", key="pbmon_telegram_token", help=pbgui_help.pbmon_telegram_token)
+    st.text_input("Telegram Chat ID", key="pbmon_telegram_chat_id", help=pbgui_help.pbmon_telegram_chat_id)
+
+    if st.checkbox("Show logfile", key="pbmon_log"):
+        st.session_state.pbgui_instances.view_log("PBMon")
 
 def pbstat_details():
     # Navigation
@@ -366,6 +413,8 @@ elif 'edit_bucket' in st.session_state:
     edit_bucket()
 elif 'pbremote_details' in st.session_state:
     pbremote_details()
+elif 'pbmon_details' in st.session_state:
+    pbmon_details()
 elif 'pbstat_details' in st.session_state:
     pbstat_details()
 elif 'pbdata_details' in st.session_state:
