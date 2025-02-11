@@ -598,12 +598,15 @@ class Exchange:
                     print(f'User:{self.user.name} Done')
                     break
             for history in all_histories:
-                if history["incomeType"] == "REALIZED_PNL":
+                if history["incomeType"] in ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"]:
                     income = {}
                     income["symbol"] = history["symbol"]
                     income["timestamp"] = history["time"]
                     income["income"] = history["income"]
-                    income["uniqueid"] = history["tradeId"]
+                    if history["incomeType"] == "REALIZED_PNL":
+                        income["uniqueid"] = history["tradeId"]
+                    else:
+                        income["uniqueid"] = history["tranId"]
                     all.append(income)
                 else: 
                     self.save_income_other(history, self.user.name)
