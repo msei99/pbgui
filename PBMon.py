@@ -37,7 +37,9 @@ class PBMon():
         return self._telegram_token
     @telegram_token.setter
     def telegram_token(self, new_telegram_token):
-        save_ini("main", "telegram_token", new_telegram_token)
+        if self._telegram_token != new_telegram_token:
+            self._telegram_token = new_telegram_token
+            save_ini("main", "telegram_token", new_telegram_token)
 
     @property
     def telegram_chat_id(self):
@@ -46,7 +48,9 @@ class PBMon():
         return self._telegram_chat_id
     @telegram_chat_id.setter
     def telegram_chat_id(self, new_telegram_chat_id):
-        save_ini("main", "telegram_chat_id", new_telegram_chat_id)
+        if self._telegram_chat_id != new_telegram_chat_id:
+            self._telegram_chat_id = new_telegram_chat_id
+            save_ini("main", "telegram_chat_id", new_telegram_chat_id)
     
     def run(self):
         if not self.is_running():
