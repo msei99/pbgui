@@ -116,13 +116,13 @@ class PBMon():
                         self.system_error.append(error["server"])
                         msg = msg + f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} CPU: {error["cpu"]} Swap: {error["swap"]} Disk: {error["disk"]}\n'
                 else:
-                    if error["server"] not in self.instance_error:
-                        self.instance_error.append(error["server"])
+                    if error["name"] not in self.instance_error:
+                        self.instance_error.append(error["name"])
                         msg = msg + f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}\n'
             # remove errors that are no longer present
             self.offline_error = [error for error in self.offline_error if error in [error["server"] for error in errors if error["name"] == "offline"]]
             self.system_error = [error for error in self.system_error if error in [error["server"] for error in errors if error["name"] == "system"]]
-            self.instance_error = [error for error in self.instance_error if error in [error["server"] for error in errors if error["name"] not in ["offline", "system"]]]
+            self.instance_error = [error for error in self.instance_error if error in [error["name"] for error in errors if error["name"] not in ["offline", "system"]]]
             msg = re.sub(r':blue\[(.*?)\]', r'*\1*', msg)
             msg = re.sub(r':red\[(.*?)\]', r'*\1*', msg)
             msg = re.sub(r':green\[(.*?)\]', r'\1', msg)
