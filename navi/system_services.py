@@ -176,6 +176,9 @@ def pbremote_details():
         if st.button(f'View All Instances'):
             if "server" in st.session_state:
                 del st.session_state.server
+            monitor.d_v7 = []
+            monitor.d_multi = []
+            monitor.d_single = []
             monitor.servers = st.session_state.pbremote.remote_servers
             st.rerun()
         for rserver in sorted(st.session_state.pbremote.remote_servers, key=lambda s: s.name):
