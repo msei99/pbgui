@@ -53,6 +53,8 @@ def list_vps():
                     if server.is_online():
                         color = "green"
                 if st.button(f':{color}[{vps.hostname}]'):
+                    if "monitor" in st.session_state:
+                        del st.session_state.monitor
                     st.session_state.manage_vps = vps
                     st.rerun()
 
@@ -275,6 +277,7 @@ def manage_vps():
             del st.session_state.vps_firewall
             del st.session_state.vps_firewall_ssh_port
             del st.session_state.vps_firewall_ssh_ips
+            del st.session_state.monitor
     vps = st.session_state.manage_vps
     # Init PBRemote
     pbremote = st.session_state.pbremote
@@ -346,6 +349,9 @@ def manage_vps():
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             if st.button(":material/refresh:"):
+                monitor.d_v7 = []
+                monitor.d_multi = []
+                monitor.d_single = []
                 if "rclone_test" in st.session_state:
                     del st.session_state.rclone_test
                 st.rerun()
