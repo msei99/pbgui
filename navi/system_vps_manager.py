@@ -43,6 +43,10 @@ def list_vps():
             color = "red"
         if st.button(f':{color}[{pbremote.name} (local)]'):
             st.session_state.manage_master = True
+            if "monitor" in st.session_state:
+                st.session_state.monitor.d_v7 = []
+                st.session_state.monitor.d_multi = []
+                st.session_state.monitor.d_single = []
             st.rerun()
 
         for vps in vpsmanager.vpss:
@@ -54,7 +58,9 @@ def list_vps():
                         color = "green"
                 if st.button(f':{color}[{vps.hostname}]'):
                     if "monitor" in st.session_state:
-                        del st.session_state.monitor
+                        st.session_state.monitor.d_v7 = []
+                        st.session_state.monitor.d_multi = []
+                        st.session_state.monitor.d_single = []
                     st.session_state.manage_vps = vps
                     st.rerun()
 
@@ -277,7 +283,10 @@ def manage_vps():
             del st.session_state.vps_firewall
             del st.session_state.vps_firewall_ssh_port
             del st.session_state.vps_firewall_ssh_ips
-            del st.session_state.monitor
+            if "monitor" in st.session_state:
+                st.session_state.monitor.d_v7 = []
+                st.session_state.monitor.d_multi = []
+                st.session_state.monitor.d_single = []
     vps = st.session_state.manage_vps
     # Init PBRemote
     pbremote = st.session_state.pbremote
