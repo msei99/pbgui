@@ -149,14 +149,14 @@ class Monitor():
                             self.d_single.append(info)
                             self.logfiles.append(f'instances/{info["Name"]}/passivbot.log')
 
-            column_config = {
-                "PB Version": None,
-                "Last Info": None,
-                "Last Error": None,
-                "Last Traceback": None,
-                "Memory": st.column_config.NumberColumn(format="%.2f MB"),
-                "CPU": st.column_config.NumberColumn(format="%.2f %%"),
-            }
+        column_config = {
+            "PB Version": None,
+            "Last Info": None,
+            "Last Error": None,
+            "Last Traceback": None,
+            "Memory": st.column_config.NumberColumn(format="%.2f MB"),
+            "CPU": st.column_config.NumberColumn(format="%.2f %%"),
+        }
 
         if self.d_v7:
             st.subheader(f"Running V7 Instances ({len(self.d_v7)})")
