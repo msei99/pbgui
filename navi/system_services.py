@@ -190,6 +190,9 @@ def pbremote_details():
             col1, col2 = st.columns([3, 1])
             with col1:
                 if st.button(f':{color}[{rserver.name}]'):
+                    monitor.d_v7 = []
+                    monitor.d_multi = []
+                    monitor.d_single = []
                     st.session_state.server = rserver
             with col2:
                 if color == "red":
