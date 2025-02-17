@@ -159,6 +159,9 @@ def manage_master():
         with col1:
             if st.button(":material/refresh:"):
                 pbremote.update_remote_servers()
+                monitor.d_v7 = []
+                monitor.d_multi = []
+                monitor.d_single = []
                 st.rerun()
         with col2:
             if st.button(":material/home:"):
