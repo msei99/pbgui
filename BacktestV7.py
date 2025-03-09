@@ -950,10 +950,10 @@ class BacktestV7Result:
 
                 # Fill missing time slots with a custom function
                 resolution = st.session_state[f"backtest_v7_{self.result_path}_resolution"]
-                exposure_by_currency = exposure_by_currency.resample(f'{resolution}T').agg(lambda x: x.ffill().max() if not x.empty else 0)
+                exposure_by_currency = exposure_by_currency.resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
                 
                 # Ensure 'twe' is filled and retains maximum values too
-                exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}T').agg(lambda x: x.ffill().max() if not x.empty else 0)
+                exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
 
                 # Plot total exposure
                 fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency['twe'], name="TWE"))
