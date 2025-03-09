@@ -247,10 +247,16 @@ class DynamicIgnore():
             for symbol in self.ignored_coins_long:
                 if symbol not in ignored_coins:
                     ignored_coins.append(symbol)
+                if symbol in self.approved_coins:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins_long')
+                    self.approved_coins.remove(symbol)
         if self.ignored_coins_short:
             for symbol in self.ignored_coins_short:
                 if symbol not in ignored_coins:
                     ignored_coins.append(symbol)
+                if symbol in self.approved_coins:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins_short')
+                    self.approved_coins.remove(symbol)
         with open(file, "w", encoding='utf-8') as f:
             json.dump(ignored_coins, f)
         file = Path(f'{self.path}/approved_coins.json')
@@ -259,10 +265,16 @@ class DynamicIgnore():
             for symbol in self.approved_coins_long:
                 if symbol not in approved_coins:
                     approved_coins.append(symbol)
+                if symbol in self.ignored_coins:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {symbol} because it is in approved_coins_long')
+                    self.ignored_coins.remove(symbol)
         if self.approved_coins_short:
             for symbol in self.approved_coins_short:
                 if symbol not in approved_coins:
                     approved_coins.append(symbol)
+                if symbol in self.ignored_coins:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {symbol} because it is in approved_coins_short')
+                    self.ignored_coins.remove(symbol)
         with open(file, "w", encoding='utf-8') as f:
             json.dump(approved_coins, f)
     
