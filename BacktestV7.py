@@ -956,11 +956,11 @@ class BacktestV7Result:
                 exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}T').agg(lambda x: x.ffill().max() if not x.empty else 0)
 
                 # Plot total exposure
-                fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency['twe'], name="Total Exposure"))
+                fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency['twe'], name="TWE"))
 
                 # Plot each coin's exposure
                 for coin in exposure_by_currency.columns[:-1]:  # Exclude 'twe' column
-                    fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency[coin], name=f"{coin} Exposure"))
+                    fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency[coin], name=f"{coin} WE"))
 
                 fig.update_layout(yaxis_title='Exposure', height=800)
                 fig.update_xaxes(showgrid=True, griddash="dot")
