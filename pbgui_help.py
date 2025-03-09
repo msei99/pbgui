@@ -134,6 +134,12 @@ backtest_stuck = """
     automatic backtest n lowest hours stuck results
     ```"""
 
+backtest_twe_resolution = """
+    ```
+    Resolution of the total wallet exposure limit in minutes.
+    Best is 1 minute, but it can be very slow.
+    ```"""
+
 pbrun = """
     ```
     This is the Instance Manager from PBGUI.

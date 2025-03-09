@@ -923,6 +923,51 @@ class BacktestV7Result:
         else:
             st.error("No fills data found")
 
+    def view_chart_twe(self):
+        if self.fills is not None:
+            col1, col2 = st.columns([1,9], vertical_alignment="bottom")
+            with col1:
+                #Add selectbot for resolution
+                st.selectbox("resolution in minutes", [1440, 720, 240, 60, 30, 15, 10, 5, 2, 1], key=f"backtest_v7_{self.result_path}_resolution", help=pbgui_help.backtest_twe_resolution)
+            # Add a spinner
+            with st.spinner("Calculating WE and TWE", show_time=True):
+                fig = go.Figure()
+
+                # Determine whether to use 'symbol' or 'coin'
+                coin_or_symbol = "symbol" if "symbol" in self.fills else "coin"
+                self.fills['we'] = 1 / self.fills["balance"] * self.fills['psize'] * self.fills['pprice']
+
+                # Create pivot table
+                exposure_by_currency = self.fills.pivot_table(
+                    index='time',
+                    columns=coin_or_symbol,
+                    values='we',
+                    aggfunc='last'
+                ).fillna(0)
+
+                # Calculate total exposure and fill missing values
+                exposure_by_currency['twe'] = exposure_by_currency.sum(axis=1).ffill().fillna(0)
+
+                # Fill missing time slots with a custom function
+                resolution = st.session_state[f"backtest_v7_{self.result_path}_resolution"]
+                exposure_by_currency = exposure_by_currency.resample(f'{resolution}T').agg(lambda x: x.ffill().max() if not x.empty else 0)
+                
+                # Ensure 'twe' is filled and retains maximum values too
+                exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}T').agg(lambda x: x.ffill().max() if not x.empty else 0)
+
+                # Plot total exposure
+                fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency['twe'], name="Total Exposure"))
+
+                # Plot each coin's exposure
+                for coin in exposure_by_currency.columns[:-1]:  # Exclude 'twe' column
+                    fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency[coin], name=f"{coin} Exposure"))
+
+                fig.update_layout(yaxis_title='Exposure', height=800)
+                fig.update_xaxes(showgrid=True, griddash="dot")
+                st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_we")
+        else:
+            st.error("No fills data found")
+
 class BacktestV7Results:
 
     def __init__(self):
@@ -1027,6 +1072,7 @@ class BacktestV7Results:
                     'TWE': f"{result.config.bot.long.total_wallet_exposure_limit:.2f} / {result.config.bot.short.total_wallet_exposure_limit:.2f}",
                     'POS': f"{result.config.bot.long.n_positions:.2f} / {result.config.bot.short.n_positions:.2f}",
                     'View': False,
+                    'WE': False,
                     'Plot': False,
                     'Fills': False,
                     'Create Run': False,
@@ -1039,6 +1085,7 @@ class BacktestV7Results:
         column_config = {
             "id": None,
             'View': st.column_config.CheckboxColumn(label="Results"),
+            'WE': st.column_config.CheckboxColumn(label="WE"),
             'Plot': st.column_config.CheckboxColumn(label="BE Plot"),
             'Fills': st.column_config.CheckboxColumn(label="Fills"),
             'Create Run': st.column_config.CheckboxColumn(label="Run"),
@@ -1067,6 +1114,9 @@ class BacktestV7Results:
                         self.results[row].load_be()
                         self.results[row].view_chart_be()
                         self.results[row].view_chart_symbol()
+                        if "WE" in ed["edited_rows"][row]:
+                            if ed["edited_rows"][row]["WE"]:
+                                self.results[row].view_chart_twe()
                         self.results[row].view()
                 if "Plot" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["Plot"]:
