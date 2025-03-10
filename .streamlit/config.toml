@@ -193,12 +193,12 @@ disableWidgetStateDuplicationWarning = true
 # Max size, in megabytes, of messages that can be sent via the WebSocket connection.
 
 # Default: 200
-maxMessageSize = 2500
+maxMessageSize = 5000
 
 # Enables support for websocket compression.
 
 # Default: false
-enableWebsocketCompression = true
+# enableWebsocketCompression = true
 
 # Enable serving files from a `static` directory in the running app's directory.
 
