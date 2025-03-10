@@ -950,10 +950,28 @@ class BacktestV7Result:
 
                 # Fill missing time slots with a custom function
                 resolution = st.session_state[f"backtest_v7_{self.result_path}_resolution"]
-                exposure_by_currency = exposure_by_currency.resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
-                
+                # exposure_by_currency = exposure_by_currency.resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
+
+                # Ensure no unnecessary NaNs are left in the dataset initially
+                exposure_by_currency = exposure_by_currency.ffill()
+
+                # Resample and apply a vectorized function
+                exposure_by_currency = exposure_by_currency.resample(f'{resolution}min').max()
+
+                # Replace NaN values with 0 after resampling
+                exposure_by_currency.fillna(0, inplace=True)
+
                 # Ensure 'twe' is filled and retains maximum values too
-                exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
+                # exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
+
+                # Forward fill before resampling
+                exposure_by_currency['twe'] = exposure_by_currency['twe'].ffill()
+
+                # Resample and get the maximum value
+                exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}min').max()
+
+                # Replace NaN values with 0 after resampling
+                exposure_by_currency['twe'] = exposure_by_currency['twe'].fillna(0)
 
                 # Plot total exposure
                 fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency['twe'], name="TWE"))
