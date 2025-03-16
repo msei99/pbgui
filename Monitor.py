@@ -72,7 +72,7 @@ class Monitor():
             elif server.cpu < 50:
                 cpu_color = "green"
             else:
-                cpu_color = "yellow"
+                cpu_color = "orange"
             st.markdown(f"##### CPU utilization: :{cpu_color}[{server.cpu}] %  |  System boot: :blue[{boot}]")
 
     def view_server_instances(self):
