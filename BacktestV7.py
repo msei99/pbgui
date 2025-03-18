@@ -891,8 +891,14 @@ class BacktestV7Result:
     # Create Chart with plotly
     def view_chart_be(self):
         if self.be is not None:
+            col1, col2 = st.columns([1,9], vertical_alignment="bottom")
+            with col1:
+                st.checkbox("logarithmic", key=f"backtest_v7_{self.result_path}_be_log")
             fig = go.Figure()
-            fig.update_layout(yaxis_title='Balance')
+            if st.session_state[f"backtest_v7_{self.result_path}_be_log"]:
+                fig.update_layout(yaxis_type="log")
+            else:
+                fig.update_layout(yaxis_type="linear")
             fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['equity'], name="equity", line=dict(width=0.75)))
             fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['balance'], name="balance", line=dict(width=2.5)))
             fig.update_layout(yaxis_title='Balance', height=800)
@@ -907,7 +913,14 @@ class BacktestV7Result:
     # Create Symbol Chart with plotly
     def view_chart_symbol(self):
         if self.fills is not None:
+            col1, col2 = st.columns([1,9], vertical_alignment="bottom")
+            with col1:
+                st.checkbox("logarithmic", key=f"backtest_v7_{self.result_path}_symbol_log")
             fig = go.Figure()
+            if st.session_state[f"backtest_v7_{self.result_path}_symbol_log"]:
+                fig.update_layout(yaxis_type="log")
+            else:
+                fig.update_layout(yaxis_type="linear")
             if "symbol" in self.fills:
                 coin_or_symbol = "symbol"
             elif "coin" in self.fills:
