@@ -839,14 +839,20 @@ class BacktestV7Result:
         balance = Path(f'{self.result_path}/balance_and_equity.csv')
         if balance.exists():
             with open(balance, "r", encoding='utf-8') as file:
+                # Read first line
+                first_line = file.readline()
+                if first_line.count(',') == 2:
+                    format = 3
+                elif first_line.count(',') == 4:
+                    format = 5
                 end_of_file = file.seek(0, 2)
                 file.seek(end_of_file)
                 n = 0
                 for num in range(end_of_file+1):            
                     file.seek(end_of_file - num)    
                     last_line = file.read()
-                    if last_line.count('\n') == 1: 
-                        if len(last_line.split(',')) == 3:
+                    if last_line.count('\n') == 1:
+                        if len(last_line.split(',')) == format:
                             final_balance = last_line.split(',')[1]
                             return final_balance
                         else: last_line = None
