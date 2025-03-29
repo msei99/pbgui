@@ -277,65 +277,66 @@ class Config:
 
 # config template
 # {"backtest": {"base_dir": "backtests",
-#               "combine_ohlcvs": true,
+#               "combine_ohlcvs": false,
 #               "compress_cache": true,
 #               "end_date": "now",
-#               "exchanges": ["binance", "bybit", "gateio", "bitget"],
+#               "exchanges": ["binance", "bybit"],
 #               "gap_tolerance_ohlcvs_minutes": 120.0,
-#               "start_date": "2021-04-01",
-#               "starting_balance": 100000},
-#  "bot": {"long": {"close_grid_markup_range": 0.0049352,
-#                   "close_grid_min_markup": 0.0010187,
-#                   "close_grid_qty_pct": 0.99988,
-#                   "close_trailing_grid_ratio": -0.047595,
-#                   "close_trailing_qty_pct": 0.65397,
-#                   "close_trailing_retracement_pct": 0.087726,
-#                   "close_trailing_threshold_pct": 0.054134,
-#                   "ema_span_0": 736.69,
-#                   "ema_span_1": 234.87,
+#               "start_date": "2020-01-01",
+#               "starting_balance": 100000,
+#               "use_btc_collateral": true},
+#  "bot": {"long": {"close_grid_markup_range": 0.0076185,
+#                   "close_grid_min_markup": 0.002665,
+#                   "close_grid_qty_pct": 0.96044,
+#                   "close_trailing_grid_ratio": -0.0088751,
+#                   "close_trailing_qty_pct": 0.75703,
+#                   "close_trailing_retracement_pct": 0.094468,
+#                   "close_trailing_threshold_pct": 0.033725,
+#                   "ema_span_0": 321.67,
+#                   "ema_span_1": 320.53,
 #                   "enforce_exposure_limit": true,
-#                   "entry_grid_double_down_factor": 1.6927,
-#                   "entry_grid_spacing_pct": 0.029524,
-#                   "entry_grid_spacing_weight": 1.2461,
-#                   "entry_initial_ema_dist": -0.087569,
-#                   "entry_initial_qty_pct": 0.019263,
-#                   "entry_trailing_grid_ratio": -0.11611,
-#                   "entry_trailing_retracement_pct": 0.012595,
-#                   "entry_trailing_threshold_pct": 0.078207,
-#                   "filter_relative_volume_clip_pct": 0.16837,
-#                   "filter_rolling_window": 304.38,
-#                   "n_positions": 6.4025,
-#                   "total_wallet_exposure_limit": 1.9999,
-#                   "unstuck_close_pct": 0.055819,
-#                   "unstuck_ema_dist": -0.095984,
-#                   "unstuck_loss_allowance_pct": 0.013268,
-#                   "unstuck_threshold": 0.54944},
-#          "short": {"close_grid_markup_range": 0.021648,
-#                    "close_grid_min_markup": 0.01214,
-#                    "close_grid_qty_pct": 0.725,
-#                    "close_trailing_grid_ratio": 0.35701,
-#                    "close_trailing_qty_pct": 0.68703,
-#                    "close_trailing_retracement_pct": 0.020607,
-#                    "close_trailing_threshold_pct": -0.0043591,
-#                    "ema_span_0": 1226.9,
-#                    "ema_span_1": 975.48,
+#                   "entry_grid_double_down_factor": 1.6886,
+#                   "entry_grid_spacing_pct": 0.027326,
+#                   "entry_grid_spacing_weight": 1.1331,
+#                   "entry_initial_ema_dist": -0.099207,
+#                   "entry_initial_qty_pct": 0.010642,
+#                   "entry_trailing_grid_ratio": -0.016706,
+#                   "entry_trailing_retracement_pct": 0.02615,
+#                   "entry_trailing_threshold_pct": 0.055202,
+#                   "filter_relative_volume_clip_pct": 0.0053335,
+#                   "filter_rolling_window": 309.75,
+#                   "n_positions": 6.4011,
+#                   "total_wallet_exposure_limit": 0.87819,
+#                   "unstuck_close_pct": 0.036772,
+#                   "unstuck_ema_dist": -0.078578,
+#                   "unstuck_loss_allowance_pct": 0.030858,
+#                   "unstuck_threshold": 0.56304},
+#          "short": {"close_grid_markup_range": 0.022568,
+#                    "close_grid_min_markup": 0.0082649,
+#                    "close_grid_qty_pct": 0.53985,
+#                    "close_trailing_grid_ratio": 0.52698,
+#                    "close_trailing_qty_pct": 0.71696,
+#                    "close_trailing_retracement_pct": 0.01282,
+#                    "close_trailing_threshold_pct": -0.005394,
+#                    "ema_span_0": 1212.7,
+#                    "ema_span_1": 659.66,
 #                    "enforce_exposure_limit": true,
-#                    "entry_grid_double_down_factor": 0.93282,
-#                    "entry_grid_spacing_pct": 0.016287,
-#                    "entry_grid_spacing_weight": 5.2376,
-#                    "entry_initial_ema_dist": -0.016642,
-#                    "entry_initial_qty_pct": 0.014245,
-#                    "entry_trailing_grid_ratio": 0.20993,
-#                    "entry_trailing_retracement_pct": 0.025544,
-#                    "entry_trailing_threshold_pct": 0.063268,
-#                    "filter_relative_volume_clip_pct": 0.46558,
-#                    "filter_rolling_window": 288.05,
-#                    "n_positions": 7.1941,
+#                    "entry_grid_double_down_factor": 0.72508,
+#                    "entry_grid_spacing_pct": 0.017338,
+#                    "entry_grid_spacing_weight": 4.0792,
+#                    "entry_initial_ema_dist": 0.0026837,
+#                    "entry_initial_qty_pct": 0.014787,
+#                    "entry_trailing_grid_ratio": 0.18122,
+#                    "entry_trailing_retracement_pct": 0.018165,
+#                    "entry_trailing_threshold_pct": 0.062005,
+#                    "filter_relative_volume_clip_pct": 0.57973,
+#                    "filter_rolling_window": 320.18,
+#                    "n_positions": 6.4396,
 #                    "total_wallet_exposure_limit": 0.0,
-#                    "unstuck_close_pct": 0.081342,
-#                    "unstuck_ema_dist": -0.015041,
-#                    "unstuck_loss_allowance_pct": 0.040395,
-#                    "unstuck_threshold": 0.52387}},
+#                    "unstuck_close_pct": 0.088717,
+#                    "unstuck_ema_dist": -0.014418,
+#                    "unstuck_loss_allowance_pct": 0.030868,
+#                    "unstuck_threshold": 0.68942}},
 #  "live": {"approved_coins": "configs/approved_coins_top20mcap.json",
 #           "auto_gs": true,
 #           "coin_flags": {},
@@ -409,6 +410,7 @@ class Config:
 #                          "short_unstuck_threshold": [0.4, 0.95]},
 #               "compress_results_file": true,
 #               "crossover_probability": 0.7,
+#               "enable_overrides": [],
 #               "iters": 300000,
 #               "limits": {"lower_bound_drawdown_worst": 0.333,
 #                          "lower_bound_drawdown_worst_mean_1pct": 0.2,
@@ -421,7 +423,7 @@ class Config:
 #               "mutation_probability": 0.2,
 #               "n_cpus": 5,
 #               "population_size": 500,
-#               "scoring": ["mdg", "sterling_ratio"]}}
+#               "scoring": ["mdg_w", "sharpe_ratio"]}}
 
 class Backtest:
     def __init__(self):
@@ -433,6 +435,7 @@ class Backtest:
         self._gap_tolerance_ohlcvs_minutes = 120.0
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
+        self._use_btc_collateral = False
         self._backtest = {
             "base_dir": self._base_dir,
             "combine_ohlcvs": self._combine_ohlcvs,
@@ -441,7 +444,8 @@ class Backtest:
             "exchanges": self._exchanges,
             "gap_tolerance_ohlcvs_minutes": self._gap_tolerance_ohlcvs_minutes,
             "start_date": self._start_date,
-            "starting_balance": self._starting_balance
+            "starting_balance": self._starting_balance,
+            "use_btc_collateral": self._use_btc_collateral
         }
     
     def __repr__(self):
@@ -467,6 +471,8 @@ class Backtest:
             self.start_date = new_backtest["start_date"]
         if "starting_balance" in new_backtest:
             self.starting_balance = new_backtest["starting_balance"]
+        if "use_btc_collateral" in new_backtest:
+            self.use_btc_collateral = new_backtest["use_btc_collateral"]
     
     @property
     def base_dir(self): return self._base_dir
@@ -487,6 +493,8 @@ class Backtest:
     def start_date(self): return self._start_date
     @property
     def starting_balance(self): return self._starting_balance
+    @property
+    def use_btc_collateral(self): return self._use_btc_collateral
 
     @base_dir.setter
     def base_dir(self, new_base_dir):
@@ -520,6 +528,10 @@ class Backtest:
     def starting_balance(self, new_starting_balance):
         self._starting_balance = new_starting_balance
         self._backtest["starting_balance"] = self._starting_balance
+    @use_btc_collateral.setter
+    def use_btc_collateral(self, new_use_btc_collateral):
+        self._use_btc_collateral = new_use_btc_collateral
+        self._backtest["use_btc_collateral"] = self._use_btc_collateral
 
 class Bot:
     def __init__(self):
@@ -1537,6 +1549,7 @@ class Optimize:
         # optimize
         self._compress_results_file = True
         self._crossover_probability = 0.7
+        self._enable_overrides = []
         self._iters = 100000
         self._mutation_probability = 0.2
         self._n_cpus = 5
@@ -1548,6 +1561,7 @@ class Optimize:
             "bounds": self._bounds._bounds,
             "compress_results_file": self._compress_results_file,
             "crossover_probability": self._crossover_probability,
+            "enable_overrides": self._enable_overrides,
             "iters": self._iters,
             "limits": self._limits._limits,
             "mutation_probability": self._mutation_probability,
@@ -1569,6 +1583,8 @@ class Optimize:
             self.compress_results_file = new_optimize["compress_results_file"]
         if "crossover_probability" in new_optimize:
             self.crossover_probability = new_optimize["crossover_probability"]
+        if "enable_overrides" in new_optimize:
+            self.enable_overrides = new_optimize["enable_overrides"]
         if "iters" in new_optimize:
             self.iters = new_optimize["iters"]
         if "limits" in new_optimize:
@@ -1590,6 +1606,8 @@ class Optimize:
     def limits(self): return self._limits
     @property
     def crossover_probability(self): return self._crossover_probability
+    @property
+    def enable_overrides(self): return self._enable_overrides
     @property
     def iters(self): return self._iters
     @property
@@ -1620,6 +1638,10 @@ class Optimize:
     def crossover_probability(self, new_crossover_probability):
         self._crossover_probability = new_crossover_probability
         self._optimize["crossover_probability"] = self._crossover_probability
+    @enable_overrides.setter
+    def enable_overrides(self, new_enable_overrides):
+        self._enable_overrides = new_enable_overrides
+        self._optimize["enable_overrides"] = self._enable_overrides
     @iters.setter
     def iters(self, new_iters):
         self._iters = new_iters

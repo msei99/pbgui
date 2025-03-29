@@ -1103,6 +1103,18 @@ compress_cache = """
     set to true to save disk space. Set to false to load faster.
     ```"""
 
+use_btc_collateral = """
+    ```
+    Set to true to backtest with BTC as collateral, simulating starting with 100% BTC and
+    buying BTC with all USD profits, but not selling BTC when taking losses (instead go into USD debt).
+    e.g. given BTC/USD price of $100,000, if BTC balance is 1.0 and backtester makes 10 USD profit,
+    BTC balance becomes 1.0001 and USD balance is 0.
+    If backtester loses 20 USD, BTC balance remains 1.0001 and USD balance becomes -20.
+    If backtester then makes 15 USD profit, USD debt is paid off first: BTC balance remains 1.0001,
+    USD balance becomes -5. If the backtester then makes 10 USD profit: BTC balance becomes 1.00015,
+    USD balance is 0.
+    ```"""
+
 compress_results_file = """
     ```
     If true, will compress optimize output results file to save space.

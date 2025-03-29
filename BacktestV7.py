@@ -486,6 +486,16 @@ class BacktestV7Item:
         else:
             st.session_state.edit_bt_v7_compress_cache = self.config.backtest.compress_cache
         st.checkbox("compress_cache", key="edit_bt_v7_compress_cache", help=pbgui_help.compress_cache)
+    
+    # use_btc_collateral
+    @st.fragment
+    def fragment_use_btc_collateral(self):
+        if "edit_bt_v7_use_btc_collateral" in st.session_state:
+            if st.session_state.edit_bt_v7_use_btc_collateral != self.config.backtest.use_btc_collateral:
+                self.config.backtest.use_btc_collateral = st.session_state.edit_bt_v7_use_btc_collateral
+        else:
+            st.session_state.edit_bt_v7_use_btc_collateral = self.config.backtest.use_btc_collateral
+        st.checkbox("use_btc_collateral", key="edit_bt_v7_use_btc_collateral", help=pbgui_help.use_btc_collateral)
 
     # filters
     def fragment_filter_coins(self):
@@ -713,7 +723,7 @@ class BacktestV7Item:
             self.fragment_start_date()
         with col4:
             self.fragment_end_date()
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5])
         with col1:
             self.fragment_starting_balance()
         with col2:
@@ -723,6 +733,8 @@ class BacktestV7Item:
         with col4:
             self.fragment_combine_ohlcvs()
             self.fragment_compress_cache()
+        with col5:
+            self.fragment_use_btc_collateral()
         #Filters
         self.fragment_filter_coins()
         # Config
@@ -812,7 +824,7 @@ class BacktestV7Result:
         self.sharpe_ratio = self.result["sharpe_ratio"]
         self.starting_balance = self.config.backtest.starting_balance
         self.be = None
-        self.final_balance = self.load_final_balance()
+        self.final_balance, self.final_balance_btc = self.load_final_balance()
         self.fills = None
     
     def remove(self):
@@ -854,7 +866,10 @@ class BacktestV7Result:
                     if last_line.count('\n') == 1:
                         if len(last_line.split(',')) == format:
                             final_balance = last_line.split(',')[1]
-                            return final_balance
+                            final_balance_btc = None
+                            if format == 5:
+                                final_balance_btc = last_line.split(',')[3]
+                            return final_balance, final_balance_btc
                         else: last_line = None
         return None
 
@@ -878,8 +893,11 @@ class BacktestV7Result:
 
     def view_plot(self):
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
+        balance_and_equity_btc = Path(f'{self.result_path}/balance_and_equity_btc.png')
         if balance_and_equity.exists():
             st.image(str(balance_and_equity), use_column_width=True)
+        if balance_and_equity_btc.exists():
+            st.image(str(balance_and_equity_btc), use_column_width=True)
     
     def view_fills(self):
         p = str(Path(f'{self.result_path}/fills_plots/*.png'))
@@ -915,6 +933,29 @@ class BacktestV7Result:
             st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_be")
         else:
             st.error("No balance and equity data found")
+
+    # Create be_btc Chart with plotly
+    def view_chart_be_btc(self):
+        if self.be is not None:
+            col1, col2 = st.columns([1,9], vertical_alignment="bottom")
+            with col1:
+                st.checkbox("logarithmic", key=f"backtest_v7_{self.result_path}_be_btc_log")
+            fig = go.Figure()
+            if st.session_state[f"backtest_v7_{self.result_path}_be_btc_log"]:
+                fig.update_layout(yaxis_type="log")
+            else:
+                fig.update_layout(yaxis_type="linear")
+            fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['equity_btc'], name="equity_btc", line=dict(width=0.75)))
+            fig.add_trace(go.Scatter(x=self.be['time'], y=self.be['balance_btc'], name="balance_btc", line=dict(width=2.5)))
+            fig.update_layout(yaxis_title='Balance', height=800)
+            fig.update_xaxes(showgrid=True, griddash="dot")
+            name = PurePath(*self.result_path.parts[-3:-2])
+            formatted_time = self.time.strftime("%Y-%m-%d %H:%M:%S")
+            fig.update_layout(title_text=f'{name} {formatted_time}', title_x=0.5)
+            st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_be_btc")
+        else:
+            st.error("No balance and equity data found")
+
 
     # Create Symbol Chart with plotly
     def view_chart_symbol(self):
@@ -1106,6 +1147,7 @@ class BacktestV7Results:
                     'Sharpe Ratio': f"{result.sharpe_ratio:.4f}",
                     'Starting Balance': f"{starting_balance_float:,.0f}",
                     'Final Balance': f"{final_balance_float:,.0f}",
+                    'Final Balance BTC': result.final_balance_btc,
                     'TWE': f"{result.config.bot.long.total_wallet_exposure_limit:.2f} / {result.config.bot.short.total_wallet_exposure_limit:.2f}",
                     'POS': f"{result.config.bot.long.n_positions:.2f} / {result.config.bot.short.n_positions:.2f}",
                     'View': False,
@@ -1135,6 +1177,7 @@ class BacktestV7Results:
             'Sharpe Ratio': st.column_config.NumberColumn(label="Sharpe", format="%.4f"),
             'Starting Balance': st.column_config.NumberColumn(label="Start B."),
             'Final Balance': st.column_config.NumberColumn(label="Final B."),
+            'Final Balance BTC': st.column_config.NumberColumn(label="Final B. BTC"),
             }
         #Display Backtests
         height = 36+(len(self.results_d))*35
@@ -1150,6 +1193,8 @@ class BacktestV7Results:
                         self.results[row].load_fills()
                         self.results[row].load_be()
                         self.results[row].view_chart_be()
+                        if "balance_btc" in self.results[row].be.columns:
+                            self.results[row].view_chart_be_btc()
                         self.results[row].view_chart_symbol()
                         if "WE" in ed["edited_rows"][row]:
                             if ed["edited_rows"][row]["WE"]:
