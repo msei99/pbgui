@@ -1193,7 +1193,7 @@ class BacktestV7Results:
                         self.results[row].load_fills()
                         self.results[row].load_be()
                         self.results[row].view_chart_be()
-                        if "balance_btc" in self.results[row].be.columns:
+                        if self.results[row].config.backtest.use_btc_collateral:
                             self.results[row].view_chart_be_btc()
                         self.results[row].view_chart_symbol()
                         if "WE" in ed["edited_rows"][row]:
