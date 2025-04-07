@@ -833,7 +833,7 @@ class OptimizeV7Item:
                 self.config.optimize.scoring = st.session_state.edit_opt_v7_scoring
         else:
             st.session_state.edit_opt_v7_scoring = self.config.optimize.scoring
-        st.multiselect("scoring", ["adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio", "gain"], max_selections=2, key="edit_opt_v7_scoring")
+        st.multiselect("scoring", ["adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio", "gain", "adg_w", "mdg_w", "sharpe_ratio_w", "sortino_ratio_w", "omega_ratio_w", "calmar_ratio_w", "sterling_ratio_w", "loss_profit_ratio_w"], max_selections=2, key="edit_opt_v7_scoring")
 
     # filters
     def fragment_filter_coins(self):
