@@ -99,7 +99,7 @@ class OptimizeV7QueueItem:
     def is_finish(self):
         log = self.load_log()
         if log:
-            if "successfully processed optimize_results" in log:
+            if "Cleanup complete" in log:
                 return True
             else:
                 return False
@@ -109,7 +109,7 @@ class OptimizeV7QueueItem:
     def is_error(self):
         log = self.load_log()
         if log:
-            if "successfully processed optimize_results" in log:
+            if "Cleanup complete" in log:
                 return False
             else:
                 return True
@@ -363,6 +363,7 @@ class OptimizeV7Results:
         self.results_path = Path(f'{pb7dir()}/optimize_results')
         self.analysis_path = Path(f'{pb7dir()}/optimize_results_analysis')
         self.results = []
+        self.paretos = []
         self.filter = ""
         self.initialize()
     
@@ -384,6 +385,8 @@ class OptimizeV7Results:
         if self.results_path.exists():
             p = str(self.results_path) + "/*.txt"
             self.results = glob.glob(p, recursive=False)
+            p = str(self.results_path) + "/*/index.json"
+            self.results_new = glob.glob(p, recursive=False)
     
     def find_result_name(self, result_file):
         with open(result_file, "r", encoding='utf-8') as f:
@@ -403,6 +406,17 @@ class OptimizeV7Results:
             else:
                 backtest_name = config["config"]["backtest"]["base_dir"].split("/")[-1]
                 return backtest_name
+    
+    def find_result_name_new(self, result_file):
+        p = str(PurePath(result_file).parent / "pareto" / "*.json")
+        files = glob.glob(p, recursive=False)
+        if files:
+            config = ConfigV7(files[0])
+            config.load_config()
+            result_time = Path(files[0]).stat().st_mtime
+            return config.backtest.base_dir.split("/")[-1], result_time
+        else:
+            return None
 
     def view_analysis(self, analysis):
         file = Path(f'{self.analysis_path}/{analysis}.json')
@@ -414,6 +428,7 @@ class OptimizeV7Results:
         # Init
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
 
         if "select_opt_v7_result_filter" in st.session_state:
             if st.session_state.select_opt_v7_result_filter != self.filter:
@@ -431,7 +446,54 @@ class OptimizeV7Results:
 
         st.text_input("Filter by Optimize Name", value="", help=pbgui_help.smart_filter, key="select_opt_v7_result_filter")
 
-        ed_key = st.session_state.ed_key
+        if not "opt_v7_results_d_new" in st.session_state:
+            d = []
+            for id, opt in enumerate(self.results_new):
+                name, result_time = self.find_result_name_new(opt)
+                if name:
+                    result = PurePath(opt).parent.name
+                    d.append({
+                        'id': id,
+                        'Name': name,
+                        'Result Time': datetime.datetime.fromtimestamp(result_time),
+                        'view': False,
+                        '3d plot': False,
+                        'delete' : False,
+                        'Result': result,
+                        'index': opt,
+                    })
+            st.session_state.opt_v7_results_d_new = d
+        d_new = st.session_state.opt_v7_results_d_new
+        column_config_new = {
+            "id": None,
+            "edit": st.column_config.CheckboxColumn(label="Edit"),
+            "view": st.column_config.CheckboxColumn(label="View Paretos"),
+            "Result Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Result": st.column_config.TextColumn(label="Result Directory", width="50px"),
+        }
+        #Display optimizes
+        st.data_editor(data=d_new, height=36+(len(d_new))*35, use_container_width=True, key=f'select_optresults_new_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config_new, disabled=['id','name','index'])
+        if f'select_optresults_new_{st.session_state.ed_key}' in st.session_state:
+            ed = st.session_state[f'select_optresults_new_{st.session_state.ed_key}']
+            for row in ed["edited_rows"]:
+                if "view" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["view"]:
+                        if d_new[row]["Result"]:
+                            st.session_state.opt_v7_pareto = d_new[row]["index"]
+                            st.rerun()
+                if "3d plot" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["3d plot"]:
+                        self.run_3d_plot(d_new[row]["index"])
+                if "delete" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["delete"]:
+                        directory = Path(d_new[row]["index"]).parent
+                        shutil.rmtree(directory, ignore_errors=True)
+                        # remove from results
+                        self.results_new.remove(d_new[row]["index"])
+                        # remove from display
+                        d_new.remove(d_new[row])
+                        st.rerun()
+        
         if not "opt_v7_results_d" in st.session_state:
             d = []
             for id, opt in enumerate(self.results):
@@ -507,6 +569,82 @@ class OptimizeV7Results:
                         if "bt_v7_edit_symbol" in st.session_state:
                             del st.session_state.bt_v7_edit_symbol
                         st.switch_page(get_navi_paths()["V7_BACKTEST"])
+
+    def run_3d_plot(self, index):
+        # run 3d plot
+        directory = Path(index).parent / "pareto"
+        cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/pareto_store.py'), str(directory)]
+        if platform.system() == "Windows":
+            creationflags = subprocess.CREATE_NO_WINDOW
+            subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, creationflags=creationflags)
+        else:
+            subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
+
+    def load_paretos(self, index):
+        self.paretos = []
+        paretos_path = PurePath(f'{index}').parent / "pareto"
+        print(paretos_path)
+        if Path(paretos_path).exists():
+            # find all json files in paretos_path
+            p = str(paretos_path) + "/*.json"
+            paretos = glob.glob(p, recursive=False)
+        for pareto in paretos:
+            with open(pareto, "r", encoding='utf-8') as f:
+                pareto_data = json.load(f)
+                pareto_data['index_filename'] = pareto
+                self.paretos.append(pareto_data)
+        # sort by index_filename
+        self.paretos.sort(key=lambda x: x['index_filename'])
+
+    def view_pareto(self, index):
+        self.load_paretos(index)
+        if self.paretos:
+            d_paretos = []
+            for id, pareto in enumerate(self.paretos):
+                if "analyses_combined" in pareto:
+                    analysis = pareto["analyses_combined"]
+                    name = pareto["index_filename"].split("/")[-1]
+                    d_paretos.append({
+                        'id': id,
+                        'view': False,
+                        'backtest': False,
+                        'adg': analysis["adg_max"],
+                        'mdg': analysis["mdg_max"],
+                        'drawdown_worst': analysis["drawdown_worst_max"],
+                        'gain': analysis["gain_max"],
+                        'loss_profit_ratio': analysis["loss_profit_ratio_max"],
+                        'position_held_hours_max': analysis["position_held_hours_max_max"],
+                        'sharpe_ratio': analysis["sharpe_ratio_max"],
+                        'Name': name,
+                        'file': pareto["index_filename"],
+                    })
+            column_config = {
+                "id": None,
+                "file": None,
+                "view": st.column_config.CheckboxColumn(label="View"),
+                "backtest": st.column_config.CheckboxColumn(label="Backtest"),
+                "delete": st.column_config.CheckboxColumn(label="Delete"),
+                }
+            #Display paretos
+            st.data_editor(data=d_paretos, height=36+(len(d_paretos))*35, use_container_width=True, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+            if f'select_paretos_{st.session_state.ed_key}' in st.session_state:
+                ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
+                for row in ed["edited_rows"]:
+                    if "view" in ed["edited_rows"][row]:
+                        if ed["edited_rows"][row]["view"]:
+                            st.write(f"Pareto {d_paretos[row]['Name']}")
+                            st.code(json.dumps(self.paretos[row], indent=4))
+                    if "backtest" in ed["edited_rows"][row]:
+                        if ed["edited_rows"][row]["backtest"]:
+                            backtest_name = d_paretos[row]["file"]
+                            st.session_state.bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
+                            if "bt_v7_queue" in st.session_state:
+                                del st.session_state.bt_v7_queue
+                            if "bt_v7_results" in st.session_state:
+                                del st.session_state.bt_v7_results
+                            if "bt_v7_edit_symbol" in st.session_state:
+                                del st.session_state.bt_v7_edit_symbol
+                            st.switch_page(get_navi_paths()["V7_BACKTEST"])
 
     def generate_analysis(self, result_file):
         # create a copy of result_file
@@ -833,7 +971,41 @@ class OptimizeV7Item:
                 self.config.optimize.scoring = st.session_state.edit_opt_v7_scoring
         else:
             st.session_state.edit_opt_v7_scoring = self.config.optimize.scoring
-        st.multiselect("scoring", ["adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio", "calmar_ratio", "sterling_ratio", "gain", "adg_w", "mdg_w", "sharpe_ratio_w", "sortino_ratio_w", "omega_ratio_w", "calmar_ratio_w", "sterling_ratio_w", "loss_profit_ratio_w"], max_selections=2, key="edit_opt_v7_scoring")
+        st.multiselect(
+            "scoring", 
+            [
+            "adg", 
+            "mdg", 
+            "sharpe_ratio", 
+            "sortino_ratio", 
+            "omega_ratio", 
+            "calmar_ratio", 
+            "sterling_ratio", 
+            "gain",
+            "loss_profit_ratio",
+            "drawdown_worst",
+            "drawdown_worst_mean_1pct",
+            "equity_balance_diff_neg_max",
+            "equity_balance_diff_neg_mean",
+            "equity_balance_diff_pos_max",
+            "equity_balance_diff_pos_mean",
+            "expected_shortfall_1pct",
+            "position_held_hours_max",
+            "position_held_hours_mean",
+            "position_held_hours_median",
+            "position_unchanged_hours_max",
+            "positions_held_per_day", 
+            "adg_w", 
+            "mdg_w", 
+            "sharpe_ratio_w", 
+            "sortino_ratio_w", 
+            "omega_ratio_w", 
+            "calmar_ratio_w", 
+            "sterling_ratio_w", 
+            "loss_profit_ratio_w"
+            ], 
+            key="edit_opt_v7_scoring"
+        )
 
     # filters
     def fragment_filter_coins(self):
