@@ -629,7 +629,9 @@ class OptimizeV7Results:
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
         #Display paretos
-        st.data_editor(data=d_paretos, height=36+(len(d_paretos))*35, use_container_width=True, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        height = 36+(len(d_paretos))*35
+        if height > 1000: height = 1016
+        st.data_editor(data=d_paretos, height=height, use_container_width=True, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','file'])
         if f'select_paretos_{st.session_state.ed_key}' in st.session_state:
             ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
             for row in ed["edited_rows"]:
