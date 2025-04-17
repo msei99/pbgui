@@ -99,7 +99,7 @@ class OptimizeV7QueueItem:
     def is_finish(self):
         log = self.load_log()
         if log:
-            if "Cleanup complete" in log:
+            if "successfully processed optimize_results" in log or "Optimization complete" in log:
                 return True
             else:
                 return False
@@ -109,7 +109,7 @@ class OptimizeV7QueueItem:
     def is_error(self):
         log = self.load_log()
         if log:
-            if "Cleanup complete" in log:
+            if "successfully processed optimize_results" in log or "Optimization complete" in log:
                 return False
             else:
                 return True
