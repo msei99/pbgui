@@ -121,6 +121,23 @@ def opt_v7_pareto():
     opt_v7_pareto = st.session_state.opt_v7_pareto
     # Navigation
     with st.sidebar:
+        if st.button(":material/refresh:"):
+            if "d_paretos" in st.session_state:
+                del st.session_state.d_paretos
+            st.rerun()
+        if st.button(":material/home:"):
+            del st.session_state.opt_v7_results
+            del st.session_state.opt_v7_pareto
+            if "d_paretos" in st.session_state:
+                del st.session_state.d_paretos
+            st.rerun()
+        if st.button("Queue"):
+            del st.session_state.opt_v7_results
+            del st.session_state.opt_v7_pareto
+            if "d_paretos" in st.session_state:
+                del st.session_state.d_paretos
+            st.session_state.opt_v7_queue = OptimizeV7Queue()
+            st.rerun()
         if st.button(":material/arrow_upward_alt:"):
             del st.session_state.opt_v7_pareto
             if "d_paretos" in st.session_state:
