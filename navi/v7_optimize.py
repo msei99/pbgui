@@ -123,30 +123,13 @@ def opt_v7_pareto():
     with st.sidebar:
         if st.button(":material/arrow_upward_alt:"):
             del st.session_state.opt_v7_pareto
+            if "d_paretos" in st.session_state:
+                del st.session_state.d_paretos
             st.rerun()
-        # if st.button(":material/refresh:"):
-        #     opt_v7_results.results = []
-        #     opt_v7_results.find_results()
-        #     if "opt_v7_results_d" in st.session_state:
-        #         del st.session_state.opt_v7_results_d
-        #     st.rerun()
-        # if st.button(":material/home:"):
-        #     del st.session_state.opt_v7_results
-        #     st.rerun()
-        # if st.button("Queue"):
-        #     del st.session_state.opt_v7_results
-        #     st.session_state.opt_v7_queue = OptimizeV7Queue()
-        #     st.rerun()
-        # if st.button(":material/delete: selected"):
-        #     opt_v7_results.remove_selected_results()
-        #     if "opt_v7_results_d" in st.session_state:
-        #         del st.session_state.opt_v7_results_d
-        #     st.rerun()
-        # if st.button(":material/delete: all"):
-        #     opt_v7_results.remove_all_results()
-        #     if "opt_v7_results_d" in st.session_state:
-        #         del st.session_state.opt_v7_results_d
-        #     st.rerun()
+        if st.button("Backtest selected"):
+            opt_v7_results.backtest_selected()
+        if st.button("Backtest all"):
+            opt_v7_results.backtest_all()
     st.subheader("View Paretos")
     opt_v7_results.view_pareto(opt_v7_pareto)
 
