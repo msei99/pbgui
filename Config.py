@@ -282,35 +282,35 @@ class Config:
 #               "end_date": "now",
 #               "exchanges": ["binance", "bybit"],
 #               "gap_tolerance_ohlcvs_minutes": 120.0,
-#               "start_date": "2020-01-01",
+#               "start_date": "2020-04-01",
 #               "starting_balance": 100000,
 #               "use_btc_collateral": true},
-#  "bot": {"long": {"close_grid_markup_range": 0.0076185,
-#                   "close_grid_min_markup": 0.002665,
-#                   "close_grid_qty_pct": 0.96044,
-#                   "close_trailing_grid_ratio": -0.0088751,
-#                   "close_trailing_qty_pct": 0.75703,
-#                   "close_trailing_retracement_pct": 0.094468,
-#                   "close_trailing_threshold_pct": 0.033725,
-#                   "ema_span_0": 321.67,
-#                   "ema_span_1": 320.53,
+#  "bot": {"long": {"close_grid_markup_range": 0.0024039,
+#                   "close_grid_min_markup": 0.0027654,
+#                   "close_grid_qty_pct": 0.96052,
+#                   "close_trailing_grid_ratio": -0.034979,
+#                   "close_trailing_qty_pct": 0.87744,
+#                   "close_trailing_retracement_pct": 0.096961,
+#                   "close_trailing_threshold_pct": 0.033947,
+#                   "ema_span_0": 315.47,
+#                   "ema_span_1": 1386.4,
 #                   "enforce_exposure_limit": true,
-#                   "entry_grid_double_down_factor": 1.6886,
+#                   "entry_grid_double_down_factor": 0.38149,
 #                   "entry_grid_spacing_pct": 0.027326,
-#                   "entry_grid_spacing_weight": 1.1331,
-#                   "entry_initial_ema_dist": -0.099207,
-#                   "entry_initial_qty_pct": 0.010642,
-#                   "entry_trailing_grid_ratio": -0.016706,
-#                   "entry_trailing_retracement_pct": 0.02615,
-#                   "entry_trailing_threshold_pct": 0.055202,
-#                   "filter_relative_volume_clip_pct": 0.0053335,
-#                   "filter_rolling_window": 309.75,
-#                   "n_positions": 6.4011,
-#                   "total_wallet_exposure_limit": 0.87819,
-#                   "unstuck_close_pct": 0.036772,
-#                   "unstuck_ema_dist": -0.078578,
-#                   "unstuck_loss_allowance_pct": 0.030858,
-#                   "unstuck_threshold": 0.56304},
+#                   "entry_grid_spacing_weight": 1.122,
+#                   "entry_initial_ema_dist": -0.098242,
+#                   "entry_initial_qty_pct": 0.0087909,
+#                   "entry_trailing_grid_ratio": -0.016703,
+#                   "entry_trailing_retracement_pct": 0.026151,
+#                   "entry_trailing_threshold_pct": 0.052532,
+#                   "filter_relative_volume_clip_pct": 0.0053487,
+#                   "filter_rolling_window": 308.35,
+#                   "n_positions": 6.4031,
+#                   "total_wallet_exposure_limit": 1.7122,
+#                   "unstuck_close_pct": 0.010836,
+#                   "unstuck_ema_dist": -0.0023852,
+#                   "unstuck_loss_allowance_pct": 0.03071,
+#                   "unstuck_threshold": 0.81056},
 #          "short": {"close_grid_markup_range": 0.022568,
 #                    "close_grid_min_markup": 0.0082649,
 #                    "close_grid_qty_pct": 0.53985,
@@ -423,7 +423,8 @@ class Config:
 #               "mutation_probability": 0.2,
 #               "n_cpus": 5,
 #               "population_size": 500,
-#               "scoring": ["mdg_w", "sharpe_ratio"]}}
+#               "round_to_n_significant_digits": 5,
+#               "scoring": ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]}}
 
 class Backtest:
     def __init__(self):
@@ -1554,8 +1555,9 @@ class Optimize:
         self._mutation_probability = 0.2
         self._n_cpus = 5
         self._population_size = 500
+        self._round_to_n_significant_digits = 5
         # scoring
-        self._scoring = ["mdg", "sortino_ratio"]
+        self._scoring = ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]
 
         self._optimize = {
             "bounds": self._bounds._bounds,
@@ -1567,6 +1569,7 @@ class Optimize:
             "mutation_probability": self._mutation_probability,
             "n_cpus": self._n_cpus,
             "population_size": self._population_size,
+            "round_to_n_significant_digits": self._round_to_n_significant_digits,
             "scoring": self._scoring
         }
     
@@ -1595,6 +1598,8 @@ class Optimize:
             self.n_cpus = new_optimize["n_cpus"]
         if "population_size" in new_optimize:
             self.population_size = new_optimize["population_size"]
+        if "round_to_n_significant_digits" in new_optimize:
+            self.round_to_n_significant_digits = new_optimize["round_to_n_significant_digits"]
         if "scoring" in new_optimize:
             self.scoring = new_optimize["scoring"]
     
@@ -1619,6 +1624,8 @@ class Optimize:
         return self._n_cpus
     @property
     def population_size(self): return self._population_size
+    @property
+    def round_to_n_significant_digits(self): return self._round_to_n_significant_digits
     @property
     def scoring(self): return self._scoring
 
@@ -1660,6 +1667,10 @@ class Optimize:
     def population_size(self, new_population_size):
         self._population_size = new_population_size
         self._optimize["population_size"] = self._population_size
+    @round_to_n_significant_digits.setter
+    def round_to_n_significant_digits(self, new_round_to_n_significant_digits):
+        self._round_to_n_significant_digits = new_round_to_n_significant_digits
+        self._optimize["round_to_n_significant_digits"] = self._round_to_n_significant_digits
     @scoring.setter
     def scoring(self, new_scoring):
         self._scoring = new_scoring

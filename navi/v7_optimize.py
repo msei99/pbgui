@@ -115,6 +115,41 @@ def opt_v7_results():
     st.subheader("All Results")
     opt_v7_results.view_results()
 
+def opt_v7_pareto():
+    # Init bt_v7_pareto
+    opt_v7_results = st.session_state.opt_v7_results
+    opt_v7_pareto = st.session_state.opt_v7_pareto
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/arrow_upward_alt:"):
+            del st.session_state.opt_v7_pareto
+            st.rerun()
+        # if st.button(":material/refresh:"):
+        #     opt_v7_results.results = []
+        #     opt_v7_results.find_results()
+        #     if "opt_v7_results_d" in st.session_state:
+        #         del st.session_state.opt_v7_results_d
+        #     st.rerun()
+        # if st.button(":material/home:"):
+        #     del st.session_state.opt_v7_results
+        #     st.rerun()
+        # if st.button("Queue"):
+        #     del st.session_state.opt_v7_results
+        #     st.session_state.opt_v7_queue = OptimizeV7Queue()
+        #     st.rerun()
+        # if st.button(":material/delete: selected"):
+        #     opt_v7_results.remove_selected_results()
+        #     if "opt_v7_results_d" in st.session_state:
+        #         del st.session_state.opt_v7_results_d
+        #     st.rerun()
+        # if st.button(":material/delete: all"):
+        #     opt_v7_results.remove_all_results()
+        #     if "opt_v7_results_d" in st.session_state:
+        #         del st.session_state.opt_v7_results_d
+        #     st.rerun()
+    st.subheader("View Paretos")
+    opt_v7_results.view_pareto(opt_v7_pareto)
+
 def opt_v7_queue():
     # Init opt_v7_queue
     opt_v7_queue = st.session_state.opt_v7_queue
@@ -168,7 +203,9 @@ if st.session_state.pbcoindata.api_error:
     st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
     st.stop()
 
-if "opt_v7_results" in st.session_state:
+if "opt_v7_pareto" in st.session_state:
+    opt_v7_pareto()
+elif "opt_v7_results" in st.session_state:
     opt_v7_results()
 elif "opt_v7" in st.session_state:
     opt_v7()
