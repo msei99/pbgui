@@ -583,7 +583,6 @@ class OptimizeV7Results:
     def load_paretos(self, index):
         self.paretos = []
         paretos_path = PurePath(f'{index}').parent / "pareto"
-        print(paretos_path)
         if Path(paretos_path).exists():
             # find all json files in paretos_path
             p = str(paretos_path) + "/*.json"
@@ -597,17 +596,18 @@ class OptimizeV7Results:
         self.paretos.sort(key=lambda x: x['index_filename'])
 
     def view_pareto(self, index):
-        self.load_paretos(index)
-        if self.paretos:
-            d_paretos = []
+        if not "d_paretos" in st.session_state:
+            self.load_paretos(index)
+            d = []
             for id, pareto in enumerate(self.paretos):
                 if "analyses_combined" in pareto:
                     analysis = pareto["analyses_combined"]
                     name = pareto["index_filename"].split("/")[-1]
-                    d_paretos.append({
+                    d.append({
                         'id': id,
                         'view': False,
                         'backtest': False,
+                        'multi_bt': False,
                         'adg': analysis["adg_max"],
                         'mdg': analysis["mdg_max"],
                         'drawdown_worst': analysis["drawdown_worst_max"],
@@ -618,33 +618,75 @@ class OptimizeV7Results:
                         'Name': name,
                         'file': pareto["index_filename"],
                     })
-            column_config = {
-                "id": None,
-                "file": None,
-                "view": st.column_config.CheckboxColumn(label="View"),
-                "backtest": st.column_config.CheckboxColumn(label="Backtest"),
-                "delete": st.column_config.CheckboxColumn(label="Delete"),
-                }
-            #Display paretos
-            st.data_editor(data=d_paretos, height=36+(len(d_paretos))*35, use_container_width=True, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
-            if f'select_paretos_{st.session_state.ed_key}' in st.session_state:
-                ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
-                for row in ed["edited_rows"]:
-                    if "view" in ed["edited_rows"][row]:
-                        if ed["edited_rows"][row]["view"]:
-                            st.write(f"Pareto {d_paretos[row]['Name']}")
-                            st.code(json.dumps(self.paretos[row], indent=4))
-                    if "backtest" in ed["edited_rows"][row]:
-                        if ed["edited_rows"][row]["backtest"]:
-                            backtest_name = d_paretos[row]["file"]
-                            st.session_state.bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
-                            if "bt_v7_queue" in st.session_state:
-                                del st.session_state.bt_v7_queue
-                            if "bt_v7_results" in st.session_state:
-                                del st.session_state.bt_v7_results
-                            if "bt_v7_edit_symbol" in st.session_state:
-                                del st.session_state.bt_v7_edit_symbol
-                            st.switch_page(get_navi_paths()["V7_BACKTEST"])
+            st.session_state.d_paretos = d
+        d_paretos = st.session_state.d_paretos
+        column_config = {
+            "id": None,
+            "file": None,
+            "view": st.column_config.CheckboxColumn(label="View"),
+            "backtest": st.column_config.CheckboxColumn(label="Single BT"),
+            "multi_bt": st.column_config.CheckboxColumn(label="Multi BT"),
+            "delete": st.column_config.CheckboxColumn(label="Delete"),
+            }
+        #Display paretos
+        st.data_editor(data=d_paretos, height=36+(len(d_paretos))*35, use_container_width=True, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        if f'select_paretos_{st.session_state.ed_key}' in st.session_state:
+            ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
+            for row in ed["edited_rows"]:
+                if "view" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["view"]:
+                        st.write(f"Pareto {d_paretos[row]['Name']}")
+                        st.code(json.dumps(self.paretos[row], indent=4))
+                if "backtest" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["backtest"]:
+                        backtest_name = d_paretos[row]["file"]
+                        st.session_state.bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
+                        if "bt_v7_queue" in st.session_state:
+                            del st.session_state.bt_v7_queue
+                        if "bt_v7_results" in st.session_state:
+                            del st.session_state.bt_v7_results
+                        if "bt_v7_edit_symbol" in st.session_state:
+                            del st.session_state.bt_v7_edit_symbol
+                        st.switch_page(get_navi_paths()["V7_BACKTEST"])
+
+    def backtest_selected(self):
+        if "d_paretos" in st.session_state:
+            d_paretos = st.session_state.d_paretos
+        else:
+            return
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
+        for row in ed["edited_rows"]:
+            if "multi_bt" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["multi_bt"]:
+                    backtest_name = d_paretos[row]["file"]
+                    # run backtest on selected pareto
+                    bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
+                    bt_v7.save_queue()
+        if "bt_v7_results" in st.session_state:
+            del st.session_state.bt_v7_results
+        if "bt_v7_edit_symbol" in st.session_state:
+            del st.session_state.bt_v7_edit_symbol
+        st.session_state.bt_v7_queue = BacktestV7.BacktestV7Queue()
+        st.switch_page(get_navi_paths()["V7_BACKTEST"])
+    
+    def backtest_all(self):
+        if "d_paretos" in st.session_state:
+            d_paretos = st.session_state.d_paretos
+        else:
+            return
+        for row in range(len(d_paretos)):
+            backtest_name = d_paretos[row]["file"]
+            # run backtest on selected pareto
+            bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
+            bt_v7.save_queue()
+        if "bt_v7_results" in st.session_state:
+            del st.session_state.bt_v7_results
+        if "bt_v7_edit_symbol" in st.session_state:
+            del st.session_state.bt_v7_edit_symbol
+        st.session_state.bt_v7_queue = BacktestV7.BacktestV7Queue()
+        st.switch_page(get_navi_paths()["V7_BACKTEST"])
+
 
     def generate_analysis(self, result_file):
         # create a copy of result_file
