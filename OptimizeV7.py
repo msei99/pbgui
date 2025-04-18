@@ -896,6 +896,16 @@ class OptimizeV7Item:
         else:
             st.session_state.edit_opt_v7_compress_results_file = self.config.optimize.compress_results_file
         st.checkbox("compress_results_file", key="edit_opt_v7_compress_results_file", help=pbgui_help.compress_results_file)
+    
+    # use_btc_collateral
+    @st.fragment
+    def fragment_use_btc_collateral(self):
+        if "edit_opt_v7_use_btc_collateral" in st.session_state:
+            if st.session_state.edit_opt_v7_use_btc_collateral != self.config.backtest.use_btc_collateral:
+                self.config.backtest.use_btc_collateral = st.session_state.edit_opt_v7_use_btc_collateral
+        else:
+            st.session_state.edit_opt_v7_use_btc_collateral = self.config.backtest.use_btc_collateral
+        st.checkbox("use_btc_collateral", key="edit_opt_v7_use_btc_collateral", help=pbgui_help.use_btc_collateral)
 
     # lower_bound_drawdown_worst
     @st.fragment
@@ -2123,6 +2133,7 @@ class OptimizeV7Item:
             self.fragment_n_cpus()
         with col4:
             self.fragment_starting_config()
+            self.fragment_use_btc_collateral()
         with col5:
             self.fragment_combine_ohlcvs()
             self.fragment_compress_results_file()
