@@ -2308,7 +2308,7 @@ def main():
             pb_config.read('pbgui.ini')
             if not eval(pb_config.get("optimize_v7", "autostart")):
                 return
-            if item.status() == "not started":
+            if item.status() == "not started" or item.status() == "error":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')
                 item.run()
                 time.sleep(1)
