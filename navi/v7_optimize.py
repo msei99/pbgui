@@ -91,9 +91,12 @@ def opt_v7_results():
     with st.sidebar:
         if st.button(":material/refresh:"):
             opt_v7_results.results = []
+            opt_v7_results.results_new = []
             opt_v7_results.find_results()
             if "opt_v7_results_d" in st.session_state:
                 del st.session_state.opt_v7_results_d
+            if "opt_v7_results_d_new" in st.session_state:
+                del st.session_state.opt_v7_results_d_new
             st.rerun()
         if st.button(":material/home:"):
             del st.session_state.opt_v7_results
