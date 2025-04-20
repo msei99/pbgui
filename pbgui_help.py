@@ -815,6 +815,11 @@ limits_lower_bound_position_held_hours_max = """
     max hours a position is held
     ```"""
 
+limits = """
+    ```
+    The optimizer will penalize backtests whose metrics exceed the given values
+    ```"""
+
 population_size = """
     ```
     size of population for genetic optimization algorithm
