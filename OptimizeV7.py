@@ -363,6 +363,7 @@ class OptimizeV7Results:
         self.results_path = Path(f'{pb7dir()}/optimize_results')
         self.analysis_path = Path(f'{pb7dir()}/optimize_results_analysis')
         self.results = []
+        self.results_new = []
         self.paretos = []
         self.filter = ""
         self.initialize()
@@ -1056,7 +1057,36 @@ class OptimizeV7Item:
             "omega_ratio_w", 
             "calmar_ratio_w", 
             "sterling_ratio_w", 
-            "loss_profit_ratio_w"
+            "loss_profit_ratio_w",
+            "btc_adg",
+            "btc_mdg",
+            "btc_sharpe_ratio",
+            "btc_sortino_ratio",
+            "btc_omega_ratio",
+            "btc_calmar_ratio",
+            "btc_sterling_ratio",
+            "btc_gain",
+            "btc_loss_profit_ratio",
+            "btc_drawdown_worst",
+            "btc_drawdown_worst_mean_1pct",
+            "btc_equity_balance_diff_neg_max",
+            "btc_equity_balance_diff_neg_mean",
+            "btc_equity_balance_diff_pos_max",
+            "btc_equity_balance_diff_pos_mean",
+            "btc_expected_shortfall_1pct",
+            "btc_position_held_hours_max",
+            "btc_position_held_hours_mean",
+            "btc_position_held_hours_median",
+            "btc_position_unchanged_hours_max",
+            "btc_positions_held_per_day",
+            "btc_adg_w",
+            "btc_mdg_w",
+            "btc_sharpe_ratio_w",
+            "btc_sortino_ratio_w",
+            "btc_omega_ratio_w",
+            "btc_calmar_ratio_w",
+            "btc_sterling_ratio_w",
+            "btc_loss_profit_ratio_w",
             ], 
             key="edit_opt_v7_scoring"
         )
