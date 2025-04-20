@@ -1546,7 +1546,8 @@ class Live:
 class Optimize:
     def __init__(self):
         self._bounds = Bounds()
-        self._limits = Limits()
+        # self._limits = Limits()
+        self._limits = {}
         # optimize
         self._compress_results_file = True
         self._crossover_probability = 0.7
@@ -1565,7 +1566,8 @@ class Optimize:
             "crossover_probability": self._crossover_probability,
             "enable_overrides": self._enable_overrides,
             "iters": self._iters,
-            "limits": self._limits._limits,
+            # "limits": self._limits._limits,
+            "limits": self._limits,
             "mutation_probability": self._mutation_probability,
             "n_cpus": self._n_cpus,
             "population_size": self._population_size,
@@ -1639,8 +1641,10 @@ class Optimize:
         self._optimize["compress_results_file"] = self._compress_results_file
     @limits.setter
     def limits(self, new_limits):
-        self._limits.limits = new_limits
-        self._optimize["limits"] = self._limits.limits
+        # self._limits.limits = new_limits
+        # self._optimize["limits"] = self._limits.limits
+        self._limits = new_limits
+        self._optimize["limits"] = self._limits
     @crossover_probability.setter
     def crossover_probability(self, new_crossover_probability):
         self._crossover_probability = new_crossover_probability
@@ -1676,100 +1680,100 @@ class Optimize:
         self._scoring = new_scoring
         self._optimize["scoring"] = self._scoring
 
-class Limits:
-    def __init__(self):
-        self._lower_bound_drawdown_worst = 0.25
-        self._lower_bound_drawdown_worst_mean_1pct = 0.15
-        self._lower_bound_equity_balance_diff_neg_max = 0.4
-        self._lower_bound_equity_balance_diff_neg_mean = 0.01
-        self._lower_bound_equity_balance_diff_pos_max = 0.5
-        self._lower_bound_equity_balance_diff_pos_mean = 0.02
-        self._lower_bound_loss_profit_ratio = 0.6
-        self._lower_bound_position_held_hours_max = 336.0
-        self._limits = {
-            "lower_bound_drawdown_worst": self._lower_bound_drawdown_worst,
-            "lower_bound_drawdown_worst_mean_1pct": self._lower_bound_drawdown_worst_mean_1pct,
-            "lower_bound_equity_balance_diff_neg_max": self._lower_bound_equity_balance_diff_neg_max,
-            "lower_bound_equity_balance_diff_neg_mean": self._lower_bound_equity_balance_diff_neg_mean,
-            "lower_bound_equity_balance_diff_pos_max": self._lower_bound_equity_balance_diff_pos_max,
-            "lower_bound_equity_balance_diff_pos_mean": self._lower_bound_equity_balance_diff_pos_mean,
-            "lower_bound_loss_profit_ratio": self._lower_bound_loss_profit_ratio,
-            "lower_bound_position_held_hours_max": self._lower_bound_position_held_hours_max
-        }
+# class Limits:
+#     def __init__(self):
+#         self._lower_bound_drawdown_worst = 0.25
+#         self._lower_bound_drawdown_worst_mean_1pct = 0.15
+#         self._lower_bound_equity_balance_diff_neg_max = 0.4
+#         self._lower_bound_equity_balance_diff_neg_mean = 0.01
+#         self._lower_bound_equity_balance_diff_pos_max = 0.5
+#         self._lower_bound_equity_balance_diff_pos_mean = 0.02
+#         self._lower_bound_loss_profit_ratio = 0.6
+#         self._lower_bound_position_held_hours_max = 336.0
+#         self._limits = {
+#             "lower_bound_drawdown_worst": self._lower_bound_drawdown_worst,
+#             "lower_bound_drawdown_worst_mean_1pct": self._lower_bound_drawdown_worst_mean_1pct,
+#             "lower_bound_equity_balance_diff_neg_max": self._lower_bound_equity_balance_diff_neg_max,
+#             "lower_bound_equity_balance_diff_neg_mean": self._lower_bound_equity_balance_diff_neg_mean,
+#             "lower_bound_equity_balance_diff_pos_max": self._lower_bound_equity_balance_diff_pos_max,
+#             "lower_bound_equity_balance_diff_pos_mean": self._lower_bound_equity_balance_diff_pos_mean,
+#             "lower_bound_loss_profit_ratio": self._lower_bound_loss_profit_ratio,
+#             "lower_bound_position_held_hours_max": self._lower_bound_position_held_hours_max
+#         }
     
-    def __repr__(self):
-        return str(self._limits)
+    # def __repr__(self):
+    #     return str(self._limits)
     
-    @property
-    def limits(self): return self._limits
-    @limits.setter
-    def limits(self, new_limits):
-        if "lower_bound_drawdown_worst" in new_limits:
-            self.lower_bound_drawdown_worst = new_limits["lower_bound_drawdown_worst"]
-        if "lower_bound_drawdown_worst_mean_1pct" in new_limits:
-            self.lower_bound_drawdown_worst_mean_1pct = new_limits["lower_bound_drawdown_worst_mean_1pct"]
-        if "lower_bound_equity_balance_diff_neg_max" in new_limits:
-            self.lower_bound_equity_balance_diff_neg_max = new_limits["lower_bound_equity_balance_diff_neg_max"]
-        if "lower_bound_equity_balance_diff_neg_mean" in new_limits:
-            self.lower_bound_equity_balance_diff_neg_mean = new_limits["lower_bound_equity_balance_diff_neg_mean"]
-        if "lower_bound_equity_balance_diff_pos_max" in new_limits:
-            self.lower_bound_equity_balance_diff_pos_max = new_limits["lower_bound_equity_balance_diff_pos_max"]
-        if "lower_bound_equity_balance_diff_pos_mean" in new_limits:
-            self.lower_bound_equity_balance_diff_pos_mean = new_limits["lower_bound_equity_balance_diff_pos_mean"]
-        if "lower_bound_loss_profit_ratio" in new_limits:
-            self.lower_bound_loss_profit_ratio = new_limits["lower_bound_loss_profit_ratio"]
-        if "lower_bound_position_held_hours_max" in new_limits:
-            self.lower_bound_position_held_hours_max = new_limits["lower_bound_position_held_hours_max"]
+    # @property
+    # def limits(self): return self._limits
+    # @limits.setter
+    # def limits(self, new_limits):
+    #     if "lower_bound_drawdown_worst" in new_limits:
+    #         self.lower_bound_drawdown_worst = new_limits["lower_bound_drawdown_worst"]
+    #     if "lower_bound_drawdown_worst_mean_1pct" in new_limits:
+    #         self.lower_bound_drawdown_worst_mean_1pct = new_limits["lower_bound_drawdown_worst_mean_1pct"]
+    #     if "lower_bound_equity_balance_diff_neg_max" in new_limits:
+    #         self.lower_bound_equity_balance_diff_neg_max = new_limits["lower_bound_equity_balance_diff_neg_max"]
+    #     if "lower_bound_equity_balance_diff_neg_mean" in new_limits:
+    #         self.lower_bound_equity_balance_diff_neg_mean = new_limits["lower_bound_equity_balance_diff_neg_mean"]
+    #     if "lower_bound_equity_balance_diff_pos_max" in new_limits:
+    #         self.lower_bound_equity_balance_diff_pos_max = new_limits["lower_bound_equity_balance_diff_pos_max"]
+    #     if "lower_bound_equity_balance_diff_pos_mean" in new_limits:
+    #         self.lower_bound_equity_balance_diff_pos_mean = new_limits["lower_bound_equity_balance_diff_pos_mean"]
+    #     if "lower_bound_loss_profit_ratio" in new_limits:
+    #         self.lower_bound_loss_profit_ratio = new_limits["lower_bound_loss_profit_ratio"]
+    #     if "lower_bound_position_held_hours_max" in new_limits:
+    #         self.lower_bound_position_held_hours_max = new_limits["lower_bound_position_held_hours_max"]
     
-    @property
-    def lower_bound_drawdown_worst(self): return self._lower_bound_drawdown_worst
-    @property
-    def lower_bound_drawdown_worst_mean_1pct(self): return self._lower_bound_drawdown_worst_mean_1pct
-    @property
-    def lower_bound_equity_balance_diff_neg_max(self): return self._lower_bound_equity_balance_diff_neg_max
-    @property
-    def lower_bound_equity_balance_diff_neg_mean(self): return self._lower_bound_equity_balance_diff_neg_mean
-    @property
-    def lower_bound_equity_balance_diff_pos_max(self): return self._lower_bound_equity_balance_diff_pos_max
-    @property
-    def lower_bound_equity_balance_diff_pos_mean(self): return self._lower_bound_equity_balance_diff_pos_mean
-    @property
-    def lower_bound_loss_profit_ratio(self): return self._lower_bound_loss_profit_ratio
-    @property
-    def lower_bound_position_held_hours_max(self): return self._lower_bound_position_held_hours_max
+    # @property
+    # def lower_bound_drawdown_worst(self): return self._lower_bound_drawdown_worst
+    # @property
+    # def lower_bound_drawdown_worst_mean_1pct(self): return self._lower_bound_drawdown_worst_mean_1pct
+    # @property
+    # def lower_bound_equity_balance_diff_neg_max(self): return self._lower_bound_equity_balance_diff_neg_max
+    # @property
+    # def lower_bound_equity_balance_diff_neg_mean(self): return self._lower_bound_equity_balance_diff_neg_mean
+    # @property
+    # def lower_bound_equity_balance_diff_pos_max(self): return self._lower_bound_equity_balance_diff_pos_max
+    # @property
+    # def lower_bound_equity_balance_diff_pos_mean(self): return self._lower_bound_equity_balance_diff_pos_mean
+    # @property
+    # def lower_bound_loss_profit_ratio(self): return self._lower_bound_loss_profit_ratio
+    # @property
+    # def lower_bound_position_held_hours_max(self): return self._lower_bound_position_held_hours_max
 
-    @lower_bound_drawdown_worst.setter
-    def lower_bound_drawdown_worst(self, new_lower_bound_drawdown_worst):
-        self._lower_bound_drawdown_worst = new_lower_bound_drawdown_worst
-        self._limits["lower_bound_drawdown_worst"] = self._lower_bound_drawdown_worst
-    @lower_bound_drawdown_worst_mean_1pct.setter
-    def lower_bound_drawdown_worst_mean_1pct(self, new_lower_bound_drawdown_worst_mean_1pct):
-        self._lower_bound_drawdown_worst_mean_1pct = new_lower_bound_drawdown_worst_mean_1pct
-        self._limits["lower_bound_drawdown_worst_mean_1pct"] = self._lower_bound_drawdown_worst_mean_1pct
-    @lower_bound_equity_balance_diff_neg_max.setter
-    def lower_bound_equity_balance_diff_neg_max(self, new_lower_bound_equity_balance_diff_neg_max):
-        self._lower_bound_equity_balance_diff_neg_max = new_lower_bound_equity_balance_diff_neg_max
-        self._limits["lower_bound_equity_balance_diff_neg_max"] = self._lower_bound_equity_balance_diff_neg_max
-    @lower_bound_equity_balance_diff_neg_mean.setter
-    def lower_bound_equity_balance_diff_neg_mean(self, new_lower_bound_equity_balance_diff_neg_mean):
-        self._lower_bound_equity_balance_diff_neg_mean = new_lower_bound_equity_balance_diff_neg_mean
-        self._limits["lower_bound_equity_balance_diff_neg_mean"] = self._lower_bound_equity_balance_diff_neg_mean
-    @lower_bound_equity_balance_diff_pos_max.setter
-    def lower_bound_equity_balance_diff_pos_max(self, new_lower_bound_equity_balance_diff_pos_max):
-        self._lower_bound_equity_balance_diff_pos_max = new_lower_bound_equity_balance_diff_pos_max
-        self._limits["lower_bound_equity_balance_diff_pos_max"] = self._lower_bound_equity_balance_diff_pos_max
-    @lower_bound_equity_balance_diff_pos_mean.setter
-    def lower_bound_equity_balance_diff_pos_mean(self, new_lower_bound_equity_balance_diff_pos_mean):
-        self._lower_bound_equity_balance_diff_pos_mean = new_lower_bound_equity_balance_diff_pos_mean
-        self._limits["lower_bound_equity_balance_diff_pos_mean"] = self._lower_bound_equity_balance_diff_pos_mean
-    @lower_bound_loss_profit_ratio.setter
-    def lower_bound_loss_profit_ratio(self, new_lower_bound_loss_profit_ratio):
-        self._lower_bound_loss_profit_ratio = new_lower_bound_loss_profit_ratio
-        self._limits["lower_bound_loss_profit_ratio"] = self._lower_bound_loss_profit_ratio
-    @lower_bound_position_held_hours_max.setter
-    def lower_bound_position_held_hours_max(self, new_lower_bound_position_held_hours_max):
-        self._lower_bound_position_held_hours_max = new_lower_bound_position_held_hours_max
-        self._limits["lower_bound_position_held_hours_max"] = self._lower_bound_position_held_hours_max
+    # @lower_bound_drawdown_worst.setter
+    # def lower_bound_drawdown_worst(self, new_lower_bound_drawdown_worst):
+    #     self._lower_bound_drawdown_worst = new_lower_bound_drawdown_worst
+    #     self._limits["lower_bound_drawdown_worst"] = self._lower_bound_drawdown_worst
+    # @lower_bound_drawdown_worst_mean_1pct.setter
+    # def lower_bound_drawdown_worst_mean_1pct(self, new_lower_bound_drawdown_worst_mean_1pct):
+    #     self._lower_bound_drawdown_worst_mean_1pct = new_lower_bound_drawdown_worst_mean_1pct
+    #     self._limits["lower_bound_drawdown_worst_mean_1pct"] = self._lower_bound_drawdown_worst_mean_1pct
+    # @lower_bound_equity_balance_diff_neg_max.setter
+    # def lower_bound_equity_balance_diff_neg_max(self, new_lower_bound_equity_balance_diff_neg_max):
+    #     self._lower_bound_equity_balance_diff_neg_max = new_lower_bound_equity_balance_diff_neg_max
+    #     self._limits["lower_bound_equity_balance_diff_neg_max"] = self._lower_bound_equity_balance_diff_neg_max
+    # @lower_bound_equity_balance_diff_neg_mean.setter
+    # def lower_bound_equity_balance_diff_neg_mean(self, new_lower_bound_equity_balance_diff_neg_mean):
+    #     self._lower_bound_equity_balance_diff_neg_mean = new_lower_bound_equity_balance_diff_neg_mean
+    #     self._limits["lower_bound_equity_balance_diff_neg_mean"] = self._lower_bound_equity_balance_diff_neg_mean
+    # @lower_bound_equity_balance_diff_pos_max.setter
+    # def lower_bound_equity_balance_diff_pos_max(self, new_lower_bound_equity_balance_diff_pos_max):
+    #     self._lower_bound_equity_balance_diff_pos_max = new_lower_bound_equity_balance_diff_pos_max
+    #     self._limits["lower_bound_equity_balance_diff_pos_max"] = self._lower_bound_equity_balance_diff_pos_max
+    # @lower_bound_equity_balance_diff_pos_mean.setter
+    # def lower_bound_equity_balance_diff_pos_mean(self, new_lower_bound_equity_balance_diff_pos_mean):
+    #     self._lower_bound_equity_balance_diff_pos_mean = new_lower_bound_equity_balance_diff_pos_mean
+    #     self._limits["lower_bound_equity_balance_diff_pos_mean"] = self._lower_bound_equity_balance_diff_pos_mean
+    # @lower_bound_loss_profit_ratio.setter
+    # def lower_bound_loss_profit_ratio(self, new_lower_bound_loss_profit_ratio):
+    #     self._lower_bound_loss_profit_ratio = new_lower_bound_loss_profit_ratio
+    #     self._limits["lower_bound_loss_profit_ratio"] = self._lower_bound_loss_profit_ratio
+    # @lower_bound_position_held_hours_max.setter
+    # def lower_bound_position_held_hours_max(self, new_lower_bound_position_held_hours_max):
+    #     self._lower_bound_position_held_hours_max = new_lower_bound_position_held_hours_max
+    #     self._limits["lower_bound_position_held_hours_max"] = self._lower_bound_position_held_hours_max
 
 class Bounds:
 

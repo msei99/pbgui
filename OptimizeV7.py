@@ -2176,24 +2176,209 @@ class OptimizeV7Item:
             self.fragment_compress_results_file()
         with st.expander("Edit Config", expanded=False):
             self.config.bot.edit()
-        col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
-        with col1:
-            self.fragment_lower_bound_drawdown_worst()
-        with col2:
-            self.fragment_lower_bound_drawdown_worst_mean_1pct()
-        with col3:
-            self.fragment_lower_bound_loss_profit_ratio()
-        with col4:
-            self.fragment_lower_bound_position_held_hours_max()
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
-        with col1:
-            self.fragment_lower_bound_equity_balance_diff_neg_max()
-        with col2:
-            self.fragment_lower_bound_equity_balance_diff_neg_mean()
-        with col3:
-            self.fragment_lower_bound_equity_balance_diff_pos_max()
-        with col4:
-            self.fragment_lower_bound_equity_balance_diff_pos_mean()
+        # col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        # with col1:
+        #     self.fragment_lower_bound_drawdown_worst()
+        # with col2:
+        #     self.fragment_lower_bound_drawdown_worst_mean_1pct()
+        # with col3:
+        #     self.fragment_lower_bound_loss_profit_ratio()
+        # with col4:
+        #     self.fragment_lower_bound_position_held_hours_max()
+        # col1, col2, col3, col4 = st.columns([1,1,1,1])
+        # with col1:
+        #     self.fragment_lower_bound_equity_balance_diff_neg_max()
+        # with col2:
+        #     self.fragment_lower_bound_equity_balance_diff_neg_mean()
+        # with col3:
+        #     self.fragment_lower_bound_equity_balance_diff_pos_max()
+        # with col4:
+        #     self.fragment_lower_bound_equity_balance_diff_pos_mean()
+
+        LIMITS = [
+            "penalize_if_greater_than_adg",
+            "penalize_if_greater_than_adg_w",
+            "penalize_if_greater_than_btc_adg",
+            "penalize_if_greater_than_btc_adg_w",
+            "penalize_if_greater_than_btc_calmar_ratio",
+            "penalize_if_greater_than_btc_calmar_ratio_w",
+            "penalize_if_greater_than_btc_drawdown_worst",
+            "penalize_if_greater_than_btc_drawdown_worst_mean_1pct",
+            "penalize_if_greater_than_btc_equity_balance_diff_neg_max",
+            "penalize_if_greater_than_btc_equity_balance_diff_neg_mean",
+            "penalize_if_greater_than_btc_equity_balance_diff_pos_max",
+            "penalize_if_greater_than_btc_equity_balance_diff_pos_mean",
+            "penalize_if_greater_than_btc_equity_choppiness",
+            "penalize_if_greater_than_btc_equity_choppiness_w",
+            "penalize_if_greater_than_btc_equity_jerkiness",
+            "penalize_if_greater_than_btc_equity_jerkiness_w",
+            "penalize_if_greater_than_btc_expected_shortfall_1pct",
+            "penalize_if_greater_than_btc_exponential_fit_error",
+            "penalize_if_greater_than_btc_exponential_fit_error_w",
+            "penalize_if_greater_than_btc_gain",
+            "penalize_if_greater_than_btc_loss_profit_ratio",
+            "penalize_if_greater_than_btc_loss_profit_ratio_w",
+            "penalize_if_greater_than_btc_mdg",
+            "penalize_if_greater_than_btc_mdg_w",
+            "penalize_if_greater_than_btc_omega_ratio",
+            "penalize_if_greater_than_btc_omega_ratio_w",
+            "penalize_if_greater_than_btc_sharpe_ratio",
+            "penalize_if_greater_than_btc_sharpe_ratio_w",
+            "penalize_if_greater_than_btc_sortino_ratio",
+            "penalize_if_greater_than_btc_sortino_ratio_w",
+            "penalize_if_greater_than_btc_sterling_ratio",
+            "penalize_if_greater_than_btc_sterling_ratio_w",
+            "penalize_if_greater_than_calmar_ratio",
+            "penalize_if_greater_than_calmar_ratio_w",
+            "penalize_if_greater_than_drawdown_worst",
+            "penalize_if_greater_than_drawdown_worst_mean_1pct",
+            "penalize_if_greater_than_equity_balance_diff_neg_max",
+            "penalize_if_greater_than_equity_balance_diff_neg_mean",
+            "penalize_if_greater_than_equity_balance_diff_pos_max",
+            "penalize_if_greater_than_equity_balance_diff_pos_mean",
+            "penalize_if_greater_than_equity_choppiness",
+            "penalize_if_greater_than_equity_choppiness_w",
+            "penalize_if_greater_than_equity_jerkiness",
+            "penalize_if_greater_than_equity_jerkiness_w",
+            "penalize_if_greater_than_expected_shortfall_1pct",
+            "penalize_if_greater_than_exponential_fit_error",
+            "penalize_if_greater_than_exponential_fit_error_w",
+            "penalize_if_greater_than_gain",
+            "penalize_if_greater_than_loss_profit_ratio",
+            "penalize_if_greater_than_loss_profit_ratio_w",
+            "penalize_if_greater_than_mdg",
+            "penalize_if_greater_than_mdg_w",
+            "penalize_if_greater_than_omega_ratio",
+            "penalize_if_greater_than_omega_ratio_w",
+            "penalize_if_greater_than_position_held_hours_max",
+            "penalize_if_greater_than_position_held_hours_mean",
+            "penalize_if_greater_than_position_held_hours_median",
+            "penalize_if_greater_than_position_unchanged_hours_max",
+            "penalize_if_greater_than_positions_held_per_day",
+            "penalize_if_greater_than_sharpe_ratio",
+            "penalize_if_greater_than_sharpe_ratio_w",
+            "penalize_if_greater_than_sortino_ratio",
+            "penalize_if_greater_than_sortino_ratio_w",
+            "penalize_if_greater_than_sterling_ratio",
+            "penalize_if_greater_than_sterling_ratio_w",
+            "penalize_if_lower_than_adg",
+            "penalize_if_lower_than_adg_w",
+            "penalize_if_lower_than_btc_adg",
+            "penalize_if_lower_than_btc_adg_w",
+            "penalize_if_lower_than_btc_calmar_ratio",
+            "penalize_if_lower_than_btc_calmar_ratio_w",
+            "penalize_if_lower_than_btc_drawdown_worst",
+            "penalize_if_lower_than_btc_drawdown_worst_mean_1pct",
+            "penalize_if_lower_than_btc_equity_balance_diff_neg_max",
+            "penalize_if_lower_than_btc_equity_balance_diff_neg_mean",
+            "penalize_if_lower_than_btc_equity_balance_diff_pos_max",
+            "penalize_if_lower_than_btc_equity_balance_diff_pos_mean",
+            "penalize_if_lower_than_btc_equity_choppiness",
+            "penalize_if_lower_than_btc_equity_choppiness_w",
+            "penalize_if_lower_than_btc_equity_jerkiness",
+            "penalize_if_lower_than_btc_equity_jerkiness_w",
+            "penalize_if_lower_than_btc_expected_shortfall_1pct",
+            "penalize_if_lower_than_btc_exponential_fit_error",
+            "penalize_if_lower_than_btc_exponential_fit_error_w",
+            "penalize_if_lower_than_btc_gain",
+            "penalize_if_lower_than_btc_loss_profit_ratio",
+            "penalize_if_lower_than_btc_loss_profit_ratio_w",
+            "penalize_if_lower_than_btc_mdg",
+            "penalize_if_lower_than_btc_mdg_w",
+            "penalize_if_lower_than_btc_omega_ratio",
+            "penalize_if_lower_than_btc_omega_ratio_w",
+            "penalize_if_lower_than_btc_sharpe_ratio",
+            "penalize_if_lower_than_btc_sharpe_ratio_w",
+            "penalize_if_lower_than_btc_sortino_ratio",
+            "penalize_if_lower_than_btc_sortino_ratio_w",
+            "penalize_if_lower_than_btc_sterling_ratio",
+            "penalize_if_lower_than_btc_sterling_ratio_w",
+            "penalize_if_lower_than_calmar_ratio",
+            "penalize_if_lower_than_calmar_ratio_w",
+            "penalize_if_lower_than_drawdown_worst",
+            "penalize_if_lower_than_drawdown_worst_mean_1pct",
+            "penalize_if_lower_than_equity_balance_diff_neg_max",
+            "penalize_if_lower_than_equity_balance_diff_neg_mean",
+            "penalize_if_lower_than_equity_balance_diff_pos_max",
+            "penalize_if_lower_than_equity_balance_diff_pos_mean",
+            "penalize_if_lower_than_equity_choppiness",
+            "penalize_if_lower_than_equity_choppiness_w",
+            "penalize_if_lower_than_equity_jerkiness",
+            "penalize_if_lower_than_equity_jerkiness_w",
+            "penalize_if_lower_than_expected_shortfall_1pct",
+            "penalize_if_lower_than_exponential_fit_error",
+            "penalize_if_lower_than_exponential_fit_error_w",
+            "penalize_if_lower_than_gain",
+            "penalize_if_lower_than_loss_profit_ratio",
+            "penalize_if_lower_than_loss_profit_ratio_w",
+            "penalize_if_lower_than_mdg",
+            "penalize_if_lower_than_mdg_w",
+            "penalize_if_lower_than_omega_ratio",
+            "penalize_if_lower_than_omega_ratio_w",
+            "penalize_if_lower_than_position_held_hours_max",
+            "penalize_if_lower_than_position_held_hours_mean",
+            "penalize_if_lower_than_position_held_hours_median",
+            "penalize_if_lower_than_position_unchanged_hours_max",
+            "penalize_if_lower_than_positions_held_per_day",
+            "penalize_if_lower_than_sharpe_ratio",
+            "penalize_if_lower_than_sharpe_ratio_w",
+            "penalize_if_lower_than_sortino_ratio",
+            "penalize_if_lower_than_sortino_ratio_w",
+            "penalize_if_lower_than_sterling_ratio",
+            "penalize_if_lower_than_sterling_ratio_w",
+        ]
+
+        # Edit limits
+        if self.config.optimize.limits:
+            limits = True
+        else:
+            limits = False
+        with st.expander("Edit Limits", expanded=limits):
+            # Init
+            if not "ed_key" in st.session_state:
+                st.session_state.ed_key = 0
+            ed_key = st.session_state.ed_key
+            if f'select_limits_{ed_key}' in st.session_state:
+                ed = st.session_state[f'select_limits_{ed_key}']
+                for row in ed["edited_rows"]:
+                    if "edit" in ed["edited_rows"][row]:
+                        if ed["edited_rows"][row]["edit"]:
+                            st.session_state.edit_limits = st.session_state.limits_data[row]["limit"]
+                    if "delete" in ed["edited_rows"][row]:
+                        if ed["edited_rows"][row]["delete"]:
+                            self.config.optimize.limits.pop(st.session_state.limits_data[row]["limit"])
+                            self.clean_limits_session_state()
+                            st.rerun()
+            if not "limits_data" in st.session_state:
+                limits_data = []
+                if self.config.optimize.limits:
+                    for limit, value in self.config.optimize.limits.items():
+                        limits_data.append({
+                            "limit": limit,
+                            "value": value,
+                            "edit": False,
+                            "delete": False
+                        })
+                st.session_state.limits_data = limits_data
+            # Display limits
+            if st.session_state.limits_data and not "edit_limits" in st.session_state:
+                d = st.session_state.limits_data
+                st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_limits_{ed_key}', disabled=['limit','value'])
+            if "edit_opt_v7_add_limits_button" in st.session_state:
+                if st.session_state.edit_opt_v7_add_limits_button:
+                    st.session_state.edit_limits = st.session_state.edit_opt_v7_add_limits
+            if "edit_limits" in st.session_state:
+                if st.session_state.edit_limits in self.config.optimize.limits:
+                    self.edit_limits(st.session_state.edit_limits, self.config.optimize.limits[st.session_state.edit_limits])
+                else:
+                    self.edit_limits(st.session_state.edit_limits)
+            else:
+                col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+                with col1:
+                    st.selectbox('Limit', LIMITS, key="edit_opt_v7_add_limits")
+                with col2:
+                    st.button("Add Limit", key="edit_opt_v7_add_limits_button")
+
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             self.fragment_population_size()
@@ -2266,6 +2451,36 @@ class OptimizeV7Item:
                 self.fragment_short_unstuck_ema_dist()
                 self.fragment_short_unstuck_loss_allowance_pct()
                 self.fragment_short_unstuck_threshold()
+
+    def edit_limits(self, limit, value=0.0):
+        st.number_input(limit, value=value, format="%.5f", key="edit_opt_v7_limits", help=pbgui_help.limits)
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
+        with col1:
+            if st.button("Save"):
+                self.config.optimize.limits[limit] = st.session_state.edit_opt_v7_limits
+                self.clean_limits_session_state()
+                st.rerun()
+        with col2:
+            if st.button("Cancel"):
+                self.clean_limits_session_state()
+                st.rerun()
+        with col3:
+            if st.button("Delete"):
+                self.config.optimize.limits.pop(limit)
+                self.clean_limits_session_state()
+                st.rerun()
+
+    def clean_limits_session_state(self):
+        if "edit_opt_v7_limits" in st.session_state:
+            del st.session_state.edit_opt_v7_limits
+        if "limits_data" in st.session_state:
+            del st.session_state.limits_data
+        if "ed_key" in st.session_state:
+            del st.session_state.ed_key
+        if "edit_limits" in st.session_state:
+            del st.session_state.edit_limits
+        if "edit_opt_v7_add_limits_button" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_button
 
     def save(self):
         self.path = Path(f'{PBGDIR}/data/opt_v7')
