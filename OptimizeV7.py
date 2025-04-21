@@ -908,86 +908,6 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_use_btc_collateral = self.config.backtest.use_btc_collateral
         st.checkbox("use_btc_collateral", key="edit_opt_v7_use_btc_collateral", help=pbgui_help.use_btc_collateral)
 
-    # lower_bound_drawdown_worst
-    @st.fragment
-    def fragment_lower_bound_drawdown_worst(self):
-        if "edit_opt_v7_lower_bound_drawdown_worst" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_drawdown_worst != self.config.optimize.limits.lower_bound_drawdown_worst:
-                self.config.optimize.limits.lower_bound_drawdown_worst = st.session_state.edit_opt_v7_lower_bound_drawdown_worst
-        else:
-            st.session_state.edit_opt_v7_lower_bound_drawdown_worst = self.config.optimize.limits.lower_bound_drawdown_worst
-        st.number_input("lower_bound_drawdown_worst", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_drawdown_worst", help=pbgui_help.limits_lower_bound_drawdown_worst)
-
-    # lower_bound_drawdown_worst_mean_1pct
-    @st.fragment
-    def fragment_lower_bound_drawdown_worst_mean_1pct(self):
-        if "edit_opt_v7_lower_bound_drawdown_worst_mean_1pct" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_drawdown_worst_mean_1pct != self.config.optimize.limits.lower_bound_drawdown_worst_mean_1pct:
-                self.config.optimize.limits.lower_bound_drawdown_worst_mean_1pct = st.session_state.edit_opt_v7_lower_bound_drawdown_worst_mean_1pct
-        else:
-            st.session_state.edit_opt_v7_lower_bound_drawdown_worst_mean_1pct = self.config.optimize.limits.lower_bound_drawdown_worst_mean_1pct
-        st.number_input("lower_bound_drawdown_worst_mean_1pct", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_drawdown_worst_mean_1pct", help=pbgui_help.limits_lower_bound_drawdown_worst_mean_1pct)
-
-    # lower_bound_equity_balance_diff_neg_max
-    @st.fragment
-    def fragment_lower_bound_equity_balance_diff_neg_max(self):
-        if "edit_opt_v7_lower_bound_equity_balance_diff_neg_max" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_neg_max != self.config.optimize.limits.lower_bound_equity_balance_diff_neg_max:
-                self.config.optimize.limits.lower_bound_equity_balance_diff_neg_max = st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_neg_max
-        else:
-            st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_neg_max = self.config.optimize.limits.lower_bound_equity_balance_diff_neg_max
-        st.number_input("lower_bound_equity_balance_diff_neg_max", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_equity_balance_diff_neg_max", help=pbgui_help.limits_lower_bound_equity_balance_diff_mean)
-    
-    # lower_bound_equity_balance_diff_neg_mean
-    @st.fragment
-    def fragment_lower_bound_equity_balance_diff_neg_mean(self):
-        if "edit_opt_v7_lower_bound_equity_balance_diff_neg_mean" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_neg_mean != self.config.optimize.limits.lower_bound_equity_balance_diff_neg_mean:
-                self.config.optimize.limits.lower_bound_equity_balance_diff_neg_mean = st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_neg_mean
-        else:
-            st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_neg_mean = self.config.optimize.limits.lower_bound_equity_balance_diff_neg_mean
-        st.number_input("lower_bound_equity_balance_diff_neg_mean", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_equity_balance_diff_neg_mean", help=pbgui_help.limits_lower_bound_equity_balance_diff_mean)
-    
-    # lower_bound_equity_balance_diff_pos_max
-    @st.fragment
-    def fragment_lower_bound_equity_balance_diff_pos_max(self):
-        if "edit_opt_v7_lower_bound_equity_balance_diff_pos_max" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_pos_max != self.config.optimize.limits.lower_bound_equity_balance_diff_pos_max:
-                self.config.optimize.limits.lower_bound_equity_balance_diff_pos_max = st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_pos_max
-        else:
-            st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_pos_max = self.config.optimize.limits.lower_bound_equity_balance_diff_pos_max
-        st.number_input("lower_bound_equity_balance_diff_pos_max", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_equity_balance_diff_pos_max", help=pbgui_help.limits_lower_bound_equity_balance_diff_mean)
-    
-    # lower_bound_equity_balance_diff_pos_mean
-    @st.fragment
-    def fragment_lower_bound_equity_balance_diff_pos_mean(self):
-        if "edit_opt_v7_lower_bound_equity_balance_diff_pos_mean" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_pos_mean != self.config.optimize.limits.lower_bound_equity_balance_diff_pos_mean:
-                self.config.optimize.limits.lower_bound_equity_balance_diff_pos_mean = st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_pos_mean
-        else:
-            st.session_state.edit_opt_v7_lower_bound_equity_balance_diff_pos_mean = self.config.optimize.limits.lower_bound_equity_balance_diff_pos_mean
-        st.number_input("lower_bound_equity_balance_diff_pos_mean", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_equity_balance_diff_pos_mean", help=pbgui_help.limits_lower_bound_equity_balance_diff_mean)
-
-    # lower_bound_loss_profit_ratio
-    @st.fragment
-    def fragment_lower_bound_loss_profit_ratio(self):
-        if "edit_opt_v7_lower_bound_loss_profit_ratio" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_loss_profit_ratio != self.config.optimize.limits.lower_bound_loss_profit_ratio:
-                self.config.optimize.limits.lower_bound_loss_profit_ratio = st.session_state.edit_opt_v7_lower_bound_loss_profit_ratio
-        else:
-            st.session_state.edit_opt_v7_lower_bound_loss_profit_ratio = self.config.optimize.limits.lower_bound_loss_profit_ratio
-        st.number_input("lower_bound_loss_profit_ratio", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_lower_bound_loss_profit_ratio", help=pbgui_help.limits_lower_bound_loss_profit_ratio)
-
-    # lower_bound_position_held_hours_max
-    @st.fragment
-    def fragment_lower_bound_position_held_hours_max(self):
-        if "edit_opt_v7_lower_bound_position_held_hours_max" in st.session_state:
-            if st.session_state.edit_opt_v7_lower_bound_position_held_hours_max != self.config.optimize.limits.lower_bound_position_held_hours_max:
-                self.config.optimize.limits.lower_bound_position_held_hours_max = st.session_state.edit_opt_v7_lower_bound_position_held_hours_max
-        else:
-            st.session_state.edit_opt_v7_lower_bound_position_held_hours_max = self.config.optimize.limits.lower_bound_position_held_hours_max
-        st.number_input("lower_bound_position_held_hours_max", step=1.0, format="%.1f", key="edit_opt_v7_lower_bound_position_held_hours_max", help=pbgui_help.limits_lower_bound_position_held_hours_max)
-
     # mutation_probability
     @st.fragment
     def fragment_mutation_probability(self):
@@ -2176,24 +2096,6 @@ class OptimizeV7Item:
             self.fragment_compress_results_file()
         with st.expander("Edit Config", expanded=False):
             self.config.bot.edit()
-        # col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
-        # with col1:
-        #     self.fragment_lower_bound_drawdown_worst()
-        # with col2:
-        #     self.fragment_lower_bound_drawdown_worst_mean_1pct()
-        # with col3:
-        #     self.fragment_lower_bound_loss_profit_ratio()
-        # with col4:
-        #     self.fragment_lower_bound_position_held_hours_max()
-        # col1, col2, col3, col4 = st.columns([1,1,1,1])
-        # with col1:
-        #     self.fragment_lower_bound_equity_balance_diff_neg_max()
-        # with col2:
-        #     self.fragment_lower_bound_equity_balance_diff_neg_mean()
-        # with col3:
-        #     self.fragment_lower_bound_equity_balance_diff_pos_max()
-        # with col4:
-        #     self.fragment_lower_bound_equity_balance_diff_pos_mean()
 
         LIMITS = [
             "penalize_if_greater_than_adg",
