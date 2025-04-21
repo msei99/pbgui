@@ -818,6 +818,29 @@ limits_lower_bound_position_held_hours_max = """
 limits = """
     ```
     The optimizer will penalize backtests whose metrics exceed the given values
+    Performance Metrics:
+    Returns & Growth:
+    adg                           Average Daily Gain (smoothed geometric)
+    mdg                           Median Daily Gain
+    gain                          Final Balance Gain (ratio of end/start balance)
+    Risk Metrics:
+    drawdown_worst                Maximum peak-to-trough drawdown
+    drawdown_worst_mean_1pct      Mean of worst 1% drawdowns
+    expected_shortfall_1pct       Mean of worst 1% daily losses (CVaR)
+    equity_balance_diff_neg_max   Maximum negative equity-balance difference
+    equity_balance_diff_neg_mean  Mean negative equity-balance difference
+    equity_balance_diff_pos_max   Maximum positive equity-balance difference
+    equity_balance_diff_pos_mean  Mean positive equity-balance difference
+    Ratios & Efficiency:
+    positions_held_per_day	      Average number of positions held daily
+    position_held_hours_max       Maximum duration of any position (hours)
+    position_held_hours_mean      Average position duration (hours)
+    position_held_hours_median    Median position duration (hours)
+    position_unchanged_hours_max  Maximum time between position adjustments (hours)
+    Equity Curve Quality:
+    equity_choppiness             Normalized total variation (lower is smoother)
+    equity_jerkiness              Normalized mean absolute second derivative
+    exponential_fit_error         MSE from log-linear fit (lower = more consistent growth)
     ```"""
 
 population_size = """
@@ -839,7 +862,7 @@ mutation_probability = """
 
 scoring = """
     ```
-    the optimizer uses two objectives and finds the pareto front,
+    the optimizer uses n objectives and finds the pareto front,
     finally choosing the optimal candidate based on lowest euclidian distance to ideal point.
     default values are median daily gain and sharpe ratio
     ```"""

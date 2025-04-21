@@ -1015,7 +1015,8 @@ class OptimizeV7Item:
             "sterling_ratio",
             "sterling_ratio_w",
             ], 
-            key="edit_opt_v7_scoring"
+            key="edit_opt_v7_scoring",
+            help=pbgui_help.scoring,
         )
 
     # filters
@@ -2192,29 +2193,29 @@ class OptimizeV7Item:
             else:
                 col1, col2, col3, col4, col5, col6 = st.columns([1,0.5,0.5,1,0.5,0.5], vertical_alignment="bottom")
                 with col1:
-                    st.selectbox('penalize_if_greater_than', LIMITS, key="edit_opt_v7_add_limits_greater")
+                    st.selectbox('penalize_if_greater_than', LIMITS, key="edit_opt_v7_add_limits_greater", help=pbgui_help.limits)
                 with col2:
-                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_greater_value", help=pbgui_help.limits)
+                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_greater_value")
                 with col3:
                     st.button("Add Limit", key="edit_opt_v7_add_limits_greater_button")
                 with col4:
-                    st.selectbox('penalize_if_lower_than', LIMITS, key="edit_opt_v7_add_limits_lower")
+                    st.selectbox('penalize_if_lower_than', LIMITS, key="edit_opt_v7_add_limits_lower", help=pbgui_help.limits)
                 with col5:
-                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_lower_value", help=pbgui_help.limits)
+                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_lower_value")
                 with col6:
                     st.button("Add Limit", key="edit_opt_v7_add_limits_lower_button")
                 # btc
                 col1, col2, col3, col4, col5, col6 = st.columns([1,0.5,0.5,1,0.5,0.5], vertical_alignment="bottom")
                 with col1:
-                    st.selectbox('penalize_if_greater_than_btc', LIMITS_BTC, key="edit_opt_v7_add_limits_greater_btc")
+                    st.selectbox('penalize_if_greater_than_btc', LIMITS_BTC, key="edit_opt_v7_add_limits_greater_btc", help=pbgui_help.limits)
                 with col2:
-                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_greater_value_btc", help=pbgui_help.limits)
+                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_greater_value_btc")
                 with col3:
                     st.button("Add Limit", key="edit_opt_v7_add_limits_greater_btc_button")
                 with col4:
-                    st.selectbox('penalize_if_lower_than_btc', LIMITS_BTC, key="edit_opt_v7_add_limits_lower_btc")
+                    st.selectbox('penalize_if_lower_than_btc', LIMITS_BTC, key="edit_opt_v7_add_limits_lower_btc", help=pbgui_help.limits)
                 with col5:
-                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_lower_value_btc", help=pbgui_help.limits)
+                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_lower_value_btc")
                 with col6:
                     st.button("Add Limit", key="edit_opt_v7_add_limits_lower_btc_button")
 
