@@ -2059,39 +2059,9 @@ class OptimizeV7Item:
 
     @st.fragment
     def fragment_limits(self):
-        LIMITS = [
+        LIMITS_GREATER = [
             "penalize_if_greater_than_adg",
             "penalize_if_greater_than_adg_w",
-            "penalize_if_greater_than_btc_adg",
-            "penalize_if_greater_than_btc_adg_w",
-            "penalize_if_greater_than_btc_calmar_ratio",
-            "penalize_if_greater_than_btc_calmar_ratio_w",
-            "penalize_if_greater_than_btc_drawdown_worst",
-            "penalize_if_greater_than_btc_drawdown_worst_mean_1pct",
-            "penalize_if_greater_than_btc_equity_balance_diff_neg_max",
-            "penalize_if_greater_than_btc_equity_balance_diff_neg_mean",
-            "penalize_if_greater_than_btc_equity_balance_diff_pos_max",
-            "penalize_if_greater_than_btc_equity_balance_diff_pos_mean",
-            "penalize_if_greater_than_btc_equity_choppiness",
-            "penalize_if_greater_than_btc_equity_choppiness_w",
-            "penalize_if_greater_than_btc_equity_jerkiness",
-            "penalize_if_greater_than_btc_equity_jerkiness_w",
-            "penalize_if_greater_than_btc_expected_shortfall_1pct",
-            "penalize_if_greater_than_btc_exponential_fit_error",
-            "penalize_if_greater_than_btc_exponential_fit_error_w",
-            "penalize_if_greater_than_btc_gain",
-            "penalize_if_greater_than_btc_loss_profit_ratio",
-            "penalize_if_greater_than_btc_loss_profit_ratio_w",
-            "penalize_if_greater_than_btc_mdg",
-            "penalize_if_greater_than_btc_mdg_w",
-            "penalize_if_greater_than_btc_omega_ratio",
-            "penalize_if_greater_than_btc_omega_ratio_w",
-            "penalize_if_greater_than_btc_sharpe_ratio",
-            "penalize_if_greater_than_btc_sharpe_ratio_w",
-            "penalize_if_greater_than_btc_sortino_ratio",
-            "penalize_if_greater_than_btc_sortino_ratio_w",
-            "penalize_if_greater_than_btc_sterling_ratio",
-            "penalize_if_greater_than_btc_sterling_ratio_w",
             "penalize_if_greater_than_calmar_ratio",
             "penalize_if_greater_than_calmar_ratio_w",
             "penalize_if_greater_than_drawdown_worst",
@@ -2125,38 +2095,42 @@ class OptimizeV7Item:
             "penalize_if_greater_than_sortino_ratio_w",
             "penalize_if_greater_than_sterling_ratio",
             "penalize_if_greater_than_sterling_ratio_w",
+        ]
+        LIMITS_GREATER_BTC = [
+            "penalize_if_greater_than_btc_adg",
+            "penalize_if_greater_than_btc_adg_w",
+            "penalize_if_greater_than_btc_calmar_ratio",
+            "penalize_if_greater_than_btc_calmar_ratio_w",
+            "penalize_if_greater_than_btc_drawdown_worst",
+            "penalize_if_greater_than_btc_drawdown_worst_mean_1pct",
+            "penalize_if_greater_than_btc_equity_balance_diff_neg_max",
+            "penalize_if_greater_than_btc_equity_balance_diff_neg_mean",
+            "penalize_if_greater_than_btc_equity_balance_diff_pos_max",
+            "penalize_if_greater_than_btc_equity_balance_diff_pos_mean",
+            "penalize_if_greater_than_btc_equity_choppiness",
+            "penalize_if_greater_than_btc_equity_choppiness_w",
+            "penalize_if_greater_than_btc_equity_jerkiness",
+            "penalize_if_greater_than_btc_equity_jerkiness_w",
+            "penalize_if_greater_than_btc_expected_shortfall_1pct",
+            "penalize_if_greater_than_btc_exponential_fit_error",
+            "penalize_if_greater_than_btc_exponential_fit_error_w",
+            "penalize_if_greater_than_btc_gain",
+            "penalize_if_greater_than_btc_loss_profit_ratio",
+            "penalize_if_greater_than_btc_loss_profit_ratio_w",
+            "penalize_if_greater_than_btc_mdg",
+            "penalize_if_greater_than_btc_mdg_w",
+            "penalize_if_greater_than_btc_omega_ratio",
+            "penalize_if_greater_than_btc_omega_ratio_w",
+            "penalize_if_greater_than_btc_sharpe_ratio",
+            "penalize_if_greater_than_btc_sharpe_ratio_w",
+            "penalize_if_greater_than_btc_sortino_ratio",
+            "penalize_if_greater_than_btc_sortino_ratio_w",
+            "penalize_if_greater_than_btc_sterling_ratio",
+            "penalize_if_greater_than_btc_sterling_ratio_w",
+        ]
+        LIMITS_LOWER = [
             "penalize_if_lower_than_adg",
             "penalize_if_lower_than_adg_w",
-            "penalize_if_lower_than_btc_adg",
-            "penalize_if_lower_than_btc_adg_w",
-            "penalize_if_lower_than_btc_calmar_ratio",
-            "penalize_if_lower_than_btc_calmar_ratio_w",
-            "penalize_if_lower_than_btc_drawdown_worst",
-            "penalize_if_lower_than_btc_drawdown_worst_mean_1pct",
-            "penalize_if_lower_than_btc_equity_balance_diff_neg_max",
-            "penalize_if_lower_than_btc_equity_balance_diff_neg_mean",
-            "penalize_if_lower_than_btc_equity_balance_diff_pos_max",
-            "penalize_if_lower_than_btc_equity_balance_diff_pos_mean",
-            "penalize_if_lower_than_btc_equity_choppiness",
-            "penalize_if_lower_than_btc_equity_choppiness_w",
-            "penalize_if_lower_than_btc_equity_jerkiness",
-            "penalize_if_lower_than_btc_equity_jerkiness_w",
-            "penalize_if_lower_than_btc_expected_shortfall_1pct",
-            "penalize_if_lower_than_btc_exponential_fit_error",
-            "penalize_if_lower_than_btc_exponential_fit_error_w",
-            "penalize_if_lower_than_btc_gain",
-            "penalize_if_lower_than_btc_loss_profit_ratio",
-            "penalize_if_lower_than_btc_loss_profit_ratio_w",
-            "penalize_if_lower_than_btc_mdg",
-            "penalize_if_lower_than_btc_mdg_w",
-            "penalize_if_lower_than_btc_omega_ratio",
-            "penalize_if_lower_than_btc_omega_ratio_w",
-            "penalize_if_lower_than_btc_sharpe_ratio",
-            "penalize_if_lower_than_btc_sharpe_ratio_w",
-            "penalize_if_lower_than_btc_sortino_ratio",
-            "penalize_if_lower_than_btc_sortino_ratio_w",
-            "penalize_if_lower_than_btc_sterling_ratio",
-            "penalize_if_lower_than_btc_sterling_ratio_w",
             "penalize_if_lower_than_calmar_ratio",
             "penalize_if_lower_than_calmar_ratio_w",
             "penalize_if_lower_than_drawdown_worst",
@@ -2190,6 +2164,38 @@ class OptimizeV7Item:
             "penalize_if_lower_than_sortino_ratio_w",
             "penalize_if_lower_than_sterling_ratio",
             "penalize_if_lower_than_sterling_ratio_w",
+        ]
+        LIMITS_LOWER_BTC = [
+            "penalize_if_lower_than_btc_adg",
+            "penalize_if_lower_than_btc_adg_w",
+            "penalize_if_lower_than_btc_calmar_ratio",
+            "penalize_if_lower_than_btc_calmar_ratio_w",
+            "penalize_if_lower_than_btc_drawdown_worst",
+            "penalize_if_lower_than_btc_drawdown_worst_mean_1pct",
+            "penalize_if_lower_than_btc_equity_balance_diff_neg_max",
+            "penalize_if_lower_than_btc_equity_balance_diff_neg_mean",
+            "penalize_if_lower_than_btc_equity_balance_diff_pos_max",
+            "penalize_if_lower_than_btc_equity_balance_diff_pos_mean",
+            "penalize_if_lower_than_btc_equity_choppiness",
+            "penalize_if_lower_than_btc_equity_choppiness_w",
+            "penalize_if_lower_than_btc_equity_jerkiness",
+            "penalize_if_lower_than_btc_equity_jerkiness_w",
+            "penalize_if_lower_than_btc_expected_shortfall_1pct",
+            "penalize_if_lower_than_btc_exponential_fit_error",
+            "penalize_if_lower_than_btc_exponential_fit_error_w",
+            "penalize_if_lower_than_btc_gain",
+            "penalize_if_lower_than_btc_loss_profit_ratio",
+            "penalize_if_lower_than_btc_loss_profit_ratio_w",
+            "penalize_if_lower_than_btc_mdg",
+            "penalize_if_lower_than_btc_mdg_w",
+            "penalize_if_lower_than_btc_omega_ratio",
+            "penalize_if_lower_than_btc_omega_ratio_w",
+            "penalize_if_lower_than_btc_sharpe_ratio",
+            "penalize_if_lower_than_btc_sharpe_ratio_w",
+            "penalize_if_lower_than_btc_sortino_ratio",
+            "penalize_if_lower_than_btc_sortino_ratio_w",
+            "penalize_if_lower_than_btc_sterling_ratio",
+            "penalize_if_lower_than_btc_sterling_ratio_w",
         ]
         # Edit limits
         if self.config.optimize.limits:
@@ -2227,20 +2233,60 @@ class OptimizeV7Item:
             if st.session_state.limits_data and not "edit_limits" in st.session_state:
                 d = st.session_state.limits_data
                 st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_limits_{ed_key}', disabled=['limit','value'])
-            if "edit_opt_v7_add_limits_button" in st.session_state:
-                if st.session_state.edit_opt_v7_add_limits_button:
-                    st.session_state.edit_limits = st.session_state.edit_opt_v7_add_limits
+            if "edit_opt_v7_add_limits_greater" in st.session_state:
+                if st.session_state.edit_opt_v7_add_limits_greater_button:
+                    self.config.optimize.limits[st.session_state.edit_opt_v7_add_limits_greater] = st.session_state.edit_opt_v7_add_limits_greater_value
+                    self.clean_limits_session_state()
+                    st.rerun()
+            if "edit_opt_v7_add_limits_lower" in st.session_state:
+                if st.session_state.edit_opt_v7_add_limits_lower_button:
+                    self.config.optimize.limits[st.session_state.edit_opt_v7_add_limits_lower] = st.session_state.edit_opt_v7_add_limits_lower_value
+                    self.clean_limits_session_state()
+                    st.rerun()
+            if "edit_opt_v7_add_limits_greater_btc" in st.session_state:
+                if st.session_state.edit_opt_v7_add_limits_greater_btc_button:
+                    self.config.optimize.limits[st.session_state.edit_opt_v7_add_limits_greater_btc] = st.session_state.edit_opt_v7_add_limits_greater_value_btc
+                    self.clean_limits_session_state()
+                    st.rerun()
+            if "edit_opt_v7_add_limits_lower_btc" in st.session_state:
+                if st.session_state.edit_opt_v7_add_limits_lower_btc_button:
+                    self.config.optimize.limits[st.session_state.edit_opt_v7_add_limits_lower_btc] = st.session_state.edit_opt_v7_add_limits_lower_value_btc
+                    self.clean_limits_session_state()
+                    st.rerun()
             if "edit_limits" in st.session_state:
                 if st.session_state.edit_limits in self.config.optimize.limits:
                     self.edit_limits(st.session_state.edit_limits, self.config.optimize.limits[st.session_state.edit_limits])
                 else:
                     self.edit_limits(st.session_state.edit_limits)
             else:
-                col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+                col1, col2, col3, col4, col5, col6 = st.columns([1,0.5,0.5,1,0.5,0.5], vertical_alignment="bottom")
                 with col1:
-                    st.selectbox('Limit', LIMITS, key="edit_opt_v7_add_limits")
+                    st.selectbox('penalize_if_greater_than', LIMITS_GREATER, key="edit_opt_v7_add_limits_greater")
                 with col2:
-                    st.button("Add Limit", key="edit_opt_v7_add_limits_button")
+                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_greater_value", help=pbgui_help.limits)
+                with col3:
+                    st.button("Add Limit", key="edit_opt_v7_add_limits_greater_button")
+                with col4:
+                    st.selectbox('penalize_if_lower_than', LIMITS_LOWER, key="edit_opt_v7_add_limits_lower")
+                with col5:
+                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_lower_value", help=pbgui_help.limits)
+                with col6:
+                    st.button("Add Limit", key="edit_opt_v7_add_limits_lower_button")
+                # btc
+                col1, col2, col3, col4, col5, col6 = st.columns([1,0.5,0.5,1,0.5,0.5], vertical_alignment="bottom")
+                with col1:
+                    st.selectbox('penalize_if_greater_than_btc', LIMITS_GREATER_BTC, key="edit_opt_v7_add_limits_greater_btc")
+                with col2:
+                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_greater_value_btc", help=pbgui_help.limits)
+                with col3:
+                    st.button("Add Limit", key="edit_opt_v7_add_limits_greater_btc_button")
+                with col4:
+                    st.selectbox('penalize_if_lower_than_btc', LIMITS_LOWER_BTC, key="edit_opt_v7_add_limits_lower_btc")
+                with col5:
+                    st.number_input("limit_value", format="%.5f", key="edit_opt_v7_add_limits_lower_value_btc", help=pbgui_help.limits)
+                with col6:
+                    st.button("Add Limit", key="edit_opt_v7_add_limits_lower_btc_button")
+
 
     def edit(self):
         # Init coindata
@@ -2386,8 +2432,22 @@ class OptimizeV7Item:
             del st.session_state.ed_key
         if "edit_limits" in st.session_state:
             del st.session_state.edit_limits
-        if "edit_opt_v7_add_limits_button" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_button
+        if "edit_opt_v7_add_limits_greater_button" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_greater_button
+        if "edit_opt_v7_add_limits_greater_value" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_greater_value
+        if "edit_opt_v7_add_limits_lower_button" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_lower_button
+        if "edit_opt_v7_add_limits_lower_value" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_lower_value
+        if "edit_opt_v7_add_limits_greater_btc_button" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_greater_btc_button
+        if "edit_opt_v7_add_limits_greater_value_btc" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_greater_value_btc
+        if "edit_opt_v7_add_limits_lower_btc_button" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_lower_btc_button
+        if "edit_opt_v7_add_limits_lower_value_btc" in st.session_state:
+            del st.session_state.edit_opt_v7_add_limits_lower_value_btc
 
     def save(self):
         self.path = Path(f'{PBGDIR}/data/opt_v7')
