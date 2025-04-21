@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.33
+# v1.34
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -210,6 +210,17 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.34 (21-04-2025)
+- Compatible with passivbot v7.3.4
+- Using fragments for speedup GUI
+- Support for GateIO
+- Send Telegram Messages on Bot errors
+- logarithmic view of backtests
+- TWE and WE view on backtests v7
+- Update to streamlit v1.44
+- hundreds of bug fixes
+
 
 ## v1.33 (30-12-2024)
 - Filter for coins with warnings on CoinMarketCap
