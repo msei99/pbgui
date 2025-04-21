@@ -2057,46 +2057,8 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_unstuck_threshold",
             help=pbgui_help.unstuck_threshold)
 
-    def edit(self):
-        # Init coindata
-        if "coindata_bybit" not in st.session_state:
-            st.session_state.coindata_bybit = CoinData()
-            st.session_state.coindata_bybit.exchange = "bybit"
-        if "coindata_binance" not in st.session_state:
-            st.session_state.coindata_binance = CoinData()
-            st.session_state.coindata_binance.exchange = "binance"
-        if "coindata_gateio" not in st.session_state:
-            st.session_state.coindata_gateio = CoinData()
-            st.session_state.coindata_gateio.exchange = "gateio"
-        if "coindata_bitget" not in st.session_state:
-            st.session_state.coindata_bitget = CoinData()
-            st.session_state.coindata_bitget.exchange = "bitget"
-        # Display Editor
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
-        with col1:
-            self.fragment_exchanges()
-        with col2:
-            self.fragment_name()
-        with col3:
-            self.fragment_start_date()
-        with col4:
-            self.fragment_end_date()
-        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
-        with col1:
-            self.fragment_starting_balance()
-        with col2:
-            self.fragment_iters()
-        with col3:
-            self.fragment_n_cpus()
-        with col4:
-            self.fragment_starting_config()
-            self.fragment_use_btc_collateral()
-        with col5:
-            self.fragment_combine_ohlcvs()
-            self.fragment_compress_results_file()
-        with st.expander("Edit Config", expanded=False):
-            self.config.bot.edit()
-
+    @st.fragment
+    def fragment_limits(self):
         LIMITS = [
             "penalize_if_greater_than_adg",
             "penalize_if_greater_than_adg_w",
@@ -2229,7 +2191,6 @@ class OptimizeV7Item:
             "penalize_if_lower_than_sterling_ratio",
             "penalize_if_lower_than_sterling_ratio_w",
         ]
-
         # Edit limits
         if self.config.optimize.limits:
             limits = True
@@ -2281,6 +2242,50 @@ class OptimizeV7Item:
                 with col2:
                     st.button("Add Limit", key="edit_opt_v7_add_limits_button")
 
+    def edit(self):
+        # Init coindata
+        if "coindata_bybit" not in st.session_state:
+            st.session_state.coindata_bybit = CoinData()
+            st.session_state.coindata_bybit.exchange = "bybit"
+        if "coindata_binance" not in st.session_state:
+            st.session_state.coindata_binance = CoinData()
+            st.session_state.coindata_binance.exchange = "binance"
+        if "coindata_gateio" not in st.session_state:
+            st.session_state.coindata_gateio = CoinData()
+            st.session_state.coindata_gateio.exchange = "gateio"
+        if "coindata_bitget" not in st.session_state:
+            st.session_state.coindata_bitget = CoinData()
+            st.session_state.coindata_bitget.exchange = "bitget"
+        # Display Editor
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            self.fragment_exchanges()
+        with col2:
+            self.fragment_name()
+        with col3:
+            self.fragment_start_date()
+        with col4:
+            self.fragment_end_date()
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
+        with col1:
+            self.fragment_starting_balance()
+        with col2:
+            self.fragment_iters()
+        with col3:
+            self.fragment_n_cpus()
+        with col4:
+            self.fragment_starting_config()
+            self.fragment_use_btc_collateral()
+        with col5:
+            self.fragment_combine_ohlcvs()
+            self.fragment_compress_results_file()
+        with st.expander("Edit Config", expanded=False):
+            self.config.bot.edit()
+
+        # Limits
+        self.fragment_limits()
+        
+        # Optimizer
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             self.fragment_population_size()
