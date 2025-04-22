@@ -130,6 +130,7 @@ class PBMon():
             msg = re.sub(r':blue\[(.*?)\]', r'*\1*', msg)
             msg = re.sub(r':red\[(.*?)\]', r'*\1*', msg)
             msg = re.sub(r':green\[(.*?)\]', r'\1', msg)
+            msg = re.sub(r':orange\[(.*?)\]', r'\1', msg)
             if msg:
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Send Message:\n{msg}')
                 await self.send_telegram_message(msg)
