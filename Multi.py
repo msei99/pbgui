@@ -811,6 +811,10 @@ class MultiInstance():
                         config_file.unlink(missing_ok=True)
                         self._symbols.remove(self._symbols[row])
                 if "edit" in ed["edited_rows"][row]:
+                    if not self.instance_path:
+                        info_popup("You need to save the Multi config first, before editing a symbol")
+                        return
+                    # Edit Symbol config with single instance
                     for instance in st.session_state.pbgui_instances:
                         if instance.user == self.user and instance.symbol == self._symbols[row]:
                             instance._config._config_v7 = self.default_config._config_v7
