@@ -487,6 +487,7 @@ class OptimizeV7Results:
                 if "3d plot" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["3d plot"]:
                         self.run_3d_plot(d_new[row]["index"])
+                        st.session_state.ed_key += 1
                 if "delete" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["delete"]:
                         directory = Path(d_new[row]["index"]).parent
@@ -579,9 +580,10 @@ class OptimizeV7Results:
         cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/pareto_store.py'), str(directory)]
         if platform.system() == "Windows":
             creationflags = subprocess.CREATE_NO_WINDOW
-            subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, creationflags=creationflags)
+            result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, creationflags=creationflags)
         else:
-            subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
+            result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
+        info_popup(f"3D Plot Generated {result.stdout}")
 
     def load_paretos(self, index):
         self.paretos = []
