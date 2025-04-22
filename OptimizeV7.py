@@ -601,28 +601,59 @@ class OptimizeV7Results:
         self.paretos.sort(key=lambda x: x['index_filename'])
 
     def view_pareto(self, index):
-        if not "d_paretos" in st.session_state:
+        if not self.paretos:
             self.load_paretos(index)
+        select_analysis = []
+        if "analyses_combined" in self.paretos[0]:
+            select_analysis.append("analyses_combined")
+        if "analyses" in self.paretos[0]:
+            for analyse in self.paretos[0]["analyses"]:
+                select_analysis.append(analyse)
+        def clear_paretos():
+            if "d_paretos" in st.session_state:
+                del st.session_state.d_paretos
+        col1, col2 = st.columns([1, 3], gap="small")
+        with col1:
+            st.selectbox('analyses', options=select_analysis, key="opt_v7_pareto_select_analysis", on_change=clear_paretos)
+        if not "d_paretos" in st.session_state:
             d = []
             for id, pareto in enumerate(self.paretos):
-                if "analyses_combined" in pareto:
-                    analysis = pareto["analyses_combined"]
+                if select_analysis:
                     name = pareto["index_filename"].split("/")[-1]
-                    d.append({
-                        'id': id,
-                        'view': False,
-                        'backtest': False,
-                        'multi_bt': False,
-                        'adg': analysis["adg_max"],
-                        'mdg': analysis["mdg_max"],
-                        'drawdown_worst': analysis["drawdown_worst_max"],
-                        'gain': analysis["gain_max"],
-                        'loss_profit_ratio': analysis["loss_profit_ratio_max"],
-                        'position_held_hours_max': analysis["position_held_hours_max_max"],
-                        'sharpe_ratio': analysis["sharpe_ratio_max"],
-                        'Name': name,
-                        'file': pareto["index_filename"],
-                    })
+                    if st.session_state.opt_v7_pareto_select_analysis == "analyses_combined":
+                        analysis = pareto["analyses_combined"]
+                        d.append({
+                            'id': id,
+                            'view': False,
+                            'backtest': False,
+                            'multi_bt': False,
+                            'adg': analysis["adg_max"],
+                            'mdg': analysis["mdg_max"],
+                            'drawdown_worst': analysis["drawdown_worst_max"],
+                            'gain': analysis["gain_max"],
+                            'loss_profit_ratio': analysis["loss_profit_ratio_max"],
+                            'position_held_hours_max': analysis["position_held_hours_max_max"],
+                            'sharpe_ratio': analysis["sharpe_ratio_max"],
+                            'Name': name,
+                            'file': pareto["index_filename"],
+                        })
+                    else:
+                        analysis = pareto["analyses"][st.session_state.opt_v7_pareto_select_analysis]
+                        d.append({
+                            'id': id,
+                            'view': False,
+                            'backtest': False,
+                            'multi_bt': False,
+                            'adg': analysis["adg"],
+                            'mdg': analysis["mdg"],
+                            'drawdown_worst': analysis["drawdown_worst"],
+                            'gain': analysis["gain"],
+                            'loss_profit_ratio': analysis["loss_profit_ratio"],
+                            'position_held_hours_max': analysis["position_held_hours_max"],
+                            'sharpe_ratio': analysis["sharpe_ratio"],
+                            'Name': name,
+                            'file': pareto["index_filename"],
+                        })
             st.session_state.d_paretos = d
         d_paretos = st.session_state.d_paretos
         column_config = {
