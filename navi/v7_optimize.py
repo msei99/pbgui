@@ -122,6 +122,8 @@ def opt_v7_pareto():
     # Init bt_v7_pareto
     opt_v7_results = st.session_state.opt_v7_results
     opt_v7_pareto = st.session_state.opt_v7_pareto
+    opt_v7_pareto_name = st.session_state.opt_v7_pareto_name
+    opt_v7_pareto_directory = st.session_state.opt_v7_pareto_directory
     # Navigation
     with st.sidebar:
         if st.button(":material/refresh:"):
@@ -150,7 +152,7 @@ def opt_v7_pareto():
             opt_v7_results.backtest_selected()
         if st.button("Backtest all"):
             opt_v7_results.backtest_all()
-    st.subheader("View Paretos")
+    st.subheader(f"Name: :blue[{opt_v7_pareto_name}] Directory: :blue[{opt_v7_pareto_directory}]")
     opt_v7_results.view_pareto(opt_v7_pareto)
 
 def opt_v7_queue():

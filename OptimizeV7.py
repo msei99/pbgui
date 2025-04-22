@@ -481,6 +481,8 @@ class OptimizeV7Results:
                     if ed["edited_rows"][row]["view"]:
                         if d_new[row]["Result"]:
                             st.session_state.opt_v7_pareto = d_new[row]["index"]
+                            st.session_state.opt_v7_pareto_name = d_new[row]["Name"]
+                            st.session_state.opt_v7_pareto_directory = d_new[row]["Result"]
                             st.rerun()
                 if "3d plot" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["3d plot"]:
