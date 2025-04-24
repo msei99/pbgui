@@ -523,8 +523,11 @@ class CoinData:
         if self.update_symbols_ts < now_ts - 3600*24:
             for exchange in self.exchanges:
                 exc = Exchange(exchange)
-                exc.fetch_symbols()
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange}')
+                try:
+                    exc.fetch_symbols()
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange}')
+                except Exception as e:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Failed to fetch symbols for {exchange}')
             self.update_symbols_ts = now_ts
             self._symbols = []
             self._symbols_cpt = []
