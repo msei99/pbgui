@@ -488,15 +488,15 @@ class OptimizeV7Results:
                     if ed["edited_rows"][row]["3d plot"]:
                         self.run_3d_plot(d_new[row]["index"])
                         st.session_state.ed_key += 1
-                if "delete" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["delete"]:
-                        directory = Path(d_new[row]["index"]).parent
-                        shutil.rmtree(directory, ignore_errors=True)
-                        # remove from results
-                        self.results_new.remove(d_new[row]["index"])
-                        # remove from display
-                        d_new.remove(d_new[row])
-                        st.rerun()
+                # if "delete" in ed["edited_rows"][row]:
+                #     if ed["edited_rows"][row]["delete"]:
+                #         directory = Path(d_new[row]["index"]).parent
+                #         shutil.rmtree(directory, ignore_errors=True)
+                #         # remove from results
+                #         self.results_new.remove(d_new[row]["index"])
+                #         # remove from display
+                #         d_new.remove(d_new[row])
+                #         st.rerun()
         
         if not "opt_v7_results_d" in st.session_state:
             d = []
@@ -751,13 +751,21 @@ class OptimizeV7Results:
             if "delete" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["delete"]:
                     self.remove(self.results[row])
+        ed = st.session_state[f'select_optresults_new_{ed_key}']
+        for row in ed["edited_rows"]:
+            if "delete" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["delete"]:
+                    directory = Path(self.results_new[row]).parent
+                    shutil.rmtree(directory, ignore_errors=True)
         self.results = []
+        self.results_new = []
         self.find_results()
-    
+
     def remove_all_results(self):
         shutil.rmtree(self.results_path, ignore_errors=True)
         shutil.rmtree(self.analysis_path, ignore_errors=True)
         self.results = []
+        self.results_new = []
 
 class OptimizeV7Item:
     def __init__(self, optimize_file: str = None):
