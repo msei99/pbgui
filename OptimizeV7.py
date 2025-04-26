@@ -1453,6 +1453,24 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_entry_initial_qty_pct",
             help=pbgui_help.entry_initial_qty_pct)
     
+    # long_entry_trailing_double_down_factor
+    @st.fragment
+    def fragment_long_entry_trailing_double_down_factor(self):
+        if "edit_opt_v7_long_entry_trailing_double_down_factor" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor != (self.config.optimize.bounds.long_entry_trailing_double_down_factor_0, self.config.optimize.bounds.long_entry_trailing_double_down_factor_1):
+                self.config.optimize.bounds.long_entry_trailing_double_down_factor_0 = st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor[0]
+                self.config.optimize.bounds.long_entry_trailing_double_down_factor_1 = st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor = (self.config.optimize.bounds.long_entry_trailing_double_down_factor_0, self.config.optimize.bounds.long_entry_trailing_double_down_factor_1)
+        st.slider(
+            "long_entry_trailing_double_down_factor",
+            min_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MIN,
+            max_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MAX,
+            step=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_STEP,
+            format=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_double_down_factor",
+            help=pbgui_help.trailing_parameters)
+    
     # long_entry_trailing_grid_ratio
     @st.fragment
     def fragment_long_entry_trailing_grid_ratio(self):
@@ -1903,6 +1921,24 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_entry_initial_qty_pct",
             help=pbgui_help.entry_initial_qty_pct)
     
+    # short_entry_trailing_double_down_factor
+    @st.fragment
+    def fragment_short_entry_trailing_double_down_factor(self):
+        if "edit_opt_v7_short_entry_trailing_double_down_factor" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor != (self.config.optimize.bounds.short_entry_trailing_double_down_factor_0, self.config.optimize.bounds.short_entry_trailing_double_down_factor_1):
+                self.config.optimize.bounds.short_entry_trailing_double_down_factor_0 = st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor[0]
+                self.config.optimize.bounds.short_entry_trailing_double_down_factor_1 = st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor = (self.config.optimize.bounds.short_entry_trailing_double_down_factor_0, self.config.optimize.bounds.short_entry_trailing_double_down_factor_1)
+        st.slider(
+            "short_entry_trailing_double_down_factor",
+            min_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MIN,
+            max_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MAX,
+            step=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_STEP,
+            format=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_double_down_factor",
+            help=pbgui_help.trailing_parameters)
+    
     # short_entry_trailing_grid_ratio
     @st.fragment
     def fragment_short_entry_trailing_grid_ratio(self):
@@ -2339,6 +2375,7 @@ class OptimizeV7Item:
                 self.fragment_long_entry_grid_spacing_weight()
                 self.fragment_long_entry_initial_ema_dist()
                 self.fragment_long_entry_initial_qty_pct()
+                self.fragment_long_entry_trailing_double_down_factor()
                 self.fragment_long_entry_trailing_grid_ratio()
                 self.fragment_long_entry_trailing_retracement_pct()
                 self.fragment_long_entry_trailing_threshold_pct()
@@ -2368,6 +2405,7 @@ class OptimizeV7Item:
                 self.fragment_short_entry_grid_spacing_weight()
                 self.fragment_short_entry_initial_ema_dist()
                 self.fragment_short_entry_initial_qty_pct()
+                self.fragment_short_entry_trailing_double_down_factor()
                 self.fragment_short_entry_trailing_grid_ratio()
                 self.fragment_short_entry_trailing_retracement_pct()
                 self.fragment_short_entry_trailing_threshold_pct()
