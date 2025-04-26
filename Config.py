@@ -285,32 +285,33 @@ class Config:
 #               "start_date": "2020-04-01",
 #               "starting_balance": 100000,
 #               "use_btc_collateral": true},
-#  "bot": {"long": {"close_grid_markup_range": 0.0024039,
-#                   "close_grid_min_markup": 0.0027654,
-#                   "close_grid_qty_pct": 0.96052,
-#                   "close_trailing_grid_ratio": -0.034979,
-#                   "close_trailing_qty_pct": 0.87744,
-#                   "close_trailing_retracement_pct": 0.096961,
-#                   "close_trailing_threshold_pct": 0.033947,
-#                   "ema_span_0": 315.47,
-#                   "ema_span_1": 1386.4,
+#  "bot": {"long": {"close_grid_markup_range": 0.009019,
+#                   "close_grid_min_markup": 0.001806,
+#                   "close_grid_qty_pct": 0.9936,
+#                   "close_trailing_grid_ratio": -0.03841,
+#                   "close_trailing_qty_pct": 0.1305,
+#                   "close_trailing_retracement_pct": 0.08762,
+#                   "close_trailing_threshold_pct": 0.04794,
+#                   "ema_span_0": 318.6,
+#                   "ema_span_1": 554.2,
 #                   "enforce_exposure_limit": true,
-#                   "entry_grid_double_down_factor": 0.38149,
-#                   "entry_grid_spacing_pct": 0.027326,
-#                   "entry_grid_spacing_weight": 1.122,
-#                   "entry_initial_ema_dist": -0.098242,
-#                   "entry_initial_qty_pct": 0.0087909,
-#                   "entry_trailing_grid_ratio": -0.016703,
-#                   "entry_trailing_retracement_pct": 0.026151,
-#                   "entry_trailing_threshold_pct": 0.052532,
-#                   "filter_relative_volume_clip_pct": 0.0053487,
-#                   "filter_rolling_window": 308.35,
-#                   "n_positions": 6.4031,
-#                   "total_wallet_exposure_limit": 1.7122,
-#                   "unstuck_close_pct": 0.010836,
-#                   "unstuck_ema_dist": -0.0023852,
-#                   "unstuck_loss_allowance_pct": 0.03071,
-#                   "unstuck_threshold": 0.81056},
+#                   "entry_grid_double_down_factor": 1.441,
+#                   "entry_grid_spacing_pct": 0.03647,
+#                   "entry_grid_spacing_weight": 0.6164,
+#                   "entry_initial_ema_dist": -0.06118,
+#                   "entry_initial_qty_pct": 0.006745,
+#                   "entry_trailing_double_down_factor": 1.441,
+#                   "entry_trailing_grid_ratio": -0.01683,
+#                   "entry_trailing_retracement_pct": 0.07317,
+#                   "entry_trailing_threshold_pct": 0.05631,
+#                   "filter_relative_volume_clip_pct": 0.7021,
+#                   "filter_rolling_window": 303.6,
+#                   "n_positions": 7.426,
+#                   "total_wallet_exposure_limit": 1.977,
+#                   "unstuck_close_pct": 0.01166,
+#                   "unstuck_ema_dist": -0.07641,
+#                   "unstuck_loss_allowance_pct": 0.007161,
+#                   "unstuck_threshold": 0.4562},
 #          "short": {"close_grid_markup_range": 0.022568,
 #                    "close_grid_min_markup": 0.0082649,
 #                    "close_grid_qty_pct": 0.53985,
@@ -326,18 +327,19 @@ class Config:
 #                    "entry_grid_spacing_weight": 4.0792,
 #                    "entry_initial_ema_dist": 0.0026837,
 #                    "entry_initial_qty_pct": 0.014787,
+#                    "entry_trailing_double_down_factor": 0.72508,
 #                    "entry_trailing_grid_ratio": 0.18122,
 #                    "entry_trailing_retracement_pct": 0.018165,
 #                    "entry_trailing_threshold_pct": 0.062005,
 #                    "filter_relative_volume_clip_pct": 0.57973,
 #                    "filter_rolling_window": 320.18,
-#                    "n_positions": 6.4396,
+#                    "n_positions": 7.4396,
 #                    "total_wallet_exposure_limit": 0.0,
 #                    "unstuck_close_pct": 0.088717,
 #                    "unstuck_ema_dist": -0.014418,
 #                    "unstuck_loss_allowance_pct": 0.030868,
 #                    "unstuck_threshold": 0.68942}},
-#  "live": {"approved_coins": "configs/approved_coins_top20mcap.json",
+#  "live": {"approved_coins": "configs/approved_coins_top15mcap.json",
 #           "auto_gs": true,
 #           "coin_flags": {},
 #           "empty_means_all_approved": true,
@@ -351,7 +353,7 @@ class Config:
 #           "max_n_cancellations_per_batch": 5,
 #           "max_n_creations_per_batch": 3,
 #           "max_n_restarts_per_day": 10,
-#           "minimum_coin_age_days": 30.0,
+#           "minimum_coin_age_days": 450.0,
 #           "ohlcvs_1m_rolling_window_days": 4.0,
 #           "ohlcvs_1m_update_after_minutes": 10.0,
 #           "pnls_max_lookback_days": 30.0,
@@ -372,13 +374,14 @@ class Config:
 #                          "long_entry_grid_spacing_weight": [0, 10],
 #                          "long_entry_initial_ema_dist": [-0.1, 0.003],
 #                          "long_entry_initial_qty_pct": [0.004, 0.02],
+#                          "long_entry_trailing_double_down_factor": [0.1, 3],
 #                          "long_entry_trailing_grid_ratio": [-1, 1],
 #                          "long_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "long_entry_trailing_threshold_pct": [-0.01, 0.1],
 #                          "long_filter_relative_volume_clip_pct": [0, 1],
 #                          "long_filter_rolling_window": [10, 360],
-#                          "long_n_positions": [6.4, 12.0],
-#                          "long_total_wallet_exposure_limit": [0.0, 2.0],
+#                          "long_n_positions": [7.4, 12.0],
+#                          "long_total_wallet_exposure_limit": [0.01, 2],
 #                          "long_unstuck_close_pct": [0.001, 0.1],
 #                          "long_unstuck_ema_dist": [-0.1, 0.01],
 #                          "long_unstuck_loss_allowance_pct": [0.001, 0.05],
@@ -397,12 +400,13 @@ class Config:
 #                          "short_entry_grid_spacing_weight": [0, 10],
 #                          "short_entry_initial_ema_dist": [-0.1, 0.003],
 #                          "short_entry_initial_qty_pct": [0.004, 0.02],
+#                          "short_entry_trailing_double_down_factor": [0.1, 3],
 #                          "short_entry_trailing_grid_ratio": [-1, 1],
 #                          "short_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "short_entry_trailing_threshold_pct": [-0.01, 0.1],
 #                          "short_filter_relative_volume_clip_pct": [0, 1],
 #                          "short_filter_rolling_window": [10, 360],
-#                          "short_n_positions": [6.4, 12.0],
+#                          "short_n_positions": [0],
 #                          "short_total_wallet_exposure_limit": [0.0, 2.0],
 #                          "short_unstuck_close_pct": [0.001, 0.1],
 #                          "short_unstuck_ema_dist": [-0.1, 0.01],
@@ -412,19 +416,12 @@ class Config:
 #               "crossover_probability": 0.7,
 #               "enable_overrides": [],
 #               "iters": 300000,
-#               "limits": {"lower_bound_drawdown_worst": 0.333,
-#                          "lower_bound_drawdown_worst_mean_1pct": 0.2,
-#                          "lower_bound_equity_balance_diff_neg_max": 0.4,
-#                          "lower_bound_equity_balance_diff_neg_mean": 0.01,
-#                          "lower_bound_equity_balance_diff_pos_max": 0.5,
-#                          "lower_bound_equity_balance_diff_pos_mean": 0.02,
-#                          "lower_bound_loss_profit_ratio": 0.5,
-#                          "lower_bound_position_held_hours_max": 336.0},
+#               "limits": "--btc_drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0",
 #               "mutation_probability": 0.2,
 #               "n_cpus": 5,
-#               "population_size": 500,
-#               "round_to_n_significant_digits": 5,
-#               "scoring": ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]}}
+#               "population_size": 1000,
+#               "round_to_n_significant_digits": 4,
+#               "scoring": ["btc_adg", "btc_mdg", "btc_omega_ratio"]}}
 
 class Backtest:
     def __init__(self):
@@ -708,6 +705,7 @@ class Long:
         self._entry_grid_spacing_weight = 0.17715
         self._entry_initial_ema_dist = -0.0060574
         self._entry_initial_qty_pct = 0.019955
+        self._entry_trailing_double_down_factor = 1.441
         self._entry_trailing_grid_ratio = -0.28053
         self._entry_trailing_retracement_pct = 0.0024762
         self._entry_trailing_threshold_pct = 0.014956
@@ -735,6 +733,7 @@ class Long:
             "entry_grid_spacing_weight": self._entry_grid_spacing_weight,
             "entry_initial_ema_dist": self._entry_initial_ema_dist,
             "entry_initial_qty_pct": self._entry_initial_qty_pct,
+            "entry_trailing_double_down_factor": self._entry_trailing_double_down_factor,
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
@@ -785,6 +784,8 @@ class Long:
             self.entry_initial_ema_dist = new_long["entry_initial_ema_dist"]
         if "entry_initial_qty_pct" in new_long:
             self.entry_initial_qty_pct = new_long["entry_initial_qty_pct"]
+        if "entry_trailing_double_down_factor" in new_long:
+            self.entry_trailing_double_down_factor = new_long["entry_trailing_double_down_factor"]
         if "entry_trailing_grid_ratio" in new_long:
             self.entry_trailing_grid_ratio = new_long["entry_trailing_grid_ratio"]
         if "entry_trailing_retracement_pct" in new_long:
@@ -838,6 +839,8 @@ class Long:
     def entry_initial_ema_dist(self): return self._entry_initial_ema_dist
     @property
     def entry_initial_qty_pct(self): return self._entry_initial_qty_pct
+    @property
+    def entry_trailing_double_down_factor(self): return self._entry_trailing_double_down_factor
     @property
     def entry_trailing_grid_ratio(self): return self._entry_trailing_grid_ratio
     @property
@@ -921,6 +924,10 @@ class Long:
     def entry_initial_qty_pct(self, new_entry_initial_qty_pct):
         self._entry_initial_qty_pct = new_entry_initial_qty_pct
         self._long["entry_initial_qty_pct"] = self._entry_initial_qty_pct
+    @entry_trailing_double_down_factor.setter
+    def entry_trailing_double_down_factor(self, new_entry_trailing_double_down_factor):
+        self._entry_trailing_double_down_factor = new_entry_trailing_double_down_factor
+        self._long["entry_trailing_double_down_factor"] = self._entry_trailing_double_down_factor
     @entry_trailing_grid_ratio.setter
     def entry_trailing_grid_ratio(self, new_entry_trailing_grid_ratio):
         self._entry_trailing_grid_ratio = new_entry_trailing_grid_ratio
@@ -983,6 +990,7 @@ class Short:
         self._entry_grid_spacing_weight = 0.98867
         self._entry_initial_ema_dist = -0.060333
         self._entry_initial_qty_pct = 0.066426
+        self._entry_trailing_double_down_factor = 0.72508
         self._entry_trailing_grid_ratio = -0.026647
         self._entry_trailing_retracement_pct = 0.016626
         self._entry_trailing_threshold_pct = 0.052728
@@ -1010,6 +1018,7 @@ class Short:
             "entry_grid_spacing_weight": self._entry_grid_spacing_weight,
             "entry_initial_ema_dist": self._entry_initial_ema_dist,
             "entry_initial_qty_pct": self._entry_initial_qty_pct,
+            "entry_trailing_double_down_factor": self._entry_trailing_double_down_factor,
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
@@ -1060,6 +1069,8 @@ class Short:
             self.entry_initial_ema_dist = new_short["entry_initial_ema_dist"]
         if "entry_initial_qty_pct" in new_short:
             self.entry_initial_qty_pct = new_short["entry_initial_qty_pct"]
+        if "entry_trailing_double_down_factor" in new_short:
+            self.entry_trailing_double_down_factor = new_short["entry_trailing_double_down_factor"]
         if "entry_trailing_grid_ratio" in new_short:
             self.entry_trailing_grid_ratio = new_short["entry_trailing_grid_ratio"]
         if "entry_trailing_retracement_pct" in new_short:
@@ -1113,6 +1124,8 @@ class Short:
     def entry_initial_ema_dist(self): return self._entry_initial_ema_dist
     @property
     def entry_initial_qty_pct(self): return self._entry_initial_qty_pct
+    @property
+    def entry_trailing_double_down_factor(self): return self._entry_trailing_double_down_factor
     @property
     def entry_trailing_grid_ratio(self): return self._entry_trailing_grid_ratio
     @property
@@ -1196,6 +1209,10 @@ class Short:
     def entry_initial_qty_pct(self, new_entry_initial_qty_pct):
         self._entry_initial_qty_pct = new_entry_initial_qty_pct
         self._short["entry_initial_qty_pct"] = self._entry_initial_qty_pct
+    @entry_trailing_double_down_factor.setter
+    def entry_trailing_double_down_factor(self, new_entry_trailing_double_down_factor):
+        self._entry_trailing_double_down_factor = new_entry_trailing_double_down_factor
+        self._short["entry_trailing_double_down_factor"] = self._entry_trailing_double_down_factor
     @entry_trailing_grid_ratio.setter
     def entry_trailing_grid_ratio(self, new_entry_trailing_grid_ratio):
         self._entry_trailing_grid_ratio = new_entry_trailing_grid_ratio
@@ -1762,6 +1779,12 @@ class Bounds:
     ENTRY_INITIAL_QTY_PCT_ROUND = 3
     ENTRY_INITIAL_QTY_PCT_FORMAT = f'%.{ENTRY_INITIAL_QTY_PCT_ROUND}f'
 
+    ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MIN = 0.0
+    ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MAX = 10.0
+    ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_STEP = 0.05
+    ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_ROUND = 2
+    ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_FORMAT = f'%.{ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_ROUND}f'
+    
     ENTRY_TRAILING_GRID_RATIO_MIN = -1.0
     ENTRY_TRAILING_GRID_RATIO_MAX = 1.0
     ENTRY_TRAILING_GRID_RATIO_STEP = 0.01
@@ -1858,6 +1881,8 @@ class Bounds:
         self._long_entry_initial_ema_dist_1 = 0.003
         self._long_entry_initial_qty_pct_0 = 0.005
         self._long_entry_initial_qty_pct_1 = 0.1
+        self._long_entry_trailing_double_down_factor_0 = 0.1
+        self._long_entry_trailing_double_down_factor_1 = 3.0
         self._long_entry_trailing_grid_ratio_0 = -1.0
         self._long_entry_trailing_grid_ratio_1 = 1.0
         self._long_entry_trailing_retracement_pct_0 = 0.0
@@ -1909,6 +1934,8 @@ class Bounds:
         self._short_entry_initial_ema_dist_1 = 0.003
         self._short_entry_initial_qty_pct_0 = 0.005
         self._short_entry_initial_qty_pct_1 = 0.1
+        self._short_entry_trailing_double_down_factor_0 = 0.1
+        self._short_entry_trailing_double_down_factor_1 = 3.0
         self._short_entry_trailing_grid_ratio_0 = -1.0
         self._short_entry_trailing_grid_ratio_1 = 1.0
         self._short_entry_trailing_retracement_pct_0 = 0.0
@@ -1946,6 +1973,7 @@ class Bounds:
                 "long_entry_grid_spacing_weight": [self._long_entry_grid_spacing_weight_0, self._long_entry_grid_spacing_weight_1],
                 "long_entry_initial_ema_dist": [self._long_entry_initial_ema_dist_0, self._long_entry_initial_ema_dist_1],
                 "long_entry_initial_qty_pct": [self._long_entry_initial_qty_pct_0, self._long_entry_initial_qty_pct_1],
+                "long_entry_trailing_double_down_factor": [self._long_entry_trailing_double_down_factor_0, self._long_entry_trailing_double_down_factor_1],
                 "long_entry_trailing_grid_ratio": [self._long_entry_trailing_grid_ratio_0, self._long_entry_trailing_grid_ratio_1],
                 "long_entry_trailing_retracement_pct": [self._long_entry_trailing_retracement_pct_0, self._long_entry_trailing_retracement_pct_1],
                 "long_entry_trailing_threshold_pct": [self._long_entry_trailing_threshold_pct_0, self._long_entry_trailing_threshold_pct_1],
@@ -1971,6 +1999,7 @@ class Bounds:
                 "short_entry_grid_spacing_weight": [self._short_entry_grid_spacing_weight_0, self._short_entry_grid_spacing_weight_1],
                 "short_entry_initial_ema_dist": [self._short_entry_initial_ema_dist_0, self._short_entry_initial_ema_dist_1],
                 "short_entry_initial_qty_pct": [self._short_entry_initial_qty_pct_0, self._short_entry_initial_qty_pct_1],
+                "short_entry_trailing_double_down_factor": [self._short_entry_trailing_double_down_factor_0, self._short_entry_trailing_double_down_factor_1],
                 "short_entry_trailing_grid_ratio": [self._short_entry_trailing_grid_ratio_0, self._short_entry_trailing_grid_ratio_1],
                 "short_entry_trailing_retracement_pct": [self._short_entry_trailing_retracement_pct_0, self._short_entry_trailing_retracement_pct_1],
                 "short_entry_trailing_threshold_pct": [self._short_entry_trailing_threshold_pct_0, self._short_entry_trailing_threshold_pct_1],
@@ -2034,6 +2063,9 @@ class Bounds:
         if "long_entry_initial_qty_pct" in new_bounds:
             self.long_entry_initial_qty_pct_0 = new_bounds["long_entry_initial_qty_pct"][0]
             self.long_entry_initial_qty_pct_1 = new_bounds["long_entry_initial_qty_pct"][1]
+        if "long_entry_trailing_double_down_factor" in new_bounds:
+            self.long_entry_trailing_double_down_factor_0 = new_bounds["long_entry_trailing_double_down_factor"][0]
+            self.long_entry_trailing_double_down_factor_1 = new_bounds["long_entry_trailing_double_down_factor"][1]
         if "long_entry_trailing_grid_ratio" in new_bounds:
             self.long_entry_trailing_grid_ratio_0 = new_bounds["long_entry_trailing_grid_ratio"][0]
             self.long_entry_trailing_grid_ratio_1 = new_bounds["long_entry_trailing_grid_ratio"][1]
@@ -2111,6 +2143,9 @@ class Bounds:
         if "short_entry_initial_qty_pct" in new_bounds:
             self.short_entry_initial_qty_pct_0 = new_bounds["short_entry_initial_qty_pct"][0]
             self.short_entry_initial_qty_pct_1 = new_bounds["short_entry_initial_qty_pct"][1]
+        if "short_entry_trailing_double_down_factor" in new_bounds:
+            self.short_entry_trailing_double_down_factor_0 = new_bounds["short_entry_trailing_double_down_factor"][0]
+            self.short_entry_trailing_double_down_factor_1 = new_bounds["short_entry_trailing_double_down_factor"][1]
         if "short_entry_trailing_grid_ratio" in new_bounds:
             self.short_entry_trailing_grid_ratio_0 = new_bounds["short_entry_trailing_grid_ratio"][0]
             self.short_entry_trailing_grid_ratio_1 = new_bounds["short_entry_trailing_grid_ratio"][1]
@@ -2202,6 +2237,10 @@ class Bounds:
     def long_entry_initial_qty_pct_0(self): return self._long_entry_initial_qty_pct_0
     @property
     def long_entry_initial_qty_pct_1(self): return self._long_entry_initial_qty_pct_1
+    @property
+    def long_entry_trailing_double_down_factor_0(self): return self._long_entry_trailing_double_down_factor_0
+    @property
+    def long_entry_trailing_double_down_factor_1(self): return self._long_entry_trailing_double_down_factor_1
     @property
     def long_entry_trailing_grid_ratio_0(self): return self._long_entry_trailing_grid_ratio_0
     @property
@@ -2304,6 +2343,10 @@ class Bounds:
     def short_entry_initial_qty_pct_0(self): return self._short_entry_initial_qty_pct_0
     @property
     def short_entry_initial_qty_pct_1(self): return self._short_entry_initial_qty_pct_1
+    @property
+    def short_entry_trailing_double_down_factor_0(self): return self._short_entry_trailing_double_down_factor_0
+    @property
+    def short_entry_trailing_double_down_factor_1(self): return self._short_entry_trailing_double_down_factor_1
     @property
     def short_entry_trailing_grid_ratio_0(self): return self._short_entry_trailing_grid_ratio_0
     @property
@@ -2462,6 +2505,14 @@ class Bounds:
     def long_entry_initial_qty_pct_1(self, new_value):
         self._long_entry_initial_qty_pct_1 = new_value
         self._bounds["long_entry_initial_qty_pct"][1] = new_value
+    @long_entry_trailing_double_down_factor_0.setter
+    def long_entry_trailing_double_down_factor_0(self, new_value):
+        self._long_entry_trailing_double_down_factor_0 = new_value
+        self._bounds["long_entry_trailing_double_down_factor"][0] = new_value
+    @long_entry_trailing_double_down_factor_1.setter
+    def long_entry_trailing_double_down_factor_1(self, new_value):
+        self._long_entry_trailing_double_down_factor_1 = new_value
+        self._bounds["long_entry_trailing_double_down_factor"][1] = new_value
     @long_entry_trailing_grid_ratio_0.setter
     def long_entry_trailing_grid_ratio_0(self, new_value):
         self._long_entry_trailing_grid_ratio_0 = new_value
@@ -2664,6 +2715,14 @@ class Bounds:
     def short_entry_initial_qty_pct_1(self, new_value):
         self._short_entry_initial_qty_pct_1 = new_value
         self._bounds["short_entry_initial_qty_pct"][1] = new_value
+    @short_entry_trailing_double_down_factor_0.setter
+    def short_entry_trailing_double_down_factor_0(self, new_value):
+        self._short_entry_trailing_double_down_factor_0 = new_value
+        self._bounds["short_entry_trailing_double_down_factor"][0] = new_value
+    @short_entry_trailing_double_down_factor_1.setter
+    def short_entry_trailing_double_down_factor_1(self, new_value):
+        self._short_entry_trailing_double_down_factor_1 = new_value
+        self._bounds["short_entry_trailing_double_down_factor"][1] = new_value
     @short_entry_trailing_grid_ratio_0.setter
     def short_entry_trailing_grid_ratio_0(self, new_value):
         self._short_entry_trailing_grid_ratio_0 = new_value
