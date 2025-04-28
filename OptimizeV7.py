@@ -97,7 +97,7 @@ class OptimizeV7QueueItem:
         return False
 
     def is_finish(self):
-        log = self.load_log()
+        log = self.load_log(log_size=1000)
         if log:
             if "successfully processed optimize_results" in log or "Optimization complete" in log:
                 return True
@@ -107,7 +107,7 @@ class OptimizeV7QueueItem:
             return False
 
     def is_error(self):
-        log = self.load_log()
+        log = self.load_log(log_size=1000)
         if log:
             if "successfully processed optimize_results" in log or "Optimization complete" in log:
                 return False
@@ -118,7 +118,7 @@ class OptimizeV7QueueItem:
 
     def is_optimizing(self):
         if self.is_running():
-            log = self.load_log()
+            log = self.load_log(log_size=1000)
             if log:
                 if "Optimization complete" in log:
                     return False
