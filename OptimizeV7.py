@@ -362,6 +362,7 @@ class OptimizeV7Results:
     def __init__(self):
         self.results_path = Path(f'{pb7dir()}/optimize_results')
         self.analysis_path = Path(f'{pb7dir()}/optimize_results_analysis')
+        self.selected_analysis = "analyses_combined"
         self.results = []
         self.results_new = []
         self.paretos = []
@@ -614,6 +615,11 @@ class OptimizeV7Results:
                 del st.session_state.d_paretos
         col1, col2 = st.columns([1, 3], gap="small")
         with col1:
+            if "opt_v7_pareto_select_analysis" in st.session_state:
+                if st.session_state.opt_v7_pareto_select_analysis != self.selected_analysis:
+                    self.selected_analysis = st.session_state.opt_v7_pareto_select_analysis
+            else:
+                st.session_state.opt_v7_pareto_select_analysis = self.selected_analysis
             st.selectbox('analyses', options=select_analysis, key="opt_v7_pareto_select_analysis", on_change=clear_paretos)
         if not "d_paretos" in st.session_state:
             d = []
