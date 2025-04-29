@@ -1078,14 +1078,16 @@ class BacktestV7Results:
                 self.results_d = []
                 self.results = []
                 self.load()
-                if not self.filter == "":
-                    for result in self.results.copy():
-                        target = result.config.backtest.base_dir.split('/')[-1]
-                        if not fnmatch.fnmatch(target.lower(), self.filter.lower()):
-                            self.results.remove(result)
         else:
             st.session_state.select_btv7_result_filter = self.filter
             
+        # Remove results by filter
+        if not self.filter == "":
+            for result in self.results.copy():
+                target = result.config.backtest.base_dir.split('/')[-1]
+                if not fnmatch.fnmatch(target.lower(), self.filter.lower()):
+                    self.results.remove(result)
+
         st.text_input("Filter by Backtest Name", value="", help=pbgui_help.smart_filter, key="select_btv7_result_filter")
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
