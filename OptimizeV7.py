@@ -436,15 +436,23 @@ class OptimizeV7Results:
             if st.session_state.select_opt_v7_result_filter != self.filter:
                 self.filter = st.session_state.select_opt_v7_result_filter
                 self.results = []
+                self.results_new = []
                 del st.session_state.opt_v7_results_d
+                del st.session_state.opt_v7_results_d_new
                 self.find_results()
-                if not self.filter == "":
-                    for result in self.results.copy():
-                        name = self.find_result_name(result)
-                        if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
-                            self.results.remove(result)
         else:
             st.session_state.select_opt_v7_result_filter = self.filter
+
+        # Remove results that are not in the filter
+        if not self.filter == "":
+            for result in self.results.copy():
+                name = self.find_result_name(result)
+                if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
+                    self.results.remove(result)
+            for result in self.results_new.copy():
+                name, result_time = self.find_result_name_new(result)
+                if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
+                    self.results_new.remove(result)
 
         st.text_input("Filter by Optimize Name", value="", help=pbgui_help.smart_filter, key="select_opt_v7_result_filter")
 
