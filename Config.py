@@ -786,6 +786,8 @@ class Long:
             self.entry_initial_qty_pct = new_long["entry_initial_qty_pct"]
         if "entry_trailing_double_down_factor" in new_long:
             self.entry_trailing_double_down_factor = new_long["entry_trailing_double_down_factor"]
+        else:
+            self.entry_trailing_double_down_factor = self.entry_grid_double_down_factor
         if "entry_trailing_grid_ratio" in new_long:
             self.entry_trailing_grid_ratio = new_long["entry_trailing_grid_ratio"]
         if "entry_trailing_retracement_pct" in new_long:
@@ -1071,6 +1073,8 @@ class Short:
             self.entry_initial_qty_pct = new_short["entry_initial_qty_pct"]
         if "entry_trailing_double_down_factor" in new_short:
             self.entry_trailing_double_down_factor = new_short["entry_trailing_double_down_factor"]
+        else:
+            self.entry_trailing_double_down_factor = self.entry_grid_double_down_factor
         if "entry_trailing_grid_ratio" in new_short:
             self.entry_trailing_grid_ratio = new_short["entry_trailing_grid_ratio"]
         if "entry_trailing_retracement_pct" in new_short:
