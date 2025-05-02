@@ -3,7 +3,7 @@ streamlit-scrollable-textbox==0.0.3
 streamlit-autorefresh==1.0.1
 bokeh==2.4.3
 psutil==5.9.4
-plotly==5.20.0
+plotly==6.0.1
 contourpy==1.1.1
 numpy==1.24.4
 numba==0.59.1
