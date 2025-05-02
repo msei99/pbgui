@@ -1335,7 +1335,7 @@ def main():
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.filename} started')
                 item.run()
                 time.sleep(1)
-        time.sleep(60)
+        time.sleep(15)
 
 if __name__ == '__main__':
     main()
