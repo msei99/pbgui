@@ -1539,41 +1539,95 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_entry_trailing_threshold_pct",
             help=pbgui_help.trailing_parameters)
     
-    # long_filter_relative_volume_clip_pct
+    # long_filter_noisiness_rolling_window
     @st.fragment
-    def fragment_long_filter_relative_volume_clip_pct(self):
-        if "edit_opt_v7_long_filter_relative_volume_clip_pct" in st.session_state:
-            if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct != (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1):
-                self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[0]
-                self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[1]
+    def fragment_long_filter_noisiness_rolling_window(self):
+        if "edit_opt_v7_long_filter_noisiness_rolling_window" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window != (self.config.optimize.bounds.long_filter_noisiness_rolling_window_0, self.config.optimize.bounds.long_filter_noisiness_rolling_window_1):
+                self.config.optimize.bounds.long_filter_noisiness_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window[0]
+                self.config.optimize.bounds.long_filter_noisiness_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window[1]
         else:
-            st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct = (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1)
+            st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window = (self.config.optimize.bounds.long_filter_noisiness_rolling_window_0, self.config.optimize.bounds.long_filter_noisiness_rolling_window_1)
         st.slider(
-            "long_filter_relative_volume_clip_pct",
-            min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
-            max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
-            step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
-            format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
-            key="edit_opt_v7_long_filter_relative_volume_clip_pct",
-            help=pbgui_help.filter_relative_volume_clip_pct)
-
-    # long_filter_rolling_window
-    @st.fragment
-    def fragment_long_filter_rolling_window(self):
-        if "edit_opt_v7_long_filter_rolling_window" in st.session_state:
-            if st.session_state.edit_opt_v7_long_filter_rolling_window != (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1):
-                self.config.optimize.bounds.long_filter_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_rolling_window[0]
-                self.config.optimize.bounds.long_filter_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_rolling_window[1]
-        else:
-            st.session_state.edit_opt_v7_long_filter_rolling_window = (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1)
-        st.slider(
-            "long_filter_rolling_window",
-            min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
-            max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
-            step=Bounds.FILTER_ROLLING_WINDOW_STEP,
-            format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
-            key="edit_opt_v7_long_filter_rolling_window",
+            "long_filter_noisiness_rolling_window",
+            min_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MIN,
+            max_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MAX,
+            step=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_STEP,
+            format=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_FORMAT,
+            key="edit_opt_v7_long_filter_noisiness_rolling_window",
             help=pbgui_help.filter_rolling_window)
+
+    # long_filter_volume_drop_pct
+    @st.fragment
+    def fragment_long_filter_volume_drop_pct(self):
+        if "edit_opt_v7_long_filter_volume_drop_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_volume_drop_pct != (self.config.optimize.bounds.long_filter_volume_drop_pct_0, self.config.optimize.bounds.long_filter_volume_drop_pct_1):
+                self.config.optimize.bounds.long_filter_volume_drop_pct_0 = st.session_state.edit_opt_v7_long_filter_volume_drop_pct[0]
+                self.config.optimize.bounds.long_filter_volume_drop_pct_1 = st.session_state.edit_opt_v7_long_filter_volume_drop_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_filter_volume_drop_pct = (self.config.optimize.bounds.long_filter_volume_drop_pct_0, self.config.optimize.bounds.long_filter_volume_drop_pct_1)
+        st.slider(
+            "long_filter_volume_drop_pct",
+            min_value=Bounds.FILTER_VOLUME_DROP_PCT_MIN,
+            max_value=Bounds.FILTER_VOLUME_DROP_PCT_MAX,
+            step=Bounds.FILTER_VOLUME_DROP_PCT_STEP,
+            format=Bounds.FILTER_VOLUME_DROP_PCT_FORMAT,
+            key="edit_opt_v7_long_filter_volume_drop_pct",
+            help=pbgui_help.filter_volume_drop_pct)
+    
+    # long_filter_volume_rolling_window
+    @st.fragment
+    def fragment_long_filter_volume_rolling_window(self):
+        if "edit_opt_v7_long_filter_volume_rolling_window" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_volume_rolling_window != (self.config.optimize.bounds.long_filter_volume_rolling_window_0, self.config.optimize.bounds.long_filter_volume_rolling_window_1):
+                self.config.optimize.bounds.long_filter_volume_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_volume_rolling_window[0]
+                self.config.optimize.bounds.long_filter_volume_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_volume_rolling_window[1]
+        else:
+            st.session_state.edit_opt_v7_long_filter_volume_rolling_window = (self.config.optimize.bounds.long_filter_volume_rolling_window_0, self.config.optimize.bounds.long_filter_volume_rolling_window_1)
+        st.slider(
+            "long_filter_volume_rolling_window",
+            min_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MIN,
+            max_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MAX,
+            step=Bounds.FILTER_VOLUME_ROLLING_WINDOW_STEP,
+            format=Bounds.FILTER_VOLUME_ROLLING_WINDOW_FORMAT,
+            key="edit_opt_v7_long_filter_volume_rolling_window",
+            help=pbgui_help.filter_rolling_window)
+
+    # # long_filter_relative_volume_clip_pct
+    # @st.fragment
+    # def fragment_long_filter_relative_volume_clip_pct(self):
+    #     if "edit_opt_v7_long_filter_relative_volume_clip_pct" in st.session_state:
+    #         if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct != (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1):
+    #             self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[0]
+    #             self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct = (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1)
+    #     st.slider(
+    #         "long_filter_relative_volume_clip_pct",
+    #         min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
+    #         max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
+    #         step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
+    #         format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
+    #         key="edit_opt_v7_long_filter_relative_volume_clip_pct",
+    #         help=pbgui_help.filter_relative_volume_clip_pct)
+
+    # # long_filter_rolling_window
+    # @st.fragment
+    # def fragment_long_filter_rolling_window(self):
+    #     if "edit_opt_v7_long_filter_rolling_window" in st.session_state:
+    #         if st.session_state.edit_opt_v7_long_filter_rolling_window != (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1):
+    #             self.config.optimize.bounds.long_filter_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_rolling_window[0]
+    #             self.config.optimize.bounds.long_filter_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_rolling_window[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_long_filter_rolling_window = (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1)
+    #     st.slider(
+    #         "long_filter_rolling_window",
+    #         min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
+    #         max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
+    #         step=Bounds.FILTER_ROLLING_WINDOW_STEP,
+    #         format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
+    #         key="edit_opt_v7_long_filter_rolling_window",
+    #         help=pbgui_help.filter_rolling_window)
 
     # long_n_positions
     @st.fragment
@@ -2007,41 +2061,95 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_entry_trailing_threshold_pct",
             help=pbgui_help.trailing_parameters)
     
-    # short_filter_relative_volume_clip_pct
+    # short_filter_noisiness_rolling_window
     @st.fragment
-    def fragment_short_filter_relative_volume_clip_pct(self):
-        if "edit_opt_v7_short_filter_relative_volume_clip_pct" in st.session_state:
-            if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct != (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1):
-                self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[0]
-                self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[1]
+    def fragment_short_filter_noisiness_rolling_window(self):
+        if "edit_opt_v7_short_filter_noisiness_rolling_window" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window != (self.config.optimize.bounds.short_filter_noisiness_rolling_window_0, self.config.optimize.bounds.short_filter_noisiness_rolling_window_1):
+                self.config.optimize.bounds.short_filter_noisiness_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window[0]
+                self.config.optimize.bounds.short_filter_noisiness_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window[1]
         else:
-            st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct = (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1)
+            st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window = (self.config.optimize.bounds.short_filter_noisiness_rolling_window_0, self.config.optimize.bounds.short_filter_noisiness_rolling_window_1)
         st.slider(
-            "short_filter_relative_volume_clip_pct",
-            min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
-            max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
-            step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
-            format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
-            key="edit_opt_v7_short_filter_relative_volume_clip_pct",
-            help=pbgui_help.filter_relative_volume_clip_pct)
-
-    # short_filter_rolling_window
-    @st.fragment
-    def fragment_short_filter_rolling_window(self):
-        if "edit_opt_v7_short_filter_rolling_window" in st.session_state:
-            if st.session_state.edit_opt_v7_short_filter_rolling_window != (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1):
-                self.config.optimize.bounds.short_filter_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_rolling_window[0]
-                self.config.optimize.bounds.short_filter_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_rolling_window[1]
-        else:
-            st.session_state.edit_opt_v7_short_filter_rolling_window = (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1)
-        st.slider(
-            "short_filter_rolling_window",
-            min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
-            max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
-            step=Bounds.FILTER_ROLLING_WINDOW_STEP,
-            format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
-            key="edit_opt_v7_short_filter_rolling_window",
+            "short_filter_noisiness_rolling_window",
+            min_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MIN,
+            max_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MAX,
+            step=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_STEP,
+            format=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_FORMAT,
+            key="edit_opt_v7_short_filter_noisiness_rolling_window",
             help=pbgui_help.filter_rolling_window)
+    
+    # short_filter_volume_drop_pct
+    @st.fragment
+    def fragment_short_filter_volume_drop_pct(self):
+        if "edit_opt_v7_short_filter_volume_drop_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_volume_drop_pct != (self.config.optimize.bounds.short_filter_volume_drop_pct_0, self.config.optimize.bounds.short_filter_volume_drop_pct_1):
+                self.config.optimize.bounds.short_filter_volume_drop_pct_0 = st.session_state.edit_opt_v7_short_filter_volume_drop_pct[0]
+                self.config.optimize.bounds.short_filter_volume_drop_pct_1 = st.session_state.edit_opt_v7_short_filter_volume_drop_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_filter_volume_drop_pct = (self.config.optimize.bounds.short_filter_volume_drop_pct_0, self.config.optimize.bounds.short_filter_volume_drop_pct_1)
+        st.slider(
+            "short_filter_volume_drop_pct",
+            min_value=Bounds.FILTER_VOLUME_DROP_PCT_MIN,
+            max_value=Bounds.FILTER_VOLUME_DROP_PCT_MAX,
+            step=Bounds.FILTER_VOLUME_DROP_PCT_STEP,
+            format=Bounds.FILTER_VOLUME_DROP_PCT_FORMAT,
+            key="edit_opt_v7_short_filter_volume_drop_pct",
+            help=pbgui_help.filter_volume_drop_pct)
+
+    # short_filter_volume_rolling_window
+    @st.fragment
+    def fragment_short_filter_volume_rolling_window(self):
+        if "edit_opt_v7_short_filter_volume_rolling_window" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_volume_rolling_window != (self.config.optimize.bounds.short_filter_volume_rolling_window_0, self.config.optimize.bounds.short_filter_volume_rolling_window_1):
+                self.config.optimize.bounds.short_filter_volume_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_volume_rolling_window[0]
+                self.config.optimize.bounds.short_filter_volume_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_volume_rolling_window[1]
+        else:
+            st.session_state.edit_opt_v7_short_filter_volume_rolling_window = (self.config.optimize.bounds.short_filter_volume_rolling_window_0, self.config.optimize.bounds.short_filter_volume_rolling_window_1)
+        st.slider(
+            "short_filter_volume_rolling_window",
+            min_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MIN,
+            max_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MAX,
+            step=Bounds.FILTER_VOLUME_ROLLING_WINDOW_STEP,
+            format=Bounds.FILTER_VOLUME_ROLLING_WINDOW_FORMAT,
+            key="edit_opt_v7_short_filter_volume_rolling_window",
+            help=pbgui_help.filter_rolling_window)
+
+    # # short_filter_relative_volume_clip_pct
+    # @st.fragment
+    # def fragment_short_filter_relative_volume_clip_pct(self):
+    #     if "edit_opt_v7_short_filter_relative_volume_clip_pct" in st.session_state:
+    #         if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct != (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1):
+    #             self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[0]
+    #             self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct = (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1)
+    #     st.slider(
+    #         "short_filter_relative_volume_clip_pct",
+    #         min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
+    #         max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
+    #         step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
+    #         format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
+    #         key="edit_opt_v7_short_filter_relative_volume_clip_pct",
+    #         help=pbgui_help.filter_relative_volume_clip_pct)
+
+    # # short_filter_rolling_window
+    # @st.fragment
+    # def fragment_short_filter_rolling_window(self):
+    #     if "edit_opt_v7_short_filter_rolling_window" in st.session_state:
+    #         if st.session_state.edit_opt_v7_short_filter_rolling_window != (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1):
+    #             self.config.optimize.bounds.short_filter_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_rolling_window[0]
+    #             self.config.optimize.bounds.short_filter_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_rolling_window[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_short_filter_rolling_window = (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1)
+    #     st.slider(
+    #         "short_filter_rolling_window",
+    #         min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
+    #         max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
+    #         step=Bounds.FILTER_ROLLING_WINDOW_STEP,
+    #         format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
+    #         key="edit_opt_v7_short_filter_rolling_window",
+    #         help=pbgui_help.filter_rolling_window)
     
     # short_n_positions
     @st.fragment
@@ -2393,8 +2501,11 @@ class OptimizeV7Item:
                 self.fragment_long_entry_trailing_grid_ratio()
                 self.fragment_long_entry_trailing_retracement_pct()
                 self.fragment_long_entry_trailing_threshold_pct()
-                self.fragment_long_filter_relative_volume_clip_pct()
-                self.fragment_long_filter_rolling_window()
+                self.fragment_long_filter_noisiness_rolling_window()
+                self.fragment_long_filter_volume_drop_pct()
+                self.fragment_long_filter_volume_rolling_window()
+                # self.fragment_long_filter_relative_volume_clip_pct()
+                # self.fragment_long_filter_rolling_window()
                 self.fragment_long_n_positions()
                 self.fragment_long_total_wallet_exposure_limit()
                 self.fragment_long_unstuck_close_pct()
@@ -2423,8 +2534,11 @@ class OptimizeV7Item:
                 self.fragment_short_entry_trailing_grid_ratio()
                 self.fragment_short_entry_trailing_retracement_pct()
                 self.fragment_short_entry_trailing_threshold_pct()
-                self.fragment_short_filter_relative_volume_clip_pct()
-                self.fragment_short_filter_rolling_window()
+                self.fragment_short_filter_noisiness_rolling_window()
+                self.fragment_short_filter_volume_drop_pct()
+                self.fragment_short_filter_volume_rolling_window()
+                # self.fragment_short_filter_relative_volume_clip_pct()
+                # self.fragment_short_filter_rolling_window()
                 self.fragment_short_n_positions()
                 self.fragment_short_total_wallet_exposure_limit()
                 self.fragment_short_unstuck_close_pct()
