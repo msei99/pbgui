@@ -281,7 +281,7 @@ class Config:
 #               "compress_cache": true,
 #               "end_date": "now",
 #               "exchanges": ["binance", "bybit"],
-#               "gap_tolerance_ohlcvs_minutes": 120.0,
+#               "gap_tolerance_ohlcvs_minutes": 120,
 #               "start_date": "2020-04-01",
 #               "starting_balance": 100000,
 #               "use_btc_collateral": true},
@@ -304,8 +304,9 @@ class Config:
 #                   "entry_trailing_grid_ratio": -0.01683,
 #                   "entry_trailing_retracement_pct": 0.07317,
 #                   "entry_trailing_threshold_pct": 0.05631,
-#                   "filter_relative_volume_clip_pct": 0.7021,
-#                   "filter_rolling_window": 303.6,
+#                   "filter_noisiness_rolling_window": 303.6,
+#                   "filter_volume_drop_pct": 0.7021,
+#                   "filter_volume_rolling_window": 303.6,
 #                   "n_positions": 7.426,
 #                   "total_wallet_exposure_limit": 1.977,
 #                   "unstuck_close_pct": 0.01166,
@@ -331,10 +332,11 @@ class Config:
 #                    "entry_trailing_grid_ratio": 0.18122,
 #                    "entry_trailing_retracement_pct": 0.018165,
 #                    "entry_trailing_threshold_pct": 0.062005,
-#                    "filter_relative_volume_clip_pct": 0.57973,
-#                    "filter_rolling_window": 320.18,
+#                    "filter_noisiness_rolling_window": 320.18,
+#                    "filter_volume_drop_pct": 0.57973,
+#                    "filter_volume_rolling_window": 320.18,
 #                    "n_positions": 7.4396,
-#                    "total_wallet_exposure_limit": 0.0,
+#                    "total_wallet_exposure_limit": 0,
 #                    "unstuck_close_pct": 0.088717,
 #                    "unstuck_ema_dist": -0.014418,
 #                    "unstuck_loss_allowance_pct": 0.030868,
@@ -343,44 +345,45 @@ class Config:
 #           "auto_gs": true,
 #           "coin_flags": {},
 #           "empty_means_all_approved": true,
-#           "execution_delay_seconds": 2.0,
+#           "execution_delay_seconds": 2,
 #           "filter_by_min_effective_cost": true,
 #           "forced_mode_long": "",
 #           "forced_mode_short": "",
 #           "ignored_coins": {"long": [], "short": []},
-#           "leverage": 10.0,
+#           "leverage": 10,
 #           "market_orders_allowed": true,
 #           "max_n_cancellations_per_batch": 5,
 #           "max_n_creations_per_batch": 3,
 #           "max_n_restarts_per_day": 10,
-#           "minimum_coin_age_days": 450.0,
-#           "ohlcvs_1m_rolling_window_days": 4.0,
-#           "ohlcvs_1m_update_after_minutes": 10.0,
-#           "pnls_max_lookback_days": 30.0,
+#           "minimum_coin_age_days": 450,
+#           "ohlcvs_1m_rolling_window_days": 4,
+#           "ohlcvs_1m_update_after_minutes": 10,
+#           "pnls_max_lookback_days": 30,
 #           "price_distance_threshold": 0.002,
 #           "time_in_force": "good_till_cancelled",
 #           "user": "bybit_01"},
 #  "optimize": {"bounds": {"long_close_grid_markup_range": [0, 0.03],
 #                          "long_close_grid_min_markup": [0.001, 0.03],
-#                          "long_close_grid_qty_pct": [0.05, 1.0],
+#                          "long_close_grid_qty_pct": [0.05, 1],
 #                          "long_close_trailing_grid_ratio": [-1, 1],
-#                          "long_close_trailing_qty_pct": [0.05, 1.0],
+#                          "long_close_trailing_qty_pct": [0.05, 1],
 #                          "long_close_trailing_retracement_pct": [0.0001, 0.1],
 #                          "long_close_trailing_threshold_pct": [-0.01, 0.1],
 #                          "long_ema_span_0": [200, 1440],
 #                          "long_ema_span_1": [200, 1440],
-#                          "long_entry_grid_double_down_factor": [0.1, 3],
+#                          "long_entry_grid_double_down_factor": [0.01, 3],
 #                          "long_entry_grid_spacing_pct": [0.001, 0.06],
 #                          "long_entry_grid_spacing_weight": [0, 10],
 #                          "long_entry_initial_ema_dist": [-0.1, 0.003],
 #                          "long_entry_initial_qty_pct": [0.004, 0.02],
-#                          "long_entry_trailing_double_down_factor": [0.1, 3],
+#                          "long_entry_trailing_double_down_factor": [0.01, 3],
 #                          "long_entry_trailing_grid_ratio": [-1, 1],
 #                          "long_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "long_entry_trailing_threshold_pct": [-0.01, 0.1],
-#                          "long_filter_relative_volume_clip_pct": [0, 1],
-#                          "long_filter_rolling_window": [10, 360],
-#                          "long_n_positions": [7.4, 12.0],
+#                          "long_filter_noisiness_rolling_window": [10, 360],
+#                          "long_filter_volume_drop_pct": [0.5, 1],
+#                          "long_filter_volume_rolling_window": [360, 2880],
+#                          "long_n_positions": [7, 30],
 #                          "long_total_wallet_exposure_limit": [0.01, 2],
 #                          "long_unstuck_close_pct": [0.001, 0.1],
 #                          "long_unstuck_ema_dist": [-0.1, 0.01],
@@ -388,26 +391,27 @@ class Config:
 #                          "long_unstuck_threshold": [0.4, 0.95],
 #                          "short_close_grid_markup_range": [0, 0.03],
 #                          "short_close_grid_min_markup": [0.001, 0.03],
-#                          "short_close_grid_qty_pct": [0.05, 1.0],
+#                          "short_close_grid_qty_pct": [0.05, 1],
 #                          "short_close_trailing_grid_ratio": [-1, 1],
-#                          "short_close_trailing_qty_pct": [0.05, 1.0],
+#                          "short_close_trailing_qty_pct": [0.05, 1],
 #                          "short_close_trailing_retracement_pct": [0.0001, 0.1],
 #                          "short_close_trailing_threshold_pct": [-0.01, 0.1],
 #                          "short_ema_span_0": [200, 1440],
 #                          "short_ema_span_1": [200, 1440],
-#                          "short_entry_grid_double_down_factor": [0.1, 3],
+#                          "short_entry_grid_double_down_factor": [0.01, 3],
 #                          "short_entry_grid_spacing_pct": [0.001, 0.06],
 #                          "short_entry_grid_spacing_weight": [0, 10],
 #                          "short_entry_initial_ema_dist": [-0.1, 0.003],
 #                          "short_entry_initial_qty_pct": [0.004, 0.02],
-#                          "short_entry_trailing_double_down_factor": [0.1, 3],
+#                          "short_entry_trailing_double_down_factor": [0.01, 3],
 #                          "short_entry_trailing_grid_ratio": [-1, 1],
 #                          "short_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "short_entry_trailing_threshold_pct": [-0.01, 0.1],
-#                          "short_filter_relative_volume_clip_pct": [0, 1],
-#                          "short_filter_rolling_window": [10, 360],
-#                          "short_n_positions": [0],
-#                          "short_total_wallet_exposure_limit": [0.0, 2.0],
+#                          "short_filter_noisiness_rolling_window": [10, 360],
+#                          "short_filter_volume_drop_pct": [0.5, 1],
+#                          "short_filter_volume_rolling_window": [360, 2880],
+#                          "short_n_positions": [7, 30],
+#                          "short_total_wallet_exposure_limit": [0.01, 2],
 #                          "short_unstuck_close_pct": [0.001, 0.1],
 #                          "short_unstuck_ema_dist": [-0.1, 0.01],
 #                          "short_unstuck_loss_allowance_pct": [0.001, 0.05],
@@ -421,7 +425,7 @@ class Config:
 #               "n_cpus": 5,
 #               "population_size": 1000,
 #               "round_to_n_significant_digits": 4,
-#               "scoring": ["btc_adg", "btc_mdg", "btc_omega_ratio"]}}
+#               "scoring": ["btc_adg_w", "btc_mdg_w", "btc_omega_ratio_w"]}}
 
 class Backtest:
     def __init__(self):
@@ -709,8 +713,11 @@ class Long:
         self._entry_trailing_grid_ratio = -0.28053
         self._entry_trailing_retracement_pct = 0.0024762
         self._entry_trailing_threshold_pct = 0.014956
-        self._filter_relative_volume_clip_pct = 0.51416
-        self._filter_rolling_window = 60.0
+        self._filter_volume_drop_pct = 0.7021
+        self._filter_volume_rolling_window = 303.6
+        self._filter_noisiness_rolling_window = 303.6
+        # self._filter_relative_volume_clip_pct = 0.51416
+        # self._filter_rolling_window = 60.0
         self._n_positions = 9.6662
         self._total_wallet_exposure_limit = 0.8536
         self._unstuck_close_pct = 0.049593
@@ -737,8 +744,11 @@ class Long:
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
-            "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
-            "filter_rolling_window": self._filter_rolling_window,
+            "filter_noisiness_rolling_window": self._filter_noisiness_rolling_window,
+            "filter_volume_drop_pct": self._filter_volume_drop_pct,
+            "filter_volume_rolling_window": self._filter_volume_rolling_window,
+            # "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
+            # "filter_rolling_window": self._filter_rolling_window,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -794,10 +804,25 @@ class Long:
             self.entry_trailing_retracement_pct = new_long["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_long:
             self.entry_trailing_threshold_pct = new_long["entry_trailing_threshold_pct"]
-        if "filter_relative_volume_clip_pct" in new_long:
-            self.filter_relative_volume_clip_pct = new_long["filter_relative_volume_clip_pct"]
-        if "filter_rolling_window" in new_long:
-            self.filter_rolling_window = new_long["filter_rolling_window"]
+        if "filter_noisiness_rolling_window" in new_long:
+            self.filter_noisiness_rolling_window = new_long["filter_noisiness_rolling_window"]
+        # Fix for old configs
+        elif "filter_rolling_window" in new_long:
+            self.filter_noisiness_rolling_window = new_long["filter_rolling_window"]
+        if "filter_volume_drop_pct" in new_long:
+            self.filter_volume_drop_pct = new_long["filter_volume_drop_pct"]
+        # Fix for old configs
+        elif "filter_relative_volume_clip_pct" in new_long:
+            self.filter_volume_drop_pct = new_long["filter_relative_volume_clip_pct"]
+        if "filter_volume_rolling_window" in new_long:
+            self.filter_volume_rolling_window = new_long["filter_volume_rolling_window"]
+        # Fix for old configs
+        elif "filter_rolling_window" in new_long:
+            self.filter_volume_rolling_window = new_long["filter_rolling_window"]
+        # if "filter_relative_volume_clip_pct" in new_long:
+        #     self.filter_relative_volume_clip_pct = new_long["filter_relative_volume_clip_pct"]
+        # if "filter_rolling_window" in new_long:
+        #     self.filter_rolling_window = new_long["filter_rolling_window"]
         if "n_positions" in new_long:
             self.n_positions = new_long["n_positions"]
         if "total_wallet_exposure_limit" in new_long:
@@ -850,9 +875,15 @@ class Long:
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
     @property
-    def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
+    def filter_noisiness_rolling_window(self): return self._filter_noisiness_rolling_window
     @property
-    def filter_rolling_window(self): return self._filter_rolling_window
+    def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
+    @property
+    def filter_volume_rolling_window(self): return self._filter_volume_rolling_window
+    # @property
+    # def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
+    # @property
+    # def filter_rolling_window(self): return self._filter_rolling_window
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -942,14 +973,26 @@ class Long:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._long["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
-    @filter_relative_volume_clip_pct.setter
-    def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
-        self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
-        self._long["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
-    @filter_rolling_window.setter
-    def filter_rolling_window(self, new_filter_rolling_window):
-        self._filter_rolling_window = new_filter_rolling_window
-        self._long["filter_rolling_window"] = self._filter_rolling_window
+    @filter_noisiness_rolling_window.setter
+    def filter_noisiness_rolling_window(self, new_filter_noisiness_rolling_window):
+        self._filter_noisiness_rolling_window = new_filter_noisiness_rolling_window
+        self._long["filter_noisiness_rolling_window"] = self._filter_noisiness_rolling_window
+    @filter_volume_drop_pct.setter
+    def filter_volume_drop_pct(self, new_filter_volume_drop_pct):
+        self._filter_volume_drop_pct = new_filter_volume_drop_pct
+        self._long["filter_volume_drop_pct"] = self._filter_volume_drop_pct
+    @filter_volume_rolling_window.setter
+    def filter_volume_rolling_window(self, new_filter_volume_rolling_window):
+        self._filter_volume_rolling_window = new_filter_volume_rolling_window
+        self._long["filter_volume_rolling_window"] = self._filter_volume_rolling_window
+    # @filter_relative_volume_clip_pct.setter
+    # def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
+    #     self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
+    #     self._long["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
+    # @filter_rolling_window.setter
+    # def filter_rolling_window(self, new_filter_rolling_window):
+    #     self._filter_rolling_window = new_filter_rolling_window
+    #     self._long["filter_rolling_window"] = self._filter_rolling_window
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -996,8 +1039,11 @@ class Short:
         self._entry_trailing_grid_ratio = -0.026647
         self._entry_trailing_retracement_pct = 0.016626
         self._entry_trailing_threshold_pct = 0.052728
-        self._filter_relative_volume_clip_pct = 0.50001
-        self._filter_rolling_window = 68.072
+        self._filter_noisiness_rolling_window = 320.18
+        self._filter_volume_drop_pct = 0.57973
+        self._filter_volume_rolling_window = 320.18
+        # self._filter_relative_volume_clip_pct = 0.50001
+        # self._filter_rolling_window = 68.072
         self._n_positions = 0.0
         self._total_wallet_exposure_limit = 0.0
         self._unstuck_close_pct = 0.052992
@@ -1024,8 +1070,11 @@ class Short:
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
-            "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
-            "filter_rolling_window": self._filter_rolling_window,
+            "filter_noisiness_rolling_window": self._filter_noisiness_rolling_window,
+            "filter_volume_drop_pct": self._filter_volume_drop_pct,
+            "filter_volume_rolling_window": self._filter_volume_rolling_window,
+            # "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
+            # "filter_rolling_window": self._filter_rolling_window,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -1081,10 +1130,25 @@ class Short:
             self.entry_trailing_retracement_pct = new_short["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_short:
             self.entry_trailing_threshold_pct = new_short["entry_trailing_threshold_pct"]
-        if "filter_relative_volume_clip_pct" in new_short:
-            self.filter_relative_volume_clip_pct = new_short["filter_relative_volume_clip_pct"]
-        if "filter_rolling_window" in new_short:
-            self.filter_rolling_window = new_short["filter_rolling_window"]
+        if "filter_noisiness_rolling_window" in new_short:
+            self.filter_noisiness_rolling_window = new_short["filter_noisiness_rolling_window"]
+        # Fix for old configs
+        elif "filter_rolling_window" in new_short:
+            self.filter_noisiness_rolling_window = new_short["filter_rolling_window"]
+        if "filter_volume_drop_pct" in new_short:
+            self.filter_volume_drop_pct = new_short["filter_volume_drop_pct"]
+        # Fix for old configs
+        elif "filter_relative_volume_clip_pct" in new_short:
+            self.filter_volume_drop_pct = new_short["filter_relative_volume_clip_pct"]
+        if "filter_volume_rolling_window" in new_short:
+            self.filter_volume_rolling_window = new_short["filter_volume_rolling_window"]
+        # Fix for old configs
+        elif "filter_rolling_window" in new_short:
+            self.filter_volume_rolling_window = new_short["filter_rolling_window"]
+        # if "filter_relative_volume_clip_pct" in new_short:
+        #     self.filter_relative_volume_clip_pct = new_short["filter_relative_volume_clip_pct"]
+        # if "filter_rolling_window" in new_short:
+        #     self.filter_rolling_window = new_short["filter_rolling_window"]
         if "n_positions" in new_short:
             self.n_positions = new_short["n_positions"]
         if "total_wallet_exposure_limit" in new_short:
@@ -1137,9 +1201,15 @@ class Short:
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
     @property
-    def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
+    def filter_noisiness_rolling_window(self): return self._filter_noisiness_rolling_window
     @property
-    def filter_rolling_window(self): return self._filter_rolling_window
+    def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
+    @property
+    def filter_volume_rolling_window(self): return self._filter_volume_rolling_window
+    # @property
+    # def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
+    # @property
+    # def filter_rolling_window(self): return self._filter_rolling_window
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -1229,14 +1299,26 @@ class Short:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._short["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
-    @filter_relative_volume_clip_pct.setter
-    def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
-        self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
-        self._short["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
-    @filter_rolling_window.setter
-    def filter_rolling_window(self, new_filter_rolling_window):
-        self._filter_rolling_window = new_filter_rolling_window
-        self._short["filter_rolling_window"] = self._filter_rolling_window
+    @filter_noisiness_rolling_window.setter
+    def filter_noisiness_rolling_window(self, new_filter_noisiness_rolling_window):
+        self._filter_noisiness_rolling_window = new_filter_noisiness_rolling_window
+        self._short["filter_noisiness_rolling_window"] = self._filter_noisiness_rolling_window
+    @filter_volume_drop_pct.setter
+    def filter_volume_drop_pct(self, new_filter_volume_drop_pct):
+        self._filter_volume_drop_pct = new_filter_volume_drop_pct
+        self._short["filter_volume_drop_pct"] = self._filter_volume_drop_pct
+    @filter_volume_rolling_window.setter
+    def filter_volume_rolling_window(self, new_filter_volume_rolling_window):
+        self._filter_volume_rolling_window = new_filter_volume_rolling_window
+        self._short["filter_volume_rolling_window"] = self._filter_volume_rolling_window
+    # @filter_relative_volume_clip_pct.setter
+    # def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
+    #     self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
+    #     self._short["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
+    # @filter_rolling_window.setter
+    # def filter_rolling_window(self, new_filter_rolling_window):
+    #     self._filter_rolling_window = new_filter_rolling_window
+    #     self._short["filter_rolling_window"] = self._filter_rolling_window
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -1807,17 +1889,23 @@ class Bounds:
     ENTRY_TRAILING_THRESHOLD_PCT_ROUND = 4
     ENTRY_TRAILING_THRESHOLD_PCT_FORMAT = f'%.{ENTRY_TRAILING_THRESHOLD_PCT_ROUND}f'
 
-    FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN = 0.0
-    FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX = 1.0
-    FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP = 0.01
-    FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND = 2
-    FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT = f'%.{FILTER_RELATIVE_VOLUME_CLIP_PCT_ROUND}f'
+    FILTER_NOISINESS_ROLLING_WINDOW_MIN = 1.0
+    FILTER_NOISINESS_ROLLING_WINDOW_MAX = 1440.0
+    FILTER_NOISINESS_ROLLING_WINDOW_STEP = 1.0
+    FILTER_NOISINESS_ROLLING_WINDOW_ROUND = 0
+    FILTER_NOISINESS_ROLLING_WINDOW_FORMAT = f'%.{FILTER_NOISINESS_ROLLING_WINDOW_ROUND}f'
 
-    FILTER_ROLLING_WINDOW_MIN = 1.0
-    FILTER_ROLLING_WINDOW_MAX = 1440.0
-    FILTER_ROLLING_WINDOW_STEP = 1.0
-    FILTER_ROLLING_WINDOW_ROUND = 0
-    FILTER_ROLLING_WINDOW_FORMAT = f'%.{FILTER_ROLLING_WINDOW_ROUND}f'
+    FILTER_VOLUME_DROP_PCT_MIN = 0.0
+    FILTER_VOLUME_DROP_PCT_MAX = 1.0
+    FILTER_VOLUME_DROP_PCT_STEP = 0.01
+    FILTER_VOLUME_DROP_PCT_ROUND = 2
+    FILTER_VOLUME_DROP_PCT_FORMAT = f'%.{FILTER_VOLUME_DROP_PCT_ROUND}f'
+
+    FILTER_VOLUME_ROLLING_WINDOW_MIN = 1.0
+    FILTER_VOLUME_ROLLING_WINDOW_MAX = 1440.0
+    FILTER_VOLUME_ROLLING_WINDOW_STEP = 1.0
+    FILTER_VOLUME_ROLLING_WINDOW_ROUND = 0
+    FILTER_VOLUME_ROLLING_WINDOW_FORMAT = f'%.{FILTER_VOLUME_ROLLING_WINDOW_ROUND}f'
 
     N_POSITIONS_MIN = 0.0
     N_POSITIONS_MAX = 100.0
@@ -1893,10 +1981,16 @@ class Bounds:
         self._long_entry_trailing_retracement_pct_1 = 0.1
         self._long_entry_trailing_threshold_pct_0 = -0.1
         self._long_entry_trailing_threshold_pct_1 = 0.1
-        self._long_filter_relative_volume_clip_pct_0 = 0.0
-        self._long_filter_relative_volume_clip_pct_1 = 1.0
-        self._long_filter_rolling_window_0 = 10.0
-        self._long_filter_rolling_window_1 = 360.0
+        self._filter_noisiness_rolling_window_0 = 10.0
+        self._filter_noisiness_rolling_window_1 = 360.0
+        self._filter_volume_drop_pct_0 = 0.5
+        self._filter_volume_drop_pct_1 = 1.0
+        self._filter_volume_rolling_window_0 = 10.0
+        self._filter_volume_rolling_window_1 = 360.0
+        # self._long_filter_relative_volume_clip_pct_0 = 0.0
+        # self._long_filter_relative_volume_clip_pct_1 = 1.0
+        # self._long_filter_rolling_window_0 = 10.0
+        # self._long_filter_rolling_window_1 = 360.0
         self._long_n_positions_0 = 1.0
         self._long_n_positions_1 = 20.0
         self._long_total_wallet_exposure_limit_0 = 0.0
@@ -1946,10 +2040,16 @@ class Bounds:
         self._short_entry_trailing_retracement_pct_1 = 0.1
         self._short_entry_trailing_threshold_pct_0 = -0.1
         self._short_entry_trailing_threshold_pct_1 = 0.1
-        self._short_filter_relative_volume_clip_pct_0 = 0.0
-        self._short_filter_relative_volume_clip_pct_1 = 1.0
-        self._short_filter_rolling_window_0 = 10.0
-        self._short_filter_rolling_window_1 = 360.0
+        self._short_filter_noisiness_rolling_window_0 = 10.0
+        self._short_filter_noisiness_rolling_window_1 = 360.0
+        self._short_filter_volume_drop_pct_0 = 0.5
+        self._short_filter_volume_drop_pct_1 = 1.0
+        self._short_filter_volume_rolling_window_0 = 10.0
+        self._short_filter_volume_rolling_window_1 = 360.0
+        # self._short_filter_relative_volume_clip_pct_0 = 0.0
+        # self._short_filter_relative_volume_clip_pct_1 = 1.0
+        # self._short_filter_rolling_window_0 = 10.0
+        # self._short_filter_rolling_window_1 = 360.0
         self._short_n_positions_0 = 1.0
         self._short_n_positions_1 = 20.0
         self._short_total_wallet_exposure_limit_0 = 0.0
@@ -1981,8 +2081,11 @@ class Bounds:
                 "long_entry_trailing_grid_ratio": [self._long_entry_trailing_grid_ratio_0, self._long_entry_trailing_grid_ratio_1],
                 "long_entry_trailing_retracement_pct": [self._long_entry_trailing_retracement_pct_0, self._long_entry_trailing_retracement_pct_1],
                 "long_entry_trailing_threshold_pct": [self._long_entry_trailing_threshold_pct_0, self._long_entry_trailing_threshold_pct_1],
-                "long_filter_relative_volume_clip_pct": [self._long_filter_relative_volume_clip_pct_0, self._long_filter_relative_volume_clip_pct_1],
-                "long_filter_rolling_window": [self._long_filter_rolling_window_0, self._long_filter_rolling_window_1],
+                "long_filter_noisiness_rolling_window": [self._filter_noisiness_rolling_window_0, self._filter_noisiness_rolling_window_1],
+                "long_filter_volume_drop_pct": [self._filter_volume_drop_pct_0, self._filter_volume_drop_pct_1],
+                "long_filter_volume_rolling_window": [self._filter_volume_rolling_window_0, self._filter_volume_rolling_window_1],
+                # "long_filter_relative_volume_clip_pct": [self._long_filter_relative_volume_clip_pct_0, self._long_filter_relative_volume_clip_pct_1],
+                # "long_filter_rolling_window": [self._long_filter_rolling_window_0, self._long_filter_rolling_window_1],
                 "long_n_positions": [self._long_n_positions_0, self._long_n_positions_1],
                 "long_total_wallet_exposure_limit": [self._long_total_wallet_exposure_limit_0, self._long_total_wallet_exposure_limit_1],
                 "long_unstuck_close_pct": [self._long_unstuck_close_pct_0, self._long_unstuck_close_pct_1],
@@ -2007,8 +2110,11 @@ class Bounds:
                 "short_entry_trailing_grid_ratio": [self._short_entry_trailing_grid_ratio_0, self._short_entry_trailing_grid_ratio_1],
                 "short_entry_trailing_retracement_pct": [self._short_entry_trailing_retracement_pct_0, self._short_entry_trailing_retracement_pct_1],
                 "short_entry_trailing_threshold_pct": [self._short_entry_trailing_threshold_pct_0, self._short_entry_trailing_threshold_pct_1],
-                "short_filter_relative_volume_clip_pct": [self._short_filter_relative_volume_clip_pct_0, self._short_filter_relative_volume_clip_pct_1],
-                "short_filter_rolling_window": [self._short_filter_rolling_window_0, self._short_filter_rolling_window_1],
+                "short_filter_noisiness_rolling_window": [self._short_filter_noisiness_rolling_window_0, self._short_filter_noisiness_rolling_window_1],
+                "short_filter_volume_drop_pct": [self._short_filter_volume_drop_pct_0, self._short_filter_volume_drop_pct_1],
+                "short_filter_volume_rolling_window": [self._short_filter_volume_rolling_window_0, self._short_filter_volume_rolling_window_1],
+                # "short_filter_relative_volume_clip_pct": [self._short_filter_relative_volume_clip_pct_0, self._short_filter_relative_volume_clip_pct_1],
+                # "short_filter_rolling_window": [self._short_filter_rolling_window_0, self._short_filter_rolling_window_1],
                 "short_n_positions": [self._short_n_positions_0, self._short_n_positions_1],
                 "short_total_wallet_exposure_limit": [self._short_total_wallet_exposure_limit_0, self._short_total_wallet_exposure_limit_1],
                 "short_unstuck_close_pct": [self._short_unstuck_close_pct_0, self._short_unstuck_close_pct_1],
@@ -2079,12 +2185,33 @@ class Bounds:
         if "long_entry_trailing_threshold_pct" in new_bounds:
             self.long_entry_trailing_threshold_pct_0 = new_bounds["long_entry_trailing_threshold_pct"][0]
             self.long_entry_trailing_threshold_pct_1 = new_bounds["long_entry_trailing_threshold_pct"][1]
-        if "long_filter_relative_volume_clip_pct" in new_bounds:
-            self.long_filter_relative_volume_clip_pct_0 = new_bounds["long_filter_relative_volume_clip_pct"][0]
-            self.long_filter_relative_volume_clip_pct_1 = new_bounds["long_filter_relative_volume_clip_pct"][1]
-        if "long_filter_rolling_window" in new_bounds:
-            self.long_filter_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
-            self.long_filter_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
+        if "long_filter_noisiness_rolling_window" in new_bounds:
+            self.long_filter_noisiness_rolling_window_0 = new_bounds["long_filter_noisiness_rolling_window"][0]
+            self.long_filter_noisiness_rolling_window_1 = new_bounds["long_filter_noisiness_rolling_window"][1]
+        # Fix for old configs
+        elif "long_filter_rolling_window" in new_bounds:
+            self.long_filter_noisiness_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
+            self.long_filter_noisiness_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
+        if "long_filter_volume_drop_pct" in new_bounds:
+            self.long_filter_volume_drop_pct_0 = new_bounds["long_filter_volume_drop_pct"][0]
+            self.long_filter_volume_drop_pct_1 = new_bounds["long_filter_volume_drop_pct"][1]
+        # Fix for old configs
+        elif "long_filter_relative_volume_clip_pct" in new_bounds:
+            self.long_filter_volume_drop_pct_0 = new_bounds["long_filter_relative_volume_clip_pct"][0]
+            self.long_filter_volume_drop_pct_1 = new_bounds["long_filter_relative_volume_clip_pct"][1]
+        if "long_filter_volume_rolling_window" in new_bounds:
+            self.long_filter_volume_rolling_window_0 = new_bounds["long_filter_volume_rolling_window"][0]
+            self.long_filter_volume_rolling_window_1 = new_bounds["long_filter_volume_rolling_window"][1]
+        # Fix for old configs
+        elif "long_filter_rolling_window" in new_bounds:
+            self.long_filter_volume_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
+            self.long_filter_volume_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
+        # if "long_filter_relative_volume_clip_pct" in new_bounds:
+        #     self.long_filter_relative_volume_clip_pct_0 = new_bounds["long_filter_relative_volume_clip_pct"][0]
+        #     self.long_filter_relative_volume_clip_pct_1 = new_bounds["long_filter_relative_volume_clip_pct"][1]
+        # if "long_filter_rolling_window" in new_bounds:
+        #     self.long_filter_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
+        #     self.long_filter_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
         if "long_n_positions" in new_bounds:
             self.long_n_positions_0 = new_bounds["long_n_positions"][0]
             self.long_n_positions_1 = new_bounds["long_n_positions"][1]
@@ -2159,12 +2286,33 @@ class Bounds:
         if "short_entry_trailing_threshold_pct" in new_bounds:
             self.short_entry_trailing_threshold_pct_0 = new_bounds["short_entry_trailing_threshold_pct"][0]
             self.short_entry_trailing_threshold_pct_1 = new_bounds["short_entry_trailing_threshold_pct"][1]
-        if "short_filter_relative_volume_clip_pct" in new_bounds:
-            self.short_filter_relative_volume_clip_pct_0 = new_bounds["short_filter_relative_volume_clip_pct"][0]
-            self.short_filter_relative_volume_clip_pct_1 = new_bounds["short_filter_relative_volume_clip_pct"][1]
-        if "short_filter_rolling_window" in new_bounds:
-            self.short_filter_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
-            self.short_filter_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
+        if "short_filter_noisiness_rolling_window" in new_bounds:
+            self.short_filter_noisiness_rolling_window_0 = new_bounds["short_filter_noisiness_rolling_window"][0]
+            self.short_filter_noisiness_rolling_window_1 = new_bounds["short_filter_noisiness_rolling_window"][1]
+        # Fix for old configs
+        elif "short_filter_rolling_window" in new_bounds:
+            self.short_filter_noisiness_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
+            self.short_filter_noisiness_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
+        if "short_filter_volume_drop_pct" in new_bounds:
+            self.short_filter_volume_drop_pct_0 = new_bounds["short_filter_volume_drop_pct"][0]
+            self.short_filter_volume_drop_pct_1 = new_bounds["short_filter_volume_drop_pct"][1]
+        # Fix for old configs
+        elif "short_filter_relative_volume_clip_pct" in new_bounds:
+            self.short_filter_volume_drop_pct_0 = new_bounds["short_filter_relative_volume_clip_pct"][0]
+            self.short_filter_volume_drop_pct_1 = new_bounds["short_filter_relative_volume_clip_pct"][1]
+        if "short_filter_volume_rolling_window" in new_bounds:
+            self.short_filter_volume_rolling_window_0 = new_bounds["short_filter_volume_rolling_window"][0]
+            self.short_filter_volume_rolling_window_1 = new_bounds["short_filter_volume_rolling_window"][1]
+        # Fix for old configs
+        elif "short_filter_rolling_window" in new_bounds:
+            self.short_filter_volume_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
+            self.short_filter_volume_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
+        # if "short_filter_relative_volume_clip_pct" in new_bounds:
+        #     self.short_filter_relative_volume_clip_pct_0 = new_bounds["short_filter_relative_volume_clip_pct"][0]
+        #     self.short_filter_relative_volume_clip_pct_1 = new_bounds["short_filter_relative_volume_clip_pct"][1]
+        # if "short_filter_rolling_window" in new_bounds:
+        #     self.short_filter_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
+        #     self.short_filter_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
         if "short_n_positions" in new_bounds:
             self.short_n_positions_0 = new_bounds["short_n_positions"][0]
             self.short_n_positions_1 = new_bounds["short_n_positions"][1]
@@ -2258,13 +2406,25 @@ class Bounds:
     @property
     def long_entry_trailing_threshold_pct_1(self): return self._long_entry_trailing_threshold_pct_1
     @property
-    def long_filter_relative_volume_clip_pct_0(self): return self._long_filter_relative_volume_clip_pct_0
+    def long_filter_noisiness_rolling_window_0(self): return self._long_filter_noisiness_rolling_window_0
     @property
-    def long_filter_relative_volume_clip_pct_1(self): return self._long_filter_relative_volume_clip_pct_1
+    def long_filter_noisiness_rolling_window_1(self): return self._long_filter_noisiness_rolling_window_1
     @property
-    def long_filter_rolling_window_0(self): return self._long_filter_rolling_window_0
+    def long_filter_volume_drop_pct_0(self): return self._long_filter_volume_drop_pct_0
     @property
-    def long_filter_rolling_window_1(self): return self._long_filter_rolling_window_1
+    def long_filter_volume_drop_pct_1(self): return self._long_filter_volume_drop_pct_1
+    @property
+    def long_filter_volume_rolling_window_0(self): return self._long_filter_volume_rolling_window_0
+    @property
+    def long_filter_volume_rolling_window_1(self): return self._long_filter_volume_rolling_window_1
+    # @property
+    # def long_filter_relative_volume_clip_pct_0(self): return self._long_filter_relative_volume_clip_pct_0
+    # @property
+    # def long_filter_relative_volume_clip_pct_1(self): return self._long_filter_relative_volume_clip_pct_1
+    # @property
+    # def long_filter_rolling_window_0(self): return self._long_filter_rolling_window_0
+    # @property
+    # def long_filter_rolling_window_1(self): return self._long_filter_rolling_window_1
     @property
     def long_n_positions_0(self): return self._long_n_positions_0
     @property
@@ -2364,13 +2524,25 @@ class Bounds:
     @property
     def short_entry_trailing_threshold_pct_1(self): return self._short_entry_trailing_threshold_pct_1
     @property
-    def short_filter_relative_volume_clip_pct_0(self): return self._short_filter_relative_volume_clip_pct_0
+    def short_filter_noisiness_rolling_window_0(self): return self._short_filter_noisiness_rolling_window_0
     @property
-    def short_filter_relative_volume_clip_pct_1(self): return self._short_filter_relative_volume_clip_pct_1
+    def short_filter_noisiness_rolling_window_1(self): return self._short_filter_noisiness_rolling_window_1
     @property
-    def short_filter_rolling_window_0(self): return self._short_filter_rolling_window_0
+    def short_filter_volume_drop_pct_0(self): return self._short_filter_volume_drop_pct_0
     @property
-    def short_filter_rolling_window_1(self): return self._short_filter_rolling_window_1
+    def short_filter_volume_drop_pct_1(self): return self._short_filter_volume_drop_pct_1
+    @property
+    def short_filter_volume_rolling_window_0(self): return self._short_filter_volume_rolling_window_0
+    @property
+    def short_filter_volume_rolling_window_1(self): return self._short_filter_volume_rolling_window_1
+    # @property
+    # def short_filter_relative_volume_clip_pct_0(self): return self._short_filter_relative_volume_clip_pct_0
+    # @property
+    # def short_filter_relative_volume_clip_pct_1(self): return self._short_filter_relative_volume_clip_pct_1
+    # @property
+    # def short_filter_rolling_window_0(self): return self._short_filter_rolling_window_0
+    # @property
+    # def short_filter_rolling_window_1(self): return self._short_filter_rolling_window_1
     @property
     def short_n_positions_0(self): return self._short_n_positions_0
     @property
@@ -2541,22 +2713,46 @@ class Bounds:
     def long_entry_trailing_threshold_pct_1(self, new_value):
         self._long_entry_trailing_threshold_pct_1 = new_value
         self._bounds["long_entry_trailing_threshold_pct"][1] = new_value
-    @long_filter_relative_volume_clip_pct_0.setter
-    def long_filter_relative_volume_clip_pct_0(self, new_value):
-        self._long_filter_relative_volume_clip_pct_0 = new_value
-        self._bounds["long_filter_relative_volume_clip_pct"][0] = new_value
-    @long_filter_relative_volume_clip_pct_1.setter
-    def long_filter_relative_volume_clip_pct_1(self, new_value):
-        self._long_filter_relative_volume_clip_pct_1 = new_value
-        self._bounds["long_filter_relative_volume_clip_pct"][1] = new_value
-    @long_filter_rolling_window_0.setter
-    def long_filter_rolling_window_0(self, new_value):
-        self._long_filter_rolling_window_0 = new_value
-        self._bounds["long_filter_rolling_window"][0] = new_value
-    @long_filter_rolling_window_1.setter
-    def long_filter_rolling_window_1(self, new_value):
-        self._long_filter_rolling_window_1 = new_value
-        self._bounds["long_filter_rolling_window"][1] = new_value
+    @long_filter_noisiness_rolling_window_0.setter
+    def long_filter_noisiness_rolling_window_0(self, new_value):
+        self._long_filter_noisiness_rolling_window_0 = new_value
+        self._bounds["long_filter_noisiness_rolling_window"][0] = new_value
+    @long_filter_noisiness_rolling_window_1.setter
+    def long_filter_noisiness_rolling_window_1(self, new_value):
+        self._long_filter_noisiness_rolling_window_1 = new_value
+        self._bounds["long_filter_noisiness_rolling_window"][1] = new_value
+    @long_filter_volume_drop_pct_0.setter
+    def long_filter_volume_drop_pct_0(self, new_value):
+        self._long_filter_volume_drop_pct_0 = new_value
+        self._bounds["long_filter_volume_drop_pct"][0] = new_value
+    @long_filter_volume_drop_pct_1.setter
+    def long_filter_volume_drop_pct_1(self, new_value):
+        self._long_filter_volume_drop_pct_1 = new_value
+        self._bounds["long_filter_volume_drop_pct"][1] = new_value
+    @long_filter_volume_rolling_window_0.setter
+    def long_filter_volume_rolling_window_0(self, new_value):
+        self._long_filter_volume_rolling_window_0 = new_value
+        self._bounds["long_filter_volume_rolling_window"][0] = new_value
+    @long_filter_volume_rolling_window_1.setter
+    def long_filter_volume_rolling_window_1(self, new_value):
+        self._long_filter_volume_rolling_window_1 = new_value
+        self._bounds["long_filter_volume_rolling_window"][1] = new_value
+    # @long_filter_relative_volume_clip_pct_0.setter
+    # def long_filter_relative_volume_clip_pct_0(self, new_value):
+    #     self._long_filter_relative_volume_clip_pct_0 = new_value
+    #     self._bounds["long_filter_relative_volume_clip_pct"][0] = new_value
+    # @long_filter_relative_volume_clip_pct_1.setter
+    # def long_filter_relative_volume_clip_pct_1(self, new_value):
+    #     self._long_filter_relative_volume_clip_pct_1 = new_value
+    #     self._bounds["long_filter_relative_volume_clip_pct"][1] = new_value
+    # @long_filter_rolling_window_0.setter
+    # def long_filter_rolling_window_0(self, new_value):
+    #     self._long_filter_rolling_window_0 = new_value
+    #     self._bounds["long_filter_rolling_window"][0] = new_value
+    # @long_filter_rolling_window_1.setter
+    # def long_filter_rolling_window_1(self, new_value):
+    #     self._long_filter_rolling_window_1 = new_value
+    #     self._bounds["long_filter_rolling_window"][1] = new_value
     @long_n_positions_0.setter
     def long_n_positions_0(self, new_value):
         self._long_n_positions_0 = new_value
@@ -2751,22 +2947,46 @@ class Bounds:
     def short_entry_trailing_threshold_pct_1(self, new_value):
         self._short_entry_trailing_threshold_pct_1 = new_value
         self._bounds["short_entry_trailing_threshold_pct"][1] = new_value
-    @short_filter_relative_volume_clip_pct_0.setter
-    def short_filter_relative_volume_clip_pct_0(self, new_value):
-        self._short_filter_relative_volume_clip_pct_0 = new_value
-        self._bounds["short_filter_relative_volume_clip_pct"][0] = new_value
-    @short_filter_relative_volume_clip_pct_1.setter
-    def short_filter_relative_volume_clip_pct_1(self, new_value):
-        self._short_filter_relative_volume_clip_pct_1 = new_value
-        self._bounds["short_filter_relative_volume_clip_pct"][1] = new_value
-    @short_filter_rolling_window_0.setter
-    def short_filter_rolling_window_0(self, new_value):
-        self._short_filter_rolling_window_0 = new_value
-        self._bounds["short_filter_rolling_window"][0] = new_value
-    @short_filter_rolling_window_1.setter
-    def short_filter_rolling_window_1(self, new_value):
-        self._short_filter_rolling_window_1 = new_value
-        self._bounds["short_filter_rolling_window"][1] = new_value
+    @short_filter_noisiness_rolling_window_0.setter
+    def short_filter_noisiness_rolling_window_0(self, new_value):
+        self._short_filter_noisiness_rolling_window_0 = new_value
+        self._bounds["short_filter_noisiness_rolling_window"][0] = new_value
+    @short_filter_noisiness_rolling_window_1.setter
+    def short_filter_noisiness_rolling_window_1(self, new_value):
+        self._short_filter_noisiness_rolling_window_1 = new_value
+        self._bounds["short_filter_noisiness_rolling_window"][1] = new_value
+    @short_filter_volume_drop_pct_0.setter
+    def short_filter_volume_drop_pct_0(self, new_value):
+        self._short_filter_volume_drop_pct_0 = new_value
+        self._bounds["short_filter_volume_drop_pct"][0] = new_value
+    @short_filter_volume_drop_pct_1.setter
+    def short_filter_volume_drop_pct_1(self, new_value):
+        self._short_filter_volume_drop_pct_1 = new_value
+        self._bounds["short_filter_volume_drop_pct"][1] = new_value
+    @short_filter_volume_rolling_window_0.setter
+    def short_filter_volume_rolling_window_0(self, new_value):
+        self._short_filter_volume_rolling_window_0 = new_value
+        self._bounds["short_filter_volume_rolling_window"][0] = new_value
+    @short_filter_volume_rolling_window_1.setter
+    def short_filter_volume_rolling_window_1(self, new_value):
+        self._short_filter_volume_rolling_window_1 = new_value
+        self._bounds["short_filter_volume_rolling_window"][1] = new_value
+    # @short_filter_relative_volume_clip_pct_0.setter
+    # def short_filter_relative_volume_clip_pct_0(self, new_value):
+    #     self._short_filter_relative_volume_clip_pct_0 = new_value
+    #     self._bounds["short_filter_relative_volume_clip_pct"][0] = new_value
+    # @short_filter_relative_volume_clip_pct_1.setter
+    # def short_filter_relative_volume_clip_pct_1(self, new_value):
+    #     self._short_filter_relative_volume_clip_pct_1 = new_value
+    #     self._bounds["short_filter_relative_volume_clip_pct"][1] = new_value
+    # @short_filter_rolling_window_0.setter
+    # def short_filter_rolling_window_0(self, new_value):
+    #     self._short_filter_rolling_window_0 = new_value
+    #     self._bounds["short_filter_rolling_window"][0] = new_value
+    # @short_filter_rolling_window_1.setter
+    # def short_filter_rolling_window_1(self, new_value):
+    #     self._short_filter_rolling_window_1 = new_value
+    #     self._bounds["short_filter_rolling_window"][1] = new_value
     @short_n_positions_0.setter
     def short_n_positions_0(self, new_value):
         self._short_n_positions_0 = new_value
