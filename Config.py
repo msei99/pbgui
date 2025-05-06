@@ -1981,12 +1981,12 @@ class Bounds:
         self._long_entry_trailing_retracement_pct_1 = 0.1
         self._long_entry_trailing_threshold_pct_0 = -0.1
         self._long_entry_trailing_threshold_pct_1 = 0.1
-        self._filter_noisiness_rolling_window_0 = 10.0
-        self._filter_noisiness_rolling_window_1 = 360.0
-        self._filter_volume_drop_pct_0 = 0.5
-        self._filter_volume_drop_pct_1 = 1.0
-        self._filter_volume_rolling_window_0 = 10.0
-        self._filter_volume_rolling_window_1 = 360.0
+        self._long_filter_noisiness_rolling_window_0 = 10.0
+        self._long_filter_noisiness_rolling_window_1 = 360.0
+        self._long_filter_volume_drop_pct_0 = 0.5
+        self._long_filter_volume_drop_pct_1 = 1.0
+        self._long_filter_volume_rolling_window_0 = 10.0
+        self._long_filter_volume_rolling_window_1 = 360.0
         # self._long_filter_relative_volume_clip_pct_0 = 0.0
         # self._long_filter_relative_volume_clip_pct_1 = 1.0
         # self._long_filter_rolling_window_0 = 10.0
@@ -2081,9 +2081,9 @@ class Bounds:
                 "long_entry_trailing_grid_ratio": [self._long_entry_trailing_grid_ratio_0, self._long_entry_trailing_grid_ratio_1],
                 "long_entry_trailing_retracement_pct": [self._long_entry_trailing_retracement_pct_0, self._long_entry_trailing_retracement_pct_1],
                 "long_entry_trailing_threshold_pct": [self._long_entry_trailing_threshold_pct_0, self._long_entry_trailing_threshold_pct_1],
-                "long_filter_noisiness_rolling_window": [self._filter_noisiness_rolling_window_0, self._filter_noisiness_rolling_window_1],
-                "long_filter_volume_drop_pct": [self._filter_volume_drop_pct_0, self._filter_volume_drop_pct_1],
-                "long_filter_volume_rolling_window": [self._filter_volume_rolling_window_0, self._filter_volume_rolling_window_1],
+                "long_filter_noisiness_rolling_window": [self._long_filter_noisiness_rolling_window_0, self._long_filter_noisiness_rolling_window_1],
+                "long_filter_volume_drop_pct": [self._long_filter_volume_drop_pct_0, self._long_filter_volume_drop_pct_1],
+                "long_filter_volume_rolling_window": [self._long_filter_volume_rolling_window_0, self._long_filter_volume_rolling_window_1],
                 # "long_filter_relative_volume_clip_pct": [self._long_filter_relative_volume_clip_pct_0, self._long_filter_relative_volume_clip_pct_1],
                 # "long_filter_rolling_window": [self._long_filter_rolling_window_0, self._long_filter_rolling_window_1],
                 "long_n_positions": [self._long_n_positions_0, self._long_n_positions_1],
