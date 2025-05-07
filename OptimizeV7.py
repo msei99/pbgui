@@ -387,7 +387,7 @@ class OptimizeV7Results:
         if self.results_path.exists():
             p = str(self.results_path) + "/*.txt"
             self.results = glob.glob(p, recursive=False)
-            p = str(self.results_path) + "/*/index.json"
+            p = str(self.results_path) + "/*/all_results.bin"
             self.results_new = glob.glob(p, recursive=False)
     
     def find_result_name(self, result_file):
