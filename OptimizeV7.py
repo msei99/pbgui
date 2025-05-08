@@ -418,7 +418,7 @@ class OptimizeV7Results:
             result_time = Path(files[0]).stat().st_mtime
             return config.backtest.base_dir.split("/")[-1], result_time
         else:
-            return None
+            return None, None
 
     def view_analysis(self, analysis):
         file = Path(f'{self.analysis_path}/{analysis}.json')
