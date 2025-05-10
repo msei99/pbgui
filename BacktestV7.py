@@ -380,6 +380,7 @@ class BacktestV7Item:
             self.config.load_config()
             self.name = self.config.backtest.base_dir.split('/')[-1]
             self.results.results_path = str(Path(f'{pb7dir()}/backtests/pbgui/{self.name}'))
+            self.date = Path(self.path).stat().st_mtime
             self.results.name = self.name
         else:
             self.initialize()
@@ -1290,6 +1291,7 @@ class BacktestsV7:
                 'id': id,
                 'edit': False,
                 'Name': bt.name,
+                'Date': datetime.datetime.fromtimestamp(bt.date),
                 'Exchange': bt.config.backtest.exchanges,
                 'view': False,
                 # 'Backtests': bt.calculate_results(),
@@ -1299,6 +1301,7 @@ class BacktestsV7:
         column_config = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
+            "Date": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
             "view": st.column_config.CheckboxColumn(label="View Results"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
