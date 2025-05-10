@@ -1285,6 +1285,12 @@ class BacktestsV7:
                         self.backtests[row].remove()
                         self.backtests.pop(row)
                         st.rerun()
+                if 'delete_results' in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]['delete_results']:
+                        self.backtests[row].results.remove_all_results()
+                        self.backtests[row].remove()
+                        self.backtests.pop(row)
+                        st.rerun()
         d = []
         for id, bt in enumerate(self.backtests):
             d.append({
@@ -1297,6 +1303,7 @@ class BacktestsV7:
                 # 'Backtests': bt.calculate_results(),
                 'Backtests': bt.results.calculate_results(),
                 'delete' : False,
+                'delete_results' : False,
             })
         column_config = {
             "id": None,
@@ -1304,6 +1311,7 @@ class BacktestsV7:
             "Date": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
             "view": st.column_config.CheckboxColumn(label="View Results"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
+            "delete_results": st.column_config.CheckboxColumn(label="Delete BT and Results"),
             }
         #Display Backtests
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_backtest_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
