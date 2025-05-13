@@ -1301,3 +1301,15 @@ pbmon_telegram_chat_id = """
     ```
     Your Telegram Chat ID
     ```"""
+
+archive_name = """
+    ```
+    Name of the archive
+    ```"""
+archive_url = """
+    ```
+    Github URL of the archive
+    Archives:
+    https://github.com/msei99/pbconfigs.git
+    https://github.com/RustyCZ/pb-configs.git
+    ```"""

@@ -11,7 +11,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, get_navi_paths, replace_special_chars
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
 from PBCoinData import CoinData
 import uuid
 from Base import Base
@@ -872,7 +872,7 @@ class BacktestV7Result:
                                 final_balance_btc = last_line.split(',')[3]
                             return final_balance, final_balance_btc
                         else: last_line = None
-        return None
+        return 0, 0
 
     def load_be(self):
         if self.be is None:
@@ -897,14 +897,19 @@ class BacktestV7Result:
         balance_and_equity_btc = Path(f'{self.result_path}/balance_and_equity_btc.png')
         if balance_and_equity.exists():
             st.image(str(balance_and_equity), use_column_width=True)
+        else:
+            st.warning("No balance and equity plot found")
         if balance_and_equity_btc.exists():
             st.image(str(balance_and_equity_btc), use_column_width=True)
-    
+
     def view_fills(self):
         p = str(Path(f'{self.result_path}/fills_plots/*.png'))
         fills = glob.glob(p)
-        for fill in fills:
-            st.image(fill, use_column_width=True)
+        if fills:
+            for fill in fills:
+                st.image(fill, use_column_width=True)
+        else:
+            st.warning("No fills plot found")
 
     def view(self):
         col1, col2 = st.columns([1,1])
@@ -1047,6 +1052,128 @@ class BacktestV7Result:
         else:
             st.error("No fills data found")
 
+class ConfigV7Archives:
+    def __init__(self):
+        self.archives = []
+        self.load()
+
+    def load(self):
+        p = str(Path(f'{PBGDIR}/data/archives/*/.git/config'))
+        files = glob.glob(p, recursive=True)
+        self.archives = []
+        for file in files:
+            git_config = configparser.ConfigParser()
+            git_config.read(file)
+            if git_config.has_section('remote "origin"'):
+                if git_config.has_option('remote "origin"', 'url'):
+                    remote_url = git_config.get('remote "origin"', 'url')
+                    if remote_url:
+                        self.archives.append({
+                            "url": remote_url,
+                            "name": PurePath(file).parent.parent.name,
+                            "path": PurePath(file).parent.parent
+                        })
+
+    def list(self):
+        if not self.archives:
+            st.warning("No archives found")
+            return
+        if not "ed_key" in st.session_state:
+            st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
+        if f'select_config_v7_archives_{ed_key}' in st.session_state:
+            ed = st.session_state[f'select_config_v7_archives_{ed_key}']
+            for row in ed["edited_rows"]:
+                if 'view' in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]['view']:
+                        results =  BacktestV7Results()
+                        results.results_path = self.archives[row]['path']
+                        results.name = self.archives[row]['name']
+                        st.session_state.config_v7_config_archive = results
+                        st.session_state.ed_key += 1
+                        st.rerun()
+                if 'delete' in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]['delete']:
+                        self.remove_archive(self.archives[row]['path'])
+                        self.load()
+                        st.session_state.ed_key += 1
+                        st.rerun()
+        data = [
+            {
+                "view": False,
+                "Name": archive["name"],
+                "URL": archive["url"],
+                "Path": str(archive["path"]),
+                "delete": False,
+            }
+            for archive in self.archives
+        ]
+        column_config={
+            "view": st.column_config.CheckboxColumn(label="View Archive"),
+            "Name": st.column_config.TextColumn(label="Archive Name"),
+            "URL": st.column_config.LinkColumn(label="Repository URL"),
+            "Path": st.column_config.TextColumn(label="Local Path"),
+            "delete": st.column_config.CheckboxColumn(label="Delete Archive"),
+        }
+        # Display Config Archives
+        st.data_editor(
+            data,
+            use_container_width=True,
+            column_config=column_config,
+            key=f"select_config_v7_archives_{ed_key}",
+            hide_index=True
+        )
+    
+    def remove_archive(self, path: str):
+        if path:
+            rmtree(path, ignore_errors=True)
+
+    def add(self):
+        if "edit_bt_v7_archive_name" not in st.session_state:
+            st.session_state.edit_bt_v7_archive_name = ""
+        if "edit_bt_v7_archive_url" not in st.session_state:
+            st.session_state.edit_bt_v7_archive_url = ""
+        col1, col2 = st.columns([1,1])
+        with col1:
+            st.text_input("Name", value=st.session_state.edit_bt_v7_archive_name, key="edit_bt_v7_archive_name", help=pbgui_help.archive_name)
+        with col2:
+            st.text_input("URL", value=st.session_state.edit_bt_v7_archive_url, key="edit_bt_v7_archive_url", help=pbgui_help.archive_url)
+        if st.button("Add Archive"):
+            self.git_add(st.session_state.edit_bt_v7_archive_name, st.session_state.edit_bt_v7_archive_url)
+            self.load()
+
+    def git_add(self, archive_name: str, url: str):
+        if not archive_name or not url:
+            st.error("Please enter a name and URL")
+            return
+        cmd = ["git", "clone", url, f"{PBGDIR}/data/archives/{archive_name}"]
+        try:
+            log = ""
+            result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+            log = result.stdout + "\n"
+            if result.stderr:
+                log = log + result.stderr + "\n"
+        except subprocess.CalledProcessError as e:
+            log = f"Error adding {archive_name}: {e.stderr}"
+        if log:
+            info_popup(log)
+    
+    def git_pull(self):
+        log = ""
+        for archive in self.archives:
+            path = archive["path"]
+            cmd = ["git", "-C", path, "pull"]
+            log = log + f'Pulling {archive["name"]}...' + "\n\n"
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+                log = log + result.stdout + "\n"
+                if result.stderr:
+                    log = log + result.stderr + "\n"
+            except subprocess.CalledProcessError as e:
+                log = log + f"Error pulling {archive['name']}: {e.stderr}"
+        if log:
+            info_popup(log)
+
 class BacktestV7Results:
 
     def __init__(self):
@@ -1110,7 +1237,12 @@ class BacktestV7Results:
                 if "BT" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["BT"]:
                         st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
-                        del st.session_state.bt_v7_results
+                        if "bt_v7_list" in st.session_state:
+                            del st.session_state.bt_v7_list
+                        if "config_v7_archives" in st.session_state:
+                            del st.session_state.config_v7_archives
+                        if "config_v7_config_archive" in st.session_state:
+                            del st.session_state.config_v7_config_archive
                         st.rerun()
                 if "Optimize" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["Optimize"]:
@@ -1146,6 +1278,7 @@ class BacktestV7Results:
                     'Exch.': str(result.result_path).split('/')[-2],
                     'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
                     'ADG': f"{result.adg:.4f}",
+                    'Gain': f"{result.result['gain']:.4f}",
                     'Drawdown Worst': f"{result.drawdown_worst:.4f}",
                     'Sharpe Ratio': f"{result.sharpe_ratio:.4f}",
                     'Starting Balance': f"{starting_balance_float:,.0f}",
