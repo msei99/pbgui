@@ -1,7 +1,7 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths
 from pbgui_func import PBGDIR, pb7dir
-from BacktestV7 import BacktestV7Item, BacktestsV7, BacktestV7Queue, BacktestV7Results
+from BacktestV7 import BacktestV7Item, BacktestsV7, BacktestV7Queue, BacktestV7Results, ConfigV7Archives
 import datetime
 from Instance import Instance
 from User import Users
@@ -60,6 +60,9 @@ def bt_v7_list():
         if st.button(":material/refresh:"):
             st.session_state.bt_v7_list = BacktestsV7()
             st.rerun()
+        if st.button("Config Archive"):
+            st.session_state.config_v7_archives = ConfigV7Archives()
+            st.rerun()
         if st.button("All Results"):
             results =  BacktestV7Results()
             results.results_path = f'{pb7dir()}/backtests/pbgui'
@@ -74,6 +77,63 @@ def bt_v7_list():
             st.rerun()
     st.subheader("Available Configs")
     bt_v7_list.view_backtests()
+
+def config_v7_archives():
+    # Init bt_v7_list
+    config_v7_archives = st.session_state.config_v7_archives
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/home:"):
+            del st.session_state.config_v7_archives
+            st.rerun()
+        if st.button(":material/refresh:"):
+            config_v7_archives.load()
+            st.rerun()
+        if st.button("Sync Github"):
+            config_v7_archives.git_pull()
+        # for archive in config_v7_archives.archives:
+        #     if st.button(f"{archive['name']}"):
+        #         results =  BacktestV7Results()
+        #         results.results_path = archive['path']
+        #         results.name = f'Config Archive {archive["name"]}'
+        #         st.session_state.config_v7_config_archive = results
+        #         st.rerun()
+        # if st.button("All Results"):
+        #     results =  BacktestV7Results()
+        #     results.results_path = f'/home/mani/software/pbconfigs'
+        #     results.name = "All Results"
+        #     st.session_state.bt_v7_results = results
+        #     st.rerun()
+    config_v7_archives.add()
+    config_v7_archives.list()
+    
+
+def config_v7_config_archive():
+    # Init bt_v7_results
+    config_v7_config_archive = st.session_state.config_v7_config_archive
+    if not config_v7_config_archive.results:
+        with st.spinner("Loading Results"):
+            st.session_state.config_v7_config_archive.load()
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/refresh:"):
+            config_v7_config_archive.results = []
+            config_v7_config_archive.results_d = []
+            st.rerun()
+        if st.button(":material/home:"):
+            del st.session_state.config_v7_config_archive
+            del st.session_state.config_v7_archives
+            st.rerun()
+        if st.button(":material/arrow_upward_alt:"):
+            del st.session_state.config_v7_config_archive
+            st.rerun()
+        if st.button("Queue"):
+            st.session_state.bt_v7_queue = BacktestV7Queue()
+            del st.session_state.config_v7_config_archive
+            del st.session_state.config_v7_archives
+            st.rerun()
+    st.subheader(f"Config Archive: {config_v7_config_archive.name}")
+    config_v7_config_archive.view()
 
 def bt_v7_results():
     # Init bt_v7_results
@@ -167,9 +227,13 @@ if st.session_state.pbcoindata.api_error:
 
 if "bt_v7_results" in st.session_state:
     bt_v7_results()
+elif "config_v7_config_archive" in st.session_state:
+    config_v7_config_archive()
 elif "bt_v7" in st.session_state:
     bt_v7()
 elif "bt_v7_queue" in st.session_state:
     bt_v7_queue()
+elif "config_v7_archives" in st.session_state:
+    config_v7_archives()
 else:
     bt_v7_list()
