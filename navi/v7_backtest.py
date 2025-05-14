@@ -91,19 +91,6 @@ def config_v7_archives():
             st.rerun()
         if st.button("Sync Github"):
             config_v7_archives.git_pull()
-        # for archive in config_v7_archives.archives:
-        #     if st.button(f"{archive['name']}"):
-        #         results =  BacktestV7Results()
-        #         results.results_path = archive['path']
-        #         results.name = f'Config Archive {archive["name"]}'
-        #         st.session_state.config_v7_config_archive = results
-        #         st.rerun()
-        # if st.button("All Results"):
-        #     results =  BacktestV7Results()
-        #     results.results_path = f'/home/mani/software/pbconfigs'
-        #     results.name = "All Results"
-        #     st.session_state.bt_v7_results = results
-        #     st.rerun()
     config_v7_archives.add()
     config_v7_archives.list()
     
@@ -154,6 +141,8 @@ def bt_v7_results():
             st.session_state.bt_v7_queue = BacktestV7Queue()
             del st.session_state.bt_v7_results
             st.rerun()
+        if st.button("BT selected"):
+            bt_v7_results.backtest_selected_results()
         if st.button(":material/delete: selected"):
             bt_v7_results.remove_selected_results()
             bt_v7_results.results = []

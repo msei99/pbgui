@@ -1237,8 +1237,8 @@ class BacktestV7Results:
                 if "BT" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["BT"]:
                         st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
-                        if "bt_v7_list" in st.session_state:
-                            del st.session_state.bt_v7_list
+                        if "bt_v7_results" in st.session_state:
+                            del st.session_state.bt_v7_results
                         if "config_v7_archives" in st.session_state:
                             del st.session_state.config_v7_archives
                         if "config_v7_config_archive" in st.session_state:
@@ -1272,13 +1272,18 @@ class BacktestV7Results:
                 
                 starting_balance_float = float(result.starting_balance)
                 final_balance_float = float(result.final_balance)
+                if "gain" in result.result:
+                    gain = result.result["gain"]
+                else:
+                    gain = 0
                 self.results_d.append({
+                    'Select': False,
                     'id': id,
                     'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
                     'Exch.': str(result.result_path).split('/')[-2],
                     'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
                     'ADG': f"{result.adg:.4f}",
-                    'Gain': f"{result.result['gain']:.4f}",
+                    'Gain': f"{gain:.2f}",
                     'Drawdown Worst': f"{result.drawdown_worst:.4f}",
                     'Sharpe Ratio': f"{result.sharpe_ratio:.4f}",
                     'Starting Balance': f"{starting_balance_float:,.0f}",
@@ -1294,11 +1299,12 @@ class BacktestV7Results:
                     'BT': False,
                     'Optimize': False,
                     'GridVis': False,
-                    'Delete': False,
+                    # 'Delete': False,
                     'Compare': compare,  # Add Compare field
                 })
         column_config = {
             "id": None,
+            'Select': st.column_config.CheckboxColumn(label="Select"),
             'View': st.column_config.CheckboxColumn(label="Results"),
             'WE': st.column_config.CheckboxColumn(label="WE"),
             'Plot': st.column_config.CheckboxColumn(label="BE Plot"),
@@ -1306,7 +1312,7 @@ class BacktestV7Results:
             'Create Run': st.column_config.CheckboxColumn(label="Run"),
             'BT': st.column_config.CheckboxColumn(label="BT"),
             'Optimize': st.column_config.CheckboxColumn(label="Opt"),
-            'Delete': st.column_config.CheckboxColumn(label="Del"),
+            # 'Delete': st.column_config.CheckboxColumn(label="Del"),
             'Compare': st.column_config.CheckboxColumn(label="Comp"),
             'ADG': st.column_config.NumberColumn(format="%.4f"),
             'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.4f"),
@@ -1343,12 +1349,22 @@ class BacktestV7Results:
                     if ed["edited_rows"][row]["Fills"]:
                         self.results[row].view_fills()
 
+    def backtest_selected_results(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_btv7_result_{ed_key}']
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                    bt_v7.save_queue()
+        info_popup(f"Selected Backtests added to queue")
+
     def remove_selected_results(self):
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'select_btv7_result_{ed_key}']
         for row in ed["edited_rows"]:
-            if "Delete" in ed["edited_rows"][row]:
-                if ed["edited_rows"][row]["Delete"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
                     self.results[row].remove()
         for result in self.results[:]:
             if not Path(result.result_path).exists():
