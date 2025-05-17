@@ -89,11 +89,28 @@ def config_v7_archives():
         if st.button(":material/refresh:"):
             config_v7_archives.load()
             st.rerun()
+        if st.button(":material/settings:"):
+            st.session_state.setup_config_archive = True
+            st.rerun()
         if st.button("Sync Github"):
             config_v7_archives.git_pull()
+        if st.button("Push own Archive"):
+            config_v7_archives.git_push()
     config_v7_archives.add()
     config_v7_archives.list()
-    
+
+def setup_config_archive():
+    # Init bt_v7_list
+    config_v7_archives = st.session_state.config_v7_archives
+    # Navigation
+    with st.sidebar:
+        if st.button(":material/home:"):
+            del st.session_state.setup_config_archive
+            st.rerun()
+        if st.button(":material/save:"):
+            config_v7_archives.save_config()
+            info_popup("Config saved")
+    config_v7_archives.setup()
 
 def config_v7_config_archive():
     # Init bt_v7_results
@@ -143,6 +160,8 @@ def bt_v7_results():
             st.rerun()
         if st.button("BT selected"):
             bt_v7_results.backtest_selected_results()
+        if st.button("Add to Config Archive"):
+            bt_v7_results.add_to_config_archive()
         if st.button(":material/delete: selected"):
             bt_v7_results.remove_selected_results()
             bt_v7_results.results = []
@@ -216,6 +235,8 @@ if st.session_state.pbcoindata.api_error:
 
 if "bt_v7_results" in st.session_state:
     bt_v7_results()
+elif "setup_config_archive" in st.session_state:
+    setup_config_archive()
 elif "config_v7_config_archive" in st.session_state:
     config_v7_config_archive()
 elif "bt_v7" in st.session_state:
