@@ -1529,11 +1529,21 @@ class BacktestV7Results:
     def backtest_selected_results(self):
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'select_btv7_result_{ed_key}']
+        # Get number of selected results
+        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
+        if selected_count == 0:
+            error_popup("No Backtests selected")
+            return
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
-                    bt_v7.save_queue()
+                    if selected_count == 1:
+                        st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                        del st.session_state.bt_v7_results
+                        st.rerun()
+                    else:                        
+                        bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                        bt_v7.save_queue()
         info_popup(f"Selected Backtests added to queue")
 
     def remove_selected_results(self):
