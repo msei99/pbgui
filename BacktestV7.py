@@ -12,13 +12,14 @@ import time
 import multiprocessing
 import pandas as pd
 from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
+from pbgui_purefunc import load_ini, save_ini
 from PBCoinData import CoinData
 import uuid
 from Base import Base
 from Exchange import Exchange
 from Config import Config, ConfigV7
 from pathlib import Path, PurePath
-from shutil import rmtree
+from shutil import rmtree, copytree
 from RunV7 import V7Instance
 import OptimizeV7
 import datetime
@@ -1055,7 +1056,13 @@ class BacktestV7Result:
 class ConfigV7Archives:
     def __init__(self):
         self.archives = []
+        self.my_archive = ""
+        self.my_archive_username = ""
+        self.my_archive_email = ""
+        self.my_archive_path = "pbgui/configs/pb7"
+        self.my_archive_access_token = ""
         self.load()
+        self.load_config()
 
     def load(self):
         p = str(Path(f'{PBGDIR}/data/archives/*/.git/config'))
@@ -1073,6 +1080,70 @@ class ConfigV7Archives:
                             "name": PurePath(file).parent.parent.name,
                             "path": PurePath(file).parent.parent
                         })
+
+    def setup(self):
+        if not self.archives:
+            st.warning("No archives found\n Please add your own github archive.")
+            return
+        # Init session states for keys
+        if "edit_my_archive" in st.session_state:
+            if st.session_state.edit_my_archive != self.my_archive:
+                self.my_archive = st.session_state.edit_my_archive
+        else:
+            st.session_state.edit_my_archive = self.my_archive
+        if "edit_my_archive_path" in st.session_state:
+            if st.session_state.edit_my_archive_path != self.my_archive_path:
+                self.my_archive_path = st.session_state.edit_my_archive_path
+        else:
+            st.session_state.edit_my_archive_path = self.my_archive_path
+        if "edit_my_archive_username" in st.session_state:
+            if st.session_state.edit_my_archive_username != self.my_archive_username:
+                self.my_archive_username = st.session_state.edit_my_archive_username
+        else:
+            st.session_state.edit_my_archive_username = self.my_archive_username
+        if "edit_my_archive_email" in st.session_state:
+            if st.session_state.edit_my_archive_email != self.my_archive_email:
+                self.my_archive_email = st.session_state.edit_my_archive_email
+        else:
+            st.session_state.edit_my_archive_email = self.my_archive_email
+        if "edit_my_archive_access_token" in st.session_state:
+            if st.session_state.edit_my_archive_access_token != self.my_archive_access_token:
+                self.my_archive_access_token = st.session_state.edit_my_archive_access_token
+        else:
+            st.session_state.edit_my_archive_access_token = self.my_archive_access_token
+        # Display Editor
+        col1, col2 = st.columns([1,1])
+        with col1:
+            options = [""] + [archive["name"] for archive in self.archives]        
+            st.selectbox("Select your own Archive", options=options, key="edit_my_archive", help=pbgui_help.my_archive)
+        with col2:
+            st.text_input("Archive Path", value=self.my_archive_path, key="edit_my_archive_path", help=pbgui_help.my_archive_path)
+        # Archive Username and Email
+        col1, col2 = st.columns([1,1])
+        with col1:
+            st.text_input("Archive Username", value=self.my_archive_username, key="edit_my_archive_username", help=pbgui_help.my_archive_username)
+        with col2:
+            st.text_input("Archive Email", value=self.my_archive_email, key="edit_my_archive_email", help=pbgui_help.my_archive_email)
+        # Archive Token
+        col1, col2 = st.columns([1,1])
+        with col1:
+            st.text_input("Archive Access Token", value=self.my_archive_access_token, type="password", key="edit_my_archive_access_token", help=pbgui_help.my_archive_access_token)
+        if st.button("Test"):
+            self.git_push_test()
+
+    def load_config(self):
+        self.my_archive = load_ini("config_archive", "my_archive")
+        self.my_archive_path = load_ini("config_archive", "my_archive_path")
+        self.my_archive_username = load_ini("config_archive", "my_archive_username")
+        self.my_archive_email = load_ini("config_archive", "my_archive_email")
+        self.my_archive_access_token = load_ini("config_archive", "my_archive_access_token")
+
+    def save_config(self):
+        save_ini("config_archive", "my_archive", self.my_archive)
+        save_ini("config_archive", "my_archive_path", self.my_archive_path)
+        save_ini("config_archive", "my_archive_username", self.my_archive_username)
+        save_ini("config_archive", "my_archive_email", self.my_archive_email)
+        save_ini("config_archive", "my_archive_access_token", self.my_archive_access_token)
 
     def list(self):
         if not self.archives:
@@ -1128,6 +1199,19 @@ class ConfigV7Archives:
         if path:
             rmtree(path, ignore_errors=True)
 
+    def add_config(self, path: str):
+        if path:
+            if Path(path).exists():
+                # create dest_name from path
+                dest_name = str(path).split("/pbgui/")[-1]
+                if self.my_archive_path:
+                    dest = Path(f'{PBGDIR}/data/archives/{self.my_archive}/{self.my_archive_path}/{dest_name}')
+                else:
+                    dest = Path(f'{PBGDIR}/data/archives/{self.my_archive}/{dest_name}')
+                # copy path to dest
+                copytree(path, dest, dirs_exist_ok=True)
+
+
     def add(self):
         if "edit_bt_v7_archive_name" not in st.session_state:
             st.session_state.edit_bt_v7_archive_name = ""
@@ -1173,6 +1257,104 @@ class ConfigV7Archives:
                 log = log + f"Error pulling {archive['name']}: {e.stderr}"
         if log:
             info_popup(log)
+    
+    def git_push_test(self):
+        if self.my_archive_access_token and self.my_archive:
+            archive = next((a for a in self.archives if a["name"] == self.my_archive), None)
+            if archive:
+                path = archive["path"]
+                url = archive["url"]
+                # add token to url
+                if url.startswith("http://"):
+                    url = url.replace("http://", f"http://{self.my_archive_access_token}@")
+                elif url.startswith("https://"):
+                    url = url.replace("https://", f"https://{self.my_archive_access_token}@")
+            else:
+                st.error(f"Archive '{self.my_archive}' not found.")
+                return
+            # Configure username and email
+            cmd = ["git", "-C", path, "config", "user.name", self.my_archive_username]
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+            except subprocess.CalledProcessError as e:
+                error_popup(f"Error configuring username for {self.my_archive}: {e.stderr}")
+                return
+            cmd = ["git", "-C", path, "config", "user.email", self.my_archive_email]
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+            except subprocess.CalledProcessError as e:
+                error_popup(f"Error configuring email for {self.my_archive}: {e.stderr}")
+                return
+            # Test push
+            cmd = ["git", "-C", path, "push", url, "--dry-run"]
+            print(cmd)
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+                log = result.stdout + "\n" + result.stderr
+                if result.returncode == 0:
+                    info_popup(log)
+                else:
+                    error_popup(log)
+            except subprocess.CalledProcessError as e:
+                error_popup(f"Error pushing to {self.my_archive}: {e.stderr}")
+        else:
+            st.error("Please enter a name, user and access token")
+
+    def git_push(self):
+        if self.my_archive_access_token and self.my_archive:
+            archive = next((a for a in self.archives if a["name"] == self.my_archive), None)
+            if archive:
+                path = archive["path"]
+                url = archive["url"]
+                # add token to url
+                if url.startswith("http://"):
+                    url = url.replace("http://", f"http://{self.my_archive_access_token}@")
+                elif url.startswith("https://"):
+                    url = url.replace("https://", f"https://{self.my_archive_access_token}@")
+            else:
+                st.error(f"Archive '{self.my_archive}' not found.")
+                return
+
+            # add all files to git
+            cmd = ["git", "-C", path, "add", "-A"]
+            log = ""
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+                log = "Git add all files to archive\n"
+                log = log + result.stdout + "\n"
+                if result.stderr:
+                    log = log + result.stderr + "\n"
+            except subprocess.CalledProcessError as e:
+                error_popup(f"Error adding files to {self.my_archive}: {e.stderr}")
+                return
+
+            # commit changes
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cmd = ["git", "-C", path, "commit", "-m", f"Update {self.my_archive} at {current_time}"]
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+                log = log + "Git commit changes\n"
+                log = log + result.stdout + "\n"
+                if result.stderr:
+                    log = log + result.stderr + "\n"
+            except subprocess.CalledProcessError as e:
+                error_popup(f"Error committing to {self.my_archive}: {e.stderr}")
+                return
+
+            # push changes
+            cmd = ["git", "-C", path, "push", url]
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+                log = log + "Git push changes\n"
+                log = log + result.stdout + "\n"
+                if result.stderr:
+                    log = log + result.stderr + "\n"
+            except subprocess.CalledProcessError as e:
+                error_popup(f"Error pushing to {self.my_archive}: {e.stderr}")
+                return
+            if log:
+                info_popup(log)
+
 
 class BacktestV7Results:
 
@@ -1234,16 +1416,6 @@ class BacktestV7Results:
                         st.session_state.edit_v7_instance.config = self.results[row].config
                         st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
                         st.switch_page(get_navi_paths()["V7_RUN"])
-                if "BT" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["BT"]:
-                        st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
-                        if "bt_v7_results" in st.session_state:
-                            del st.session_state.bt_v7_results
-                        if "config_v7_archives" in st.session_state:
-                            del st.session_state.config_v7_archives
-                        if "config_v7_config_archive" in st.session_state:
-                            del st.session_state.config_v7_config_archive
-                        st.rerun()
                 if "Optimize" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["Optimize"]:
                         st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
@@ -1296,10 +1468,8 @@ class BacktestV7Results:
                     'Plot': False,
                     'Fills': False,
                     'Create Run': False,
-                    'BT': False,
                     'Optimize': False,
                     'GridVis': False,
-                    # 'Delete': False,
                     'Compare': compare,  # Add Compare field
                 })
         column_config = {
@@ -1310,9 +1480,7 @@ class BacktestV7Results:
             'Plot': st.column_config.CheckboxColumn(label="BE Plot"),
             'Fills': st.column_config.CheckboxColumn(label="Fills"),
             'Create Run': st.column_config.CheckboxColumn(label="Run"),
-            'BT': st.column_config.CheckboxColumn(label="BT"),
             'Optimize': st.column_config.CheckboxColumn(label="Opt"),
-            # 'Delete': st.column_config.CheckboxColumn(label="Del"),
             'Compare': st.column_config.CheckboxColumn(label="Comp"),
             'ADG': st.column_config.NumberColumn(format="%.4f"),
             'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.4f"),
@@ -1348,6 +1516,15 @@ class BacktestV7Results:
                 if "Fills" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["Fills"]:
                         self.results[row].view_fills()
+
+    def add_to_config_archive(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_btv7_result_{ed_key}']
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    ConfigV7Archives().add_config(self.results[row].result_path)
+        info_popup(f"Selected Backtests added to config archive")
 
     def backtest_selected_results(self):
         ed_key = st.session_state.ed_key

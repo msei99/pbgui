@@ -1313,3 +1313,28 @@ archive_url = """
     https://github.com/msei99/pbconfigs.git
     https://github.com/RustyCZ/pb-configs.git
     ```"""
+
+my_archive = """
+    ```
+    Select your own archive that you already created on github and added to the archive list.
+    ```"""
+
+my_archive_path = """
+    ```
+    Path where inside the archive the config gte published.
+    ```"""
+
+my_archive_username = """
+    ```
+    Your github username
+    ```"""
+my_archive_email = """
+    ```
+    Your github email
+    ```"""
+
+my_archive_access_token = """
+    ```
+    Your github access token that you created for the archive.
+    give the token read/write access to content.
+    ```"""
