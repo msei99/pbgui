@@ -36,9 +36,6 @@ def opt_v7():
                         del st.session_state.opt_v7_list
                     opt_v7.save_queue()
                     info_popup(f"Added {opt_v7.name} to Queue")
-                    # st.session_state.opt_v7_queue = OptimizeV7Queue()
-                    # del st.session_state.opt_v7
-                    # st.rerun()
             else:
                 if not opt_v7.name:
                     info_popup("Name is empty")
@@ -156,9 +153,9 @@ def opt_v7_pareto():
                 del st.session_state.d_paretos
             opt_v7_results.paretos = []
             st.rerun()
-        if st.button("Backtest selected"):
+        if st.button("BT selected"):
             opt_v7_results.backtest_selected()
-        if st.button("Backtest all"):
+        if st.button("BT all"):
             opt_v7_results.backtest_all()
     st.subheader(f"Name: :blue[{opt_v7_pareto_name}] Directory: :blue[{opt_v7_pareto_directory}]")
     opt_v7_results.view_pareto(opt_v7_pareto)
