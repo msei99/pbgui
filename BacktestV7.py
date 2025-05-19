@@ -1315,6 +1315,21 @@ class ConfigV7Archives:
                 st.error(f"Archive '{self.my_archive}' not found.")
                 return
 
+            # Init emtpy log
+            log = ""
+
+            # git pull before push
+            cmd = ["git", "-C", path, "pull"]
+            try:
+                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+                log = log + f"Pull {archive["name"]}\n"
+                log = log + result.stdout + "\n"
+                if result.stderr:
+                    log = log + result.stderr + "\n"
+            except subprocess.CalledProcessError as e:
+                error_popup(f"Error pulling {self.my_archive}: {e.stderr}")
+                return
+           
             # add all files to git
             cmd = ["git", "-C", path, "add", "-A"]
             log = ""
