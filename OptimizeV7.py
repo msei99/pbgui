@@ -687,15 +687,6 @@ class OptimizeV7Results:
                         st.write(f"Pareto {d_paretos[row]['Name']}")
                         st.code(json.dumps(self.paretos[row], indent=4))
 
-    def select_all(self):
-        if "d_paretos" in st.session_state:
-            d_paretos = st.session_state.d_paretos
-        else:
-            return
-        for row in d_paretos:
-            row["Select"] = True
-        st.session_state.d_paretos = d_paretos
-
     def cleanup_bt_session_state(self):
         if "bt_v7_queue" in st.session_state:
             del st.session_state.bt_v7_queue
