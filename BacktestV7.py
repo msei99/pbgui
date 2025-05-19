@@ -1322,7 +1322,7 @@ class ConfigV7Archives:
             cmd = ["git", "-C", path, "pull"]
             try:
                 result = subprocess.run(cmd, capture_output=True, check=True, text=True)
-                log = log + f"Pull {archive["name"]}\n"
+                log = log + f"Git pull changes\n"
                 log = log + result.stdout + "\n"
                 if result.stderr:
                     log = log + result.stderr + "\n"
