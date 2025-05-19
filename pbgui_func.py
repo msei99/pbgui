@@ -325,13 +325,13 @@ def sync_api():
     else:
         st.success('API in sync')
 
-@st.dialog("Error")
+@st.dialog("Error", width="large")
 def error_popup(message):
     st.error(f'{message}', icon="⚠️")
     if st.button(":green[OK]"):
         st.rerun()
 
-@st.dialog("Info")
+@st.dialog("Info", width="large")
 def info_popup(message):
     st.info(f'{message}', icon="✅")
     if st.button(":green[OK]"):
