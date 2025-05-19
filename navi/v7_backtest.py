@@ -136,6 +136,11 @@ def config_v7_config_archive():
             del st.session_state.config_v7_config_archive
             del st.session_state.config_v7_archives
             st.rerun()
+        if st.button(":material/delete: selected"):
+            config_v7_config_archive.remove_selected_results()
+            config_v7_config_archive.results = []
+            config_v7_config_archive.results_d = []
+            st.rerun()
     st.subheader(f"Config Archive: {config_v7_config_archive.name}")
     config_v7_config_archive.view()
 
@@ -162,6 +167,10 @@ def bt_v7_results():
             bt_v7_results.backtest_selected_results()
         if st.button("Add to Config Archive"):
             bt_v7_results.add_to_config_archive()
+        if st.button("Go to Config Archives"):
+            del st.session_state.bt_v7_results
+            st.session_state.config_v7_archives = ConfigV7Archives()
+            st.rerun()
         if st.button(":material/delete: selected"):
             bt_v7_results.remove_selected_results()
             bt_v7_results.results = []
