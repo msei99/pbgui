@@ -136,6 +136,8 @@ def config_v7_config_archive():
             del st.session_state.config_v7_config_archive
             del st.session_state.config_v7_archives
             st.rerun()
+        if st.button("BT selected"):
+            config_v7_config_archive.backtest_selected_results()
         if st.button(":material/delete: selected"):
             config_v7_config_archive.remove_selected_results()
             config_v7_config_archive.results = []
