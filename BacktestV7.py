@@ -1556,7 +1556,10 @@ class BacktestV7Results:
                 if ed["edited_rows"][row]["Select"]:
                     if selected_count == 1:
                         st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
-                        del st.session_state.bt_v7_results
+                        if "bt_v7_results" in st.session_state:
+                            del st.session_state.bt_v7_results
+                        if "config_v7_config_archive" in st.session_state:
+                            del st.session_state.config_v7_config_archive
                         st.rerun()
                     else:                        
                         bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
