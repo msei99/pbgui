@@ -485,7 +485,8 @@ class Exchange:
             for history in all_histories:
                 if history["type"] in ["trade","fee"]:
                     income = {}
-                    income["symbol"] = history["symbol"][0:-5].replace("/", "").replace("-", "")
+                    # income["symbol"] = history["symbol"][0:-5].replace("/", "").replace("-", "")
+                    income["symbol"] = history["info"]["instId"][0:-5].replace("/", "").replace("-", "")
                     income["timestamp"] = history["timestamp"]
                     income["income"] = history["amount"]
                     income["uniqueid"] = history["id"]
