@@ -1409,8 +1409,18 @@ class BacktestV7Results:
         # Remove results by filter
         if not self.filter == "":
             for result in self.results.copy():
-                target = result.config.backtest.base_dir.split('/')[-1]
-                if not fnmatch.fnmatch(target.lower(), self.filter.lower()):
+                # remove archive_path from result_path
+                result_path = str(result.result_path)
+                if result_path.startswith(f'{PBGDIR}/data/archives/'):
+                    # remove archives path
+                    result_path = result_path.replace(f'{PBGDIR}/data/archives/', '')
+                    result_path = result_path.split('/')
+                    result_path = '/'.join(result_path[1:])
+                else:
+                    # remove backtests path
+                    result_path = result_path.replace(f'{pb7dir()}/backtests/pbgui/', '')
+                # target = result.config.backtest.base_dir.split('/')[-1]
+                if not fnmatch.fnmatch(result_path.lower(), self.filter.lower()):
                     self.results.remove(result)
 
         st.text_input("Filter by Backtest Name", value="", help=pbgui_help.smart_filter, key="select_btv7_result_filter")
@@ -1465,11 +1475,23 @@ class BacktestV7Results:
                     gain = result.result["gain"]
                 else:
                     gain = 0
+                # remove archive_path from result_path
+                result_path = str(result.result_path)
+                if result_path.startswith(f'{PBGDIR}/data/archives/'):
+                    # remove archives path
+                    result_path = result_path.replace(f'{PBGDIR}/data/archives/', '')
+                    result_path = result_path.split('/')
+                    result_path = '/'.join(result_path[1:])
+                else:
+                    # remove backtests path
+                    result_path = result_path.replace(f'{pb7dir()}/backtests/pbgui/', '')
                 self.results_d.append({
                     'Select': False,
                     'id': id,
-                    'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
-                    'Exch.': str(result.result_path).split('/')[-2],
+                    # 'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
+                    'Backtest Name': result_path,
+                    # 'Exch.': str(result.result_path).split('/')[-2],
+                    'Exch.': result.config.backtest.exchanges,
                     'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
                     'ADG': f"{result.adg:.4f}",
                     'Gain': f"{gain:.2f}",
