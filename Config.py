@@ -1375,11 +1375,21 @@ class ApprovedCoins:
     def short(self): return self._short
     @long.setter
     def long(self, new_long):
-        self._long = new_long
+        # Add 'USDT' to each coin if it does not already end with 'USDT'
+        updated_long = [
+            coin if coin.endswith("USDT") or coin.endswith("USDC") else coin + "USDT"
+            for coin in new_long
+        ]
+        self._long = updated_long
         self._approved_coins["long"] = self._long
     @short.setter
     def short(self, new_short):
-        self._short = new_short
+        # Add 'USDT' to each coin if it does not already end with 'USDT'
+        updated_short = [
+            coin if coin.endswith("USDT") or coin.endswith("USDC") else coin + "USDT"
+            for coin in new_short
+        ]
+        self._short = updated_short
         self._approved_coins["short"] = self._short
 
 class IgnoredCoins:
