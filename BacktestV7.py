@@ -1522,6 +1522,7 @@ class BacktestV7Results:
             'Optimize': st.column_config.CheckboxColumn(label="Opt"),
             'Compare': st.column_config.CheckboxColumn(label="Comp"),
             'ADG': st.column_config.NumberColumn(format="%.4f"),
+            'Gain': st.column_config.NumberColumn(label="Gain", format="%.2f"),
             'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.4f"),
             'Sharpe Ratio': st.column_config.NumberColumn(label="Sharpe", format="%.4f"),
             'Starting Balance': st.column_config.NumberColumn(label="Start B."),
