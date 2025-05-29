@@ -136,7 +136,7 @@ class V7Instance():
                 self.config.live.leverage = st.session_state.edit_run_v7_leverage
         else:
             st.session_state.edit_run_v7_leverage = float(round(self.config.live.leverage, 0))
-        st.number_input("leverage", min_value=0.0, max_value=10.0, step=1.0, format="%.1f", key="edit_run_v7_leverage", help=pbgui_help.leverage)
+        st.number_input("leverage", min_value=0.0, max_value=20.0, step=1.0, format="%.1f", key="edit_run_v7_leverage", help=pbgui_help.leverage)
 
     @st.fragment
     def fragment_minimum_coin_age_days(self):
