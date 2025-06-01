@@ -207,8 +207,8 @@ def prepare_config() -> GVData:
             entry_trailing_retracement_pct= config_v7.bot.long.entry_trailing_retracement_pct,
             entry_trailing_grid_ratio=      config_v7.bot.long.entry_trailing_grid_ratio,
             
-            close_grid_min_markup=          config_v7.bot.long.close_grid_min_markup,
-            close_grid_markup_range=        config_v7.bot.long.close_grid_markup_range,
+            close_grid_min_markup=          config_v7.bot.long.close_grid_markup_end,
+            close_grid_markup_range=        config_v7.bot.long.close_grid_markup_start - config_v7.bot.long.close_grid_markup_end,
             close_grid_qty_pct=             config_v7.bot.long.close_grid_qty_pct,
             close_trailing_threshold_pct=   config_v7.bot.long.close_trailing_threshold_pct,
             close_trailing_retracement_pct= config_v7.bot.long.close_trailing_retracement_pct,
@@ -228,8 +228,8 @@ def prepare_config() -> GVData:
             entry_trailing_retracement_pct= config_v7.bot.short.entry_trailing_retracement_pct,
             entry_trailing_grid_ratio=      config_v7.bot.short.entry_trailing_grid_ratio,
             
-            close_grid_min_markup=          config_v7.bot.short.close_grid_min_markup,
-            close_grid_markup_range=        config_v7.bot.short.close_grid_markup_range,
+            close_grid_min_markup=          config_v7.bot.short.close_grid_markup_end,
+            close_grid_markup_range=        config_v7.bot.short.close_grid_markup_start - config_v7.bot.short.close_grid_markup_end,
             close_grid_qty_pct=             config_v7.bot.short.close_grid_qty_pct,
             close_trailing_threshold_pct=   config_v7.bot.short.close_trailing_threshold_pct,
             close_trailing_retracement_pct= config_v7.bot.short.close_trailing_retracement_pct,

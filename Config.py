@@ -277,7 +277,7 @@ class Config:
 
 # config template
 # {"backtest": {"base_dir": "backtests",
-#               "combine_ohlcvs": false,
+#               "combine_ohlcvs": true,
 #               "compress_cache": true,
 #               "end_date": "now",
 #               "exchanges": ["binance", "bybit"],
@@ -285,63 +285,63 @@ class Config:
 #               "start_date": "2020-04-01",
 #               "starting_balance": 100000,
 #               "use_btc_collateral": true},
-#  "bot": {"long": {"close_grid_markup_range": 0.009019,
-#                   "close_grid_min_markup": 0.001806,
-#                   "close_grid_qty_pct": 0.9936,
-#                   "close_trailing_grid_ratio": -0.03841,
-#                   "close_trailing_qty_pct": 0.1305,
-#                   "close_trailing_retracement_pct": 0.08762,
-#                   "close_trailing_threshold_pct": 0.04794,
-#                   "ema_span_0": 318.6,
-#                   "ema_span_1": 554.2,
+#  "bot": {"long": {"close_grid_markup_end": 0.001161,
+#                   "close_grid_markup_start": 0.009675,
+#                   "close_grid_qty_pct": 0.9692,
+#                   "close_trailing_grid_ratio": -0.0316,
+#                   "close_trailing_qty_pct": 0.6361,
+#                   "close_trailing_retracement_pct": 0.09966,
+#                   "close_trailing_threshold_pct": 0.04829,
+#                   "ema_span_0": 275.7,
+#                   "ema_span_1": 586.4,
 #                   "enforce_exposure_limit": true,
-#                   "entry_grid_double_down_factor": 1.441,
-#                   "entry_grid_spacing_pct": 0.03647,
-#                   "entry_grid_spacing_weight": 0.6164,
-#                   "entry_initial_ema_dist": -0.06118,
-#                   "entry_initial_qty_pct": 0.006745,
-#                   "entry_trailing_double_down_factor": 1.441,
-#                   "entry_trailing_grid_ratio": -0.01683,
-#                   "entry_trailing_retracement_pct": 0.07317,
-#                   "entry_trailing_threshold_pct": 0.05631,
-#                   "filter_noisiness_rolling_window": 303.6,
-#                   "filter_volume_drop_pct": 0.7021,
-#                   "filter_volume_rolling_window": 303.6,
-#                   "n_positions": 7.426,
-#                   "total_wallet_exposure_limit": 1.977,
-#                   "unstuck_close_pct": 0.01166,
-#                   "unstuck_ema_dist": -0.07641,
-#                   "unstuck_loss_allowance_pct": 0.007161,
-#                   "unstuck_threshold": 0.4562},
-#          "short": {"close_grid_markup_range": 0.022568,
-#                    "close_grid_min_markup": 0.0082649,
-#                    "close_grid_qty_pct": 0.53985,
-#                    "close_trailing_grid_ratio": 0.52698,
-#                    "close_trailing_qty_pct": 0.71696,
-#                    "close_trailing_retracement_pct": 0.01282,
-#                    "close_trailing_threshold_pct": -0.005394,
-#                    "ema_span_0": 1212.7,
-#                    "ema_span_1": 659.66,
+#                   "entry_grid_double_down_factor": 1.437,
+#                   "entry_grid_spacing_pct": 0.03623,
+#                   "entry_grid_spacing_weight": 0.693,
+#                   "entry_initial_ema_dist": -0.06036,
+#                   "entry_initial_qty_pct": 0.004391,
+#                   "entry_trailing_double_down_factor": 1.364,
+#                   "entry_trailing_grid_ratio": -0.01483,
+#                   "entry_trailing_retracement_pct": 0.01131,
+#                   "entry_trailing_threshold_pct": 0.05542,
+#                   "filter_noisiness_rolling_window": 302.3,
+#                   "filter_volume_drop_pct": 0.9292,
+#                   "filter_volume_rolling_window": 2530,
+#                   "n_positions": 7,
+#                   "total_wallet_exposure_limit": 1.953,
+#                   "unstuck_close_pct": 0.01231,
+#                   "unstuck_ema_dist": -0.07572,
+#                   "unstuck_loss_allowance_pct": 0.03499,
+#                   "unstuck_threshold": 0.6536},
+#          "short": {"close_grid_markup_end": 0.001,
+#                    "close_grid_markup_start": 0.001,
+#                    "close_grid_qty_pct": 0.05,
+#                    "close_trailing_grid_ratio": -1,
+#                    "close_trailing_qty_pct": 0.05,
+#                    "close_trailing_retracement_pct": 0.0001,
+#                    "close_trailing_threshold_pct": -0.01,
+#                    "ema_span_0": 200,
+#                    "ema_span_1": 200,
 #                    "enforce_exposure_limit": true,
-#                    "entry_grid_double_down_factor": 0.72508,
-#                    "entry_grid_spacing_pct": 0.017338,
-#                    "entry_grid_spacing_weight": 4.0792,
-#                    "entry_initial_ema_dist": 0.0026837,
-#                    "entry_initial_qty_pct": 0.014787,
-#                    "entry_trailing_double_down_factor": 0.72508,
-#                    "entry_trailing_grid_ratio": 0.18122,
-#                    "entry_trailing_retracement_pct": 0.018165,
-#                    "entry_trailing_threshold_pct": 0.062005,
-#                    "filter_noisiness_rolling_window": 320.18,
-#                    "filter_volume_drop_pct": 0.57973,
-#                    "filter_volume_rolling_window": 320.18,
-#                    "n_positions": 7.4396,
-#                    "total_wallet_exposure_limit": 0,
-#                    "unstuck_close_pct": 0.088717,
-#                    "unstuck_ema_dist": -0.014418,
-#                    "unstuck_loss_allowance_pct": 0.030868,
-#                    "unstuck_threshold": 0.68942}},
-#  "live": {"approved_coins": "configs/approved_coins_top15mcap.json",
+#                    "entry_grid_double_down_factor": 0.01,
+#                    "entry_grid_spacing_pct": 0.001,
+#                    "entry_grid_spacing_weight": 0,
+#                    "entry_initial_ema_dist": -0.1,
+#                    "entry_initial_qty_pct": 0.004,
+#                    "entry_trailing_double_down_factor": 0.01,
+#                    "entry_trailing_grid_ratio": -1,
+#                    "entry_trailing_retracement_pct": 0.0001,
+#                    "entry_trailing_threshold_pct": -0.01,
+#                    "filter_noisiness_rolling_window": 10,
+#                    "filter_volume_drop_pct": 0.5,
+#                    "filter_volume_rolling_window": 360,
+#                    "n_positions": 0,
+#                    "total_wallet_exposure_limit": 0.01,
+#                    "unstuck_close_pct": 0.001,
+#                    "unstuck_ema_dist": -0.1,
+#                    "unstuck_loss_allowance_pct": 0.001,
+#                    "unstuck_threshold": 0.4}},
+#  "live": {"approved_coins": "configs/approved_coins_top20mcap.json",
 #           "auto_gs": true,
 #           "coin_flags": {},
 #           "empty_means_all_approved": true,
@@ -355,15 +355,16 @@ class Config:
 #           "max_n_cancellations_per_batch": 5,
 #           "max_n_creations_per_batch": 3,
 #           "max_n_restarts_per_day": 10,
-#           "minimum_coin_age_days": 450,
+#           "mimic_backtest_1m_delay": false,
+#           "minimum_coin_age_days": 365,
 #           "ohlcvs_1m_rolling_window_days": 4,
 #           "ohlcvs_1m_update_after_minutes": 10,
 #           "pnls_max_lookback_days": 30,
 #           "price_distance_threshold": 0.002,
 #           "time_in_force": "good_till_cancelled",
 #           "user": "bybit_01"},
-#  "optimize": {"bounds": {"long_close_grid_markup_range": [0, 0.03],
-#                          "long_close_grid_min_markup": [0.001, 0.03],
+#  "optimize": {"bounds": {"long_close_grid_markup_end": [0.001, 0.03],
+#                          "long_close_grid_markup_start": [0.001, 0.03],
 #                          "long_close_grid_qty_pct": [0.05, 1],
 #                          "long_close_trailing_grid_ratio": [-1, 1],
 #                          "long_close_trailing_qty_pct": [0.05, 1],
@@ -371,12 +372,12 @@ class Config:
 #                          "long_close_trailing_threshold_pct": [-0.01, 0.1],
 #                          "long_ema_span_0": [200, 1440],
 #                          "long_ema_span_1": [200, 1440],
-#                          "long_entry_grid_double_down_factor": [0.01, 3],
+#                          "long_entry_grid_double_down_factor": [0.01, 4],
 #                          "long_entry_grid_spacing_pct": [0.001, 0.06],
 #                          "long_entry_grid_spacing_weight": [0, 10],
 #                          "long_entry_initial_ema_dist": [-0.1, 0.003],
 #                          "long_entry_initial_qty_pct": [0.004, 0.02],
-#                          "long_entry_trailing_double_down_factor": [0.01, 3],
+#                          "long_entry_trailing_double_down_factor": [0.01, 4],
 #                          "long_entry_trailing_grid_ratio": [-1, 1],
 #                          "long_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "long_entry_trailing_threshold_pct": [-0.01, 0.1],
@@ -389,8 +390,8 @@ class Config:
 #                          "long_unstuck_ema_dist": [-0.1, 0.01],
 #                          "long_unstuck_loss_allowance_pct": [0.001, 0.05],
 #                          "long_unstuck_threshold": [0.4, 0.95],
-#                          "short_close_grid_markup_range": [0, 0.03],
-#                          "short_close_grid_min_markup": [0.001, 0.03],
+#                          "short_close_grid_markup_end": [0.001, 0.03],
+#                          "short_close_grid_markup_start": [0.001, 0.03],
 #                          "short_close_grid_qty_pct": [0.05, 1],
 #                          "short_close_trailing_grid_ratio": [-1, 1],
 #                          "short_close_trailing_qty_pct": [0.05, 1],
@@ -398,34 +399,39 @@ class Config:
 #                          "short_close_trailing_threshold_pct": [-0.01, 0.1],
 #                          "short_ema_span_0": [200, 1440],
 #                          "short_ema_span_1": [200, 1440],
-#                          "short_entry_grid_double_down_factor": [0.01, 3],
+#                          "short_entry_grid_double_down_factor": [0.01, 4],
 #                          "short_entry_grid_spacing_pct": [0.001, 0.06],
 #                          "short_entry_grid_spacing_weight": [0, 10],
 #                          "short_entry_initial_ema_dist": [-0.1, 0.003],
 #                          "short_entry_initial_qty_pct": [0.004, 0.02],
-#                          "short_entry_trailing_double_down_factor": [0.01, 3],
+#                          "short_entry_trailing_double_down_factor": [0.01, 4],
 #                          "short_entry_trailing_grid_ratio": [-1, 1],
 #                          "short_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "short_entry_trailing_threshold_pct": [-0.01, 0.1],
 #                          "short_filter_noisiness_rolling_window": [10, 360],
 #                          "short_filter_volume_drop_pct": [0.5, 1],
 #                          "short_filter_volume_rolling_window": [360, 2880],
-#                          "short_n_positions": [7, 30],
+#                          "short_n_positions": [0, 0],
 #                          "short_total_wallet_exposure_limit": [0.01, 2],
 #                          "short_unstuck_close_pct": [0.001, 0.1],
 #                          "short_unstuck_ema_dist": [-0.1, 0.01],
 #                          "short_unstuck_loss_allowance_pct": [0.001, 0.05],
 #                          "short_unstuck_threshold": [0.4, 0.95]},
 #               "compress_results_file": true,
-#               "crossover_probability": 0.7,
+#               "crossover_probability": 0.64,
 #               "enable_overrides": [],
 #               "iters": 300000,
-#               "limits": "--btc_drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0",
-#               "mutation_probability": 0.2,
+#               "limits": "--btc_drawdown_worst 0.4 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 720.0",
+#               "mutation_probability": 0.34,
 #               "n_cpus": 5,
 #               "population_size": 1000,
 #               "round_to_n_significant_digits": 4,
-#               "scoring": ["btc_adg_w", "btc_mdg_w", "btc_omega_ratio_w"]}}
+#               "scoring": ["btc_adg_w",
+#                           "btc_mdg_w",
+#                           "btc_sterling_ratio",
+#                           "loss_profit_ratio",
+#                           "position_held_hours_max"],
+#               "write_all_results": true}}
 
 class Backtest:
     def __init__(self):
@@ -694,8 +700,10 @@ class Bot:
 
 class Long:
     def __init__(self):
-        self._close_grid_markup_range = 0.0015976
-        self._close_grid_min_markup = 0.012839
+        # self._close_grid_markup_range = 0.0015976
+        # self._close_grid_min_markup = 0.012839
+        self._close_grid_markup_end = 0.001161
+        self._close_grid_markup_start = 0.009675
         self._close_grid_qty_pct = 0.8195
         self._close_trailing_grid_ratio = 0.042114
         self._close_trailing_qty_pct = 1
@@ -716,8 +724,6 @@ class Long:
         self._filter_volume_drop_pct = 0.7021
         self._filter_volume_rolling_window = 303.6
         self._filter_noisiness_rolling_window = 303.6
-        # self._filter_relative_volume_clip_pct = 0.51416
-        # self._filter_rolling_window = 60.0
         self._n_positions = 9.6662
         self._total_wallet_exposure_limit = 0.8536
         self._unstuck_close_pct = 0.049593
@@ -725,8 +731,10 @@ class Long:
         self._unstuck_loss_allowance_pct = 0.044329
         self._unstuck_threshold = 0.46953
         self._long = {
-            "close_grid_markup_range": self._close_grid_markup_range,
-            "close_grid_min_markup": self._close_grid_min_markup,
+            "close_grid_markup_end": self._close_grid_markup_end,
+            "close_grid_markup_start": self._close_grid_markup_start,
+            # "close_grid_markup_range": self._close_grid_markup_range,
+            # "close_grid_min_markup": self._close_grid_min_markup,
             "close_grid_qty_pct": self._close_grid_qty_pct,
             "close_trailing_grid_ratio": self._close_trailing_grid_ratio,
             "close_trailing_qty_pct": self._close_trailing_qty_pct,
@@ -747,8 +755,6 @@ class Long:
             "filter_noisiness_rolling_window": self._filter_noisiness_rolling_window,
             "filter_volume_drop_pct": self._filter_volume_drop_pct,
             "filter_volume_rolling_window": self._filter_volume_rolling_window,
-            # "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
-            # "filter_rolling_window": self._filter_rolling_window,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -764,10 +770,14 @@ class Long:
     def long(self): return self._long
     @long.setter
     def long(self, new_long):
-        if "close_grid_markup_range" in new_long:
-            self.close_grid_markup_range = new_long["close_grid_markup_range"]
-        if "close_grid_min_markup" in new_long:
-            self.close_grid_min_markup = new_long["close_grid_min_markup"]
+        #Fix for old markup parameters
+        if "close_grid_markup_range" in new_long and "close_grid_min_markup" in new_long:
+            self.close_grid_markup_start = new_long["close_grid_min_markup"] + new_long["close_grid_markup_range"]
+            self.close_grid_markup_end = new_long["close_grid_min_markup"]
+        if "close_grid_markup_end" in new_long:
+            self.close_grid_markup_end = new_long["close_grid_markup_end"]
+        if "close_grid_markup_start" in new_long:
+            self.close_grid_markup_start = new_long["close_grid_markup_start"]
         if "close_grid_qty_pct" in new_long:
             self.close_grid_qty_pct = new_long["close_grid_qty_pct"]
         if "close_trailing_grid_ratio" in new_long:
@@ -819,10 +829,6 @@ class Long:
         # Fix for old configs
         elif "filter_rolling_window" in new_long:
             self.filter_volume_rolling_window = new_long["filter_rolling_window"]
-        # if "filter_relative_volume_clip_pct" in new_long:
-        #     self.filter_relative_volume_clip_pct = new_long["filter_relative_volume_clip_pct"]
-        # if "filter_rolling_window" in new_long:
-        #     self.filter_rolling_window = new_long["filter_rolling_window"]
         if "n_positions" in new_long:
             self.n_positions = new_long["n_positions"]
         if "total_wallet_exposure_limit" in new_long:
@@ -836,10 +842,14 @@ class Long:
         if "unstuck_threshold" in new_long:
             self.unstuck_threshold = new_long["unstuck_threshold"]
 
+    # @property
+    # def close_grid_markup_range(self): return self._close_grid_markup_range
+    # @property
+    # def close_grid_min_markup(self): return self._close_grid_min_markup
     @property
-    def close_grid_markup_range(self): return self._close_grid_markup_range
+    def close_grid_markup_end(self): return self._close_grid_markup_end
     @property
-    def close_grid_min_markup(self): return self._close_grid_min_markup
+    def close_grid_markup_start(self): return self._close_grid_markup_start
     @property
     def close_grid_qty_pct(self): return self._close_grid_qty_pct
     @property
@@ -880,10 +890,6 @@ class Long:
     def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
     @property
     def filter_volume_rolling_window(self): return self._filter_volume_rolling_window
-    # @property
-    # def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
-    # @property
-    # def filter_rolling_window(self): return self._filter_rolling_window
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -897,14 +903,22 @@ class Long:
     @property
     def unstuck_threshold(self): return self._unstuck_threshold
 
-    @close_grid_markup_range.setter
-    def close_grid_markup_range(self, new_close_grid_markup_range):
-        self._close_grid_markup_range = new_close_grid_markup_range
-        self._long["close_grid_markup_range"] = self._close_grid_markup_range
-    @close_grid_min_markup.setter
-    def close_grid_min_markup(self, new_close_grid_min_markup):
-        self._close_grid_min_markup = new_close_grid_min_markup
-        self._long["close_grid_min_markup"] = self._close_grid_min_markup
+    @close_grid_markup_end.setter
+    def close_grid_markup_end(self, new_close_grid_markup_end):
+        self._close_grid_markup_end = new_close_grid_markup_end
+        self._long["close_grid_markup_end"] = self._close_grid_markup_end
+    @close_grid_markup_start.setter
+    def close_grid_markup_start(self, new_close_grid_markup_start):
+        self._close_grid_markup_start = new_close_grid_markup_start
+        self._long["close_grid_markup_start"] = self._close_grid_markup_start
+    # @close_grid_markup_range.setter
+    # def close_grid_markup_range(self, new_close_grid_markup_range):
+    #     self._close_grid_markup_range = new_close_grid_markup_range
+    #     self._long["close_grid_markup_range"] = self._close_grid_markup_range
+    # @close_grid_min_markup.setter
+    # def close_grid_min_markup(self, new_close_grid_min_markup):
+    #     self._close_grid_min_markup = new_close_grid_min_markup
+    #     self._long["close_grid_min_markup"] = self._close_grid_min_markup
     @close_grid_qty_pct.setter
     def close_grid_qty_pct(self, new_close_grid_qty_pct):
         self._close_grid_qty_pct = new_close_grid_qty_pct
@@ -985,14 +999,6 @@ class Long:
     def filter_volume_rolling_window(self, new_filter_volume_rolling_window):
         self._filter_volume_rolling_window = new_filter_volume_rolling_window
         self._long["filter_volume_rolling_window"] = self._filter_volume_rolling_window
-    # @filter_relative_volume_clip_pct.setter
-    # def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
-    #     self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
-    #     self._long["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
-    # @filter_rolling_window.setter
-    # def filter_rolling_window(self, new_filter_rolling_window):
-    #     self._filter_rolling_window = new_filter_rolling_window
-    #     self._long["filter_rolling_window"] = self._filter_rolling_window
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -1020,9 +1026,11 @@ class Long:
 
 class Short:
     def __init__(self):
-        self._close_grid_markup_range = 0.028266
-        self._close_grid_min_markup = 0.013899
-        self._close_grid_qty_pct = 0.63174
+        # self._close_grid_markup_range = 0.028266
+        # self._close_grid_min_markup = 0.013899
+        self._close_grid_markup_end = 0.001
+        self._close_grid_markup_start = 0.001
+        self._close_grid_qty_pct = 0.05
         self._close_trailing_grid_ratio = 0.93658
         self._close_trailing_qty_pct = 1
         self._close_trailing_retracement_pct = 0.098179
@@ -1042,8 +1050,6 @@ class Short:
         self._filter_noisiness_rolling_window = 320.18
         self._filter_volume_drop_pct = 0.57973
         self._filter_volume_rolling_window = 320.18
-        # self._filter_relative_volume_clip_pct = 0.50001
-        # self._filter_rolling_window = 68.072
         self._n_positions = 0.0
         self._total_wallet_exposure_limit = 0.0
         self._unstuck_close_pct = 0.052992
@@ -1051,8 +1057,10 @@ class Short:
         self._unstuck_loss_allowance_pct = 0.045415
         self._unstuck_threshold = 0.92228
         self._short = {
-            "close_grid_markup_range": self._close_grid_markup_range,
-            "close_grid_min_markup": self._close_grid_min_markup,
+            "close_grid_markup_end": self._close_grid_markup_end,
+            "close_grid_markup_start": self._close_grid_markup_start,
+            # "close_grid_markup_range": self._close_grid_markup_range,
+            # "close_grid_min_markup": self._close_grid_min_markup,
             "close_grid_qty_pct": self._close_grid_qty_pct,
             "close_trailing_grid_ratio": self._close_trailing_grid_ratio,
             "close_trailing_qty_pct": self._close_trailing_qty_pct,
@@ -1073,8 +1081,6 @@ class Short:
             "filter_noisiness_rolling_window": self._filter_noisiness_rolling_window,
             "filter_volume_drop_pct": self._filter_volume_drop_pct,
             "filter_volume_rolling_window": self._filter_volume_rolling_window,
-            # "filter_relative_volume_clip_pct": self._filter_relative_volume_clip_pct,
-            # "filter_rolling_window": self._filter_rolling_window,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -1090,10 +1096,14 @@ class Short:
     def short(self): return self._short
     @short.setter
     def short(self, new_short):
-        if "close_grid_markup_range" in new_short:
-            self.close_grid_markup_range = new_short["close_grid_markup_range"]
-        if "close_grid_min_markup" in new_short:
-            self.close_grid_min_markup = new_short["close_grid_min_markup"]
+        #Fix for old markup parameters
+        if "close_grid_markup_range" in new_short and "close_grid_min_markup" in new_short:
+            self.close_grid_markup_start = new_short["close_grid_min_markup"] + new_short["close_grid_markup_range"]
+            self.close_grid_markup_end = new_short["close_grid_min_markup"]
+        if "close_grid_markup_end" in new_short:
+            self.close_grid_markup_end = new_short["close_grid_markup_end"]
+        if "close_grid_markup_start" in new_short:
+            self.close_grid_markup_start = new_short["close_grid_markup_start"]
         if "close_grid_qty_pct" in new_short:
             self.close_grid_qty_pct = new_short["close_grid_qty_pct"]
         if "close_trailing_grid_ratio" in new_short:
@@ -1145,10 +1155,6 @@ class Short:
         # Fix for old configs
         elif "filter_rolling_window" in new_short:
             self.filter_volume_rolling_window = new_short["filter_rolling_window"]
-        # if "filter_relative_volume_clip_pct" in new_short:
-        #     self.filter_relative_volume_clip_pct = new_short["filter_relative_volume_clip_pct"]
-        # if "filter_rolling_window" in new_short:
-        #     self.filter_rolling_window = new_short["filter_rolling_window"]
         if "n_positions" in new_short:
             self.n_positions = new_short["n_positions"]
         if "total_wallet_exposure_limit" in new_short:
@@ -1163,9 +1169,13 @@ class Short:
             self.unstuck_threshold = new_short["unstuck_threshold"]
 
     @property
-    def close_grid_markup_range(self): return self._close_grid_markup_range
+    def close_grid_markup_end(self): return self._close_grid_markup_end
     @property
-    def close_grid_min_markup(self): return self._close_grid_min_markup
+    def close_grid_markup_start(self): return self._close_grid_markup_start
+    # @property
+    # def close_grid_markup_range(self): return self._close_grid_markup_range
+    # @property
+    # def close_grid_min_markup(self): return self._close_grid_min_markup
     @property
     def close_grid_qty_pct(self): return self._close_grid_qty_pct
     @property
@@ -1206,10 +1216,6 @@ class Short:
     def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
     @property
     def filter_volume_rolling_window(self): return self._filter_volume_rolling_window
-    # @property
-    # def filter_relative_volume_clip_pct(self): return self._filter_relative_volume_clip_pct
-    # @property
-    # def filter_rolling_window(self): return self._filter_rolling_window
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -1223,14 +1229,22 @@ class Short:
     @property
     def unstuck_threshold(self): return self._unstuck_threshold
 
-    @close_grid_markup_range.setter
-    def close_grid_markup_range(self, new_close_grid_markup_range):
-        self._close_grid_markup_range = new_close_grid_markup_range
-        self._short["close_grid_markup_range"] = self._close_grid_markup_range
-    @close_grid_min_markup.setter
-    def close_grid_min_markup(self, new_close_grid_min_markup):
-        self._close_grid_min_markup = new_close_grid_min_markup
-        self._short["close_grid_min_markup"] = self._close_grid_min_markup
+    @close_grid_markup_end.setter
+    def close_grid_markup_end(self, new_close_grid_markup_end):
+        self._close_grid_markup_end = new_close_grid_markup_end
+        self._short["close_grid_markup_end"] = self._close_grid_markup_end
+    @close_grid_markup_start.setter
+    def close_grid_markup_start(self, new_close_grid_markup_start):
+        self._close_grid_markup_start = new_close_grid_markup_start
+        self._short["close_grid_markup_start"] = self._close_grid_markup_start
+    # @close_grid_markup_range.setter
+    # def close_grid_markup_range(self, new_close_grid_markup_range):
+    #     self._close_grid_markup_range = new_close_grid_markup_range
+    #     self._short["close_grid_markup_range"] = self._close_grid_markup_range
+    # @close_grid_min_markup.setter
+    # def close_grid_min_markup(self, new_close_grid_min_markup):
+    #     self._close_grid_min_markup = new_close_grid_min_markup
+    #     self._short["close_grid_min_markup"] = self._close_grid_min_markup
     @close_grid_qty_pct.setter
     def close_grid_qty_pct(self, new_close_grid_qty_pct):
         self._close_grid_qty_pct = new_close_grid_qty_pct
@@ -1311,14 +1325,6 @@ class Short:
     def filter_volume_rolling_window(self, new_filter_volume_rolling_window):
         self._filter_volume_rolling_window = new_filter_volume_rolling_window
         self._short["filter_volume_rolling_window"] = self._filter_volume_rolling_window
-    # @filter_relative_volume_clip_pct.setter
-    # def filter_relative_volume_clip_pct(self, new_filter_relative_volume_clip_pct):
-    #     self._filter_relative_volume_clip_pct = new_filter_relative_volume_clip_pct
-    #     self._short["filter_relative_volume_clip_pct"] = self._filter_relative_volume_clip_pct
-    # @filter_rolling_window.setter
-    # def filter_rolling_window(self, new_filter_rolling_window):
-    #     self._filter_rolling_window = new_filter_rolling_window
-    #     self._short["filter_rolling_window"] = self._filter_rolling_window
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -1446,6 +1452,7 @@ class Live:
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3
         self._max_n_restarts_per_day = 10
+        self._mimic_backtest_1m_delay = False
         self._minimum_coin_age_days = 30.0
         self._ohlcvs_1m_rolling_window_days = 4.0
         self._ohlcvs_1m_update_after_minutes = 10.0
@@ -1469,6 +1476,7 @@ class Live:
             "max_n_cancellations_per_batch": self._max_n_cancellations_per_batch,
             "max_n_creations_per_batch": self._max_n_creations_per_batch,
             "max_n_restarts_per_day": self._max_n_restarts_per_day,
+            "mimic_backtest_1m_delay": self._mimic_backtest_1m_delay,
             "minimum_coin_age_days": self._minimum_coin_age_days,
             "ohlcvs_1m_rolling_window_days": self._ohlcvs_1m_rolling_window_days,
             "ohlcvs_1m_update_after_minutes": self._ohlcvs_1m_update_after_minutes,
@@ -1513,6 +1521,8 @@ class Live:
             self.max_n_creations_per_batch = new_live["max_n_creations_per_batch"]
         if "max_n_restarts_per_day" in new_live:
             self.max_n_restarts_per_day = new_live["max_n_restarts_per_day"]
+        if "mimic_backtest_1m_delay" in new_live:
+            self.mimic_backtest_1m_delay = new_live["mimic_backtest_1m_delay"]
         if "minimum_coin_age_days" in new_live:
             self.minimum_coin_age_days = new_live["minimum_coin_age_days"]
         if "ohlcvs_1m_rolling_window_days" in new_live:
@@ -1556,6 +1566,8 @@ class Live:
     def max_n_creations_per_batch(self): return self._max_n_creations_per_batch
     @property
     def max_n_restarts_per_day(self): return self._max_n_restarts_per_day
+    @property
+    def mimic_backtest_1m_delay(self): return self._mimic_backtest_1m_delay
     @property
     def minimum_coin_age_days(self): return self._minimum_coin_age_days
     @property
@@ -1627,6 +1639,10 @@ class Live:
     def max_n_restarts_per_day(self, new_max_n_restarts_per_day):
         self._max_n_restarts_per_day = new_max_n_restarts_per_day
         self._live["max_n_restarts_per_day"] = self._max_n_restarts_per_day
+    @mimic_backtest_1m_delay.setter
+    def mimic_backtest_1m_delay(self, new_mimic_backtest_1m_delay):
+        self._mimic_backtest_1m_delay = new_mimic_backtest_1m_delay
+        self._live["mimic_backtest_1m_delay"] = self._mimic_backtest_1m_delay
     @minimum_coin_age_days.setter
     def minimum_coin_age_days(self, new_minimum_coin_age_days):
         self._minimum_coin_age_days = new_minimum_coin_age_days
@@ -1791,17 +1807,29 @@ class Optimize:
 
 class Bounds:
 
-    CLOSE_GRID_MARKUP_RANGE_MIN = 0.0
-    CLOSE_GRID_MARKUP_RANGE_MAX = 1.0
-    CLOSE_GRID_MARKUP_RANGE_STEP = 0.01
-    CLOSE_GRID_MARKUP_RANGE_ROUND = 2
-    CLOSE_GRID_MARKUP_RANGE_FORMAT = f'%.{CLOSE_GRID_MARKUP_RANGE_ROUND}f'
+    CLOSE_GRID_MARKUP_END_MIN = 0.0
+    CLOSE_GRID_MARKUP_END_MAX = 1.0
+    CLOSE_GRID_MARKUP_END_STEP = 0.001
+    CLOSE_GRID_MARKUP_END_ROUND = 3
+    CLOSE_GRID_MARKUP_END_FORMAT = f'%.{CLOSE_GRID_MARKUP_END_ROUND}f'
 
-    CLOSE_GRID_MIN_MARKUP_MIN = 0.0
-    CLOSE_GRID_MIN_MARKUP_MAX = 1.0
-    CLOSE_GRID_MIN_MARKUP_STEP = 0.001
-    CLOSE_GRID_MIN_MARKUP_ROUND = 3
-    CLOSE_GRID_MIN_MARKUP_FORMAT = f'%.{CLOSE_GRID_MIN_MARKUP_ROUND}f'
+    CLOSE_GRID_MARKUP_START_MIN = 0.0
+    CLOSE_GRID_MARKUP_START_MAX = 1.0
+    CLOSE_GRID_MARKUP_START_STEP = 0.001
+    CLOSE_GRID_MARKUP_START_ROUND = 3
+    CLOSE_GRID_MARKUP_START_FORMAT = f'%.{CLOSE_GRID_MARKUP_START_ROUND}f'
+    
+    # CLOSE_GRID_MARKUP_RANGE_MIN = 0.0
+    # CLOSE_GRID_MARKUP_RANGE_MAX = 1.0
+    # CLOSE_GRID_MARKUP_RANGE_STEP = 0.01
+    # CLOSE_GRID_MARKUP_RANGE_ROUND = 2
+    # CLOSE_GRID_MARKUP_RANGE_FORMAT = f'%.{CLOSE_GRID_MARKUP_RANGE_ROUND}f'
+
+    # CLOSE_GRID_MIN_MARKUP_MIN = 0.0
+    # CLOSE_GRID_MIN_MARKUP_MAX = 1.0
+    # CLOSE_GRID_MIN_MARKUP_STEP = 0.001
+    # CLOSE_GRID_MIN_MARKUP_ROUND = 3
+    # CLOSE_GRID_MIN_MARKUP_FORMAT = f'%.{CLOSE_GRID_MIN_MARKUP_ROUND}f'
 
     CLOSE_GRID_QTY_PCT_MIN = 0.0
     CLOSE_GRID_QTY_PCT_MAX = 1.0
@@ -1955,10 +1983,14 @@ class Bounds:
 
     def __init__(self):
         # bounds long
-        self._long_close_grid_markup_range_0 = 0.0
-        self._long_close_grid_markup_range_1 = 0.03
-        self._long_close_grid_min_markup_0 = 0.001
-        self._long_close_grid_min_markup_1 = 0.03
+        # self._long_close_grid_markup_range_0 = 0.0
+        # self._long_close_grid_markup_range_1 = 0.03
+        # self._long_close_grid_min_markup_0 = 0.001
+        # self._long_close_grid_min_markup_1 = 0.03
+        self._long_close_grid_markup_end_0 = 0.001
+        self._long_close_grid_markup_end_1 = 0.03
+        self._long_close_grid_markup_start_0 = 0.001
+        self._long_close_grid_markup_start_1 = 0.03
         self._long_close_grid_qty_pct_0 = 0.05
         self._long_close_grid_qty_pct_1 = 1.0
         self._long_close_trailing_grid_ratio_0 = 0.0
@@ -1997,10 +2029,6 @@ class Bounds:
         self._long_filter_volume_drop_pct_1 = 1.0
         self._long_filter_volume_rolling_window_0 = 10.0
         self._long_filter_volume_rolling_window_1 = 360.0
-        # self._long_filter_relative_volume_clip_pct_0 = 0.0
-        # self._long_filter_relative_volume_clip_pct_1 = 1.0
-        # self._long_filter_rolling_window_0 = 10.0
-        # self._long_filter_rolling_window_1 = 360.0
         self._long_n_positions_0 = 1.0
         self._long_n_positions_1 = 20.0
         self._long_total_wallet_exposure_limit_0 = 0.0
@@ -2014,10 +2042,14 @@ class Bounds:
         self._long_unstuck_threshold_0 = 0.4
         self._long_unstuck_threshold_1 = 0.95
         # bounds short
-        self._short_close_grid_markup_range_0 = 0.0
-        self._short_close_grid_markup_range_1 = 0.03
-        self._short_close_grid_min_markup_0 = 0.001
-        self._short_close_grid_min_markup_1 = 0.03
+        # self._short_close_grid_markup_range_0 = 0.0
+        # self._short_close_grid_markup_range_1 = 0.03
+        # self._short_close_grid_min_markup_0 = 0.001
+        # self._short_close_grid_min_markup_1 = 0.03
+        self._short_close_grid_markup_end_0 = 0.001
+        self._short_close_grid_markup_end_1 = 0.03
+        self._short_close_grid_markup_start_0 = 0.001
+        self._short_close_grid_markup_start_1 = 0.03
         self._short_close_grid_qty_pct_0 = 0.05
         self._short_close_grid_qty_pct_1 = 1.0
         self._short_close_trailing_grid_ratio_0 = -1.0
@@ -2056,10 +2088,6 @@ class Bounds:
         self._short_filter_volume_drop_pct_1 = 1.0
         self._short_filter_volume_rolling_window_0 = 10.0
         self._short_filter_volume_rolling_window_1 = 360.0
-        # self._short_filter_relative_volume_clip_pct_0 = 0.0
-        # self._short_filter_relative_volume_clip_pct_1 = 1.0
-        # self._short_filter_rolling_window_0 = 10.0
-        # self._short_filter_rolling_window_1 = 360.0
         self._short_n_positions_0 = 1.0
         self._short_n_positions_1 = 20.0
         self._short_total_wallet_exposure_limit_0 = 0.0
@@ -2073,8 +2101,10 @@ class Bounds:
         self._short_unstuck_threshold_0 = 0.4
         self._short_unstuck_threshold_1 = 0.95
         self._bounds = {
-                "long_close_grid_markup_range": [self._long_close_grid_markup_range_0, self._long_close_grid_markup_range_1],
-                "long_close_grid_min_markup": [self._long_close_grid_min_markup_0, self._long_close_grid_min_markup_1],
+                # "long_close_grid_markup_range": [self._long_close_grid_markup_range_0, self._long_close_grid_markup_range_1],
+                # "long_close_grid_min_markup": [self._long_close_grid_min_markup_0, self._long_close_grid_min_markup_1],
+                "long_close_grid_markup_end": [self._long_close_grid_markup_end_0, self._long_close_grid_markup_end_1],
+                "long_close_grid_markup_start": [self._long_close_grid_markup_start_0, self._long_close_grid_markup_start_1],
                 "long_close_grid_qty_pct": [self._long_close_grid_qty_pct_0, self._long_close_grid_qty_pct_1],
                 "long_close_trailing_grid_ratio": [self._long_close_trailing_grid_ratio_0, self._long_close_trailing_grid_ratio_1],
                 "long_close_trailing_qty_pct": [self._long_close_trailing_qty_pct_0, self._long_close_trailing_qty_pct_1],
@@ -2094,16 +2124,16 @@ class Bounds:
                 "long_filter_noisiness_rolling_window": [self._long_filter_noisiness_rolling_window_0, self._long_filter_noisiness_rolling_window_1],
                 "long_filter_volume_drop_pct": [self._long_filter_volume_drop_pct_0, self._long_filter_volume_drop_pct_1],
                 "long_filter_volume_rolling_window": [self._long_filter_volume_rolling_window_0, self._long_filter_volume_rolling_window_1],
-                # "long_filter_relative_volume_clip_pct": [self._long_filter_relative_volume_clip_pct_0, self._long_filter_relative_volume_clip_pct_1],
-                # "long_filter_rolling_window": [self._long_filter_rolling_window_0, self._long_filter_rolling_window_1],
                 "long_n_positions": [self._long_n_positions_0, self._long_n_positions_1],
                 "long_total_wallet_exposure_limit": [self._long_total_wallet_exposure_limit_0, self._long_total_wallet_exposure_limit_1],
                 "long_unstuck_close_pct": [self._long_unstuck_close_pct_0, self._long_unstuck_close_pct_1],
                 "long_unstuck_ema_dist": [self._long_unstuck_ema_dist_0, self._long_unstuck_ema_dist_1],
                 "long_unstuck_loss_allowance_pct": [self._long_unstuck_loss_allowance_pct_0, self._long_unstuck_loss_allowance_pct_1],
                 "long_unstuck_threshold": [self._long_unstuck_threshold_0, self._long_unstuck_threshold_1],
-                "short_close_grid_markup_range": [self._short_close_grid_markup_range_0, self._short_close_grid_markup_range_1],
-                "short_close_grid_min_markup": [self._short_close_grid_min_markup_0, self._short_close_grid_min_markup_1],
+                # "short_close_grid_markup_range": [self._short_close_grid_markup_range_0, self._short_close_grid_markup_range_1],
+                # "short_close_grid_min_markup": [self._short_close_grid_min_markup_0, self._short_close_grid_min_markup_1],
+                "short_close_grid_markup_end": [self._short_close_grid_markup_end_0, self._short_close_grid_markup_end_1],
+                "short_close_grid_markup_start": [self._short_close_grid_markup_start_0, self._short_close_grid_markup_start_1],
                 "short_close_grid_qty_pct": [self._short_close_grid_qty_pct_0, self._short_close_grid_qty_pct_1],
                 "short_close_trailing_grid_ratio": [self._short_close_trailing_grid_ratio_0, self._short_close_trailing_grid_ratio_1],
                 "short_close_trailing_qty_pct": [self._short_close_trailing_qty_pct_0, self._short_close_trailing_qty_pct_1],
@@ -2123,8 +2153,6 @@ class Bounds:
                 "short_filter_noisiness_rolling_window": [self._short_filter_noisiness_rolling_window_0, self._short_filter_noisiness_rolling_window_1],
                 "short_filter_volume_drop_pct": [self._short_filter_volume_drop_pct_0, self._short_filter_volume_drop_pct_1],
                 "short_filter_volume_rolling_window": [self._short_filter_volume_rolling_window_0, self._short_filter_volume_rolling_window_1],
-                # "short_filter_relative_volume_clip_pct": [self._short_filter_relative_volume_clip_pct_0, self._short_filter_relative_volume_clip_pct_1],
-                # "short_filter_rolling_window": [self._short_filter_rolling_window_0, self._short_filter_rolling_window_1],
                 "short_n_positions": [self._short_n_positions_0, self._short_n_positions_1],
                 "short_total_wallet_exposure_limit": [self._short_total_wallet_exposure_limit_0, self._short_total_wallet_exposure_limit_1],
                 "short_unstuck_close_pct": [self._short_unstuck_close_pct_0, self._short_unstuck_close_pct_1],
@@ -2141,12 +2169,18 @@ class Bounds:
     
     @bounds.setter
     def bounds(self, new_bounds):
-        if "long_close_grid_markup_range" in new_bounds:
-            self.long_close_grid_markup_range_0 = new_bounds["long_close_grid_markup_range"][0]
-            self.long_close_grid_markup_range_1 = new_bounds["long_close_grid_markup_range"][1]
-        if "long_close_grid_min_markup" in new_bounds:
-            self.long_close_grid_min_markup_0 = new_bounds["long_close_grid_min_markup"][0]
-            self.long_close_grid_min_markup_1 = new_bounds["long_close_grid_min_markup"][1]
+        # if "long_close_grid_markup_range" in new_bounds:
+        #     self.long_close_grid_markup_range_0 = new_bounds["long_close_grid_markup_range"][0]
+        #     self.long_close_grid_markup_range_1 = new_bounds["long_close_grid_markup_range"][1]
+        # if "long_close_grid_min_markup" in new_bounds:
+        #     self.long_close_grid_min_markup_0 = new_bounds["long_close_grid_min_markup"][0]
+        #     self.long_close_grid_min_markup_1 = new_bounds["long_close_grid_min_markup"][1]
+        if "long_close_grid_markup_end" in new_bounds:
+            self.long_close_grid_markup_end_0 = new_bounds["long_close_grid_markup_end"][0]
+            self.long_close_grid_markup_end_1 = new_bounds["long_close_grid_markup_end"][1]
+        if "long_close_grid_markup_start" in new_bounds:
+            self.long_close_grid_markup_start_0 = new_bounds["long_close_grid_markup_start"][0]
+            self.long_close_grid_markup_start_1 = new_bounds["long_close_grid_markup_start"][1]
         if "long_close_grid_qty_pct" in new_bounds:
             self.long_close_grid_qty_pct_0 = new_bounds["long_close_grid_qty_pct"][0]
             self.long_close_grid_qty_pct_1 = new_bounds["long_close_grid_qty_pct"][1]
@@ -2216,12 +2250,6 @@ class Bounds:
         elif "long_filter_rolling_window" in new_bounds:
             self.long_filter_volume_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
             self.long_filter_volume_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
-        # if "long_filter_relative_volume_clip_pct" in new_bounds:
-        #     self.long_filter_relative_volume_clip_pct_0 = new_bounds["long_filter_relative_volume_clip_pct"][0]
-        #     self.long_filter_relative_volume_clip_pct_1 = new_bounds["long_filter_relative_volume_clip_pct"][1]
-        # if "long_filter_rolling_window" in new_bounds:
-        #     self.long_filter_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
-        #     self.long_filter_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
         if "long_n_positions" in new_bounds:
             self.long_n_positions_0 = new_bounds["long_n_positions"][0]
             self.long_n_positions_1 = new_bounds["long_n_positions"][1]
@@ -2242,12 +2270,18 @@ class Bounds:
             self.long_unstuck_threshold_1 = new_bounds["long_unstuck_threshold"][1]
     
         # Short parameters
-        if "short_close_grid_markup_range" in new_bounds:
-            self.short_close_grid_markup_range_0 = new_bounds["short_close_grid_markup_range"][0]
-            self.short_close_grid_markup_range_1 = new_bounds["short_close_grid_markup_range"][1]
-        if "short_close_grid_min_markup" in new_bounds:
-            self.short_close_grid_min_markup_0 = new_bounds["short_close_grid_min_markup"][0]
-            self.short_close_grid_min_markup_1 = new_bounds["short_close_grid_min_markup"][1]
+        # if "short_close_grid_markup_range" in new_bounds:
+        #     self.short_close_grid_markup_range_0 = new_bounds["short_close_grid_markup_range"][0]
+        #     self.short_close_grid_markup_range_1 = new_bounds["short_close_grid_markup_range"][1]
+        # if "short_close_grid_min_markup" in new_bounds:
+        #     self.short_close_grid_min_markup_0 = new_bounds["short_close_grid_min_markup"][0]
+        #     self.short_close_grid_min_markup_1 = new_bounds["short_close_grid_min_markup"][1]
+        if "short_close_grid_markup_end" in new_bounds:
+            self.short_close_grid_markup_end_0 = new_bounds["short_close_grid_markup_end"][0]
+            self.short_close_grid_markup_end_1 = new_bounds["short_close_grid_markup_end"][1]
+        if "short_close_grid_markup_start" in new_bounds:
+            self.short_close_grid_markup_start_0 = new_bounds["short_close_grid_markup_start"][0]
+            self.short_close_grid_markup_start_1 = new_bounds["short_close_grid_markup_start"][1]
         if "short_close_grid_qty_pct" in new_bounds:
             self.short_close_grid_qty_pct_0 = new_bounds["short_close_grid_qty_pct"][0]
             self.short_close_grid_qty_pct_1 = new_bounds["short_close_grid_qty_pct"][1]
@@ -2317,12 +2351,6 @@ class Bounds:
         elif "short_filter_rolling_window" in new_bounds:
             self.short_filter_volume_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
             self.short_filter_volume_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
-        # if "short_filter_relative_volume_clip_pct" in new_bounds:
-        #     self.short_filter_relative_volume_clip_pct_0 = new_bounds["short_filter_relative_volume_clip_pct"][0]
-        #     self.short_filter_relative_volume_clip_pct_1 = new_bounds["short_filter_relative_volume_clip_pct"][1]
-        # if "short_filter_rolling_window" in new_bounds:
-        #     self.short_filter_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
-        #     self.short_filter_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
         if "short_n_positions" in new_bounds:
             self.short_n_positions_0 = new_bounds["short_n_positions"][0]
             self.short_n_positions_1 = new_bounds["short_n_positions"][1]
@@ -2343,14 +2371,22 @@ class Bounds:
             self.short_unstuck_threshold_1 = new_bounds["short_unstuck_threshold"][1]
         
     # Long parameters
+    # @property
+    # def long_close_grid_markup_range_0(self): return self._long_close_grid_markup_range_0
+    # @property
+    # def long_close_grid_markup_range_1(self): return self._long_close_grid_markup_range_1
+    # @property
+    # def long_close_grid_min_markup_0(self): return self._long_close_grid_min_markup_0
+    # @property
+    # def long_close_grid_min_markup_1(self): return self._long_close_grid_min_markup_1
     @property
-    def long_close_grid_markup_range_0(self): return self._long_close_grid_markup_range_0
+    def long_close_grid_markup_end_0(self): return self._long_close_grid_markup_end_0
     @property
-    def long_close_grid_markup_range_1(self): return self._long_close_grid_markup_range_1
+    def long_close_grid_markup_end_1(self): return self._long_close_grid_markup_end_1
     @property
-    def long_close_grid_min_markup_0(self): return self._long_close_grid_min_markup_0
+    def long_close_grid_markup_start_0(self): return self._long_close_grid_markup_start_0
     @property
-    def long_close_grid_min_markup_1(self): return self._long_close_grid_min_markup_1
+    def long_close_grid_markup_start_1(self): return self._long_close_grid_markup_start_1
     @property
     def long_close_grid_qty_pct_0(self): return self._long_close_grid_qty_pct_0
     @property
@@ -2427,14 +2463,6 @@ class Bounds:
     def long_filter_volume_rolling_window_0(self): return self._long_filter_volume_rolling_window_0
     @property
     def long_filter_volume_rolling_window_1(self): return self._long_filter_volume_rolling_window_1
-    # @property
-    # def long_filter_relative_volume_clip_pct_0(self): return self._long_filter_relative_volume_clip_pct_0
-    # @property
-    # def long_filter_relative_volume_clip_pct_1(self): return self._long_filter_relative_volume_clip_pct_1
-    # @property
-    # def long_filter_rolling_window_0(self): return self._long_filter_rolling_window_0
-    # @property
-    # def long_filter_rolling_window_1(self): return self._long_filter_rolling_window_1
     @property
     def long_n_positions_0(self): return self._long_n_positions_0
     @property
@@ -2457,16 +2485,26 @@ class Bounds:
     def long_unstuck_loss_allowance_pct_1(self): return self._long_unstuck_loss_allowance_pct_1
     @property
     def long_unstuck_threshold_0(self): return self._long_unstuck_threshold_0
-    
-    # Short parameters
     @property
     def long_unstuck_threshold_1(self): return self._long_unstuck_threshold_1
+    
+    # Short parameters
+    # @property
+    # def long_unstuck_threshold_1(self): return self._long_unstuck_threshold_1
+    # @property
+    # def short_close_grid_markup_range_0(self): return self._short_close_grid_markup_range_0
+    # @property
+    # def short_close_grid_markup_range_1(self): return self._short_close_grid_markup_range_1
+    # @property
+    # def short_close_grid_min_markup_0(self): return self._short_close_grid_min_markup_0
     @property
-    def short_close_grid_markup_range_0(self): return self._short_close_grid_markup_range_0
+    def short_close_grid_markup_end_0(self): return self._short_close_grid_markup_end_0
     @property
-    def short_close_grid_markup_range_1(self): return self._short_close_grid_markup_range_1
+    def short_close_grid_markup_end_1(self): return self._short_close_grid_markup_end_1
     @property
-    def short_close_grid_min_markup_0(self): return self._short_close_grid_min_markup_0
+    def short_close_grid_markup_start_0(self): return self._short_close_grid_markup_start_0
+    @property
+    def short_close_grid_markup_start_1(self): return self._short_close_grid_markup_start_1
     @property
     def short_close_grid_min_markup_1(self): return self._short_close_grid_min_markup_1
     @property
@@ -2545,14 +2583,6 @@ class Bounds:
     def short_filter_volume_rolling_window_0(self): return self._short_filter_volume_rolling_window_0
     @property
     def short_filter_volume_rolling_window_1(self): return self._short_filter_volume_rolling_window_1
-    # @property
-    # def short_filter_relative_volume_clip_pct_0(self): return self._short_filter_relative_volume_clip_pct_0
-    # @property
-    # def short_filter_relative_volume_clip_pct_1(self): return self._short_filter_relative_volume_clip_pct_1
-    # @property
-    # def short_filter_rolling_window_0(self): return self._short_filter_rolling_window_0
-    # @property
-    # def short_filter_rolling_window_1(self): return self._short_filter_rolling_window_1
     @property
     def short_n_positions_0(self): return self._short_n_positions_0
     @property
@@ -2579,22 +2609,38 @@ class Bounds:
     def short_unstuck_threshold_1(self): return self._short_unstuck_threshold_1
 
     # Long setters
-    @long_close_grid_markup_range_0.setter
-    def long_close_grid_markup_range_0(self, new_value):
-        self._long_close_grid_markup_range_0 = new_value
-        self._bounds["long_close_grid_markup_range"][0] = new_value
-    @long_close_grid_markup_range_1.setter
-    def long_close_grid_markup_range_1(self, new_value):
-        self._long_close_grid_markup_range_1 = new_value
-        self._bounds["long_close_grid_markup_range"][1] = new_value
-    @long_close_grid_min_markup_0.setter
-    def long_close_grid_min_markup_0(self, new_value):
-        self._long_close_grid_min_markup_0 = new_value
-        self._bounds["long_close_grid_min_markup"][0] = new_value
-    @long_close_grid_min_markup_1.setter
-    def long_close_grid_min_markup_1(self, new_value):
-        self._long_close_grid_min_markup_1 = new_value
-        self._bounds["long_close_grid_min_markup"][1] = new_value
+    # @long_close_grid_markup_range_0.setter
+    # def long_close_grid_markup_range_0(self, new_value):
+    #     self._long_close_grid_markup_range_0 = new_value
+    #     self._bounds["long_close_grid_markup_range"][0] = new_value
+    # @long_close_grid_markup_range_1.setter
+    # def long_close_grid_markup_range_1(self, new_value):
+    #     self._long_close_grid_markup_range_1 = new_value
+    #     self._bounds["long_close_grid_markup_range"][1] = new_value
+    # @long_close_grid_min_markup_0.setter
+    # def long_close_grid_min_markup_0(self, new_value):
+    #     self._long_close_grid_min_markup_0 = new_value
+    #     self._bounds["long_close_grid_min_markup"][0] = new_value
+    # @long_close_grid_min_markup_1.setter
+    # def long_close_grid_min_markup_1(self, new_value):
+    #     self._long_close_grid_min_markup_1 = new_value
+    #     self._bounds["long_close_grid_min_markup"][1] = new_value
+    @long_close_grid_markup_end_0.setter
+    def long_close_grid_markup_end_0(self, new_value):
+        self._long_close_grid_markup_end_0 = new_value
+        self._bounds["long_close_grid_markup_end"][0] = new_value
+    @long_close_grid_markup_end_1.setter
+    def long_close_grid_markup_end_1(self, new_value):
+        self._long_close_grid_markup_end_1 = new_value
+        self._bounds["long_close_grid_markup_end"][1] = new_value
+    @long_close_grid_markup_start_0.setter
+    def long_close_grid_markup_start_0(self, new_value):
+        self._long_close_grid_markup_start_0 = new_value
+        self._bounds["long_close_grid_markup_start"][0] = new_value
+    @long_close_grid_markup_start_1.setter
+    def long_close_grid_markup_start_1(self, new_value):
+        self._long_close_grid_markup_start_1 = new_value
+        self._bounds["long_close_grid_markup_start"][1] = new_value
     @long_close_grid_qty_pct_0.setter
     def long_close_grid_qty_pct_0(self, new_value):
         self._long_close_grid_qty_pct_0 = new_value
@@ -2747,22 +2793,6 @@ class Bounds:
     def long_filter_volume_rolling_window_1(self, new_value):
         self._long_filter_volume_rolling_window_1 = new_value
         self._bounds["long_filter_volume_rolling_window"][1] = new_value
-    # @long_filter_relative_volume_clip_pct_0.setter
-    # def long_filter_relative_volume_clip_pct_0(self, new_value):
-    #     self._long_filter_relative_volume_clip_pct_0 = new_value
-    #     self._bounds["long_filter_relative_volume_clip_pct"][0] = new_value
-    # @long_filter_relative_volume_clip_pct_1.setter
-    # def long_filter_relative_volume_clip_pct_1(self, new_value):
-    #     self._long_filter_relative_volume_clip_pct_1 = new_value
-    #     self._bounds["long_filter_relative_volume_clip_pct"][1] = new_value
-    # @long_filter_rolling_window_0.setter
-    # def long_filter_rolling_window_0(self, new_value):
-    #     self._long_filter_rolling_window_0 = new_value
-    #     self._bounds["long_filter_rolling_window"][0] = new_value
-    # @long_filter_rolling_window_1.setter
-    # def long_filter_rolling_window_1(self, new_value):
-    #     self._long_filter_rolling_window_1 = new_value
-    #     self._bounds["long_filter_rolling_window"][1] = new_value
     @long_n_positions_0.setter
     def long_n_positions_0(self, new_value):
         self._long_n_positions_0 = new_value
@@ -2813,22 +2843,38 @@ class Bounds:
         self._bounds["long_unstuck_threshold"][1] = new_value
 
     # Short setters
-    @short_close_grid_markup_range_0.setter
-    def short_close_grid_markup_range_0(self, new_value):
-        self._short_close_grid_markup_range_0 = new_value
-        self._bounds["short_close_grid_markup_range"][0] = new_value
-    @short_close_grid_markup_range_1.setter
-    def short_close_grid_markup_range_1(self, new_value):
-        self._short_close_grid_markup_range_1 = new_value
-        self._bounds["short_close_grid_markup_range"][1] = new_value
-    @short_close_grid_min_markup_0.setter
-    def short_close_grid_min_markup_0(self, new_value):
-        self._short_close_grid_min_markup_0 = new_value
-        self._bounds["short_close_grid_min_markup"][0] = new_value
-    @short_close_grid_min_markup_1.setter
-    def short_close_grid_min_markup_1(self, new_value):
-        self._short_close_grid_min_markup_1 = new_value
-        self._bounds["short_close_grid_min_markup"][1] = new_value
+    # @short_close_grid_markup_range_0.setter
+    # def short_close_grid_markup_range_0(self, new_value):
+    #     self._short_close_grid_markup_range_0 = new_value
+    #     self._bounds["short_close_grid_markup_range"][0] = new_value
+    # @short_close_grid_markup_range_1.setter
+    # def short_close_grid_markup_range_1(self, new_value):
+    #     self._short_close_grid_markup_range_1 = new_value
+    #     self._bounds["short_close_grid_markup_range"][1] = new_value
+    # @short_close_grid_min_markup_0.setter
+    # def short_close_grid_min_markup_0(self, new_value):
+    #     self._short_close_grid_min_markup_0 = new_value
+    #     self._bounds["short_close_grid_min_markup"][0] = new_value
+    # @short_close_grid_min_markup_1.setter
+    # def short_close_grid_min_markup_1(self, new_value):
+    #     self._short_close_grid_min_markup_1 = new_value
+    #     self._bounds["short_close_grid_min_markup"][1] = new_value
+    @short_close_grid_markup_end_0.setter
+    def short_close_grid_markup_end_0(self, new_value):
+        self._short_close_grid_markup_end_0 = new_value
+        self._bounds["short_close_grid_markup_end"][0] = new_value
+    @short_close_grid_markup_end_1.setter
+    def short_close_grid_markup_end_1(self, new_value):
+        self._short_close_grid_markup_end_1 = new_value
+        self._bounds["short_close_grid_markup_end"][1] = new_value
+    @short_close_grid_markup_start_0.setter
+    def short_close_grid_markup_start_0(self, new_value):
+        self._short_close_grid_markup_start_0 = new_value
+        self._bounds["short_close_grid_markup_start"][0] = new_value
+    @short_close_grid_markup_start_1.setter
+    def short_close_grid_markup_start_1(self, new_value):
+        self._short_close_grid_markup_start_1 = new_value
+        self._bounds["short_close_grid_markup_start"][1] = new_value
     @short_close_grid_qty_pct_0.setter
     def short_close_grid_qty_pct_0(self, new_value):
         self._short_close_grid_qty_pct_0 = new_value
@@ -2981,22 +3027,6 @@ class Bounds:
     def short_filter_volume_rolling_window_1(self, new_value):
         self._short_filter_volume_rolling_window_1 = new_value
         self._bounds["short_filter_volume_rolling_window"][1] = new_value
-    # @short_filter_relative_volume_clip_pct_0.setter
-    # def short_filter_relative_volume_clip_pct_0(self, new_value):
-    #     self._short_filter_relative_volume_clip_pct_0 = new_value
-    #     self._bounds["short_filter_relative_volume_clip_pct"][0] = new_value
-    # @short_filter_relative_volume_clip_pct_1.setter
-    # def short_filter_relative_volume_clip_pct_1(self, new_value):
-    #     self._short_filter_relative_volume_clip_pct_1 = new_value
-    #     self._bounds["short_filter_relative_volume_clip_pct"][1] = new_value
-    # @short_filter_rolling_window_0.setter
-    # def short_filter_rolling_window_0(self, new_value):
-    #     self._short_filter_rolling_window_0 = new_value
-    #     self._bounds["short_filter_rolling_window"][0] = new_value
-    # @short_filter_rolling_window_1.setter
-    # def short_filter_rolling_window_1(self, new_value):
-    #     self._short_filter_rolling_window_1 = new_value
-    #     self._bounds["short_filter_rolling_window"][1] = new_value
     @short_n_positions_0.setter
     def short_n_positions_0(self, new_value):
         self._short_n_positions_0 = new_value

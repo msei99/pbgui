@@ -1220,40 +1220,76 @@ class OptimizeV7Item:
             st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", key="edit_opt_v7_only_cpt", help=pbgui_help.only_cpt)
 
-    # long_close_grid_markup_range
-    @st.fragment
-    def fragment_long_close_grid_markup_range(self):
-        if "edit_opt_v7_long_close_grid_markup_range" in st.session_state:
-            if st.session_state.edit_opt_v7_long_close_grid_markup_range != (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1):
-                self.config.optimize.bounds.long_close_grid_markup_range_0 = st.session_state.edit_opt_v7_long_close_grid_markup_range[0]
-                self.config.optimize.bounds.long_close_grid_markup_range_1 = st.session_state.edit_opt_v7_long_close_grid_markup_range[1]
-        else:
-            st.session_state.edit_opt_v7_long_close_grid_markup_range = (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1)
-        st.slider(
-            "long_close_grid_markup_range",
-            min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
-            max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
-            step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
-            format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
-            key="edit_opt_v7_long_close_grid_markup_range",
-            help=pbgui_help.close_grid_parameters)
+    # # long_close_grid_markup_range
+    # @st.fragment
+    # def fragment_long_close_grid_markup_range(self):
+    #     if "edit_opt_v7_long_close_grid_markup_range" in st.session_state:
+    #         if st.session_state.edit_opt_v7_long_close_grid_markup_range != (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1):
+    #             self.config.optimize.bounds.long_close_grid_markup_range_0 = st.session_state.edit_opt_v7_long_close_grid_markup_range[0]
+    #             self.config.optimize.bounds.long_close_grid_markup_range_1 = st.session_state.edit_opt_v7_long_close_grid_markup_range[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_long_close_grid_markup_range = (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1)
+    #     st.slider(
+    #         "long_close_grid_markup_range",
+    #         min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
+    #         max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
+    #         step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
+    #         format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
+    #         key="edit_opt_v7_long_close_grid_markup_range",
+    #         help=pbgui_help.close_grid_parameters)
     
-    # long_close_grid_min_markup
+    # # long_close_grid_min_markup
+    # @st.fragment
+    # def fragment_long_close_grid_min_markup(self):
+    #     if "edit_opt_v7_long_close_grid_min_markup" in st.session_state:
+    #         if st.session_state.edit_opt_v7_long_close_grid_min_markup != (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1):
+    #             self.config.optimize.bounds.long_close_grid_min_markup_0 = st.session_state.edit_opt_v7_long_close_grid_min_markup[0]
+    #             self.config.optimize.bounds.long_close_grid_min_markup_1 = st.session_state.edit_opt_v7_long_close_grid_min_markup[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_long_close_grid_min_markup = (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1)
+    #     st.slider(
+    #         "long_close_grid_min_markup",
+    #         min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
+    #         max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
+    #         step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
+    #         format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
+    #         key="edit_opt_v7_long_close_grid_min_markup",
+    #         help=pbgui_help.close_grid_parameters)
+
+    # long_close_grid_markup_end
     @st.fragment
-    def fragment_long_close_grid_min_markup(self):
-        if "edit_opt_v7_long_close_grid_min_markup" in st.session_state:
-            if st.session_state.edit_opt_v7_long_close_grid_min_markup != (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1):
-                self.config.optimize.bounds.long_close_grid_min_markup_0 = st.session_state.edit_opt_v7_long_close_grid_min_markup[0]
-                self.config.optimize.bounds.long_close_grid_min_markup_1 = st.session_state.edit_opt_v7_long_close_grid_min_markup[1]
+    def fragment_long_close_grid_markup_end(self):
+        if "edit_opt_v7_long_close_grid_markup_end" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_grid_markup_end != (self.config.optimize.bounds.long_close_grid_markup_end_0, self.config.optimize.bounds.long_close_grid_markup_end_1):
+                self.config.optimize.bounds.long_close_grid_markup_end_0 = st.session_state.edit_opt_v7_long_close_grid_markup_end[0]
+                self.config.optimize.bounds.long_close_grid_markup_end_1 = st.session_state.edit_opt_v7_long_close_grid_markup_end[1]
         else:
-            st.session_state.edit_opt_v7_long_close_grid_min_markup = (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1)
+            st.session_state.edit_opt_v7_long_close_grid_markup_end = (self.config.optimize.bounds.long_close_grid_markup_end_0, self.config.optimize.bounds.long_close_grid_markup_end_1)
         st.slider(
-            "long_close_grid_min_markup",
-            min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
-            max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
-            step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
-            format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
-            key="edit_opt_v7_long_close_grid_min_markup",
+            "long_close_grid_markup_end",
+            min_value=Bounds.CLOSE_GRID_MARKUP_END_MIN,
+            max_value=Bounds.CLOSE_GRID_MARKUP_END_MAX,
+            step=Bounds.CLOSE_GRID_MARKUP_END_STEP,
+            format=Bounds.CLOSE_GRID_MARKUP_END_FORMAT,
+            key="edit_opt_v7_long_close_grid_markup_end",
+            help=pbgui_help.close_grid_parameters)  
+    
+    # long_close_grid_markup_start
+    @st.fragment
+    def fragment_long_close_grid_markup_start(self):
+        if "edit_opt_v7_long_close_grid_markup_start" in st.session_state:
+            if st.session_state.edit_opt_v7_long_close_grid_markup_start != (self.config.optimize.bounds.long_close_grid_markup_start_0, self.config.optimize.bounds.long_close_grid_markup_start_1):
+                self.config.optimize.bounds.long_close_grid_markup_start_0 = st.session_state.edit_opt_v7_long_close_grid_markup_start[0]
+                self.config.optimize.bounds.long_close_grid_markup_start_1 = st.session_state.edit_opt_v7_long_close_grid_markup_start[1]
+        else:
+            st.session_state.edit_opt_v7_long_close_grid_markup_start = (self.config.optimize.bounds.long_close_grid_markup_start_0, self.config.optimize.bounds.long_close_grid_markup_start_1)
+        st.slider(
+            "long_close_grid_markup_start",
+            min_value=Bounds.CLOSE_GRID_MARKUP_START_MIN,
+            max_value=Bounds.CLOSE_GRID_MARKUP_START_MAX,
+            step=Bounds.CLOSE_GRID_MARKUP_START_STEP,
+            format=Bounds.CLOSE_GRID_MARKUP_START_FORMAT,
+            key="edit_opt_v7_long_close_grid_markup_start",
             help=pbgui_help.close_grid_parameters)
 
     # long_close_grid_qty_pct
@@ -1598,42 +1634,6 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_filter_volume_rolling_window",
             help=pbgui_help.filter_rolling_window)
 
-    # # long_filter_relative_volume_clip_pct
-    # @st.fragment
-    # def fragment_long_filter_relative_volume_clip_pct(self):
-    #     if "edit_opt_v7_long_filter_relative_volume_clip_pct" in st.session_state:
-    #         if st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct != (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1):
-    #             self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[0]
-    #             self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct[1]
-    #     else:
-    #         st.session_state.edit_opt_v7_long_filter_relative_volume_clip_pct = (self.config.optimize.bounds.long_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.long_filter_relative_volume_clip_pct_1)
-    #     st.slider(
-    #         "long_filter_relative_volume_clip_pct",
-    #         min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
-    #         max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
-    #         step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
-    #         format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
-    #         key="edit_opt_v7_long_filter_relative_volume_clip_pct",
-    #         help=pbgui_help.filter_relative_volume_clip_pct)
-
-    # # long_filter_rolling_window
-    # @st.fragment
-    # def fragment_long_filter_rolling_window(self):
-    #     if "edit_opt_v7_long_filter_rolling_window" in st.session_state:
-    #         if st.session_state.edit_opt_v7_long_filter_rolling_window != (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1):
-    #             self.config.optimize.bounds.long_filter_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_rolling_window[0]
-    #             self.config.optimize.bounds.long_filter_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_rolling_window[1]
-    #     else:
-    #         st.session_state.edit_opt_v7_long_filter_rolling_window = (self.config.optimize.bounds.long_filter_rolling_window_0, self.config.optimize.bounds.long_filter_rolling_window_1)
-    #     st.slider(
-    #         "long_filter_rolling_window",
-    #         min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
-    #         max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
-    #         step=Bounds.FILTER_ROLLING_WINDOW_STEP,
-    #         format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
-    #         key="edit_opt_v7_long_filter_rolling_window",
-    #         help=pbgui_help.filter_rolling_window)
-
     # long_n_positions
     @st.fragment
     def fragment_long_n_positions(self):
@@ -1742,42 +1742,78 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_unstuck_threshold",
             help=pbgui_help.unstuck_threshold)
 
-    # short_close_grid_markup_range
+    # # short_close_grid_markup_range
+    # @st.fragment
+    # def fragment_short_close_grid_markup_range(self):
+    #     if "edit_opt_v7_short_close_grid_markup_range" in st.session_state:
+    #         if st.session_state.edit_opt_v7_short_close_grid_markup_range != (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1):
+    #             self.config.optimize.bounds.short_close_grid_markup_range_0 = st.session_state.edit_opt_v7_short_close_grid_markup_range[0]
+    #             self.config.optimize.bounds.short_close_grid_markup_range_1 = st.session_state.edit_opt_v7_short_close_grid_markup_range[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_short_close_grid_markup_range = (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1)
+    #     st.slider(
+    #         "short_close_grid_markup_range",
+    #         min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
+    #         max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
+    #         step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
+    #         format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
+    #         key="edit_opt_v7_short_close_grid_markup_range",
+    #         help=pbgui_help.close_grid_parameters)
+    
+    # # short_close_grid_min_markup
+    # @st.fragment
+    # def fragment_short_close_grid_min_markup(self):
+    #     if "edit_opt_v7_short_close_grid_min_markup" in st.session_state:
+    #         if st.session_state.edit_opt_v7_short_close_grid_min_markup != (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1):
+    #             self.config.optimize.bounds.short_close_grid_min_markup_0 = st.session_state.edit_opt_v7_short_close_grid_min_markup[0]
+    #             self.config.optimize.bounds.short_close_grid_min_markup_1 = st.session_state.edit_opt_v7_short_close_grid_min_markup[1]
+    #     else:
+    #         st.session_state.edit_opt_v7_short_close_grid_min_markup = (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1)
+    #     st.slider(
+    #         "short_close_grid_min_markup",
+    #         min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
+    #         max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
+    #         step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
+    #         format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
+    #         key="edit_opt_v7_short_close_grid_min_markup",
+    #         help=pbgui_help.close_grid_parameters)
+    
+    # short_close_grid_markup_end
     @st.fragment
-    def fragment_short_close_grid_markup_range(self):
-        if "edit_opt_v7_short_close_grid_markup_range" in st.session_state:
-            if st.session_state.edit_opt_v7_short_close_grid_markup_range != (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1):
-                self.config.optimize.bounds.short_close_grid_markup_range_0 = st.session_state.edit_opt_v7_short_close_grid_markup_range[0]
-                self.config.optimize.bounds.short_close_grid_markup_range_1 = st.session_state.edit_opt_v7_short_close_grid_markup_range[1]
+    def fragment_short_close_grid_markup_end(self):
+        if "edit_opt_v7_short_close_grid_markup_end" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_grid_markup_end != (self.config.optimize.bounds.short_close_grid_markup_end_0, self.config.optimize.bounds.short_close_grid_markup_end_1):
+                self.config.optimize.bounds.short_close_grid_markup_end_0 = st.session_state.edit_opt_v7_short_close_grid_markup_end[0]
+                self.config.optimize.bounds.short_close_grid_markup_end_1 = st.session_state.edit_opt_v7_short_close_grid_markup_end[1]
         else:
-            st.session_state.edit_opt_v7_short_close_grid_markup_range = (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1)
+            st.session_state.edit_opt_v7_short_close_grid_markup_end = (self.config.optimize.bounds.short_close_grid_markup_end_0, self.config.optimize.bounds.short_close_grid_markup_end_1)
         st.slider(
-            "short_close_grid_markup_range",
-            min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
-            max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
-            step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
-            format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
-            key="edit_opt_v7_short_close_grid_markup_range",
+            "short_close_grid_markup_end",
+            min_value=Bounds.CLOSE_GRID_MARKUP_END_MIN,
+            max_value=Bounds.CLOSE_GRID_MARKUP_END_MAX,
+            step=Bounds.CLOSE_GRID_MARKUP_END_STEP,
+            format=Bounds.CLOSE_GRID_MARKUP_END_FORMAT,
+            key="edit_opt_v7_short_close_grid_markup_end",
             help=pbgui_help.close_grid_parameters)
     
-    # short_close_grid_min_markup
+    # short_close_grid_markup_start
     @st.fragment
-    def fragment_short_close_grid_min_markup(self):
-        if "edit_opt_v7_short_close_grid_min_markup" in st.session_state:
-            if st.session_state.edit_opt_v7_short_close_grid_min_markup != (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1):
-                self.config.optimize.bounds.short_close_grid_min_markup_0 = st.session_state.edit_opt_v7_short_close_grid_min_markup[0]
-                self.config.optimize.bounds.short_close_grid_min_markup_1 = st.session_state.edit_opt_v7_short_close_grid_min_markup[1]
+    def fragment_short_close_grid_markup_start(self):
+        if "edit_opt_v7_short_close_grid_markup_start" in st.session_state:
+            if st.session_state.edit_opt_v7_short_close_grid_markup_start != (self.config.optimize.bounds.short_close_grid_markup_start_0, self.config.optimize.bounds.short_close_grid_markup_start_1):
+                self.config.optimize.bounds.short_close_grid_markup_start_0 = st.session_state.edit_opt_v7_short_close_grid_markup_start[0]
+                self.config.optimize.bounds.short_close_grid_markup_start_1 = st.session_state.edit_opt_v7_short_close_grid_markup_start[1]
         else:
-            st.session_state.edit_opt_v7_short_close_grid_min_markup = (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1)
+            st.session_state.edit_opt_v7_short_close_grid_markup_start = (self.config.optimize.bounds.short_close_grid_markup_start_0, self.config.optimize.bounds.short_close_grid_markup_start_1)
         st.slider(
-            "short_close_grid_min_markup",
-            min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
-            max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
-            step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
-            format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
-            key="edit_opt_v7_short_close_grid_min_markup",
+            "short_close_grid_markup_start",
+            min_value=Bounds.CLOSE_GRID_MARKUP_START_MIN,
+            max_value=Bounds.CLOSE_GRID_MARKUP_START_MAX,
+            step=Bounds.CLOSE_GRID_MARKUP_START_STEP,
+            format=Bounds.CLOSE_GRID_MARKUP_START_FORMAT,
+            key="edit_opt_v7_short_close_grid_markup_start",
             help=pbgui_help.close_grid_parameters)
-    
+
     # short_close_grid_qty_pct
     @st.fragment
     def fragment_short_close_grid_qty_pct(self):
@@ -2120,42 +2156,6 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_filter_volume_rolling_window",
             help=pbgui_help.filter_rolling_window)
 
-    # # short_filter_relative_volume_clip_pct
-    # @st.fragment
-    # def fragment_short_filter_relative_volume_clip_pct(self):
-    #     if "edit_opt_v7_short_filter_relative_volume_clip_pct" in st.session_state:
-    #         if st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct != (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1):
-    #             self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[0]
-    #             self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1 = st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct[1]
-    #     else:
-    #         st.session_state.edit_opt_v7_short_filter_relative_volume_clip_pct = (self.config.optimize.bounds.short_filter_relative_volume_clip_pct_0, self.config.optimize.bounds.short_filter_relative_volume_clip_pct_1)
-    #     st.slider(
-    #         "short_filter_relative_volume_clip_pct",
-    #         min_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MIN,
-    #         max_value=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_MAX,
-    #         step=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_STEP,
-    #         format=Bounds.FILTER_RELATIVE_VOLUME_CLIP_PCT_FORMAT,
-    #         key="edit_opt_v7_short_filter_relative_volume_clip_pct",
-    #         help=pbgui_help.filter_relative_volume_clip_pct)
-
-    # # short_filter_rolling_window
-    # @st.fragment
-    # def fragment_short_filter_rolling_window(self):
-    #     if "edit_opt_v7_short_filter_rolling_window" in st.session_state:
-    #         if st.session_state.edit_opt_v7_short_filter_rolling_window != (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1):
-    #             self.config.optimize.bounds.short_filter_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_rolling_window[0]
-    #             self.config.optimize.bounds.short_filter_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_rolling_window[1]
-    #     else:
-    #         st.session_state.edit_opt_v7_short_filter_rolling_window = (self.config.optimize.bounds.short_filter_rolling_window_0, self.config.optimize.bounds.short_filter_rolling_window_1)
-    #     st.slider(
-    #         "short_filter_rolling_window",
-    #         min_value=Bounds.FILTER_ROLLING_WINDOW_MIN,
-    #         max_value=Bounds.FILTER_ROLLING_WINDOW_MAX,
-    #         step=Bounds.FILTER_ROLLING_WINDOW_STEP,
-    #         format=Bounds.FILTER_ROLLING_WINDOW_FORMAT,
-    #         key="edit_opt_v7_short_filter_rolling_window",
-    #         help=pbgui_help.filter_rolling_window)
-    
     # short_n_positions
     @st.fragment
     def fragment_short_n_positions(self):
@@ -2488,8 +2488,10 @@ class OptimizeV7Item:
         with col1:
             with st.container(border=True):
                 st.write("Bounds long")
-                self.fragment_long_close_grid_markup_range()
-                self.fragment_long_close_grid_min_markup()
+                # self.fragment_long_close_grid_markup_range()
+                # self.fragment_long_close_grid_min_markup()
+                self.fragment_long_close_grid_markup_end()
+                self.fragment_long_close_grid_markup_start()
                 self.fragment_long_close_grid_qty_pct()
                 self.fragment_long_close_trailing_grid_ratio()
                 self.fragment_long_close_trailing_qty_pct()
@@ -2509,8 +2511,6 @@ class OptimizeV7Item:
                 self.fragment_long_filter_noisiness_rolling_window()
                 self.fragment_long_filter_volume_drop_pct()
                 self.fragment_long_filter_volume_rolling_window()
-                # self.fragment_long_filter_relative_volume_clip_pct()
-                # self.fragment_long_filter_rolling_window()
                 self.fragment_long_n_positions()
                 self.fragment_long_total_wallet_exposure_limit()
                 self.fragment_long_unstuck_close_pct()
@@ -2521,8 +2521,10 @@ class OptimizeV7Item:
         with col2:
             with st.container(border=True):
                 st.write("Bounds short")
-                self.fragment_short_close_grid_markup_range()
-                self.fragment_short_close_grid_min_markup()
+                # self.fragment_short_close_grid_markup_range()
+                # self.fragment_short_close_grid_min_markup()
+                self.fragment_short_close_grid_markup_end()
+                self.fragment_short_close_grid_markup_start()
                 self.fragment_short_close_grid_qty_pct()
                 self.fragment_short_close_trailing_grid_ratio()
                 self.fragment_short_close_trailing_qty_pct()
@@ -2542,8 +2544,6 @@ class OptimizeV7Item:
                 self.fragment_short_filter_noisiness_rolling_window()
                 self.fragment_short_filter_volume_drop_pct()
                 self.fragment_short_filter_volume_rolling_window()
-                # self.fragment_short_filter_relative_volume_clip_pct()
-                # self.fragment_short_filter_rolling_window()
                 self.fragment_short_n_positions()
                 self.fragment_short_total_wallet_exposure_limit()
                 self.fragment_short_unstuck_close_pct()
