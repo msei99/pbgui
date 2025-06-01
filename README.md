@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.34
+# v1.35
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -210,6 +210,16 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.35 (01-06-2025)
+- Added new options from passivbot v7.3.13
+  close_grid_markup_start, close_grid_markup_end
+  mimic_backtest_1m_delay
+  trailing_double_down_factor
+- Config Archive
+- Many small improvements
+- A lot of bugfixes
+- Update ccxt for work with okx
 
 ## v1.34 (21-04-2025)
 - Compatible with passivbot v7.3.4

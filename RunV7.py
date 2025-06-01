@@ -211,6 +211,15 @@ class V7Instance():
         st.checkbox("auto_gs", help=pbgui_help.auto_gs, key="edit_run_v7_auto_gs")
 
     @st.fragment
+    def fragment_mimic_backtest_1m_delay(self):
+        if "edit_run_v7_mimic_backtest_1m_delay" in st.session_state:
+            if st.session_state.edit_run_v7_mimic_backtest_1m_delay != self.config.live.mimic_backtest_1m_delay:
+                self.config.live.mimic_backtest_1m_delay = st.session_state.edit_run_v7_mimic_backtest_1m_delay
+        else:
+            st.session_state.edit_run_v7_mimic_backtest_1m_delay = self.config.live.mimic_backtest_1m_delay
+        st.checkbox("mimic_backtest_1m_delay", help=pbgui_help.mimic_backtest_1m_delay, key="edit_run_v7_mimic_backtest_1m_delay")
+
+    @st.fragment
     def fragment_max_n_cancellations_per_batch(self):
         if "edit_run_v7_max_n_cancellations_per_batch" in st.session_state:
             if st.session_state.edit_run_v7_max_n_cancellations_per_batch != self.config.live.max_n_cancellations_per_batch:
@@ -494,6 +503,7 @@ class V7Instance():
             self.fragment_market_orders_allowed()
         with col4:
             self.fragment_auto_gs()
+            self.fragment_mimic_backtest_1m_delay()
 
         # Advanced Settings
         with st.expander("Advanced Settings", expanded=False):
