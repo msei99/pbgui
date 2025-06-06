@@ -996,19 +996,130 @@ class Exchange:
             self.swap = eval(pb_config.get("exchanges", f'{self.id}.swap'))
         if not self.spot and not self.swap:
             self.fetch_symbols()
+    
+    def fetch_symbol_min_order_price(self, symbol: str):
+        if not self.instance: self.connect()
+        self._markets = self.instance.load_markets()
+        # symbol = self.symbol_to_exchange_symbol(symbol, "swap")
+        if self.id == 'hyperliquid':
+            symbol = f'{symbol[0:-4]}/USDC:USDC'
+            # return 10.0
+        else:
+            symbol = f'{symbol[0:-4]}/USDT:USDT'
+        # print(symbol)
+        if symbol not in self._markets:
+            return 0.0
+        symbol_info = self._markets[symbol]
+        # print(symbol_info)
+        contractSize = symbol_info["contractSize"]
+        if symbol_info["limits"]["amount"]["min"]:
+            min_amount = symbol_info["limits"]["amount"]["min"]
+        elif symbol_info["precision"]["amount"]:
+            min_amount = symbol_info["precision"]["amount"]
+            
+        min_qty = min_amount * contractSize
+        price = self.fetch_price(symbol, "swap")['last']
+        # print(f'Price for {symbol} is {price}')
+        min_price = min_qty * price
+        min_cost = 0.0
+        if symbol_info["limits"]["cost"]["min"]:
+            min_cost = symbol_info["limits"]["cost"]["min"]
+        if min_cost > min_price:
+            return min_cost
+        else:
+            return min_price
 
+    def fetch_symbol_infos(self, symbol: str):
+        if not self.instance:
+            print("new connect")
+            self.connect()
+            self._markets = self.instance.load_markets()
+        # symbol = self.symbol_to_exchange_symbol(symbol, "swap")
+        if self.id == 'hyperliquid':
+            symbol = f'{symbol[0:-4]}/USDC:USDC'
+        else:
+            symbol = f'{symbol[0:-4]}/USDT:USDT'
+        # print(symbol)
+        if symbol not in self._markets:
+            return 0.0, 0.0, 0.0, 0.0, 0.0
+        symbol_info = self._markets[symbol]
+        # print(symbol_info)
+        contractSize = symbol_info["contractSize"]
+        if symbol_info["limits"]["amount"]["min"]:
+            min_amount = symbol_info["limits"]["amount"]["min"]
+        elif symbol_info["precision"]["amount"]:
+            min_amount = symbol_info["precision"]["amount"]
+            
+        min_qty = min_amount * contractSize
+        price = self.fetch_price(symbol, "swap")['last']
+        # print(f'Price for {symbol} is {price}')
+        min_price = min_qty * price
+        # min_cost = 0.0
+        if symbol_info["limits"]["cost"]["min"]:
+            min_cost = symbol_info["limits"]["cost"]["min"]
+        else:
+            min_cost = 0.0
+        if min_cost > min_price:
+            min_price = min_cost
+        return min_price, price, contractSize, min_amount, min_cost
+
+    def calculate_balance_needed(self, symbols: list, twe: float, entry_initial_qty_pct: float):
+        balance_needed = 0.0
+        we = twe / len(symbols)
+        for symbol in symbols:
+            min_price = self.fetch_symbol_min_order_price(symbol)
+            balance_needed_symbol = min_price / we / entry_initial_qty_pct
+            balance_needed += balance_needed_symbol
+            # print(symbol, we, min_price, balance_needed_symbol)
+        return balance_needed
+
+            
 def main():
     print("Don't Run this Class from CLI")
     # exchange = Exchange("gateio", None)
     # exchange.fetch_symbols()
     # print(exchange.swap)
-    # users = Users()
+    users = Users()
     # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
     # exchange.fetch_symbols()
     # print(exchange.fetch_copytrading_symbols())
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
-    # exchange = Exchange("binance", users.find_user("binance_FORAGER"))
+    # exchange = Exchange("binance", users.find_user("binance_CPT"))
+    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
+    # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
+    # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
+    # exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
+    # symbols = ["BTCUSDT"]
+    symbols = ["DOGEUSDT", "VETUSDT", "ICPUSDT", "INJUSDT"]
+    exchange = Exchange("hyperliquid", None)
+    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDC')
+    exchange = Exchange("okx", None)
+    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    exchange = Exchange("binance", None)
+    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    exchange = Exchange("bybit", None)
+    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    exchange = Exchange("bitget", None)
+    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    exchange = Exchange("gateio", None)
+    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    # exchange.load_market()
+    # exchange.fetch_symbol_min_order_price("BTCUSDT")
+    # exchange.fetch_symbol_min_order_price("ETHUSDT")
+    # exchange.fetch_symbol_min_order_price("SOLUSDT")
+    # exchange.fetch_symbol_min_order_price("DOGEUSDT")
+    # save markets as json
+    # with open('binance_markets.json', 'w') as f:
+    #     json.dump(exchange._markets, f, indent=4)
+    
+
     # exchange.fetch_symbols()
     # print(exchange.fetch_copytrading_symbols())
     # exchange = Exchange("bybit", users.find_user("bybit_CPTV7HR"))

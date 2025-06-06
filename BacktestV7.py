@@ -17,7 +17,7 @@ from PBCoinData import CoinData
 import uuid
 from Base import Base
 from Exchange import Exchange
-from Config import Config, ConfigV7
+from Config import Config, ConfigV7, BalanceCalculator
 from pathlib import Path, PurePath
 from shutil import rmtree, copytree
 from RunV7 import V7Instance
@@ -1590,6 +1590,23 @@ class BacktestV7Results:
                         bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
                         bt_v7.save_queue()
         info_popup(f"Selected Backtests added to queue")
+    
+    def calculate_balance(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_btv7_result_{ed_key}']
+        # Get number of selected results
+        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
+        if selected_count == 0:
+            error_popup("No Backtests selected")
+            return
+        if selected_count > 1:
+            error_popup("Please select only one Backtest to calculate balance")
+            return
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    st.session_state.balance_calc = BalanceCalculator(f'{self.results[row].result_path}/config.json')
+                    st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
 
     def remove_selected_results(self):
         ed_key = st.session_state.ed_key
