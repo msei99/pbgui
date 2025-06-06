@@ -7,6 +7,7 @@ import traceback
 import multiprocessing
 import datetime
 from Exchange import Exchange, V7
+from PBCoinData import CoinData
 from time import sleep
 
 class Config:
@@ -3304,7 +3305,7 @@ class BalanceCalculator:
     def init_coindata(self):
         if "pbcoindata" not in st.session_state:
             st.session_state.pbcoindata = CoinData()
-        st.session_state.pbcoindata.exchange = self.exchange
+        st.session_state.pbcoindata.exchange = self.exchange.id
         if self.config.pbgui.dynamic_ignore:
             st.session_state.pbcoindata.tags = self.config.pbgui.tags
             st.session_state.pbcoindata.only_cpt = self.config.pbgui.only_cpt
