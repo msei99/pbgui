@@ -2,8 +2,13 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths
 from pbgui_func import PBGDIR, pb7dir
 from BacktestV7 import BacktestV7Item, BacktestsV7, BacktestV7Queue, BacktestV7Results, ConfigV7Archives
-from Config import BalanceCalculator
+from Config import ConfigV7, BalanceCalculator
+import datetime
+from Instance import Instance
+from User import Users
+from Exchange import Exchange, V7
 import multiprocessing
+import json
 
 def bt_v7():
     # Init bt_v7
@@ -31,9 +36,6 @@ def bt_v7():
             del st.session_state.bt_v7
             st.session_state.bt_v7_queue = BacktestV7Queue()
             st.rerun()
-        if st.button("Caclulate Balance"):
-            st.session_state.balance_calc = BalanceCalculator(bt_v7.config.config_file)
-            st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
         if st.button("Add to Backtest Queue"):
             if bt_v7.name:
                 with st.spinner("Saving and adding to queue"):
@@ -139,8 +141,6 @@ def config_v7_config_archive():
             st.rerun()
         if st.button("BT selected"):
             config_v7_config_archive.backtest_selected_results()
-        if st.button("Caclulate Balance"):
-            config_v7_config_archive.calculate_balance()
         if st.button(":material/delete: selected"):
             config_v7_config_archive.remove_selected_results()
             config_v7_config_archive.results = []
@@ -149,86 +149,78 @@ def config_v7_config_archive():
     st.subheader(f"Config Archive: {config_v7_config_archive.name}")
     config_v7_config_archive.view()
 
-def bt_v7_results():
-    # Init bt_v7_results
-    bt_v7_results = st.session_state.bt_v7_results
-    if not bt_v7_results.results:
-        with st.spinner("Loading Results"):
-            st.session_state.bt_v7_results.load()
-    # Navigation
-    with st.sidebar:
-        if st.button(":material/refresh:"):
-            bt_v7_results.results = []
-            bt_v7_results.results_d = []
-            st.rerun()
-        if st.button(":material/home:"):
-            del st.session_state.bt_v7_results
-            st.rerun()
-        if st.button("Queue"):
-            st.session_state.bt_v7_queue = BacktestV7Queue()
-            del st.session_state.bt_v7_results
-            st.rerun()
-        if st.button("BT selected"):
-            bt_v7_results.backtest_selected_results()
-        if st.button("Caclulate Balance"):
-            bt_v7_results.calculate_balance()
-        if st.button("Add to Config Archive"):
-            bt_v7_results.add_to_config_archive()
-        if st.button("Go to Config Archives"):
-            del st.session_state.bt_v7_results
-            st.session_state.config_v7_archives = ConfigV7Archives()
-            st.rerun()
-        if st.button(":material/delete: selected"):
-            bt_v7_results.remove_selected_results()
-            bt_v7_results.results = []
-            bt_v7_results.results_d = []
-            st.rerun()
-        if st.button(":material/delete: all"):
-            bt_v7_results.remove_all_results()
-            bt_v7_results.results = []
-            bt_v7_results.results_d = []
-            st.rerun()
-    st.subheader(f"Results: {bt_v7_results.name}")
-    bt_v7_results.view()
+def balance_calculator():
+    # Init balance calculator
+    if "balance_calc" not in st.session_state:
+        st.session_state.balance_calc = BalanceCalculator()
+    balance_calc = st.session_state.balance_calc
+    # View
+    balance_calc.view()
+    
+    # # Init session state for balance calculator
+    # if "edit_bc_config" in st.session_state:
+    #     if st.session_state.edit_bc_config != json.dumps(bc_config.config, indent=4):
+    #         try:
+    #             bc_config.config = json.loads(st.session_state.edit_bc_config)
+    #         except:
+    #             error_popup("Invalid JSON")
+    #     st.session_state.edit_bc_config = json.dumps(bc_config.config, indent=4)
+    #     # if self.config.live.user in self._users.list_v7():
+    #     #     self._user = self.config.live.user
+    # else:
+    #     st.session_state.edit_bc_config = ""
+    # if "bc_exchange_id" in st.session_state:
+    #     if st.session_state.bc_exchange_id != bc_exchange.id:
+    #         bc_exchange = Exchange(st.session_state.bc_exchange_id, None)
+    #         st.session_state.bc_exchange = bc_exchange
 
-def bt_v7_queue():
-    # Init bt_v7_queue
-    bt_v7_queue = st.session_state.bt_v7_queue
-    # Init session state for keys
-    if "backtest_v7_cpu" in st.session_state:
-        if st.session_state.backtest_v7_cpu != bt_v7_queue.cpu:
-            bt_v7_queue.cpu = st.session_state.backtest_v7_cpu
-    if "backtest_v7_autostart" in st.session_state:
-        if st.session_state.backtest_v7_autostart != bt_v7_queue.autostart:
-            bt_v7_queue.autostart = st.session_state.backtest_v7_autostart
-    # Navigation
-    with st.sidebar:
-        if st.button(":material/refresh:"):
-            bt_v7_queue.items = []
-            st.rerun()
-        if st.button(":material/home:"):
-            del st.session_state.bt_v7_queue
-            st.rerun()
-        st.number_input(f'Max CPU(1 - {multiprocessing.cpu_count()})', min_value=1, max_value=multiprocessing.cpu_count(), value=bt_v7_queue.cpu, step=1, key = "backtest_v7_cpu")
-        st.toggle("Autostart", value=bt_v7_queue.autostart, key="backtest_v7_autostart", help=None)
-        if st.button("All Results"):
-            results =  BacktestV7Results()
-            results.results_path = f'{pb7dir()}/backtests/pbgui'
-            results.name = "All Results"
-            del st.session_state.bt_v7_queue
-            st.session_state.bt_v7_results = results
-            st.rerun()    
-        if st.button(":material/delete: selected"):
-            bt_v7_queue.remove_selected()
-            st.rerun()
-        if st.button(":material/delete: finished"):
-            bt_v7_queue.remove_finish()
-            st.rerun()
-        if st.button(":material/delete: all"):
-            bt_v7_queue.remove_finish(all=True)
-            st.rerun()
-    st.subheader("Queue")
-    bt_v7_queue.view()
+    # col1, col2 = st.columns([1, 1])
+    # with col1:
+    #     st.text_area(f'config', key="edit_bc_config", height=500)
+    # with col2:
+    #     st.markdown("### Balance Calculator")
+    #     st.markdown("This tool allows you to calculate the balance for a given configuration.")
+    #     st.markdown("You can edit the configuration in the left text area and click on 'Calculate' to see the results.")
+    #     st.selectbox("Exchange", V7.list(), key="bc_exchange_id")
+    #     if st.button("Calculate"):
+    #         balance_long = 0.0
+    #         balance_short = 0.0
+    #         balance_long_d = []
+    #         balance_short_d = []
+    #         for coin in bc_config.live.approved_coins.long:
+    #             min_order_price, price, contractSize, min_amount = bc_exchange.fetch_symbol_infos(coin)
+    #             balance_coin = min_order_price / bc_config.bot.long.total_wallet_exposure_limit / bc_config.bot.long.entry_initial_qty_pct
+    #             balance_long += balance_coin
+    #             balance_long_d.append({
+    #                 "coin": coin,
+    #                 "currentPrice": price,
+    #                 "contractSize": contractSize,
+    #                 "min_amount": min_amount,
+    #                 "min_order_price": min_order_price,
+    #                 "balance_coin": balance_coin
+    #             })
+    #         for coin in bc_config.live.approved_coins.short:
+    #             min_order_price, price, contractSize, min_amount = bc_exchange.fetch_symbol_infos(coin)
+    #             balance_coin = min_order_price / bc_config.bot.short.total_wallet_exposure_limit / bc_config.bot.short.entry_initial_qty_pct
+    #             balance_short += balance_coin
+    #             balance_short_d.append({
+    #                 "coin": coin,
+    #                 "currentPrice": price,
+    #                 "contractSize": contractSize,
+    #                 "min_amount": min_amount,
+    #                 "min_order_price": min_order_price,
+    #                 "balance_coin": balance_coin
+    #             })
+    #         balance = balance_long + balance_short
+    # if balance_long_d:
+    #     st.dataframe(balance_long_d, hide_index=True)
+    # if balance_short_d:
+    #     st.dataframe(balance_short_d, hide_index=True)
+    # st.write(f"**Total Balance for Long Positions:** {balance_long:.2f} USDT")
+    # st.write(f"**Total Balance for Short Positions:** {balance_short:.2f} USDT")
+    # st.write(f"**Total Balance Needed:** {balance:.2f} USDT")
+                
+
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
@@ -236,8 +228,8 @@ if not is_authenticted() or is_session_state_not_initialized():
     st.stop()
 
 # Page Setup
-set_page_config("PBv7 Backtest")
-st.header("PBv7 Backtest", divider="red")
+set_page_config("PBv7 Balance Calculator")
+st.header("PBv7 Balance Calculator", divider="red")
 
 # Check if PB7 is installed
 if not is_pb7_installed():
@@ -249,17 +241,4 @@ if st.session_state.pbcoindata.api_error:
     st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
     st.stop()
 
-if "bt_v7_results" in st.session_state:
-    bt_v7_results()
-elif "setup_config_archive" in st.session_state:
-    setup_config_archive()
-elif "config_v7_config_archive" in st.session_state:
-    config_v7_config_archive()
-elif "bt_v7" in st.session_state:
-    bt_v7()
-elif "bt_v7_queue" in st.session_state:
-    bt_v7_queue()
-elif "config_v7_archives" in st.session_state:
-    config_v7_archives()
-else:
-    bt_v7_list()
+balance_calculator()

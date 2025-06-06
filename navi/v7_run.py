@@ -2,8 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths
 from RunV7 import V7Instances , V7Instance
 from BacktestV7 import BacktestV7Item
-from PBRun import PBRun
-from pathlib import PurePath
+from Config import BalanceCalculator
 
 def edit_v7_instance():
     # Init instance
@@ -33,6 +32,9 @@ def edit_v7_instance():
             if "bt_v7_edit_symbol" in st.session_state:
                 del st.session_state.bt_v7_edit_symbol
             st.switch_page(get_navi_paths()["V7_BACKTEST"])
+        if st.button("Caclulate Balance"):
+            st.session_state.balance_calc = BalanceCalculator(v7_instance.config.config_file)
+            st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
         if st.button("GridVis"):
             st.session_state.v7_grid_visualizer_config = v7_instance.config
             st.switch_page(get_navi_paths()["V7_GRID_VISUALIZER"])

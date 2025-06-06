@@ -140,6 +140,7 @@ def get_navi_paths():
         "V7_BACKTEST":         os.path.join(NAVI_BASE_DIR, "v7_backtest.py"),
         "V7_OPTIMIZE":         os.path.join(NAVI_BASE_DIR, "v7_optimize.py"),
         "V7_GRID_VISUALIZER":  os.path.join(NAVI_BASE_DIR, "v7_grid_visualizer.py"),
+        "V7_BALANCE_CALC":     os.path.join(NAVI_BASE_DIR, "v7_balance_calc.py"),
     }
     return paths
 
@@ -169,6 +170,7 @@ def build_navigation():
     p72 = st.Page(paths["V7_BACKTEST"], title="Backtest", icon=":material/history:")
     p73 = st.Page(paths["V7_OPTIMIZE"], title="Optimize", icon=":material/tune:")
     p74 = st.Page(paths["V7_GRID_VISUALIZER"], title="Grid Visualizer", icon=":material/remove_red_eye:")
+    p75 = st.Page(paths["V7_BALANCE_CALC"], title="Balance Calculator", icon=":material/attach_money:")
 
        
     # Page Groups
@@ -178,7 +180,7 @@ def build_navigation():
         SystemPages.append(pM5)
                 
     InfotmationPages = [pSe1, pSe2]
-    v7Pages = [p71, p72, p73, p74]
+    v7Pages = [p71, p72, p73, p74, p75]
     v6Pages = [p61, p62, p63]
     SinglePages = [pS1, pS2, pS3, pS4]
 
