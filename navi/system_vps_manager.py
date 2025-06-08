@@ -325,6 +325,9 @@ def manage_vps():
     if "vps_swap" in st.session_state:
         if st.session_state.vps_swap != vps.swap:
             vps.swap = st.session_state.vps_swap
+    if "vps_install_pb6" in st.session_state:
+        if st.session_state.vps_install_pb6 != vps.install_pb6:
+            vps.install_pb6 = st.session_state.vps_install_pb6
     if "vps_firewall" in st.session_state:
         if st.session_state.vps_firewall != vps.firewall:
             vps.firewall = st.session_state.vps_firewall
@@ -463,6 +466,7 @@ def manage_vps():
                 st.write(":red[Please configure PBCoinData]")
         col1, col2, col3 = st.columns([1,1,2], vertical_alignment='bottom')
         with col1:
+            st.checkbox("Install pb6", value=vps.install_pb6, key="vps_install_pb6", help=pbgui_help.vps_install_pb6)
             st.checkbox("Enable Linux Firewall (ufw)", value=vps.firewall, key="vps_firewall", help=pbgui_help.vps_firewall)
         with col2:
             st.number_input("SSH port", value=vps.firewall_ssh_port, format="%d", key="vps_firewall_ssh_port", help=pbgui_help.vps_firewall_ssh_port)
@@ -563,7 +567,12 @@ def init_vps():
     # Init from session_state keys
     if "vps_ip" in st.session_state:
         if st.session_state.vps_ip != vps.ip:
-            vps.ip = st.session_state.vps_ip
+            # Check if self.ip is a valid IPv4 address
+            if re.match(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$", st.session_state.vps_ip):
+                vps.ip = st.session_state.vps_ip
+            else:
+                st.session_state.vps_ip = vps.ip
+                error_popup("Error: IP address is not valid")
     if "vps_hostname" in st.session_state:
         if st.session_state.vps_hostname != vps.hostname:
             if st.session_state.vps_hostname == st.session_state.pbname:
