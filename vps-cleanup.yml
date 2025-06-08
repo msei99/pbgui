@@ -1,0 +1,55 @@
+---
+# Clenaup vps
+# Steps:
+# 1. Remove snap
+# 2. Clean up apt cache
+# 3. Clear systemd journal logs
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    # user_pw: "{{ user_pw }}"
+    reboot: "{{ reboot }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: remove snap
+      apt:
+        name: snapd
+        state: absent
+      become: yes
+      register: snap_result
+    
+    - name: print snap removal result
+      debug:
+        var: snap_result
+    
+    - name: clean apt cache
+      apt:
+        autoclean: yes
+        autoremove: yes
+        clean: yes
+        cache_valid_time: 3600
+      become: yes
+      register: apt_cleanup_result
+
+    - name: print apt cleanup result
+      debug:
+        var: apt_cleanup_result
+    
+    - name: clear systemd journal logs
+      command: journalctl --vacuum-time=1d
+      become: yes
+      register: journal_cleanup_result
+
+    - name: print journal cleanup result
+      debug:
+        var: journal_cleanup_result
