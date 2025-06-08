@@ -48,6 +48,9 @@ class Monitor():
             color = "green"
         else: color = "red"
         st.markdown(f'### Remote Server: :{color}[{server.name}] ({server.rtd}s) PBGui: {server.pbgui_version}')
+        if not server.mem or not server.disk or not server.swap:
+            st.warning("Server is not online or not responding", icon="⚠️")
+            return
         col_1, col_2 = st.columns([1,1])
         with col_1:
             mem_total = int(server.mem[0] / 1024 / 1024)
