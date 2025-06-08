@@ -421,6 +421,13 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
+        if st.button("Cleanup VPS", disabled=not vps.has_user_pw()):
+            vps.command = "vps-cleanup"
+            vps.command_text = "Cleanup VPS"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
 
     st.subheader(f"VPS Status: {vps.hostname}")
     with st.expander("VPS Setup Settings", expanded = vps.setup_status != "successful"):
