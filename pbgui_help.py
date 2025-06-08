@@ -1232,6 +1232,12 @@ vps_user_pw = """
     Will be used for sudo when run setup.
     ```"""
 
+vps_install_pb6 = """
+    ````
+    Enable to install passivbot6 on your vps
+    If disabled, only passivbot7 will be installed.
+    ```"""
+
 vps_firewall = """
     ```
     Enable to install and configure ufw firewall on your vps
