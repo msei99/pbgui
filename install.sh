@@ -9,7 +9,7 @@ sudo add-apt-repository ppa:deadsnakes/ppa -y
 
 # Install git, python3.10-venv, rclone, rustc and cargo
 sudo apt update
-sudo apt install git python3.10-venv rclone rustc cargo -y
+sudo apt install git python3.10-venv rclone rustc cargo sshpass -y
 
 # get current directory
 DIR=$(pwd)
