@@ -42,6 +42,11 @@
         var: pbgui_repo
       tags: debug,never
 
+    - name: check ip pb6 is installed
+      stat:
+        path: "{{ install_dir }}/pb6"
+      register: pb6_installed
+
     - name: clone passivbot repository for pb6
       git:
         repo: https://github.com/enarjord/passivbot.git
@@ -51,6 +56,7 @@
         force: yes
       register: pb6_repo
       notify: restart pb6
+      when: pb6_installed.stat.exists
 
     - name: print pb6_repo
       debug:

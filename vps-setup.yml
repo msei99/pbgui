@@ -33,6 +33,7 @@
     firewall: "{{ firewall }}"
     firewall_ssh_port: "{{ firewall_ssh_port }}"
     firewall_ssh_ips: "{{ firewall_ssh_ips }}"
+    install_pb6: "{{ install_pb6 }}"
 
   tasks:
     - name: display facts
@@ -227,6 +228,13 @@
         dest: "{{ install_dir }}/pb6"
         version: v6.1.4b_latest_v6
         update: yes
+      when: install_pb6
+    
+    - name: remove pb6 repository when not installing pb6
+      file:
+        path: "{{ install_dir }}/pb6"
+        state: absent
+      when: not install_pb6
 
     - name: clone passivbot repository for pb7
       git:
@@ -248,6 +256,13 @@
         virtualenv: "{{ install_dir }}/venv_pb6"
         requirements: "{{ install_dir }}/pb6/requirements_liveonly.txt"
         extra_args: --upgrade pip
+      when: install_pb6
+    
+    - name: remove pb6 venv when not installing pb6
+      file:
+        path: "{{ install_dir }}/venv_pb6"
+        state: absent
+      when: not install_pb6
 
     - name: create python3.10 venv for pb7
       pip:
@@ -301,6 +316,13 @@
         - { regexp: '<username>', replace: "{{ user }}" }
         - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
         - { regexp: '<api_key>', replace: "{{ api_key }}" }
+    
+    - name: remove pb6 from pbgui.ini
+      lineinfile:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        regexp: 'pb6'
+        state: absent
+      when: not install_pb6
     
     - name: copy rclone config from local to remote
       copy:
