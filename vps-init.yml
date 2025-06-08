@@ -26,14 +26,14 @@
         state: absent
 
     - name: check if ssh-key exists
-      debug:
-        msg: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_rsa.pub') }}"
+      stat:
+        path: "{{ lookup('env', 'HOME') + '/.ssh/id_rsa.pub' }}"
       register: ssh_key_exists
 
     - name: create ssh-key on localhost if not exists
       openssh_keypair:
         path: "{{ lookup('env', 'HOME') + '/.ssh/id_rsa' }}"
-      when: not ssh_key_exists
+      when: not ssh_key_exists.stat.exists
 
 - hosts: "{{ hostname }}"
   remote_user: root
