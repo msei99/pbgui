@@ -1455,8 +1455,8 @@ class BacktestV7Results:
                             del st.session_state.opt_v7_results
                         if "opt_v7_pareto" in st.session_state:
                             del st.session_state.opt_v7_pareto
-                        if "limits_data" in st.session_state:
-                            del st.session_state.limits_data
+                        # if "limits_data" in st.session_state:
+                        #     del st.session_state.limits_data
                         st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
                 if "GridVis" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["GridVis"]:
