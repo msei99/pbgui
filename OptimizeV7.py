@@ -800,6 +800,8 @@ class OptimizeV7Item:
         else:
             self.initialize()
         self._calculate_results()
+        if "limits_data" in st.session_state:
+            del st.session_state.limits_data
 
     def _calculate_results(self):
         if self.name:
