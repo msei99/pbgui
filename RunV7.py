@@ -145,7 +145,7 @@ class V7Instance():
                 self.config.live.minimum_coin_age_days = st.session_state.edit_run_v7_minimum_coin_age_days
         else:
             st.session_state.edit_run_v7_minimum_coin_age_days = float(round(self.config.live.minimum_coin_age_days, 0))
-        st.number_input("minimum_coin_age_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
+        st.number_input("minimum_coin_age_days", min_value=0.0, step=1.0, format="%.1f", key="edit_run_v7_minimum_coin_age_days", help=pbgui_help.minimum_coin_age_days)
 
     @st.fragment
     def fragement_pnls_max_lookback_days(self):
