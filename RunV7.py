@@ -668,7 +668,7 @@ class V7Instance():
         with col4:
             st.number_input("short_we", step=0.05, format="%.2f", key="edit_run_v7_cf_we_short", help=pbgui_help.coin_flags_we)
         with col5:
-            st.number_input("leverage", min_value=0.0, max_value=10.0, step=1.0, format="%.1f", key="edit_run_v7_cf_lev", help=pbgui_help.coin_flags_lev)
+            st.number_input("leverage", min_value=0.0, max_value=100.0, step=1.0, format="%.1f", key="edit_run_v7_cf_lev", help=pbgui_help.coin_flags_lev)
         st.checkbox("Config", value=config, key="edit_run_v7_cf_config", help=pbgui_help.coin_flags_config)
         if config:
             if "cf_config" not in st.session_state:
