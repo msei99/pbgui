@@ -997,37 +997,37 @@ class Exchange:
         if not self.spot and not self.swap:
             self.fetch_symbols()
     
-    def fetch_symbol_min_order_price(self, symbol: str):
-        if not self.instance: self.connect()
-        self._markets = self.instance.load_markets()
-        # symbol = self.symbol_to_exchange_symbol(symbol, "swap")
-        if self.id == 'hyperliquid':
-            symbol = f'{symbol[0:-4]}/USDC:USDC'
-            # return 10.0
-        else:
-            symbol = f'{symbol[0:-4]}/USDT:USDT'
-        # print(symbol)
-        if symbol not in self._markets:
-            return 0.0
-        symbol_info = self._markets[symbol]
-        # print(symbol_info)
-        contractSize = symbol_info["contractSize"]
-        if symbol_info["limits"]["amount"]["min"]:
-            min_amount = symbol_info["limits"]["amount"]["min"]
-        elif symbol_info["precision"]["amount"]:
-            min_amount = symbol_info["precision"]["amount"]
+    # def fetch_symbol_min_order_price(self, symbol: str):
+    #     if not self.instance: self.connect()
+    #     self._markets = self.instance.load_markets()
+    #     # symbol = self.symbol_to_exchange_symbol(symbol, "swap")
+    #     if self.id == 'hyperliquid':
+    #         symbol = f'{symbol[0:-4]}/USDC:USDC'
+    #         # return 10.0
+    #     else:
+    #         symbol = f'{symbol[0:-4]}/USDT:USDT'
+    #     # print(symbol)
+    #     if symbol not in self._markets:
+    #         return 0.0
+    #     symbol_info = self._markets[symbol]
+    #     # print(symbol_info)
+    #     contractSize = symbol_info["contractSize"]
+    #     if symbol_info["limits"]["amount"]["min"]:
+    #         min_amount = symbol_info["limits"]["amount"]["min"]
+    #     elif symbol_info["precision"]["amount"]:
+    #         min_amount = symbol_info["precision"]["amount"]
             
-        min_qty = min_amount * contractSize
-        price = self.fetch_price(symbol, "swap")['last']
-        # print(f'Price for {symbol} is {price}')
-        min_price = min_qty * price
-        min_cost = 0.0
-        if symbol_info["limits"]["cost"]["min"]:
-            min_cost = symbol_info["limits"]["cost"]["min"]
-        if min_cost > min_price:
-            return min_cost
-        else:
-            return min_price
+    #     min_qty = min_amount * contractSize
+    #     price = self.fetch_price(symbol, "swap")['last']
+    #     # print(f'Price for {symbol} is {price}')
+    #     min_price = min_qty * price
+    #     min_cost = 0.0
+    #     if symbol_info["limits"]["cost"]["min"]:
+    #         min_cost = symbol_info["limits"]["cost"]["min"]
+    #     if min_cost > min_price:
+    #         return min_cost
+    #     else:
+    #         return min_price
 
     def fetch_symbol_infos(self, symbol: str):
         if not self.instance:
@@ -1041,9 +1041,13 @@ class Exchange:
             symbol = f'{symbol[0:-4]}/USDT:USDT'
         # print(symbol)
         if symbol not in self._markets:
-            return 0.0, 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         symbol_info = self._markets[symbol]
-        # print(symbol_info)
+        print(symbol_info)
+        if symbol_info["limits"]["leverage"]["max"] is None:
+            lev = "unknown"
+        else:
+            lev = symbol_info["limits"]["leverage"]["max"]
         contractSize = symbol_info["contractSize"]
         if symbol_info["limits"]["amount"]["min"]:
             min_amount = symbol_info["limits"]["amount"]["min"]
@@ -1061,7 +1065,7 @@ class Exchange:
             min_cost = 0.0
         if min_cost > min_price:
             min_price = min_cost
-        return min_price, price, contractSize, min_amount, min_cost
+        return min_price, price, contractSize, min_amount, min_cost, lev
 
     def calculate_balance_needed(self, symbols: list, twe: float, entry_initial_qty_pct: float):
         balance_needed = 0.0
