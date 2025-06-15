@@ -3352,7 +3352,7 @@ class BalanceCalculator:
                     with st.empty():
                         for counter, coin in enumerate(coins):
                             st.text(f'{counter + 1}/{len(coins)}: {coin}')
-                            min_order_price, price, contractSize, min_amount, min_cost = self.exchange.fetch_symbol_infos(coin)
+                            min_order_price, price, contractSize, min_amount, min_cost, lev = self.exchange.fetch_symbol_infos(coin)
                             self.coin_infos.append({
                                 "coin": coin,
                                 "currentPrice": price,
@@ -3360,6 +3360,7 @@ class BalanceCalculator:
                                 "min_amount": min_amount,
                                 "min_cost": min_cost,
                                 "min_order_price": min_order_price,
+                                "max lev": lev
                             })
                             if coin in self.config.live.approved_coins.long:
                                 if self.config.bot.long.n_positions > 0 and self.config.bot.long.total_wallet_exposure_limit > 0:
