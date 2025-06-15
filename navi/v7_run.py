@@ -31,6 +31,10 @@ def edit_v7_instance():
                 del st.session_state.bt_v7_results
             if "bt_v7_edit_symbol" in st.session_state:
                 del st.session_state.bt_v7_edit_symbol
+            if "config_v7_archives" in st.session_state:
+                del st.session_state.config_v7_archives
+            if "config_v7_config_archive" in st.session_state:
+                del st.session_state.config_v7_config_archive
             st.switch_page(get_navi_paths()["V7_BACKTEST"])
         if st.button("Caclulate Balance"):
             st.session_state.balance_calc = BalanceCalculator(v7_instance.config.config_file)
