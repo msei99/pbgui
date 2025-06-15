@@ -2,6 +2,7 @@ import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths
 from pbgui_func import PBGDIR, pb7dir
 from BacktestV7 import BacktestV7Item, BacktestsV7, BacktestV7Queue, BacktestV7Results, ConfigV7Archives
+from RunV7 import V7Instance
 from Config import BalanceCalculator
 import multiprocessing
 
@@ -170,8 +171,16 @@ def bt_v7_results():
             st.rerun()
         if st.button("BT selected"):
             bt_v7_results.backtest_selected_results()
+        if st.button("Grid Visualizer"):
+            bt_v7_results.grid_visualizer()
         if st.button("Caclulate Balance"):
             bt_v7_results.calculate_balance()
+        if st.button("Add to Compare"):
+            bt_v7_results.add_to_compare()
+        if st.button("Add to Run"):
+            bt_v7_results.add_to_run()
+        if st.button("Optimize from Result"):
+            bt_v7_results.optimize_from_result()
         if st.button("Add to Config Archive"):
             bt_v7_results.add_to_config_archive()
         if st.button("Go to Config Archives"):
