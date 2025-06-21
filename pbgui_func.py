@@ -192,7 +192,7 @@ def build_navigation():
             "PBv7": v7Pages,
             "PBv6 Multi": v6Pages,
             "PBv6 Single": SinglePages,
-        },position="sidebar"
+        },position="top"
     )
     st.session_state.navigation = navi
     navi.run()
