@@ -964,6 +964,35 @@ class BacktestV7Result:
             st.error("No balance and equity data found")
 
 
+    # Create Drawdown Chart with plotly
+    def view_chart_drawdown(self):
+        if self.be is not None:
+            fig = go.Figure()
+
+            equity = self.be['equity']
+            # Calculate the drawdown: normalized equity from 1 to 0
+            max_equity = equity.cummax()
+            drawdown =  (equity - max_equity) / max_equity
+            normalized_drawdown = 1 + drawdown  # To get values from 1 down to 0
+
+            # Plot Drawdown
+            fig.add_trace(go.Scatter(
+                x=self.be['time'],
+                y=normalized_drawdown,
+                name='Drawdown',
+                line=dict(width=1.5)
+            ))
+
+            fig.update_layout(yaxis_title='Drawdown', height=800)
+            fig.update_xaxes(showgrid=True, griddash="dot")
+            name = PurePath(*self.result_path.parts[-3:-2])
+            formatted_time = self.time.strftime("%Y-%m-%d %H:%M:%S")
+            fig.update_layout(title_text=f'{name} {formatted_time}', title_x=0.5)
+            fig['data'][0]['showlegend'] = True
+            st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_drawdown")
+        else:
+            st.error("No balance and equity data found")
+
     # Create Symbol Chart with plotly
     def view_chart_symbol(self):
         if self.fills is not None:
@@ -1427,42 +1456,6 @@ class BacktestV7Results:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
-        # if f'select_btv7_result_{ed_key}' in st.session_state:
-        #     ed = st.session_state[f'select_btv7_result_{ed_key}']
-        #     for row in ed["edited_rows"]:
-        #         if "Compare" in ed["edited_rows"][row]:
-        #             if ed["edited_rows"][row]["Compare"]:
-        #                 self.add_compare(self.results[row])
-        #             else:
-        #                 self.remove_compare(self.results[row])
-                # if "Create Run" in ed["edited_rows"][row]:
-                #     if ed["edited_rows"][row]["Create Run"]:
-                #         st.session_state.edit_v7_instance = V7Instance()
-                #         st.session_state.edit_v7_instance.config = self.results[row].config
-                #         st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
-                #         st.switch_page(get_navi_paths()["V7_RUN"])
-                # if "Optimize" in ed["edited_rows"][row]:
-                #     if ed["edited_rows"][row]["Optimize"]:
-                #         st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
-                #         st.session_state.opt_v7.config = self.results[row].config
-                #         st.session_state.opt_v7.config.pbgui.starting_config = True
-                #         st.session_state.opt_v7.name = self.results[row].config.backtest.base_dir.split('/')[-1]
-                #         if "opt_v7_list" in st.session_state:
-                #             del st.session_state.opt_v7_list
-                #         if "opt_v7_queue" in st.session_state:
-                #             del st.session_state.opt_v7_queue
-                #         if "opt_v7_results" in st.session_state:    
-                #             del st.session_state.opt_v7_results
-                #         if "opt_v7_pareto" in st.session_state:
-                #             del st.session_state.opt_v7_pareto
-                #         # if "limits_data" in st.session_state:
-                #         #     del st.session_state.limits_data
-                #         st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
-                # if "GridVis" in ed["edited_rows"][row]:
-                #     if ed["edited_rows"][row]["GridVis"]:
-                #         st.session_state.v7_grid_visualizer_config = self.results[row].config
-                #         st.session_state.v7_grid_visualizer_config.pbgui.note = f'{self.results[row].config.backtest.base_dir.split("/")[-1]}' 
-                #         st.switch_page(get_navi_paths()["V7_GRID_VISUALIZER"])
         if not self.results_d:
             for id, result in enumerate(self.results):
                 compare = False
@@ -1494,9 +1487,7 @@ class BacktestV7Results:
                     'WE': False,
                     'Plot': False,
                     'Fills': False,
-                    # 'Backtest Name': result.config.backtest.base_dir.split('/')[-1],
                     'Backtest Name': result_path,
-                    # 'Exch.': str(result.result_path).split('/')[-2],
                     'Exch.': result.config.backtest.exchanges,
                     'Result Time': result.time.strftime("%Y-%m-%d %H:%M:%S") if result.time else '',
                     'ADG': f"{result.adg:.4f}",
@@ -1508,14 +1499,6 @@ class BacktestV7Results:
                     'Final Balance BTC': result.final_balance_btc,
                     'TWE': f"{result.config.bot.long.total_wallet_exposure_limit:.2f} / {result.config.bot.short.total_wallet_exposure_limit:.2f}",
                     'POS': f"{result.config.bot.long.n_positions:.2f} / {result.config.bot.short.n_positions:.2f}",
-                    # 'View': False,
-                    # 'WE': False,
-                    # 'Plot': False,
-                    # 'Fills': False,
-                    # 'Create Run': False,
-                    # 'Optimize': False,
-                    # 'GridVis': False,
-                    # 'Compare': compare,  # Add Compare field
                 })
         column_config = {
             "id": None,
@@ -1524,9 +1507,6 @@ class BacktestV7Results:
             'WE': st.column_config.CheckboxColumn(label="WE"),
             'Plot': st.column_config.CheckboxColumn(label="BE Plot"),
             'Fills': st.column_config.CheckboxColumn(label="Fills"),
-            # 'Create Run': st.column_config.CheckboxColumn(label="Run"),
-            # 'Optimize': st.column_config.CheckboxColumn(label="Opt"),
-            # 'Compare': st.column_config.CheckboxColumn(label="Comp"),
             'ADG': st.column_config.NumberColumn(format="%.4f"),
             'Gain': st.column_config.NumberColumn(label="Gain", format="%.2f"),
             'Drawdown Worst': st.column_config.NumberColumn(label="Worst DD", format="%.4f"),
@@ -1549,6 +1529,7 @@ class BacktestV7Results:
                         self.results[row].load_fills()
                         self.results[row].load_be()
                         self.results[row].view_chart_be()
+                        self.results[row].view_chart_drawdown()
                         if self.results[row].config.backtest.use_btc_collateral:
                             self.results[row].view_chart_be_btc()
                         self.results[row].view_chart_symbol()
