@@ -993,6 +993,35 @@ class BacktestV7Result:
         else:
             st.error("No balance and equity data found")
 
+    # Create Drawdown Chart with plotly
+    def view_chart_drawdown_btc(self):
+        if self.be is not None:
+            fig = go.Figure()
+
+            equity = self.be['equity_btc']
+            # Calculate the drawdown: normalized equity from 1 to 0
+            max_equity = equity.cummax()
+            drawdown =  (equity - max_equity) / max_equity
+            normalized_drawdown = 1 + drawdown  # To get values from 1 down to 0
+
+            # Plot Drawdown
+            fig.add_trace(go.Scatter(
+                x=self.be['time'],
+                y=normalized_drawdown,
+                name='Drawdown BTC',
+                line=dict(width=1.5)
+            ))
+
+            fig.update_layout(yaxis_title='Drawdown BTC', height=800)
+            fig.update_xaxes(showgrid=True, griddash="dot")
+            name = PurePath(*self.result_path.parts[-3:-2])
+            formatted_time = self.time.strftime("%Y-%m-%d %H:%M:%S")
+            fig.update_layout(title_text=f'{name} {formatted_time}', title_x=0.5)
+            fig['data'][0]['showlegend'] = True
+            st.plotly_chart(fig, key=f"backtest_v7_{self.result_path}_drawdown_btc")
+        else:
+            st.error("No balance and equity data found")
+
     # Create Symbol Chart with plotly
     def view_chart_symbol(self):
         if self.fills is not None:
@@ -1532,6 +1561,7 @@ class BacktestV7Results:
                         self.results[row].view_chart_drawdown()
                         if self.results[row].config.backtest.use_btc_collateral:
                             self.results[row].view_chart_be_btc()
+                            self.results[row].view_chart_drawdown_btc()
                         self.results[row].view_chart_symbol()
                         if "WE" in ed["edited_rows"][row]:
                             if ed["edited_rows"][row]["WE"]:
