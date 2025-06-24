@@ -142,6 +142,8 @@ def config_v7_config_archive():
             config_v7_config_archive.backtest_selected_results()
         if st.button("Caclulate Balance"):
             config_v7_config_archive.calculate_balance()
+        if st.button("Add to Compare"):
+            config_v7_config_archive.add_to_compare()
         if st.button(":material/delete: selected"):
             config_v7_config_archive.remove_selected_results()
             config_v7_config_archive.results = []

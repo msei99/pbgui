@@ -1062,48 +1062,54 @@ class BacktestV7Result:
                 coin_or_symbol = "symbol" if "symbol" in self.fills else "coin"
                 self.fills['we'] = 1 / self.fills["balance"] * self.fills['psize'] * self.fills['pprice']
 
-                # Create pivot table
-                exposure_by_currency = self.fills.pivot_table(
-                    index='time',
-                    columns=coin_or_symbol,
-                    values='we',
-                    aggfunc='last'
-                ).fillna(0)
+                #write self.fills to csv
+                # self.fills.to_csv(f'{self.result_path}/fills_with_we.csv', index=False)
 
-                # Calculate total exposure and fill missing values
-                exposure_by_currency['twe'] = exposure_by_currency.sum(axis=1).ffill().fillna(0)
+                # Create pivot table
+                # Create separate pivot tables for long and short positions based on 'type' column
+                if 'type' in self.fills.columns:
+                    long_fills = self.fills[self.fills['type'].str.endswith('long')]
+                    short_fills = self.fills[self.fills['type'].str.endswith('short')]
+                    exposure_by_currency_long = long_fills.pivot_table(
+                        index='time',
+                        columns=coin_or_symbol,
+                        values='we',
+                        aggfunc='last'
+                    ).ffill()
+                    exposure_by_currency_short = short_fills.pivot_table(
+                        index='time',
+                        columns=coin_or_symbol,
+                        values='we',
+                        aggfunc='last'
+                    ).ffill()
+                else:
+                    exposure_by_currency_long = pd.DataFrame()
+                    exposure_by_currency_short = pd.DataFrame()
+
+                #write exposure_by_currency to csv
+                # exposure_by_currency.to_csv(f'{self.result_path}/exposure_by_currency_pivot.csv')
+
+                # Calculate total exposure and fill missing values with last value
+                exposure_by_currency_long['twe'] = exposure_by_currency_long.sum(axis=1).ffill()
+                exposure_by_currency_short['twe'] = exposure_by_currency_short.sum(axis=1).ffill()
+
+                #write exposure_by_currency to csv
+                # exposure_by_currency.to_csv(f'{self.result_path}/exposure_by_currency.csv')
 
                 # Fill missing time slots with a custom function
                 resolution = st.session_state[f"backtest_v7_{self.result_path}_resolution"]
-                # exposure_by_currency = exposure_by_currency.resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
-
-                # Ensure no unnecessary NaNs are left in the dataset initially
-                exposure_by_currency = exposure_by_currency.ffill()
-
-                # Resample and apply a vectorized function
-                exposure_by_currency = exposure_by_currency.resample(f'{resolution}min').max()
-
-                # Replace NaN values with 0 after resampling
-                exposure_by_currency.fillna(0, inplace=True)
-
-                # Ensure 'twe' is filled and retains maximum values too
-                # exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}min').agg(lambda x: x.ffill().max() if not x.empty else 0)
-
-                # Forward fill before resampling
-                exposure_by_currency['twe'] = exposure_by_currency['twe'].ffill()
-
-                # Resample and get the maximum value
-                exposure_by_currency['twe'] = exposure_by_currency['twe'].resample(f'{resolution}min').max()
-
-                # Replace NaN values with 0 after resampling
-                exposure_by_currency['twe'] = exposure_by_currency['twe'].fillna(0)
+                exposure_by_currency_long = exposure_by_currency_long.resample(f'{resolution}min').ffill().fillna(0)
+                exposure_by_currency_short = exposure_by_currency_short.resample(f'{resolution}min').ffill().fillna(0)
 
                 # Plot total exposure
-                fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency['twe'], name="TWE"))
+                fig.add_trace(go.Scatter(x=exposure_by_currency_long.index, y=exposure_by_currency_long['twe'], name="Long TWE"))
+                fig.add_trace(go.Scatter(x=exposure_by_currency_short.index, y=exposure_by_currency_short['twe'], name="Short TWE"))
 
                 # Plot each coin's exposure
-                for coin in exposure_by_currency.columns[:-1]:  # Exclude 'twe' column
-                    fig.add_trace(go.Scatter(x=exposure_by_currency.index, y=exposure_by_currency[coin], name=f"{coin} WE"))
+                for coin in exposure_by_currency_long.columns[:-1]:  # Exclude 'twe' column
+                    fig.add_trace(go.Scatter(x=exposure_by_currency_long.index, y=exposure_by_currency_long[coin], name=f"{coin} Long WE"))
+                for coin in exposure_by_currency_short.columns[:-1]:  # Exclude 'twe' column
+                    fig.add_trace(go.Scatter(x=exposure_by_currency_short.index, y=exposure_by_currency_short[coin], name=f"{coin} Short WE"))
 
                 fig.update_layout(yaxis_title='Exposure', height=800)
                 fig.update_xaxes(showgrid=True, griddash="dot")
