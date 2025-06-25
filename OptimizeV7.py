@@ -478,7 +478,7 @@ class OptimizeV7Results:
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
             "view": st.column_config.CheckboxColumn(label="View Paretos"),
-            "Result Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Result Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Result": st.column_config.TextColumn(label="Result Directory", width="50px"),
         }
         #Display optimizes
@@ -549,8 +549,8 @@ class OptimizeV7Results:
             "view": st.column_config.CheckboxColumn(label="View Analysis"),
             "generate": st.column_config.CheckboxColumn(label="Generate Analysis"),
             "backtest": st.column_config.CheckboxColumn(label="Backtest"),
-            "Result Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
-            "Analysis Time": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Result Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Analysis Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Analysis": st.column_config.TextColumn(label="Analysis File", width="50px"),
             "Result": st.column_config.TextColumn(label="Result File", width="50px"),
             }
@@ -797,6 +797,7 @@ class OptimizeV7Item:
             self.name = PurePath(optimize_file).stem
             self.config.config_file = optimize_file
             self.config.load_config()
+            self.time = datetime.datetime.fromtimestamp(Path(optimize_file).stat().st_mtime)
         else:
             self.initialize()
         self._calculate_results()
@@ -2653,6 +2654,7 @@ class OptimizesV7:
                 'id': id,
                 'edit': False,
                 'Name': opt.name,
+                'Date': opt.time,
                 'Exchange': opt.config.backtest.exchanges,
                 'BT Count': opt.backtest_count,
                 'delete' : False,
@@ -2660,6 +2662,7 @@ class OptimizesV7:
         column_config = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
+            "Date": st.column_config.DatetimeColumn(label="Date", format="YYYY-MM-DD HH:mm:ss"),
             }
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optimize_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])

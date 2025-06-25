@@ -1821,7 +1821,7 @@ class BacktestsV7:
         column_config = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
-            "Date": st.column_config.DateColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Date": st.column_config.DatetimeColumn(label="Date", format="YYYY-MM-DD HH:mm:ss"),
             "view": st.column_config.CheckboxColumn(label="View Results"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             "delete_results": st.column_config.CheckboxColumn(label="Delete BT and Results"),
