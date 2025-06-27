@@ -9,6 +9,7 @@ import datetime
 from Exchange import Exchange, V7
 from PBCoinData import CoinData
 from time import sleep
+import math
 
 class Config:
     def __init__(self, file_name = None, config = None):
@@ -3419,7 +3420,7 @@ class BalanceCalculator:
             st.write(f"**Formula:** `min_order_price / ((total_wallet_exposure_limit / n_positions) * entry_initial_qty_pct)`")
             result = min_order_price / ((bot_side.total_wallet_exposure_limit / bot_side.n_positions) * bot_side.entry_initial_qty_pct)
             st.write(f"**Calculation:** `{min_order_price} / (({bot_side.total_wallet_exposure_limit} / {bot_side.n_positions}) * {bot_side.entry_initial_qty_pct}) = {result:.2f}`")
-            recommended_balance = round((result * 1.1) / 10) * 10
+            recommended_balance = math.ceil(result * 1.1 / 10) * 10
             st.write(f"### Recommended Balance (10% more): :green[{int(recommended_balance)} USDT]")
 
 def main():
