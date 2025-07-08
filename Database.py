@@ -638,7 +638,7 @@ class Database():
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # user = users.find_user("hl_mani05_DOGE")
+    # user = users.find_user("HYPErQuantum")
     # db = Database()
     # db.import_from_save_income_other(user)
     # exchange = Exchange("gateio", user)

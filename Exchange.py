@@ -325,6 +325,7 @@ class Exchange:
                         continue
                 cursor = transactions["result"]["nextPageCursor"]
                 positions = transactions["result"]["list"]
+                # print(positions)
                 if positions:
                     first_position = positions[0]
                     last_position = positions[-1]
@@ -338,13 +339,14 @@ class Exchange:
                 if since > now:
                     print(f'User:{self.user.name} Done')
                     break
+            # print(all_histories)
             for history in all_histories:
                 if history["type"] in ["TRADE","SETTLEMENT"]:
                     income = {}
                     income["symbol"] = history["symbol"]
                     income["timestamp"] = history["transactionTime"]
                     income["income"] = history["change"]
-                    income["uniqueid"] = history["tradeId"]
+                    income["uniqueid"] = history["id"]
                     all.append(income)
                 else: 
                     self.save_income_other(history, self.user.name)
@@ -505,6 +507,7 @@ class Exchange:
             end = since + week
             while True:
                 ledgers = self.instance.fetch_ledger(since=since, limit=limit, params = {"type": "swap", "endTime": end})
+                # print(ledgers)
                 if ledgers:
                     first_ledger = ledgers[0]
                     last_ledger = ledgers[-1]
@@ -520,12 +523,13 @@ class Exchange:
                     print(f'User:{self.user.name} Done')
                     break
             for history in all_histories:
-                if history["info"]["symbol"] and history["info"]["amount"] != "0":
+                # if history["info"]["symbol"] and history["info"]["amount"] != "0":
+                if history["info"]["symbol"]:
                     if history["type"] in ["trade","fee"]:
                         income = {}
                         income["symbol"] = history["info"]["symbol"]
                         income["timestamp"] = history["timestamp"]
-                        income["income"] = history["info"]["amount"]
+                        income["income"] = float(history["info"]["amount"]) + float(history["info"]["fee"])
                         income["uniqueid"] = history["info"]["billId"]
                         all.append(income)
                     else: 
@@ -1091,9 +1095,9 @@ def main():
     # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
     # exchange = Exchange("binance", users.find_user("binance_CPT"))
-    # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
+    # exchange = Exchange("bybit", users.find_user("HYPErQuantum"))
     # exchange = Exchange("hyperliquid", users.find_user("hl_mani05_DOGE"))
-    # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
+    # exchange = Exchange("bitget", users.find_user("bitget_HYPErQuantum"))
     # exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
     # symbols = ["BTCUSDT"]
     # symbols = ["DOGEUSDT", "VETUSDT", "ICPUSDT", "INJUSDT"]
@@ -1145,7 +1149,7 @@ def main():
     # print(exchange.fetch_price("DOGE/USDC:USDC", "swap"))
     # exchange.fetch_symbols()
     # spot = exchange.fetch_spot()
-    # print(exchange.fetch_history(1749700000000))
+    # print(exchange.fetch_history(1749323083834))
     # print(exchange.fetch_balance("swap"))
     # print(spot)
 
