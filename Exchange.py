@@ -369,7 +369,7 @@ class Exchange:
                     method="POST",
                     headers={"Content-Type": "application/json"},
                     body=json.dumps({"type": "userFunding", "user": self.user.wallet_address, "startTime": since, "endTime": end}),
-            )
+                    )
                 if fundings:
                     first_funding = fundings[0]
                     last_funding = fundings[-1]
@@ -390,13 +390,14 @@ class Exchange:
                 income["symbol"] = history["delta"]["coin"] + "USDC"
                 income["timestamp"] = history["time"]
                 income["income"] = history["delta"]["usdc"]
-                income["uniqueid"] = history["hash"]
+                income["uniqueid"] = history["time"] + "_" + history["delta"]["coin"]
                 all.append(income)
             since = since_trades
             end = end_trades
             all_histories = []
             while True:
                 trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {"endTime": end})
+                # print(trades)
                 if trades:
                     first_trade = trades[0]
                     last_trade = trades[-1]
@@ -413,13 +414,13 @@ class Exchange:
                     break
                 sleep(1)
             for history in all_histories:
-                if history["side"] == "sell":
-                    income = {}
-                    income["symbol"] = history["info"]["coin"] + "USDC"
-                    income["timestamp"] = history["timestamp"]
-                    income["income"] = history["info"]["closedPnl"]
-                    income["uniqueid"] = history["info"]["tid"]
-                    all.append(income)
+                # if history["side"] == "sell":
+                income = {}
+                income["symbol"] = history["info"]["coin"] + "USDC"
+                income["timestamp"] = history["timestamp"]
+                income["income"] = float(history["info"]["closedPnl"]) - float(history["info"]["fee"])
+                income["uniqueid"] = history["info"]["tid"]
+                all.append(income)
         elif self.id == "kucoinfutures":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -1083,7 +1084,7 @@ def main():
     # exchange = Exchange("gateio", None)
     # exchange.fetch_symbols()
     # print(exchange.swap)
-    users = Users()
+    # users = Users()
     # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
     # exchange.fetch_symbols()
     # print(exchange.fetch_copytrading_symbols())
@@ -1091,29 +1092,29 @@ def main():
     # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
     # exchange = Exchange("binance", users.find_user("binance_CPT"))
     # exchange = Exchange("bybit", users.find_user("bybit_CPT1"))
-    # exchange = Exchange("hyperliquid", users.find_user("hl_manicpt"))
+    # exchange = Exchange("hyperliquid", users.find_user("hl_mani05_DOGE"))
     # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
     # exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
     # symbols = ["BTCUSDT"]
-    symbols = ["DOGEUSDT", "VETUSDT", "ICPUSDT", "INJUSDT"]
-    exchange = Exchange("hyperliquid", None)
-    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDC')
-    exchange = Exchange("okx", None)
-    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    exchange = Exchange("binance", None)
-    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    exchange = Exchange("bybit", None)
-    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    exchange = Exchange("bitget", None)
-    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    exchange = Exchange("gateio", None)
-    balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    # symbols = ["DOGEUSDT", "VETUSDT", "ICPUSDT", "INJUSDT"]
+    # exchange = Exchange("hyperliquid", None)
+    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDC')
+    # exchange = Exchange("okx", None)
+    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    # exchange = Exchange("binance", None)
+    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    # exchange = Exchange("bybit", None)
+    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    # exchange = Exchange("bitget", None)
+    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
+    # exchange = Exchange("gateio", None)
+    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
+    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
     # exchange.load_market()
     # exchange.fetch_symbol_min_order_price("BTCUSDT")
     # exchange.fetch_symbol_min_order_price("ETHUSDT")
@@ -1144,7 +1145,7 @@ def main():
     # print(exchange.fetch_price("DOGE/USDC:USDC", "swap"))
     # exchange.fetch_symbols()
     # spot = exchange.fetch_spot()
-    # print(exchange.fetch_history())
+    # print(exchange.fetch_history(1749700000000))
     # print(exchange.fetch_balance("swap"))
     # print(spot)
 
