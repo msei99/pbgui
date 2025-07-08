@@ -79,7 +79,7 @@ class Dashboard():
 
     PERIOD = ['TODAY', 'YESTERDAY', 'THIS_WEEK', 'LAST_WEEK', 'LAST_WEEK_NOW', 'THIS_MONTH', 'LAST_MONTH', 'LAST_MONTH_NOW', 'THIS_YEAR', 'LAST_YEAR', 'LAST_YEAR_NOW',  'ALL_TIME']
     SUM_PERIOD = ['DAY', 'WEEK', 'MONTH', 'YEAR', 'ALL_TIME']
-    DASHBOARD_TYPES = ['NONE', 'PNL', 'TOP', 'POSITIONS', 'ORDERS', 'INCOME', 'BALANCE', 'P+L']
+    DASHBOARD_TYPES = ['NONE', 'PNL', 'ADG', 'TOP', 'POSITIONS', 'ORDERS', 'INCOME', 'BALANCE', 'P+L']
 
     def __init__(self, name : str = None):
         self.cleanup_dashboard_session_state()
@@ -117,6 +117,14 @@ class Dashboard():
             del st.session_state[f'dashboard_pnl_period_{from_row}_{from_col}']
             del st.session_state[f'dashboard_pnl_mode_{from_row}_{from_col}']
             move_1 = {"pnl_users_1": pnl_users_1, "pnl_period_1": pnl_period_1, "pnl_mode_1": pnl_mode_1}
+        if dashboard_type_1 == "ADG":
+            adg_users_1 = st.session_state[f'dashboard_adg_users_{from_row}_{from_col}']
+            adg_period_1 = st.session_state[f'dashboard_adg_period_{from_row}_{from_col}']
+            adg_mode_1 = st.session_state[f'dashboard_adg_mode_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_adg_users_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_adg_period_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_adg_mode_{from_row}_{from_col}']
+            move_1 = {"adg_users_1": adg_users_1, "adg_period_1": adg_period_1, "adg_mode_1": adg_mode_1}
         if dashboard_type_1 == "INCOME":
             income_users_1 = st.session_state[f'dashboard_income_users_{from_row}_{from_col}']
             income_period_1 = st.session_state[f'dashboard_income_period_{from_row}_{from_col}']
@@ -161,6 +169,14 @@ class Dashboard():
             del st.session_state[f'dashboard_pnl_period_{to_row}_{to_col}']
             del st.session_state[f'dashboard_pnl_mode_{to_row}_{to_col}']
             move_2 = {"pnl_users_2": pnl_users_2, "pnl_period_2": pnl_period_2, "pnl_mode_2": pnl_mode_2}
+        if dashboard_type_2 == "ADG":
+            adg_users_2 = st.session_state[f'dashboard_adg_users_{to_row}_{to_col}']
+            adg_period_2 = st.session_state[f'dashboard_adg_period_{to_row}_{to_col}']
+            adg_mode_2 = st.session_state[f'dashboard_adg_mode_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_adg_users_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_adg_period_{to_row}_{to_col}']
+            del st.session_state[f'dashboard_adg_mode_{to_row}_{to_col}']
+            move_2 = {"adg_users_2": adg_users_2, "adg_period_2": adg_period_2, "adg_mode_2": adg_mode_2}
         if dashboard_type_2 == "INCOME":
             income_users_2 = st.session_state[f'dashboard_income_users_{to_row}_{to_col}']
             income_period_2 = st.session_state[f'dashboard_income_period_{to_row}_{to_col}']
@@ -277,6 +293,11 @@ class Dashboard():
                             self.view_pnl(f'{row}_1', self.dashboard_config[f'dashboard_pnl_users_{row}_1'], self.dashboard_config[f'dashboard_pnl_period_{row}_1'], self.dashboard_config[f'dashboard_pnl_mode_{row}_1'])
                         else:
                             self.view_pnl(f'{row}_1')
+                    if st.session_state[f'dashboard_type_{row}_1'] == "ADG":
+                        if f'dashboard_adg_users_{row}_1' in self.dashboard_config and f'dashboard_adg_period_{row}_1' in self.dashboard_config and f'dashboard_adg_mode_{row}_1' in self.dashboard_config:
+                            self.view_adg(f'{row}_1', self.dashboard_config[f'dashboard_adg_users_{row}_1'], self.dashboard_config[f'dashboard_adg_period_{row}_1'], self.dashboard_config[f'dashboard_adg_mode_{row}_1'])
+                        else:
+                            self.view_adg(f'{row}_1')
                     if st.session_state[f'dashboard_type_{row}_1'] == "INCOME":
                         if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config:
                             self.view_income(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'])
@@ -333,6 +354,11 @@ class Dashboard():
                             self.view_pnl(f'{row}_2', self.dashboard_config[f'dashboard_pnl_users_{row}_2'], self.dashboard_config[f'dashboard_pnl_period_{row}_2'], self.dashboard_config[f'dashboard_pnl_mode_{row}_2'])
                         else:
                             self.view_pnl(f'{row}_2')
+                    if st.session_state[f'dashboard_type_{row}_2'] == "ADG":
+                        if f'dashboard_adg_users_{row}_2' in self.dashboard_config and f'dashboard_adg_period_{row}_2' in self.dashboard_config and f'dashboard_adg_mode_{row}_2' in self.dashboard_config:
+                            self.view_adg(f'{row}_2', self.dashboard_config[f'dashboard_adg_users_{row}_2'], self.dashboard_config[f'dashboard_adg_period_{row}_2'], self.dashboard_config[f'dashboard_adg_mode_{row}_2'])
+                        else:
+                            self.view_adg(f'{row}_2')
                     if st.session_state[f'dashboard_type_{row}_2'] == "INCOME":
                         if f'dashboard_income_users_{row}_2' in self.dashboard_config and f'dashboard_income_period_{row}_2' in self.dashboard_config:
                             self.view_income(f'{row}_2', self.dashboard_config[f'dashboard_income_users_{row}_2'], self.dashboard_config[f'dashboard_income_period_{row}_2'])
@@ -382,6 +408,11 @@ class Dashboard():
                         self.view_pnl(f'{row}_1', self.dashboard_config[f'dashboard_pnl_users_{row}_1'], self.dashboard_config[f'dashboard_pnl_period_{row}_1'], self.dashboard_config[f'dashboard_pnl_mode_{row}_1'])
                     else:
                         self.view_pnl(f'{row}_1')
+                if st.session_state[f'dashboard_type_{row}_1'] == "ADG":
+                    if f'dashboard_adg_users_{row}_1' in self.dashboard_config and f'dashboard_adg_period_{row}_1' in self.dashboard_config and f'dashboard_adg_mode_{row}_1' in self.dashboard_config:
+                        self.view_adg(f'{row}_1', self.dashboard_config[f'dashboard_adg_users_{row}_1'], self.dashboard_config[f'dashboard_adg_period_{row}_1'], self.dashboard_config[f'dashboard_adg_mode_{row}_1'])
+                    else:
+                        self.view_adg(f'{row}_1')
                 if st.session_state[f'dashboard_type_{row}_1'] == "INCOME":
                     if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config:
                         self.view_income(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'])
@@ -428,6 +459,10 @@ class Dashboard():
                         dashboard_config[f'dashboard_pnl_users_{row}_{col}'] = st.session_state[f'dashboard_pnl_users_{row}_{col}']
                         dashboard_config[f'dashboard_pnl_period_{row}_{col}'] = st.session_state[f'dashboard_pnl_period_{row}_{col}']
                         dashboard_config[f'dashboard_pnl_mode_{row}_{col}'] = st.session_state[f'dashboard_pnl_mode_{row}_{col}']
+                    if st.session_state[f'dashboard_type_{row}_{col}'] == "ADG":
+                        dashboard_config[f'dashboard_adg_users_{row}_{col}'] = st.session_state[f'dashboard_adg_users_{row}_{col}']
+                        dashboard_config[f'dashboard_adg_period_{row}_{col}'] = st.session_state[f'dashboard_adg_period_{row}_{col}']
+                        dashboard_config[f'dashboard_adg_mode_{row}_{col}'] = st.session_state[f'dashboard_adg_mode_{row}_{col}']
                     if st.session_state[f'dashboard_type_{row}_{col}'] == "INCOME":
                         dashboard_config[f'dashboard_income_users_{row}_{col}'] = st.session_state[f'dashboard_income_users_{row}_{col}']
                         dashboard_config[f'dashboard_income_period_{row}_{col}'] = st.session_state[f'dashboard_income_period_{row}_{col}']
@@ -496,6 +531,8 @@ class Dashboard():
                 with db_col1:
                     if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
                         self.view_pnl(f'{row}_1', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
+                        self.view_adg(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
                         self.view_income(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
@@ -514,6 +551,8 @@ class Dashboard():
                 with db_col2:
                     if dashboard_config[f'dashboard_type_{row}_2'] == "PNL":
                         self.view_pnl(f'{row}_2', dashboard_config[f'dashboard_pnl_users_{row}_2'], dashboard_config[f'dashboard_pnl_period_{row}_2'], dashboard_config[f'dashboard_pnl_mode_{row}_2'])
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "ADG":
+                        self.view_adg(f'{row}_2', dashboard_config[f'dashboard_adg_users_{row}_2'], dashboard_config[f'dashboard_adg_period_{row}_2'], dashboard_config[f'dashboard_adg_mode_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "INCOME":
                         self.view_income(f'{row}_2', dashboard_config[f'dashboard_income_users_{row}_2'], dashboard_config[f'dashboard_income_period_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "TOP":
@@ -532,6 +571,8 @@ class Dashboard():
             else:
                 if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
                     self.view_pnl(f'{row}_1', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
+                if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
+                    self.view_adg(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
                     self.view_income(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
@@ -591,6 +632,76 @@ class Dashboard():
             fig.update_traces(marker_color=['red' if val < 0 else 'green' for val in df['Income']])
             st.plotly_chart(fig, key=f"dashboard_pnl_plot_{position}")
     
+    @st.fragment
+    def view_adg(self, position : str, user : str = None, period : str = None, mode : str = "bar"):
+        users = st.session_state.users
+        if f"dashboard_adg_users_{position}" not in st.session_state:
+            if user:
+                st.session_state[f'dashboard_adg_users_{position}'] = user
+                for user in st.session_state[f'dashboard_adg_users_{position}']:
+                    if user not in users.list() and user != 'ALL':
+                        st.session_state[f'dashboard_adg_users_{position}'].remove(user)
+        if f"dashboard_adg_period_{position}" not in st.session_state:
+            if period:
+                st.session_state[f'dashboard_adg_period_{position}'] = period
+        if f"dashboard_adg_mode_{position}" not in st.session_state:
+            if mode:
+                st.session_state[f'dashboard_adg_mode_{position}'] = mode
+        st.markdown("#### :blue[ADG]")
+        col1, col2, col3 = st.columns([2,1,1])
+        with col1:
+            st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_adg_users_{position}")
+        with col2:
+            st.selectbox('period', self.PERIOD, key=f"dashboard_adg_period_{position}")
+        with col3:
+            st.selectbox('Mode', ['bar', 'line'], key=f"dashboard_adg_mode_{position}")
+        if st.session_state[f'dashboard_adg_users_{position}']:
+            if st.session_state[f'dashboard_adg_period_{position}'] in self.PERIOD:
+                period_index = self.PERIOD.index(st.session_state[f'dashboard_adg_period_{position}'])
+                period_range = getattr(self, self.PERIOD[period_index])
+                adg = self.db.select_pnl(st.session_state[f'dashboard_adg_users_{position}'], period_range[0], period_range[1])
+
+                # get current balance
+                balances = self.db.fetch_balances(st.session_state[f'dashboard_adg_users_{position}'])
+
+                # calculate total PNL
+                total_pnl = sum(row[1] for row in adg if row[1] is not None)
+                
+                # calculate starting balance
+                starting_balance = balances[0][2] - total_pnl
+
+                current_balance = balances[0][2]
+                for i in reversed(range(len(adg))):
+                    # adg_last = adg[i-1][1] if i > 0 else 0
+                    current_balance -= adg[i][1]
+                    adg_value = 100 * (adg[i][1] / current_balance)
+                    adg[i] = list(adg[i])
+                    adg[i][1] = adg_value
+                    adg[i] = tuple(adg[i])
+            df = pd.DataFrame(adg, columns =['Date', 'ADG'])
+            # fill missing dates with 0 ADG
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.set_index('Date').asfreq('D', fill_value=0).reset_index()
+            if st.session_state[f'dashboard_adg_mode_{position}'] == "line":
+                if not adg:
+                    return
+                if len(adg) <= 31:
+                    fig = px.line(df, x='Date', y='ADG', markers=True, text='ADG', hover_data={'ADG':':.2f'}, title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
+                else:
+                    fig = px.line(df, x='Date', y='ADG', markers=True, hover_data={'ADG':':.2f'}, title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
+                fig.update_traces(texttemplate='%{text:.2f}', textposition='top left')
+            else:
+                fig = px.bar(df, x='Date', y='ADG', text='ADG', hover_data={'ADG':':.2f'}, title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
+                fig.update_traces(texttemplate='%{text:.2f}', textposition='auto')
+            fig.update_traces(marker_color=['red' if val < 0 else 'green' for val in df['ADG']])
+            # name y axis ADG(%)
+            fig.update_layout(
+                yaxis_title='ADG(%)')
+            fig.update_traces(hovertemplate='Date=%{x}<br>ADG=%{y:.2f}%')
+            st.markdown(f"**Calculated Starting Balance:** {starting_balance:.2f} | **Total PNL:** {total_pnl:.2f} | **Current Balance:** {balances[0][2]:.2f}")
+            st.plotly_chart(fig, key=f"dashboard_adg_plot_{position}")
+
+
     @st.fragment
     def view_ppl(self, position : str, user : str = None, period : str = None, sum_period : str = None):
         users = st.session_state.users
@@ -684,9 +795,6 @@ class Dashboard():
 
             # Display the plot
             st.plotly_chart(fig, key=f"dashboard_ppl_plot_{position}")
-
-
-
 
     @st.fragment
     def view_income(self, position : str, user : str = None, period : str = None):
