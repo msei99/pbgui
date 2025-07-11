@@ -389,6 +389,10 @@ class OptimizeV7Results:
             self.results = glob.glob(p, recursive=False)
             p = str(self.results_path) + "/*/all_results.bin"
             self.results_new = glob.glob(p, recursive=False)
+            if "opt_v7_results_d_new" in st.session_state:
+                del st.session_state.opt_v7_results_d_new
+            if "opt_v7_results_d" in st.session_state:
+                del st.session_state.opt_v7_results_d
     
     def find_result_name(self, result_file):
         with open(result_file, "r", encoding='utf-8') as f:
@@ -497,15 +501,6 @@ class OptimizeV7Results:
                     if ed["edited_rows"][row]["3d plot"]:
                         self.run_3d_plot(d_new[row]["index"])
                         st.session_state.ed_key += 1
-                # if "delete" in ed["edited_rows"][row]:
-                #     if ed["edited_rows"][row]["delete"]:
-                #         directory = Path(d_new[row]["index"]).parent
-                #         shutil.rmtree(directory, ignore_errors=True)
-                #         # remove from results
-                #         self.results_new.remove(d_new[row]["index"])
-                #         # remove from display
-                #         d_new.remove(d_new[row])
-                #         st.rerun()
         
         if not "opt_v7_results_d" in st.session_state:
             d = []
@@ -797,7 +792,10 @@ class OptimizeV7Item:
             self.name = PurePath(optimize_file).stem
             self.config.config_file = optimize_file
             self.config.load_config()
-            self.time = datetime.datetime.fromtimestamp(Path(optimize_file).stat().st_mtime)
+            if Path(optimize_file).exists():
+                self.time = datetime.datetime.fromtimestamp(Path(optimize_file).stat().st_mtime)
+            else:
+                self.time = datetime.datetime.now()
         else:
             self.initialize()
         self._calculate_results()
