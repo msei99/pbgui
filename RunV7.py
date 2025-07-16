@@ -619,14 +619,14 @@ class V7Instance():
 
     def edit_coin_flag(self, symbol):
         # Init
-        mode_long = ""
-        we_long = None
-        mode_short = ""
-        we_short = None
+        # mode_long = ""
+        # we_long = None
+        # mode_short = ""
+        # we_short = None
         lev = None
         config = False
         # Init from config
-        if self.config.live.coin_flags:
+        if self.config.live.coin_flags and "edit_run_v7_cf_mode_long" not in st.session_state:
             if symbol in self.config.live.coin_flags:
                 flags = self.config.live.coin_flags[symbol]
                 # if -nm in flags then get mode_long
@@ -662,11 +662,11 @@ class V7Instance():
         with col1:
             st.selectbox('mode_long',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_long", help=pbgui_help.coin_flags_mode)
         with col2:
-            st.number_input("long_we", step=0.05, format="%.2f", key="edit_run_v7_cf_we_long", help=pbgui_help.coin_flags_we)
+            st.number_input("long_we", min_value=0.0, step=0.05, format="%0.2f", key="edit_run_v7_cf_we_long", help=pbgui_help.coin_flags_we)
         with col3:
             st.selectbox('mode_short',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_short", help=pbgui_help.coin_flags_mode)
         with col4:
-            st.number_input("short_we", step=0.05, format="%.2f", key="edit_run_v7_cf_we_short", help=pbgui_help.coin_flags_we)
+            st.number_input("short_we", min_value=0.0, step=0.05, format="%0.2f", key="edit_run_v7_cf_we_short", help=pbgui_help.coin_flags_we)
         with col5:
             st.number_input("leverage", min_value=0.0, max_value=100.0, step=1.0, format="%.1f", key="edit_run_v7_cf_lev", help=pbgui_help.coin_flags_lev)
         st.checkbox("Config", value=config, key="edit_run_v7_cf_config", help=pbgui_help.coin_flags_config)
@@ -689,14 +689,14 @@ class V7Instance():
                         del self.config.live.coin_flags[symbol]
                 if st.session_state.edit_run_v7_cf_mode_long:
                     lm = f'-lm {st.session_state.edit_run_v7_cf_mode_long} '
-                if st.session_state.edit_run_v7_cf_we_long:
-                    lw = f'-lw {st.session_state.edit_run_v7_cf_we_long} '
+                if abs(st.session_state.edit_run_v7_cf_we_long) > 1e-9:
+                    lw = f'-lw {round(st.session_state.edit_run_v7_cf_we_long,2)} '
                 if st.session_state.edit_run_v7_cf_mode_short:
                     sm = f'-sm {st.session_state.edit_run_v7_cf_mode_short} '
-                if st.session_state.edit_run_v7_cf_we_short:
-                    sw = f'-sw {st.session_state.edit_run_v7_cf_we_short} '
-                if st.session_state.edit_run_v7_cf_lev:
-                    lev = f'-lev {st.session_state.edit_run_v7_cf_lev} '
+                if abs(st.session_state.edit_run_v7_cf_we_short) > 1e-9:
+                    sw = f'-sw {round(st.session_state.edit_run_v7_cf_we_short,2)} '
+                if abs(st.session_state.edit_run_v7_cf_lev) > 1e-9:
+                    lev = f'-lev {round(st.session_state.edit_run_v7_cf_lev,1)} '
                 if st.session_state.edit_run_v7_cf_config:
                     lc = f'-lc {symbol}.json'
                     st.session_state.cf_config.config_file = Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json')
