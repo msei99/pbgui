@@ -51,8 +51,8 @@ class Config:
                 if not "ddown_factor" in config["long"]:
                     return None
             # long settings
-            self._config_v7.bot.long.close_grid_markup_range = json.loads(self._config)["long"]["markup_range"]
-            self._config_v7.bot.long.close_grid_min_markup = json.loads(self._config)["long"]["min_markup"]
+            self._config_v7.bot.long.close_grid_markup_start = json.loads(self._config)["long"]["min_markup"] + json.loads(self._config)["long"]["markup_range"]
+            self._config_v7.bot.long.close_grid_markup_end = json.loads(self._config)["long"]["min_markup"]
             self._config_v7.bot.long.close_grid_qty_pct = 1.0 / float(json.loads(self._config)["long"]["n_close_orders"])
             self._config_v7.bot.long.close_trailing_grid_ratio = 0
             self._config_v7.bot.long.close_trailing_qty_pct = 1
@@ -68,6 +68,7 @@ class Config:
             self._config_v7.bot.long.entry_trailing_grid_ratio = 0
             self._config_v7.bot.long.entry_trailing_retracement_pct = 0
             self._config_v7.bot.long.entry_trailing_threshold_pct = 0
+            self._config_v7.bot.long.entry_trailing_double_down_factor = 0
             # self._config_v7.bot.long.total_wallet_exposure_limit = json.loads(self._config)["long"]["wallet_exposure_limit"]
             try:
                 self._config_v7.bot.long.unstuck_close_pct = json.loads(self._config)["long"]["auto_unstuck_qty_pct"]
@@ -75,8 +76,8 @@ class Config:
                 self._config_v7.bot.long.unstuck_close_pct = 0.025
             self._config_v7.bot.long.unstuck_ema_dist = json.loads(self._config)["long"]["auto_unstuck_ema_dist"]
             # short settings
-            self._config_v7.bot.short.close_grid_markup_range = json.loads(self._config)["short"]["markup_range"]
-            self._config_v7.bot.short.close_grid_min_markup = json.loads(self._config)["short"]["min_markup"]
+            self._config_v7.bot.short.close_grid_markup_start = json.loads(self._config)["short"]["min_markup"] + json.loads(self._config)["short"]["markup_range"]
+            self._config_v7.bot.short.close_grid_markup_end = json.loads(self._config)["short"]["min_markup"]
             self._config_v7.bot.short.close_grid_qty_pct = 1.0 / float(json.loads(self._config)["short"]["n_close_orders"])
             self._config_v7.bot.short.close_trailing_grid_ratio = 0
             self._config_v7.bot.short.close_trailing_qty_pct = 1
