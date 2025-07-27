@@ -2552,7 +2552,8 @@ class OptimizeV7Item:
                 self.fragment_short_unstuck_loss_allowance_pct()
                 self.fragment_short_unstuck_threshold()
 
-    def edit_limits(self, limit, value=0.0):
+    def edit_limits(self, limit, value = 0.0):
+        value = float(value)
         st.number_input(limit, value=value, format="%.5f", key="edit_opt_v7_limits", help=pbgui_help.limits)
         col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
         with col1:
