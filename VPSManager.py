@@ -84,6 +84,8 @@ class VPS:
                 self.init_status = config["init_status"]
             if "update_status" in config:
                 self.update_status = config["update_status"]
+            if "coinmarketcap_api_key" in config:
+                self.coinmarketcap_api_key = config["coinmarketcap_api_key"]
             if "firewall" in config:
                 self.firewall = config["firewall"]
             if "firewall_ssh_port" in config:
