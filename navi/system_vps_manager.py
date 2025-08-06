@@ -297,7 +297,8 @@ def manage_vps():
     monitor = st.session_state.monitor
     # Init coindata
     coindata = st.session_state.pbcoindata
-    vps.coinmarketcap_api_key = coindata.api_key
+    if not vps.coinmarketcap_api_key:
+        vps.coinmarketcap_api_key = coindata.api_key
     # Init keys from session_state
     if vps.is_vps_in_hosts():
         hosts_ok = f' ✅'
@@ -466,7 +467,7 @@ def manage_vps():
         with col4:
             if coindata.api_key:
                 if coindata.fetch_api_status():
-                    st.text_input("CoinMarketCap API_Key", value=vps.coinmarketcap_api_key, type="password", key="vps_coindata_api_key", disabled=True, help=pbgui_help.coindata_api_key)
+                    st.text_input("CoinMarketCap API_Key", value=vps.coinmarketcap_api_key, type="password", key="vps_coindata_api_key", disabled=False, help=pbgui_help.coindata_api_key)
                 else:
                     st.write(":red[Invalid CoinMarketCap API_Key]")
             else:
