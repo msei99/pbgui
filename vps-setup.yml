@@ -329,10 +329,10 @@
         src: "{{ local_home }}/.config/rclone/"
         dest: "{{ remote_home }}/.config/rclone/"
     
-    - name: Start or Restart PBRun, PBRemote and PBCoinData
+    - name: Start or Restart PBRun and PBRemote
       shell: |
         source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote PBCoinData
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote
       args:
         executable: /bin/bash
         chdir: "{{ install_dir }}/pbgui"
@@ -342,3 +342,18 @@
       debug:
         var: starter_result
       tags: debug,never
+
+    - name: Start or Restart PBCoinData
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      register: starter_result
+
+    - name: print starter result
+      debug:
+        var: starter_result
+      tags: debug,never
+
