@@ -549,205 +549,208 @@ class V7Instance():
             st.code(f'approved_symbols: {st.session_state.pbcoindata.approved_coins}', wrap_lines=True)
             st.code(f'dynamic_ignored symbols: {st.session_state.pbcoindata.ignored_coins}', wrap_lines=True)
 
+        # Edit coin_overrides
+        self.config.view_coin_overrides()
+
         # Edit coin_flags
-        if self.config.live.coin_flags:
-            flags = True
-        else:
-            flags = False
-        with st.expander("Coin Flags", expanded=flags):
-            # Init
-            if not "ed_key" in st.session_state:
-                st.session_state.ed_key = 0
-            ed_key = st.session_state.ed_key
-            if f'select_cf_coin_{ed_key}' in st.session_state:
-                ed = st.session_state[f'select_cf_coin_{ed_key}']
-                for row in ed["edited_rows"]:
-                    if "edit" in ed["edited_rows"][row]:
-                        if ed["edited_rows"][row]["edit"]:
-                            st.session_state.edit_coin_flag = st.session_state.cf_data[row]["coin"]
-            if not "cf_data" in st.session_state:
-                cf_data = []
-                if self.config.live.coin_flags:
-                    for coin in self.config.live.coin_flags:
-                        lm = {
-                            "n": "normal",
-                            "m": "manual",
-                            "gs": "graceful_stop",
-                            "p": "panic"
-                        }.get(self.config.live.coin_flags[coin].split("-lm")[1].split()[0], "") if "-lm" in self.config.live.coin_flags[coin] else ""
-                        lw = self.config.live.coin_flags[coin].split("-lw")[1].split()[0] if "-lw" in self.config.live.coin_flags[coin] else ""
-                        sm = {
-                            "n": "normal",
-                            "m": "manual",
-                            "gs": "graceful_stop",
-                            "p": "panic"
-                        }.get(self.config.live.coin_flags[coin].split("-sm")[1].split()[0], "") if "-sm" in self.config.live.coin_flags[coin] else ""
-                        sw = self.config.live.coin_flags[coin].split("-sw")[1].split()[0] if "-sw" in self.config.live.coin_flags[coin] else ""
-                        lev = self.config.live.coin_flags[coin].split("-lev")[1].split()[0] if "-lev" in self.config.live.coin_flags[coin] else ""
-                        config = self.config.live.coin_flags[coin].split("-lc")[1].split()[0] if "-lc" in self.config.live.coin_flags[coin] else ""
-                        cf_data.append({
-                            'edit': False,
-                            'coin': coin,
-                            'long_mode': lm,
-                            'long_we': lw,
-                            'short_mode': sm,
-                            'short_we': sw,
-                            'leverage': lev,
-                            'config_file': config,
-                            'flags': self.config.live.coin_flags[coin]
-                        })
-                st.session_state.cf_data = cf_data
-            # Display coin_flags
-            if st.session_state.cf_data and not "edit_coin_flag" in st.session_state:
-                d = st.session_state.cf_data
-                st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_cf_coin_{ed_key}', disabled=['coin','flags'])
-            if "edit_run_v7_add_coin_flag_button" in st.session_state:
-                if st.session_state.edit_run_v7_add_coin_flag_button:
-                    st.session_state.edit_coin_flag = st.session_state.edit_run_v7_add_coin_flag
-            if "edit_coin_flag" in st.session_state:
-                self.edit_coin_flag(st.session_state.edit_coin_flag)
-            else:
-                col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
-                with col1:
-                    st.selectbox('Symbol', st.session_state.pbcoindata.symbols, key="edit_run_v7_add_coin_flag")
-                with col2:
-                    st.button("Add Coin Flag", key="edit_run_v7_add_coin_flag_button")
+        # if self.config.live.coin_flags:
+        #     flags = True
+        # else:
+        #     flags = False
+        # with st.expander("Coin Flags", expanded=flags):
+        #     # Init
+        #     if not "ed_key" in st.session_state:
+        #         st.session_state.ed_key = 0
+        #     ed_key = st.session_state.ed_key
+        #     if f'select_cf_coin_{ed_key}' in st.session_state:
+        #         ed = st.session_state[f'select_cf_coin_{ed_key}']
+        #         for row in ed["edited_rows"]:
+        #             if "edit" in ed["edited_rows"][row]:
+        #                 if ed["edited_rows"][row]["edit"]:
+        #                     st.session_state.edit_coin_flag = st.session_state.cf_data[row]["coin"]
+        #     if not "cf_data" in st.session_state:
+        #         cf_data = []
+        #         if self.config.live.coin_flags:
+        #             for coin in self.config.live.coin_flags:
+        #                 lm = {
+        #                     "n": "normal",
+        #                     "m": "manual",
+        #                     "gs": "graceful_stop",
+        #                     "p": "panic"
+        #                 }.get(self.config.live.coin_flags[coin].split("-lm")[1].split()[0], "") if "-lm" in self.config.live.coin_flags[coin] else ""
+        #                 lw = self.config.live.coin_flags[coin].split("-lw")[1].split()[0] if "-lw" in self.config.live.coin_flags[coin] else ""
+        #                 sm = {
+        #                     "n": "normal",
+        #                     "m": "manual",
+        #                     "gs": "graceful_stop",
+        #                     "p": "panic"
+        #                 }.get(self.config.live.coin_flags[coin].split("-sm")[1].split()[0], "") if "-sm" in self.config.live.coin_flags[coin] else ""
+        #                 sw = self.config.live.coin_flags[coin].split("-sw")[1].split()[0] if "-sw" in self.config.live.coin_flags[coin] else ""
+        #                 lev = self.config.live.coin_flags[coin].split("-lev")[1].split()[0] if "-lev" in self.config.live.coin_flags[coin] else ""
+        #                 config = self.config.live.coin_flags[coin].split("-lc")[1].split()[0] if "-lc" in self.config.live.coin_flags[coin] else ""
+        #                 cf_data.append({
+        #                     'edit': False,
+        #                     'coin': coin,
+        #                     'long_mode': lm,
+        #                     'long_we': lw,
+        #                     'short_mode': sm,
+        #                     'short_we': sw,
+        #                     'leverage': lev,
+        #                     'config_file': config,
+        #                     'flags': self.config.live.coin_flags[coin]
+        #                 })
+        #         st.session_state.cf_data = cf_data
+        #     # Display coin_flags
+        #     if st.session_state.cf_data and not "edit_coin_flag" in st.session_state:
+        #         d = st.session_state.cf_data
+        #         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_cf_coin_{ed_key}', disabled=['coin','flags'])
+        #     if "edit_run_v7_add_coin_flag_button" in st.session_state:
+        #         if st.session_state.edit_run_v7_add_coin_flag_button:
+        #             st.session_state.edit_coin_flag = st.session_state.edit_run_v7_add_coin_flag
+        #     if "edit_coin_flag" in st.session_state:
+        #         self.edit_coin_flag(st.session_state.edit_coin_flag)
+        #     else:
+        #         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+        #         with col1:
+        #             st.selectbox('Symbol', st.session_state.pbcoindata.symbols, key="edit_run_v7_add_coin_flag")
+        #         with col2:
+        #             st.button("Add Coin Flag", key="edit_run_v7_add_coin_flag_button")
         # Edit long / short
         self.config.bot.edit()
         # View log
         self.view_log()
 
-    def edit_coin_flag(self, symbol):
-        # Init
-        # mode_long = ""
-        # we_long = None
-        # mode_short = ""
-        # we_short = None
-        lev = None
-        config = False
-        # Init from config
-        if self.config.live.coin_flags and "edit_run_v7_cf_mode_long" not in st.session_state:
-            if symbol in self.config.live.coin_flags:
-                flags = self.config.live.coin_flags[symbol]
-                # if -nm in flags then get mode_long
-                if "-lm" in flags:
-                    st.session_state.edit_run_v7_cf_mode_long = flags.split("-lm")[1].split()[0]
-                # if -lw in flags then get we_long
-                if "-lw" in flags:
-                    st.session_state.edit_run_v7_cf_we_long = float(flags.split("-lw")[1].split()[0])
-                # if -sm in flags then get mode_short
-                if "-sm" in flags:
-                    st.session_state.edit_run_v7_cf_mode_short = flags.split("-sm")[1].split()[0]
-                # if -sw in flags then get we_short
-                if "-sw" in flags:
-                    st.session_state.edit_run_v7_cf_we_short = float(flags.split("-sw")[1].split()[0])
-                # if -lev in flags then get leverage
-                if "-lev" in flags:
-                    st.session_state.edit_run_v7_cf_lev = float(flags.split("-lev")[1].split()[0])
-                if "-lc" in flags:
-                    config = True
-                    if "cf_config" not in st.session_state:
-                        st.session_state.cf_config = ConfigV7(file_name=f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json')
-                        st.session_state.cf_config.load_config()
-                        if "edit_cf_configv7_long" in st.session_state:
-                            del st.session_state.edit_cf_configv7_long
-                        if "edit_cf_configv7_short" in st.session_state:
-                            del st.session_state.edit_cf_configv7_short
-        # Init session_state for keys
-        if "edit_run_v7_cf_config" in st.session_state:
-            if st.session_state.edit_run_v7_cf_config != config:
-                config = st.session_state.edit_run_v7_cf_config
-        st.write(f"{symbol}")
-        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
-        with col1:
-            st.selectbox('mode_long',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_long", help=pbgui_help.coin_flags_mode)
-        with col2:
-            st.number_input("long_we", min_value=0.0, step=0.05, format="%0.2f", key="edit_run_v7_cf_we_long", help=pbgui_help.coin_flags_we)
-        with col3:
-            st.selectbox('mode_short',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_short", help=pbgui_help.coin_flags_mode)
-        with col4:
-            st.number_input("short_we", min_value=0.0, step=0.05, format="%0.2f", key="edit_run_v7_cf_we_short", help=pbgui_help.coin_flags_we)
-        with col5:
-            st.number_input("leverage", min_value=0.0, max_value=100.0, step=1.0, format="%.1f", key="edit_run_v7_cf_lev", help=pbgui_help.coin_flags_lev)
-        st.checkbox("Config", value=config, key="edit_run_v7_cf_config", help=pbgui_help.coin_flags_config)
-        if config:
-            if "cf_config" not in st.session_state:
-                st.session_state.cf_config = ConfigV7()
-            st.session_state.cf_config.bot.edit_cf()
-        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
-        with col1:
-            if st.button("Save"):
-                # coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}
-                lm = ""
-                lw = ""
-                sm = ""
-                sw = ""
-                lc = ""
-                lev = ""
-                if self.config.live.coin_flags:
-                    if symbol in self.config.live.coin_flags:
-                        del self.config.live.coin_flags[symbol]
-                if st.session_state.edit_run_v7_cf_mode_long:
-                    lm = f'-lm {st.session_state.edit_run_v7_cf_mode_long} '
-                if abs(st.session_state.edit_run_v7_cf_we_long) > 1e-9:
-                    lw = f'-lw {round(st.session_state.edit_run_v7_cf_we_long,2)} '
-                if st.session_state.edit_run_v7_cf_mode_short:
-                    sm = f'-sm {st.session_state.edit_run_v7_cf_mode_short} '
-                if abs(st.session_state.edit_run_v7_cf_we_short) > 1e-9:
-                    sw = f'-sw {round(st.session_state.edit_run_v7_cf_we_short,2)} '
-                if abs(st.session_state.edit_run_v7_cf_lev) > 1e-9:
-                    lev = f'-lev {round(st.session_state.edit_run_v7_cf_lev,1)} '
-                if st.session_state.edit_run_v7_cf_config:
-                    lc = f'-lc {symbol}.json'
-                    st.session_state.cf_config.config_file = Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json')
-                    st.session_state.cf_config.save_config()
-                else:
-                    Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json').unlink(missing_ok=True)
-                if lm or lw or sm or sw:
-                    flags = f"{lm}{lw}{sm}{sw}{lev}{lc}"
-                    if flags[-1] == " ":
-                        flags = flags[:-1]
-                    self.config.live.coin_flags[symbol] = flags
-                    # sort coin_flags
-                    self.config.live.coin_flags = dict(sorted(self.config.live.coin_flags.items()))
-                self.save()
-                self.clean_cf_session_state()
-                st.rerun()
-        with col2:
-            if st.button("Cancel"):
-                self.clean_cf_session_state()
-                st.rerun()
-        with col3:
-            if st.button("Remove"):
-                if self.config.live.coin_flags:
-                    if symbol in self.config.live.coin_flags:
-                        del self.config.live.coin_flags[symbol]
-                Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json').unlink(missing_ok=True)
-                self.save()
-                self.clean_cf_session_state()
-                st.rerun()
+    # def edit_coin_flag(self, symbol):
+    #     # Init
+    #     # mode_long = ""
+    #     # we_long = None
+    #     # mode_short = ""
+    #     # we_short = None
+    #     lev = None
+    #     config = False
+    #     # Init from config
+    #     if self.config.live.coin_flags and "edit_run_v7_cf_mode_long" not in st.session_state:
+    #         if symbol in self.config.live.coin_flags:
+    #             flags = self.config.live.coin_flags[symbol]
+    #             # if -nm in flags then get mode_long
+    #             if "-lm" in flags:
+    #                 st.session_state.edit_run_v7_cf_mode_long = flags.split("-lm")[1].split()[0]
+    #             # if -lw in flags then get we_long
+    #             if "-lw" in flags:
+    #                 st.session_state.edit_run_v7_cf_we_long = float(flags.split("-lw")[1].split()[0])
+    #             # if -sm in flags then get mode_short
+    #             if "-sm" in flags:
+    #                 st.session_state.edit_run_v7_cf_mode_short = flags.split("-sm")[1].split()[0]
+    #             # if -sw in flags then get we_short
+    #             if "-sw" in flags:
+    #                 st.session_state.edit_run_v7_cf_we_short = float(flags.split("-sw")[1].split()[0])
+    #             # if -lev in flags then get leverage
+    #             if "-lev" in flags:
+    #                 st.session_state.edit_run_v7_cf_lev = float(flags.split("-lev")[1].split()[0])
+    #             if "-lc" in flags:
+    #                 config = True
+    #                 if "cf_config" not in st.session_state:
+    #                     st.session_state.cf_config = ConfigV7(file_name=f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json')
+    #                     st.session_state.cf_config.load_config()
+    #                     if "edit_cf_configv7_long" in st.session_state:
+    #                         del st.session_state.edit_cf_configv7_long
+    #                     if "edit_cf_configv7_short" in st.session_state:
+    #                         del st.session_state.edit_cf_configv7_short
+    #     # Init session_state for keys
+    #     if "edit_run_v7_cf_config" in st.session_state:
+    #         if st.session_state.edit_run_v7_cf_config != config:
+    #             config = st.session_state.edit_run_v7_cf_config
+    #     st.write(f"{symbol}")
+    #     col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
+    #     with col1:
+    #         st.selectbox('mode_long',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_long", help=pbgui_help.coin_flags_mode)
+    #     with col2:
+    #         st.number_input("long_we", min_value=0.0, step=0.05, format="%0.2f", key="edit_run_v7_cf_we_long", help=pbgui_help.coin_flags_we)
+    #     with col3:
+    #         st.selectbox('mode_short',self.MODE, format_func=lambda x: self.MODE_OPTIONS.get(x), key="edit_run_v7_cf_mode_short", help=pbgui_help.coin_flags_mode)
+    #     with col4:
+    #         st.number_input("short_we", min_value=0.0, step=0.05, format="%0.2f", key="edit_run_v7_cf_we_short", help=pbgui_help.coin_flags_we)
+    #     with col5:
+    #         st.number_input("leverage", min_value=0.0, max_value=100.0, step=1.0, format="%.1f", key="edit_run_v7_cf_lev", help=pbgui_help.coin_flags_lev)
+    #     st.checkbox("Config", value=config, key="edit_run_v7_cf_config", help=pbgui_help.coin_flags_config)
+    #     if config:
+    #         if "cf_config" not in st.session_state:
+    #             st.session_state.cf_config = ConfigV7()
+    #         st.session_state.cf_config.bot.edit_cf()
+    #     col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
+    #     with col1:
+    #         if st.button("Save"):
+    #             # coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}
+    #             lm = ""
+    #             lw = ""
+    #             sm = ""
+    #             sw = ""
+    #             lc = ""
+    #             lev = ""
+    #             if self.config.live.coin_flags:
+    #                 if symbol in self.config.live.coin_flags:
+    #                     del self.config.live.coin_flags[symbol]
+    #             if st.session_state.edit_run_v7_cf_mode_long:
+    #                 lm = f'-lm {st.session_state.edit_run_v7_cf_mode_long} '
+    #             if abs(st.session_state.edit_run_v7_cf_we_long) > 1e-9:
+    #                 lw = f'-lw {round(st.session_state.edit_run_v7_cf_we_long,2)} '
+    #             if st.session_state.edit_run_v7_cf_mode_short:
+    #                 sm = f'-sm {st.session_state.edit_run_v7_cf_mode_short} '
+    #             if abs(st.session_state.edit_run_v7_cf_we_short) > 1e-9:
+    #                 sw = f'-sw {round(st.session_state.edit_run_v7_cf_we_short,2)} '
+    #             if abs(st.session_state.edit_run_v7_cf_lev) > 1e-9:
+    #                 lev = f'-lev {round(st.session_state.edit_run_v7_cf_lev,1)} '
+    #             if st.session_state.edit_run_v7_cf_config:
+    #                 lc = f'-lc {symbol}.json'
+    #                 st.session_state.cf_config.config_file = Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json')
+    #                 st.session_state.cf_config.save_config()
+    #             else:
+    #                 Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json').unlink(missing_ok=True)
+    #             if lm or lw or sm or sw:
+    #                 flags = f"{lm}{lw}{sm}{sw}{lev}{lc}"
+    #                 if flags[-1] == " ":
+    #                     flags = flags[:-1]
+    #                 self.config.live.coin_flags[symbol] = flags
+    #                 # sort coin_flags
+    #                 self.config.live.coin_flags = dict(sorted(self.config.live.coin_flags.items()))
+    #             self.save()
+    #             self.clean_cf_session_state()
+    #             st.rerun()
+    #     with col2:
+    #         if st.button("Cancel"):
+    #             self.clean_cf_session_state()
+    #             st.rerun()
+    #     with col3:
+    #         if st.button("Remove"):
+    #             if self.config.live.coin_flags:
+    #                 if symbol in self.config.live.coin_flags:
+    #                     del self.config.live.coin_flags[symbol]
+    #             Path(f'{PBGDIR}/data/run_v7/{self.user}/{symbol}.json').unlink(missing_ok=True)
+    #             self.save()
+    #             self.clean_cf_session_state()
+    #             st.rerun()
     
-    def clean_cf_session_state(self):
-        if "cf_config" in st.session_state:
-            del st.session_state.cf_config
-        if "edit_run_v7_cf_mode_long" in st.session_state:
-            del st.session_state.edit_run_v7_cf_mode_long
-        if "edit_run_v7_cf_we_long" in st.session_state:
-            del st.session_state.edit_run_v7_cf_we_long
-        if "edit_run_v7_cf_mode_short" in st.session_state:
-            del st.session_state.edit_run_v7_cf_mode_short
-        if "edit_run_v7_cf_we_short" in st.session_state:
-            del st.session_state.edit_run_v7_cf_we_short
-        if "edit_run_v7_cf_lev" in st.session_state:
-            del st.session_state.edit_run_v7_cf_lev
-        if "edit_run_v7_cf_config" in st.session_state:
-            del st.session_state.edit_run_v7_cf_config
-        if "edit_coin_flag" in st.session_state:
-            del st.session_state.edit_coin_flag
-        if "cf_data" in st.session_state:
-            del st.session_state.cf_data
-        if "ed_key" in st.session_state:
-            st.session_state.ed_key += 1
+    # def clean_cf_session_state(self):
+    #     if "cf_config" in st.session_state:
+    #         del st.session_state.cf_config
+    #     if "edit_run_v7_cf_mode_long" in st.session_state:
+    #         del st.session_state.edit_run_v7_cf_mode_long
+    #     if "edit_run_v7_cf_we_long" in st.session_state:
+    #         del st.session_state.edit_run_v7_cf_we_long
+    #     if "edit_run_v7_cf_mode_short" in st.session_state:
+    #         del st.session_state.edit_run_v7_cf_mode_short
+    #     if "edit_run_v7_cf_we_short" in st.session_state:
+    #         del st.session_state.edit_run_v7_cf_we_short
+    #     if "edit_run_v7_cf_lev" in st.session_state:
+    #         del st.session_state.edit_run_v7_cf_lev
+    #     if "edit_run_v7_cf_config" in st.session_state:
+    #         del st.session_state.edit_run_v7_cf_config
+    #     if "edit_coin_flag" in st.session_state:
+    #         del st.session_state.edit_coin_flag
+    #     if "cf_data" in st.session_state:
+    #         del st.session_state.cf_data
+    #     if "ed_key" in st.session_state:
+    #         st.session_state.ed_key += 1
 
     @st.dialog("Paste config", width="large")
     def import_instance(self):

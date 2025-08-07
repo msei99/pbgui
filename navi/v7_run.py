@@ -10,7 +10,6 @@ def edit_v7_instance():
     # Navigation
     with st.sidebar:
         if st.button(":material/home:"):
-            v7_instance.clean_cf_session_state()
             del st.session_state.edit_v7_instance
             del st.session_state.v7_instances
             st.session_state.v7_instances = V7Instances()
@@ -24,7 +23,6 @@ def edit_v7_instance():
         if st.button("Backtest"):
             st.session_state.bt_v7 = BacktestV7Item(v7_instance.config.config_file)
             del st.session_state.edit_v7_instance
-            del st.session_state.cf_data
             if "bt_v7_queue" in st.session_state:
                 del st.session_state.bt_v7_queue
             if "bt_v7_results" in st.session_state:
