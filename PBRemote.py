@@ -876,7 +876,7 @@ class PBRemote():
         """
         timestamp = round(datetime.now().timestamp())
         if timestamp - self.systemts > 3600:
-            self.local_run.load_versions()
+            self.local_run.has_upgrades()
             self.local_run.has_reboot()
             self.systemts = timestamp
         self.local_run.load_versions()
