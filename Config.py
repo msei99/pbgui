@@ -3436,8 +3436,11 @@ class ConfigV7():
                 st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_coins_{ed_key}', disabled=['coin', 'override_config_path', 'config.bot.long parameters', 'config.bot.short parameters', 'config.live parameters'])
             if "edit_run_v7_add_coin_override_button" in st.session_state:
                 if st.session_state.edit_run_v7_add_coin_override_button:
-                    st.session_state.edit_coin_override = st.session_state.edit_run_v7_add_coin_override
-                    st.rerun()
+                    if self.config_file is None:
+                        error_popup("Please save config, before editing coin overrides.")
+                    else:
+                        st.session_state.edit_coin_override = st.session_state.edit_run_v7_add_coin_override
+                        st.rerun()
             if "edit_coin_override" in st.session_state:
                 self.edit_coin_override(st.session_state.edit_coin_override)
             else:
