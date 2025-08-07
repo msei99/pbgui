@@ -746,7 +746,6 @@ class BacktestV7Item:
         self.config.bot.edit()
 
     def save(self):
-        print(self.config.config_file)
         # Create the backtest directory if it does not exist
         self.path = Path(f'{PBGDIR}/data/bt_v7/{self.name}')
         if not self.path.exists():
