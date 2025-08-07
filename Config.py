@@ -290,65 +290,65 @@ class Config:
 #               "start_date": "2020-04-01",
 #               "starting_balance": 100000,
 #               "use_btc_collateral": true},
-#  "bot": {"long": {"close_grid_markup_end": 0.001161,
-#                   "close_grid_markup_start": 0.009675,
-#                   "close_grid_qty_pct": 0.9692,
-#                   "close_trailing_grid_ratio": -0.0316,
-#                   "close_trailing_qty_pct": 0.6361,
-#                   "close_trailing_retracement_pct": 0.09966,
-#                   "close_trailing_threshold_pct": 0.04829,
-#                   "ema_span_0": 275.7,
-#                   "ema_span_1": 586.4,
+#  "bot": {"long": {"close_grid_markup_end": 0.003354,
+#                   "close_grid_markup_start": 0.006385,
+#                   "close_grid_qty_pct": 0.9429,
+#                   "close_trailing_grid_ratio": -0.006244,
+#                   "close_trailing_qty_pct": 0.2677,
+#                   "close_trailing_retracement_pct": 0.0007421,
+#                   "close_trailing_threshold_pct": 0.05089,
+#                   "ema_span_0": 279,
+#                   "ema_span_1": 475.6,
 #                   "enforce_exposure_limit": true,
-#                   "entry_grid_double_down_factor": 1.437,
-#                   "entry_grid_spacing_pct": 0.03623,
-#                   "entry_grid_spacing_weight": 0.693,
-#                   "entry_initial_ema_dist": -0.06036,
-#                   "entry_initial_qty_pct": 0.004391,
-#                   "entry_trailing_double_down_factor": 1.364,
-#                   "entry_trailing_grid_ratio": -0.01483,
-#                   "entry_trailing_retracement_pct": 0.01131,
-#                   "entry_trailing_threshold_pct": 0.05542,
-#                   "filter_noisiness_rolling_window": 302.3,
-#                   "filter_volume_drop_pct": 0.9292,
-#                   "filter_volume_rolling_window": 2530,
-#                   "n_positions": 7,
-#                   "total_wallet_exposure_limit": 1.953,
-#                   "unstuck_close_pct": 0.01231,
-#                   "unstuck_ema_dist": -0.07572,
-#                   "unstuck_loss_allowance_pct": 0.03499,
-#                   "unstuck_threshold": 0.6536},
-#          "short": {"close_grid_markup_end": 0.001,
-#                    "close_grid_markup_start": 0.001,
-#                    "close_grid_qty_pct": 0.05,
-#                    "close_trailing_grid_ratio": -1,
-#                    "close_trailing_qty_pct": 0.05,
-#                    "close_trailing_retracement_pct": 0.0001,
-#                    "close_trailing_threshold_pct": -0.01,
-#                    "ema_span_0": 200,
-#                    "ema_span_1": 200,
+#                   "entry_grid_double_down_factor": 0.8473,
+#                   "entry_grid_spacing_pct": 0.02744,
+#                   "entry_grid_spacing_weight": 0.313,
+#                   "entry_initial_ema_dist": -0.00364,
+#                   "entry_initial_qty_pct": 0.01633,
+#                   "entry_trailing_double_down_factor": 3.042,
+#                   "entry_trailing_grid_ratio": 0.007105,
+#                   "entry_trailing_retracement_pct": 0.01368,
+#                   "entry_trailing_threshold_pct": 0.06497,
+#                   "filter_noisiness_rolling_window": 39.82,
+#                   "filter_volume_drop_pct": 0.5077,
+#                   "filter_volume_rolling_window": 1886,
+#                   "n_positions": 7.057,
+#                   "total_wallet_exposure_limit": 2,
+#                   "unstuck_close_pct": 0.04102,
+#                   "unstuck_ema_dist": 0.002879,
+#                   "unstuck_loss_allowance_pct": 0.002158,
+#                   "unstuck_threshold": 0.6771},
+#          "short": {"close_grid_markup_end": 0.001698,
+#                    "close_grid_markup_start": 0.02009,
+#                    "close_grid_qty_pct": 0.05233,
+#                    "close_trailing_grid_ratio": -0.1265,
+#                    "close_trailing_qty_pct": 0.07382,
+#                    "close_trailing_retracement_pct": 0.003562,
+#                    "close_trailing_threshold_pct": -0.009199,
+#                    "ema_span_0": 1365,
+#                    "ema_span_1": 985.1,
 #                    "enforce_exposure_limit": true,
-#                    "entry_grid_double_down_factor": 0.01,
-#                    "entry_grid_spacing_pct": 0.001,
-#                    "entry_grid_spacing_weight": 0,
-#                    "entry_initial_ema_dist": -0.1,
-#                    "entry_initial_qty_pct": 0.004,
+#                    "entry_grid_double_down_factor": 3.41,
+#                    "entry_grid_spacing_pct": 0.03714,
+#                    "entry_grid_spacing_weight": 1.656,
+#                    "entry_initial_ema_dist": -0.09702,
+#                    "entry_initial_qty_pct": 0.009357,
 #                    "entry_trailing_double_down_factor": 0.01,
-#                    "entry_trailing_grid_ratio": -1,
-#                    "entry_trailing_retracement_pct": 0.0001,
-#                    "entry_trailing_threshold_pct": -0.01,
-#                    "filter_noisiness_rolling_window": 10,
-#                    "filter_volume_drop_pct": 0.5,
-#                    "filter_volume_rolling_window": 360,
-#                    "n_positions": 0,
-#                    "total_wallet_exposure_limit": 0.01,
-#                    "unstuck_close_pct": 0.001,
-#                    "unstuck_ema_dist": -0.1,
-#                    "unstuck_loss_allowance_pct": 0.001,
-#                    "unstuck_threshold": 0.4}},
-#  "live": {"approved_coins": "configs/approved_coins_top20mcap.json",
+#                    "entry_trailing_grid_ratio": -0.9565,
+#                    "entry_trailing_retracement_pct": 0.08704,
+#                    "entry_trailing_threshold_pct": 0.04012,
+#                    "filter_noisiness_rolling_window": 335.7,
+#                    "filter_volume_drop_pct": 0.5257,
+#                    "filter_volume_rolling_window": 2643,
+#                    "n_positions": 7.211,
+#                    "total_wallet_exposure_limit": 0,
+#                    "unstuck_close_pct": 0.074,
+#                    "unstuck_ema_dist": -0.02015,
+#                    "unstuck_loss_allowance_pct": 0.003297,
+#                    "unstuck_threshold": 0.898}},
+#  "coin_overrides": {},
+#  "live": {"approved_coins": "configs/approved_coins_top23mcap.json",
 #           "auto_gs": true,
-#           "coin_flags": {},
 #           "empty_means_all_approved": true,
 #           "execution_delay_seconds": 2,
 #           "filter_by_min_effective_cost": true,
@@ -361,7 +361,7 @@ class Config:
 #           "max_n_creations_per_batch": 3,
 #           "max_n_restarts_per_day": 10,
 #           "mimic_backtest_1m_delay": false,
-#           "minimum_coin_age_days": 365,
+#           "minimum_coin_age_days": 180,
 #           "ohlcvs_1m_rolling_window_days": 4,
 #           "ohlcvs_1m_update_after_minutes": 10,
 #           "pnls_max_lookback_days": 30,
@@ -389,8 +389,8 @@ class Config:
 #                          "long_filter_noisiness_rolling_window": [10, 360],
 #                          "long_filter_volume_drop_pct": [0.5, 1],
 #                          "long_filter_volume_rolling_window": [360, 2880],
-#                          "long_n_positions": [7, 30],
-#                          "long_total_wallet_exposure_limit": [0.01, 2],
+#                          "long_n_positions": [7, 20],
+#                          "long_total_wallet_exposure_limit": [2, 2],
 #                          "long_unstuck_close_pct": [0.001, 0.1],
 #                          "long_unstuck_ema_dist": [-0.1, 0.01],
 #                          "long_unstuck_loss_allowance_pct": [0.001, 0.05],
@@ -417,7 +417,7 @@ class Config:
 #                          "short_filter_volume_drop_pct": [0.5, 1],
 #                          "short_filter_volume_rolling_window": [360, 2880],
 #                          "short_n_positions": [0, 0],
-#                          "short_total_wallet_exposure_limit": [0.01, 2],
+#                          "short_total_wallet_exposure_limit": [0, 0],
 #                          "short_unstuck_close_pct": [0.001, 0.1],
 #                          "short_unstuck_ema_dist": [-0.1, 0.01],
 #                          "short_unstuck_loss_allowance_pct": [0.001, 0.05],
@@ -426,17 +426,18 @@ class Config:
 #               "crossover_probability": 0.64,
 #               "enable_overrides": [],
 #               "iters": 300000,
-#               "limits": "--btc_drawdown_worst 0.4 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 720.0",
+#               "limits": {"penalize_if_greater_than_btc_drawdown_worst": 0.5,
+#                          "penalize_if_greater_than_loss_profit_ratio": 0.2,
+#                          "penalize_if_greater_than_position_unchanged_hours_max": 504},
 #               "mutation_probability": 0.34,
 #               "n_cpus": 5,
 #               "population_size": 1000,
 #               "round_to_n_significant_digits": 4,
 #               "scoring": ["btc_adg_w",
 #                           "btc_mdg_w",
-#                           "btc_sterling_ratio",
-#                           "loss_profit_ratio",
-#                           "position_held_hours_max"],
-#               "write_all_results": true}}
+#                           "equity_balance_diff_neg_mean"],
+#               "write_all_results": false}}
+
 
 class Backtest:
     def __init__(self):
@@ -702,6 +703,30 @@ class Bot:
             st.text_area(f'long', key="edit_cf_configv7_long", height=640)
         with col2:
             st.text_area(f'short', key="edit_cf_configv7_short", height=640)
+    
+    def edit_co(self):
+        # Init session_state for keys
+        if "edit_co_configv7_long" in st.session_state:
+            if st.session_state.edit_co_configv7_long != json.dumps(self.bot["long"], indent=4):
+                try:
+                    self.long = json.loads(st.session_state.edit_co_configv7_long)
+                except:
+                    error_popup("Invalid JSON | RESET")
+        else:
+            st.session_state.edit_co_configv7_long = json.dumps(self.bot["long"], indent=4)
+        if "edit_co_configv7_short" in st.session_state:
+            if st.session_state.edit_co_configv7_short != json.dumps(self.bot["short"], indent=4):
+                try:
+                    self.short = json.loads(st.session_state.edit_co_configv7_short)
+                except:
+                    error_popup("Invalid JSON | RESET")
+        else:
+            st.session_state.edit_co_configv7_short = json.dumps(self.bot["short"], indent=4)
+        col1, col2 = st.columns([1,1])
+        with col1:
+            st.text_area(f'long', key="edit_co_configv7_long", height=640)
+        with col2:
+            st.text_area(f'short', key="edit_co_configv7_short", height=640)
 
 class Long:
     def __init__(self):
@@ -1445,7 +1470,7 @@ class Live:
     def __init__(self):
         self._approved_coins = ApprovedCoins()
         self._auto_gs = True
-        self._coin_flags = {}
+        # self._coin_flags = {}
         self._empty_means_all_approved = False
         self._execution_delay_seconds = 2.0
         self._filter_by_min_effective_cost = True
@@ -1469,7 +1494,7 @@ class Live:
         self._live = {
             "approved_coins": self._approved_coins._approved_coins,
             "auto_gs": self._auto_gs,
-            "coin_flags": self._coin_flags,
+            # "coin_flags": self._coin_flags,
             "empty_means_all_approved": self._empty_means_all_approved,
             "execution_delay_seconds": self._execution_delay_seconds,
             "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
@@ -1502,8 +1527,8 @@ class Live:
             self.approved_coins = new_live["approved_coins"]
         if "auto_gs" in new_live:
             self.auto_gs = new_live["auto_gs"]
-        if "coin_flags" in new_live:
-            self.coin_flags = new_live["coin_flags"]
+        # if "coin_flags" in new_live:
+        #     self.coin_flags = new_live["coin_flags"]
         if "empty_means_all_approved" in new_live:
             self.empty_means_all_approved = new_live["empty_means_all_approved"]
         if "execution_delay_seconds" in new_live:
@@ -1547,8 +1572,8 @@ class Live:
     def approved_coins(self): return self._approved_coins
     @property
     def auto_gs(self): return self._auto_gs
-    @property
-    def coin_flags(self): return self._coin_flags
+    # @property
+    # def coin_flags(self): return self._coin_flags
     @property
     def empty_means_all_approved(self): return self._empty_means_all_approved
     @property
@@ -1596,10 +1621,10 @@ class Live:
     def auto_gs(self, new_auto_gs):
         self._auto_gs = new_auto_gs
         self._live["auto_gs"] = self._auto_gs
-    @coin_flags.setter
-    def coin_flags(self, new_coin_flags):
-        self._coin_flags = new_coin_flags
-        self._live["coin_flags"] = self._coin_flags
+    # @coin_flags.setter
+    # def coin_flags(self, new_coin_flags):
+    #     self._coin_flags = new_coin_flags
+    #     self._live["coin_flags"] = self._coin_flags
     @empty_means_all_approved.setter
     def empty_means_all_approved(self, new_empty_means_all_approved):
         self._empty_means_all_approved = new_empty_means_all_approved
@@ -3201,6 +3226,7 @@ class ConfigV7():
         self._config_file = file_name
         self._backtest = Backtest()
         self._bot = Bot()
+        self._coin_overrides = {}
         self._live = Live()
         self._optimize = Optimize()
         self._pbgui = PBGui()
@@ -3208,6 +3234,7 @@ class ConfigV7():
         self._config = {
             "backtest": self._backtest._backtest,
             "bot": self._bot._bot,
+            "coin_overrides": self._coin_overrides,
             "live": self._live._live,
             "optimize": self._optimize._optimize,
             "pbgui": self._pbgui._pbgui
@@ -3232,6 +3259,13 @@ class ConfigV7():
     def bot(self, new_value):
         self._bot.bot = new_value
         self._config["bot"] = self._bot.bot
+
+    @property
+    def coin_overrides(self): return self._coin_overrides
+    @coin_overrides.setter
+    def coin_overrides(self, new_value):
+        self._coin_overrides = new_value
+        self._config["coin_overrides"] = self._coin_overrides
 
     @property
     def live(self): return self._live
@@ -3262,14 +3296,92 @@ class ConfigV7():
             self.backtest = new_value["backtest"]
         if "bot" in new_value:
             self.bot = new_value["bot"]
+        if "coin_overrides" in new_value:
+            self.coin_overrides = new_value["coin_overrides"]
         if "live" in new_value:
             self.live = new_value["live"]
         if "optimize" in new_value:
             self.optimize = new_value["optimize"]
         if "pbgui" in new_value:
             self.pbgui = new_value["pbgui"]
-        
-    
+        # Convert coin_flags to coin_overrides
+        if "coin_flags" in new_value["live"]:
+            if new_value["live"]["coin_flags"]:
+                for symbol, flags in new_value["live"]["coin_flags"].items():
+                    # remove USDT and USDC from symbol
+                    # if symbol.endswith("USDT"):
+                    #     symbol = symbol[:-4]
+                    # elif symbol.endswith("USDC"):
+                    #     symbol = symbol[:-4]
+                    # print(symbol, flags)
+                    if symbol not in self.coin_overrides:
+                        self.coin_overrides[symbol] = {}
+                    lm = {
+                        "n": "normal",
+                        "normal": "normal",
+                        "m": "manual",
+                        "manual": "manual",
+                        "gs": "graceful_stop",
+                        "graceful-stop": "graceful_stop",
+                        "graceful_stop": "graceful_stop",
+                        "p": "panic",
+                        "panic": "panic",
+                        "t": "tp_only",
+                        "tp": "tp_only",
+                        "tp-only": "tp_only",
+                        "tp_only": "tp_only"
+                    }.get(flags.split("-lm")[1].split()[0], "") if "-lm" in flags else ""
+                    if lm:
+                        if "live" not in self.coin_overrides[symbol]:
+                            self.coin_overrides[symbol]["live"] = {}
+                        self.coin_overrides[symbol]["live"]["forced_mode_long"] = lm
+
+                    lw = flags.split("-lw")[1].split()[0] if "-lw" in flags else ""
+                    if lw:
+                        if "bot" not in self.coin_overrides[symbol]:
+                            self.coin_overrides[symbol]["bot"] = {}
+                        if "long" not in self.coin_overrides[symbol]["bot"]:
+                            self.coin_overrides[symbol]["bot"]["long"] = {}
+                        self.coin_overrides[symbol]["bot"]["long"]["wallet_exposure_limit"] = lw
+
+                    sm = {
+                        "n": "normal",
+                        "normal": "normal",
+                        "m": "manual",
+                        "manual": "manual",
+                        "gs": "graceful_stop",
+                        "graceful-stop": "graceful_stop",
+                        "graceful_stop": "graceful_stop",
+                        "p": "panic",
+                        "panic": "panic",
+                        "t": "tp_only",
+                        "tp": "tp_only",
+                        "tp-only": "tp_only",
+                        "tp_only": "tp_only"
+                    }.get(flags.split("-sm")[1].split()[0], "") if "-sm" in flags else ""
+                    if sm:
+                        if "live" not in self.coin_overrides[symbol]:
+                            self.coin_overrides[symbol]["live"] = {}
+                        self.coin_overrides[symbol]["live"]["forced_mode_short"] = sm
+
+                    sw = flags.split("-sw")[1].split()[0] if "-sw" in flags else ""
+                    if sw:
+                        if "bot" not in self.coin_overrides[symbol]:
+                            self.coin_overrides[symbol]["bot"] = {}
+                        if "short" not in self.coin_overrides[symbol]["bot"]:
+                            self.coin_overrides[symbol]["bot"]["short"] = {}
+                        self.coin_overrides[symbol]["bot"]["short"]["wallet_exposure_limit"] = sw
+
+                    lev = flags.split("-lev")[1].split()[0] if "-lev" in flags else ""
+                    if lev:
+                        if "live" not in self.coin_overrides[symbol]:
+                            self.coin_overrides[symbol]["live"] = {}
+                        self.coin_overrides[symbol]["live"]["leverage"] = lev
+
+                    config = flags.split("-lc")[1].split()[0] if "-lc" in flags else ""
+                    if config:
+                        self.coin_overrides[symbol]["override_config_path"] = config
+
     def load_config(self):
         file =  Path(f'{self._config_file}')
         if file.exists():
@@ -3288,6 +3400,285 @@ class ConfigV7():
             file.parent.mkdir(parents=True, exist_ok=True)
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(self._config, f, indent=4)
+
+    def view_coin_overrides(self):
+        if self.config["coin_overrides"]:
+            overrides = True
+        else:
+            overrides = False
+        with st.expander("Coin Overrides", expanded=overrides):
+            # Init
+            if not "ed_key" in st.session_state:
+                st.session_state.ed_key = 0
+            ed_key = st.session_state.ed_key
+            if f'select_coins_{ed_key}' in st.session_state:
+                ed = st.session_state[f'select_coins_{ed_key}']
+                for row in ed["edited_rows"]:
+                    if "edit" in ed["edited_rows"][row]:
+                        if ed["edited_rows"][row]["edit"]:
+                            st.session_state.edit_coin_override = st.session_state.co_data[row]["coin"]
+            # if not "co_data" in st.session_state:
+            co_data = []
+            if self.config["coin_overrides"]:
+                for coin in self.config["coin_overrides"]:
+                    co_data.append({
+                        'edit': False,
+                        'coin': coin,
+                        'override_config_path': self.config["coin_overrides"][coin].get('override_config_path', False),
+                        'config.bot.long parameters': self.config["coin_overrides"][coin].get('bot', {}).get('long', {}),
+                        'config.bot.short parameters': self.config["coin_overrides"][coin].get('bot', {}).get('short', {}),
+                        'config.live parameters': self.config["coin_overrides"][coin].get('live', {}),
+                    })
+            st.session_state.co_data = co_data
+            # Display coin_overrides
+            if st.session_state.co_data and not "edit_coin_override" in st.session_state:
+                d = st.session_state.co_data
+                st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_coins_{ed_key}', disabled=['coin', 'override_config_path', 'config.bot.long parameters', 'config.bot.short parameters', 'config.live parameters'])
+            if "edit_run_v7_add_coin_override_button" in st.session_state:
+                if st.session_state.edit_run_v7_add_coin_override_button:
+                    st.session_state.edit_coin_override = st.session_state.edit_run_v7_add_coin_override
+                    st.rerun()
+            if "edit_coin_override" in st.session_state:
+                self.edit_coin_override(st.session_state.edit_coin_override)
+            else:
+                col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
+                with col1:
+                    st.selectbox('Symbol', st.session_state.pbcoindata.symbols, key="edit_run_v7_add_coin_override")
+                with col2:
+                    st.button("Add Coin Override", key="edit_run_v7_add_coin_override_button")
+
+    def edit_coin_override(self, symbol):
+        # reove USDT or USDC from symbol
+        # if symbol.endswith("USDT"):
+        #     symbol = symbol[:-4]
+        # elif symbol.endswith("USDC"):
+        #     symbol = symbol[:-4]
+        OVERRIDES_LIVE = [
+            "forced_mode_long",
+            "forced_mode_short",
+            "leverage"
+        ]
+        OVERRIDES = [
+            "close_grid_markup_end",
+            "close_grid_markup_start",
+            "close_grid_qty_pct",
+            "close_trailing_grid_ratio",
+            "close_trailing_qty_pct",
+            "close_trailing_retracement_pct",
+            "close_trailing_threshold_pct",
+            "ema_span_0",
+            "ema_span_1",
+            "enforce_exposure_limit",
+            "entry_grid_double_down_factor",
+            "entry_grid_spacing_pct",
+            "entry_grid_spacing_weight",
+            "entry_initial_ema_dist",
+            "entry_initial_qty_pct",
+            "entry_trailing_double_down_factor",
+            "entry_trailing_grid_ratio",
+            "entry_trailing_retracement_pct",
+            "entry_trailing_threshold_pct",
+            "unstuck_close_pct",
+            "unstuck_ema_dist",
+            "unstuck_threshold",
+            "wallet_exposure_limit"
+        ]
+        MODE = [
+            "normal",
+            "manual",
+            "graceful_stop",
+            "panic",
+            "tp_only"
+        ]
+        # Init
+        if not "ed_key" in st.session_state:
+            st.session_state.ed_key = 0
+        ed_key = st.session_state.ed_key
+        if f'edit_run_v7_co_parameters_{ed_key}' in st.session_state:
+            ed = st.session_state[f'edit_run_v7_co_parameters_{ed_key}']
+            for row in ed["edited_rows"]:
+                if "delete" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["delete"]:
+                        if st.session_state.co_parameters[row]["section"] == "bot":
+                            self.config["coin_overrides"][symbol]["bot"][st.session_state.co_parameters[row]["side"]].pop(st.session_state.co_parameters[row]["parameter"])
+                            # cleanup empty sections
+                            if self.config["coin_overrides"][symbol]["bot"][st.session_state.co_parameters[row]["side"]] == {}:
+                                del self.config["coin_overrides"][symbol]["bot"][st.session_state.co_parameters[row]["side"]]
+                            if self.config["coin_overrides"][symbol]["bot"] == {}:
+                                del self.config["coin_overrides"][symbol]["bot"]
+                        elif st.session_state.co_parameters[row]["section"] == "live":
+                            self.config["coin_overrides"][symbol]["live"].pop(st.session_state.co_parameters[row]["parameter"])
+                            # cleanup empty sections
+                            if self.config["coin_overrides"][symbol]["live"] == {}:
+                                del self.config["coin_overrides"][symbol]["live"]
+                        # clear co_parameters
+                        if "co_parameters" in st.session_state:
+                            del st.session_state.co_parameters
+                        st.rerun()
+
+        config = False
+        # Init from config
+        if self.config["coin_overrides"] and "edit_run_v7_co_config" not in st.session_state:
+            if symbol in self.config["coin_overrides"]:
+                if "override_config_path" in self.config["coin_overrides"][symbol]:
+                    config = True
+                    if "co_config" not in st.session_state:
+                        st.session_state.co_config = ConfigV7(file_name=Path(Path(self.config_file).parent, f'{symbol}.json'))
+                        st.session_state.co_config.load_config()
+                        if "edit_co_configv7_long" in st.session_state:
+                            del st.session_state.edit_co_configv7_long
+                        if "edit_co_configv7_short" in st.session_state:
+                            del st.session_state.edit_co_configv7_short
+        # Init session_state for keys
+        if "edit_run_v7_co_config" in st.session_state:
+            if st.session_state.edit_run_v7_co_config != config:
+                config = st.session_state.edit_run_v7_co_config
+        if "edit_run_v7_co_parameter" in st.session_state:
+            if st.session_state.edit_run_v7_co_add_parameter and st.session_state.edit_run_v7_co_side and st.session_state.edit_run_v7_co_value:
+                # Ensure nested dicts exist
+                if symbol not in self.config["coin_overrides"]:
+                    self.config["coin_overrides"][symbol] = {}
+                if "bot" not in self.config["coin_overrides"][symbol]:
+                    self.config["coin_overrides"][symbol]["bot"] = {}
+                if st.session_state.edit_run_v7_co_side not in self.config["coin_overrides"][symbol]["bot"]:
+                    self.config["coin_overrides"][symbol]["bot"][st.session_state.edit_run_v7_co_side] = {}
+                self.config["coin_overrides"][symbol]["bot"][st.session_state.edit_run_v7_co_side][st.session_state.edit_run_v7_co_parameter] = st.session_state.edit_run_v7_co_value
+                if "co_parameters" in st.session_state:
+                    del st.session_state.co_parameters
+        if "edit_run_v7_co_parameter_live" in st.session_state:
+            if st.session_state.edit_run_v7_co_add_parameter_live and st.session_state.edit_run_v7_co_value_live:
+                # Ensure nested dicts exist
+                if symbol not in self.config["coin_overrides"]:
+                    self.config["coin_overrides"][symbol] = {}
+                if "live" not in self.config["coin_overrides"][symbol]:
+                    self.config["coin_overrides"][symbol]["live"] = {}
+                self.config["coin_overrides"][symbol]["live"][st.session_state.edit_run_v7_co_parameter_live] = st.session_state.edit_run_v7_co_value_live
+                if "co_parameters" in st.session_state:
+                    del st.session_state.co_parameters
+        if not "co_parameters" in st.session_state:
+            co_parameters = []
+            for parameter in self.config["coin_overrides"].get(symbol, {}).get('bot', {}).get('long', {}):
+                co_parameters.append({
+                    'section': 'bot',
+                    'parameter': parameter,
+                    'side': 'long',
+                    'value': self.config["coin_overrides"][symbol]['bot']['long'][parameter],
+                    'delete': False,
+                })
+            for parameter in self.config["coin_overrides"].get(symbol, {}).get('bot', {}).get('short', {}):
+                co_parameters.append({
+                    'section': 'bot',
+                    'parameter': parameter,
+                    'side': 'short',
+                    'value': self.config["coin_overrides"][symbol]['bot']['short'][parameter],
+                    'delete': False,
+                })
+            for parameter in self.config["coin_overrides"].get(symbol, {}).get('live', {}):
+                co_parameters.append({
+                    'section': 'live',
+                    'parameter': parameter,
+                    'side': 'live',
+                    'value': self.config["coin_overrides"][symbol]['live'][parameter],
+                    'delete': False,
+                })
+            st.session_state.co_parameters = co_parameters
+        # Display coin_overrides
+        st.write(f"{symbol}")
+        if st.session_state.co_parameters:
+            d = st.session_state.co_parameters
+            st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'edit_run_v7_co_parameters_{ed_key}', disabled=['parameter', 'side', 'value'])
+        # config.live parameters
+        col1, col2, col3, col4 = st.columns([1,1,1,3], vertical_alignment="bottom")
+        with col1:
+            st.selectbox('config.live override parameter', OVERRIDES_LIVE, key="edit_run_v7_co_parameter_live")
+        with col2:
+            if st.session_state.edit_run_v7_co_parameter_live == "leverage":
+                st.number_input("value", min_value=0.0, max_value=100.0, step=1.0, format="%.1f", key="edit_run_v7_co_value_live")
+            else:
+                st.selectbox("mode", MODE, key="edit_run_v7_co_value_live")
+        with col3:
+            st.button("Add", key="edit_run_v7_co_add_parameter_live")
+
+        # config.bot parameters
+        col1, col2, col3, col4 = st.columns([1,1,1,3], vertical_alignment="bottom")
+        with col1:
+            st.selectbox('config.bot override parameter', OVERRIDES, key="edit_run_v7_co_parameter")
+        with col2:
+            st.selectbox("side", ["long", "short"], key="edit_run_v7_co_side")
+        with col3:
+            if st.session_state.edit_run_v7_co_parameter == "enforce_exposure_limit":
+                st.selectbox("enforce_exposure_limit", ["true", "false"], key="edit_run_v7_co_value")
+            else:
+                st.number_input("value", format="%.8f", key="edit_run_v7_co_value")
+        with col4:
+            st.button("Add", key="edit_run_v7_co_add_parameter")
+
+        st.checkbox("Config", value=config, key="edit_run_v7_co_config", help=pbgui_help.coin_overrides_config)
+        if config:
+            if "co_config" not in st.session_state:
+                st.session_state.co_config = ConfigV7()
+            st.session_state.co_config.bot.edit_co()
+        # print(self.config.coin_overrides)
+        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
+        with col1:
+            if st.button("OK"):
+                # {"COIN1": {"override_config_path": "path/to/override_config.json"}}
+                # {"COIN2": {"override_config_path": "path/to/other_override_config.json", {"bot": {"long": {"close_grid_markup_start": 0.005}}}}}
+                # {"COIN3": {"bot": {"short": {"entry_initial_qty_pct": 0.01}}, "live": {"forced_mode_long": "panic"}}}
+                if st.session_state.edit_run_v7_co_config:
+                    st.session_state.co_config.config_file = Path(Path(self.config_file).parent, f'{symbol}.json')
+                    st.session_state.co_config.save_config()
+                    if symbol not in self.config["coin_overrides"]:
+                        self.config["coin_overrides"][symbol] = {}
+                    self.config["coin_overrides"][symbol]["override_config_path"] = f'{symbol}.json'
+                else:
+                    Path(Path(self.config_file).parent, f'{symbol}.json').unlink(missing_ok=True)
+                    if symbol in self.config["coin_overrides"]:
+                        if "override_config_path" in self.config["coin_overrides"][symbol]:
+                            del self.config["coin_overrides"][symbol]["override_config_path"]
+                # Remove symbol from coin_overrides if it has no parameters
+                if symbol in self.config["coin_overrides"] and self.config["coin_overrides"][symbol] == {}:
+                    del self.config["coin_overrides"][symbol]
+                # self.save()
+                self.clean_co_session_state()
+                st.rerun()
+        with col2:
+            if st.button("Cancel"):
+                self.clean_co_session_state()
+                st.rerun()
+        with col3:
+            if st.button("Remove"):
+                if self.config["coin_overrides"]:
+                    if symbol in self.config["coin_overrides"]:
+                        del self.config["coin_overrides"][symbol]
+                Path(Path(self.config_file).parent, f'{symbol}.json').unlink(missing_ok=True)
+                # self.save()
+                self.clean_co_session_state()
+                st.rerun()
+
+    def clean_co_session_state(self):
+        if "co_config" in st.session_state:
+            del st.session_state.co_config
+        if "edit_run_v7_co_config" in st.session_state:
+            del st.session_state.edit_run_v7_co_config
+        if "edit_coin_override" in st.session_state:
+            del st.session_state.edit_coin_override
+        if "co_data" in st.session_state:
+            del st.session_state.co_data
+        if "ed_key" in st.session_state:
+            st.session_state.ed_key += 1
+        if "co_parameters" in st.session_state:
+            del st.session_state.co_parameters
+        if "edit_run_v7_co_parameter" in st.session_state:
+            del st.session_state.edit_run_v7_co_parameter
+        if "edit_run_v7_co_parameter_live" in st.session_state:
+            del st.session_state.edit_run_v7_co_parameter_live
+        if "edit_run_v7_co_side" in st.session_state:
+            del st.session_state.edit_run_v7_co_side
+        if "edit_run_v7_co_value" in st.session_state:
+            del st.session_state.edit_run_v7_co_value
+        if "edit_run_v7_co_value_live" in st.session_state:
+            del st.session_state.edit_run_v7_co_value_live
 
 class BalanceCalculator:
     def __init__(self, config_file: str = None):

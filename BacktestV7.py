@@ -20,6 +20,7 @@ from Exchange import Exchange
 from Config import Config, ConfigV7, BalanceCalculator
 from pathlib import Path, PurePath
 from shutil import rmtree, copytree
+import shutil
 from RunV7 import V7Instance
 import OptimizeV7
 import datetime
@@ -739,14 +740,35 @@ class BacktestV7Item:
             self.fragment_use_btc_collateral()
         #Filters
         self.fragment_filter_coins()
+        # coin_overrides
+        self.config.view_coin_overrides()
         # Config
         self.config.bot.edit()
 
     def save(self):
-        self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
+        print(self.config.config_file)
+        # Create the backtest directory if it does not exist
         self.path = Path(f'{PBGDIR}/data/bt_v7/{self.name}')
         if not self.path.exists():
             self.path.mkdir(parents=True)
+        # Copy the individual config file to the backtest path
+        if self.config.coin_overrides:
+            for coin in self.config.coin_overrides:
+                override_config_path = self.config.coin_overrides[coin].get('override_config_path', False)
+                if override_config_path:
+                    # concate self.config.config_file and override_config_path
+                    src = Path(Path(self.config.config_file).parent, override_config_path)
+                    dest = Path(self.path, override_config_path)
+                    # check if src exists
+                    if src.exists():
+                        # check if src and dest is not the same
+                        if src != dest:
+                            # remove dest if it exists
+                            if dest.exists():
+                                dest.unlink()
+                            # copy config
+                            shutil.copy(src, dest)
+        self.config.backtest.base_dir = f'backtests/pbgui/{self.name}'
         self.config.config_file = Path(f'{self.path}/backtest.json')
         
         self.config.save_config()
@@ -1433,7 +1455,6 @@ class ConfigV7Archives:
                 return
             if log:
                 info_popup(log)
-
 
 class BacktestV7Results:
 

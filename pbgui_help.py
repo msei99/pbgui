@@ -1285,6 +1285,31 @@ change_password = """
     If authentication is disabled, you can use this dailog to set a new password.
     ```"""
 
+coin_overrides_config = """
+    ```
+    Whole config for this coin.
+    ```"""
+coin_overrides_mode = """
+    ```
+    Normal mode: Passivbot manages the position as normal.
+    Manual mode: Passivbot ignores the position.
+    Graceful stop: If there is a position, Passivbot manages it; otherwise, no new positions are opened.
+    Take profit only mode: Passivbot only manages closing orders.
+    Panic mode: Passivbot closes the position immediately.
+    If not set, the mode from the config will be used.
+    ```"""
+
+coin_overrides_leverage = """
+    ```
+    Leverage for this coin.
+    If 0.0, the leverage from the config will be used.
+    ```"""
+
+coin_overrides_parameters = """
+    ```
+    Parameters for this coin.
+    ```"""
+
 coin_flags_mode = """
     -lm or -sm: Long or short mode. Choices:
      [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
