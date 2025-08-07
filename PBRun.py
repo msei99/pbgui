@@ -741,8 +741,8 @@ class RunV7():
                                 new_flags = f"{lm}{lw}{sm}{sw}{lev}{lc}"
                                 coin_flags[coin] = new_flags
                         self._v7_config["live"]["coin_flags"] = coin_flags
-                        with open(file_run, "w", encoding='utf-8') as f:
-                            json.dump(self._v7_config, f, indent=4)
+                        # with open(file_run, "w", encoding='utf-8') as f:
+                        #     json.dump(self._v7_config, f, indent=4)
                     if "dynamic_ignore" in self._v7_config["pbgui"]:
                         if self._v7_config["pbgui"]["dynamic_ignore"]:
                             self.dynamic_ignore = DynamicIgnore()
@@ -766,8 +766,8 @@ class RunV7():
                                         self.dynamic_ignore.approved_coins_short = self._v7_config["live"]["approved_coins"]["short"]
                             self._v7_config["live"]["ignored_coins"] = str(PurePath(f'{self.path}/ignored_coins.json'))
                             self._v7_config["live"]["approved_coins"] = str(PurePath(f'{self.path}/approved_coins.json'))
-                            with open(file_run, "w", encoding='utf-8') as f:
-                                json.dump(self._v7_config, f, indent=4)
+                            # with open(file_run, "w", encoding='utf-8') as f:
+                            #     json.dump(self._v7_config, f, indent=4)
                             # Find Exchange from User
                             api_path = f'{self.pbdir}/api-keys.json'
                             if Path(api_path).exists():
@@ -776,6 +776,8 @@ class RunV7():
                                 if self.user in api_keys:
                                     self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
                                     self.dynamic_ignore.watch()
+                    with open(file_run, "w", encoding='utf-8') as f:
+                        json.dump(self._v7_config, f, indent=4)
                     return True
                 else:                        
                     self.name = self._v7_config["pbgui"]["enabled_on"]
