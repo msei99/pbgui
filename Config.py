@@ -3342,7 +3342,7 @@ class ConfigV7():
                             self.coin_overrides[symbol]["bot"] = {}
                         if "long" not in self.coin_overrides[symbol]["bot"]:
                             self.coin_overrides[symbol]["bot"]["long"] = {}
-                        self.coin_overrides[symbol]["bot"]["long"]["wallet_exposure_limit"] = lw
+                        self.coin_overrides[symbol]["bot"]["long"]["wallet_exposure_limit"] = float(lw)
 
                     sm = {
                         "n": "normal",
@@ -3370,13 +3370,13 @@ class ConfigV7():
                             self.coin_overrides[symbol]["bot"] = {}
                         if "short" not in self.coin_overrides[symbol]["bot"]:
                             self.coin_overrides[symbol]["bot"]["short"] = {}
-                        self.coin_overrides[symbol]["bot"]["short"]["wallet_exposure_limit"] = sw
+                        self.coin_overrides[symbol]["bot"]["short"]["wallet_exposure_limit"] = float(sw)
 
                     lev = flags.split("-lev")[1].split()[0] if "-lev" in flags else ""
                     if lev:
                         if "live" not in self.coin_overrides[symbol]:
                             self.coin_overrides[symbol]["live"] = {}
-                        self.coin_overrides[symbol]["live"]["leverage"] = lev
+                        self.coin_overrides[symbol]["live"]["leverage"] = float(lev)
 
                     config = flags.split("-lc")[1].split()[0] if "-lc" in flags else ""
                     if config:
