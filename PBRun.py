@@ -124,7 +124,7 @@ class Monitor():
                     # Skip PNLs after restart bot
                     if "initiating pnl" in line:
                         self.init_found = True
-                    if "starting execution loop" in line or "done initiating bot" in line:
+                    if "starting execution loop" in line or "done initiating bot" or "watching" in line:
                         self.init_found = False
                     if self.init_found:
                         continue
