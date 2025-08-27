@@ -662,12 +662,18 @@ class Dashboard():
                 adg = self.db.select_pnl(st.session_state[f'dashboard_adg_users_{position}'], period_range[0], period_range[1])
 
                 # get current balance
-                balances = self.db.fetch_balances(st.session_state[f'dashboard_adg_users_{position}'])
+                if 'ALL' in st.session_state[f'dashboard_adg_users_{position}']:
+                    users_selected = users.list()
+                else:
+                    users_selected = st.session_state[f'dashboard_adg_users_{position}']
+                print(users_selected)
+                balances = self.db.fetch_balances(users_selected)
 
                 # calculate total PNL
                 total_pnl = sum(row[1] for row in adg if row[1] is not None)
                 
                 # calculate starting balance
+                print(balances)
                 starting_balance = balances[0][2] - total_pnl
 
                 current_balance = balances[0][2]
