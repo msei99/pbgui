@@ -216,7 +216,7 @@ class DynamicIgnore():
             self.coindata.list_symbols()
         # create list of self.coindata.ignored_coins + self.ignored_coins_long + self.ignored_coins_short
         ignored_coins = list(set(self.coindata.ignored_coins + self.ignored_coins_long + self.ignored_coins_short))
-        if not self.ignored_coins and self.ignored_coins != ignored_coins:
+        if not self.ignored_coins or sorted(self.ignored_coins) != sorted(ignored_coins):
             removed_coins = set(self.ignored_coins) - set(self.coindata.ignored_coins)
             removed_coins = [*removed_coins]
             removed_coins.sort()
@@ -227,7 +227,7 @@ class DynamicIgnore():
             self.ignored_coins = self.coindata.ignored_coins
         # create list of self.coindata.approved_coins + self.approved_coins_long + self.approved_coins_short
         approved_coins = list(set(self.coindata.approved_coins + self.approved_coins_long + self.approved_coins_short))
-        if not self.approved_coins and self.approved_coins != approved_coins:
+        if not self.approved_coins or sorted(self.approved_coins) != sorted(approved_coins):
             removed_coins = set(self.approved_coins) - set(self.coindata.approved_coins)
             removed_coins = [*removed_coins]
             removed_coins.sort()
