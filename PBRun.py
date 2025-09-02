@@ -1603,9 +1603,11 @@ def main():
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
         exit(1)
     run.save_pid()
-    run.watch_v7()
-    run.watch_multi()
-    run.watch_single()
+    if run.pb7dir:
+        run.watch_v7()
+    if run.pbdir:
+        run.watch_multi()
+        run.watch_single()
     count = 0
     while True:
         try:
@@ -1616,24 +1618,28 @@ def main():
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.has_activate()
             run.has_update_status()
-            for run_v7 in run.run_v7:
-                run_v7.watch()
-                run_v7.watch_dynamic()
-                run_v7.monitor.watch_log()
-            for run_multi in run.run_multi:
-                run_multi.watch()
-                run_multi.watch_dynamic()
-                run_multi.monitor.watch_log()
-            for run_single in run.run_single:
-                run_single.watch()
-                run_single.monitor.watch_log()
-            if count%2 == 0:
+            if run.pb7dir:
                 for run_v7 in run.run_v7:
-                    run_v7.clean_log()
+                    run_v7.watch()
+                    run_v7.watch_dynamic()
+                    run_v7.monitor.watch_log()
+            if run.pbdir:
                 for run_multi in run.run_multi:
-                    run_multi.clean_log()
+                    run_multi.watch()
+                    run_multi.watch_dynamic()
+                    run_multi.monitor.watch_log()
                 for run_single in run.run_single:
-                    run_single.clean_log()
+                    run_single.watch()
+                    run_single.monitor.watch_log()
+            if count%2 == 0:
+                if run.pb7dir:
+                    for run_v7 in run.run_v7:
+                        run_v7.clean_log()
+                if run.pbdir:
+                    for run_multi in run.run_multi:
+                        run_multi.clean_log()
+                    for run_single in run.run_single:
+                        run_single.clean_log()
             sleep(5)
             count += 1
         except Exception as e:
