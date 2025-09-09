@@ -11,6 +11,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from Database import Database
+import pbgui_help
+
 import time
 
 class Dashboard():
@@ -128,9 +130,13 @@ class Dashboard():
         if dashboard_type_1 == "INCOME":
             income_users_1 = st.session_state[f'dashboard_income_users_{from_row}_{from_col}']
             income_period_1 = st.session_state[f'dashboard_income_period_{from_row}_{from_col}']
+            income_last_1 = st.session_state[f'dashboard_income_last_{from_row}_{from_col}']
+            income_filter_1 = st.session_state[f'dashboard_income_filter_{from_row}_{from_col}']
             del st.session_state[f'dashboard_income_users_{from_row}_{from_col}']
             del st.session_state[f'dashboard_income_period_{from_row}_{from_col}']
-            move_1 = {"income_users_1": income_users_1, "income_period_1": income_period_1}
+            del st.session_state[f'dashboard_income_last_{from_row}_{from_col}']
+            del st.session_state[f'dashboard_income_filter_{from_row}_{from_col}']
+            move_1 = {"income_users_1": income_users_1, "income_period_1": income_period_1, "income_last_1": income_last_1, "income_filter_1": income_filter_1}
         if dashboard_type_1 == "TOP":
             top_symbols_users_1 = st.session_state[f'dashboard_top_symbols_users_{from_row}_{from_col}']
             top_symbols_period_1 = st.session_state[f'dashboard_top_symbols_period_{from_row}_{from_col}']
@@ -180,9 +186,11 @@ class Dashboard():
         if dashboard_type_2 == "INCOME":
             income_users_2 = st.session_state[f'dashboard_income_users_{to_row}_{to_col}']
             income_period_2 = st.session_state[f'dashboard_income_period_{to_row}_{to_col}']
+            income_last_2 = st.session_state[f'dashboard_income_last_{to_row}_{to_col}']
+            income_filter_2 = st.session_state[f'dashboard_income_filter_{to_row}_{to_col}']
             del st.session_state[f'dashboard_income_users_{to_row}_{to_col}']
             del st.session_state[f'dashboard_income_period_{to_row}_{to_col}']
-            move_2 = {"income_users_2": income_users_2, "income_period_2": income_period_2}
+            move_2 = {"income_users_2": income_users_2, "income_period_2": income_period_2, "income_last_2": income_last_2, "income_filter_2": income_filter_2}
         if dashboard_type_2 == "TOP":
             top_symbols_users_2 = st.session_state[f'dashboard_top_symbols_users_{to_row}_{to_col}']
             top_symbols_period_2 = st.session_state[f'dashboard_top_symbols_period_{to_row}_{to_col}']
@@ -299,8 +307,11 @@ class Dashboard():
                         else:
                             self.view_adg(f'{row}_1')
                     if st.session_state[f'dashboard_type_{row}_1'] == "INCOME":
-                        if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config:
-                            self.view_income(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'])
+                        if f'dashboard_income_last_{row}_1' not in self.dashboard_config:
+                            self.dashboard_config[f'dashboard_income_last_{row}_1'] = 0
+                            self.dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
+                        if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config and f'dashboard_income_last_{row}_1' in self.dashboard_config and f'dashboard_income_filter_{row}_1' in self.dashboard_config:
+                            self.view_income(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'], self.dashboard_config[f'dashboard_income_last_{row}_1'], self.dashboard_config[f'dashboard_income_filter_{row}_1'])
                         else:
                             self.view_income(f'{row}_1')
                     if st.session_state[f'dashboard_type_{row}_1'] == "TOP":
@@ -360,8 +371,11 @@ class Dashboard():
                         else:
                             self.view_adg(f'{row}_2')
                     if st.session_state[f'dashboard_type_{row}_2'] == "INCOME":
-                        if f'dashboard_income_users_{row}_2' in self.dashboard_config and f'dashboard_income_period_{row}_2' in self.dashboard_config:
-                            self.view_income(f'{row}_2', self.dashboard_config[f'dashboard_income_users_{row}_2'], self.dashboard_config[f'dashboard_income_period_{row}_2'])
+                        if f'dashboard_income_last_{row}_2' not in self.dashboard_config:
+                            self.dashboard_config[f'dashboard_income_last_{row}_2'] = 0
+                            self.dashboard_config[f'dashboard_income_filter_{row}_2'] = 0.0
+                        if f'dashboard_income_users_{row}_2' in self.dashboard_config and f'dashboard_income_period_{row}_2' in self.dashboard_config and f'dashboard_income_last_{row}_2' in self.dashboard_config and f'dashboard_income_filter_{row}_2' in self.dashboard_config:
+                            self.view_income(f'{row}_2', self.dashboard_config[f'dashboard_income_users_{row}_2'], self.dashboard_config[f'dashboard_income_period_{row}_2'], self.dashboard_config[f'dashboard_income_last_{row}_2'], self.dashboard_config[f'dashboard_income_filter_{row}_2'])
                         else:
                             self.view_income(f'{row}_2')
                     if st.session_state[f'dashboard_type_{row}_2'] == "TOP":
@@ -414,8 +428,11 @@ class Dashboard():
                     else:
                         self.view_adg(f'{row}_1')
                 if st.session_state[f'dashboard_type_{row}_1'] == "INCOME":
-                    if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config:
-                        self.view_income(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'])
+                    if f'dashboard_income_last_{row}_1' not in self.dashboard_config:
+                        self.dashboard_config[f'dashboard_income_last_{row}_1'] = 0
+                        self.dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
+                    if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config and f'dashboard_income_last_{row}_1' in self.dashboard_config and f'dashboard_income_filter_{row}_1' in self.dashboard_config:
+                        self.view_income(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'], self.dashboard_config[f'dashboard_income_last_{row}_1'], self.dashboard_config[f'dashboard_income_filter_{row}_1'])
                     else:
                         self.view_income(f'{row}_1')
                 if st.session_state[f'dashboard_type_{row}_1'] == "TOP":
@@ -466,6 +483,8 @@ class Dashboard():
                     if st.session_state[f'dashboard_type_{row}_{col}'] == "INCOME":
                         dashboard_config[f'dashboard_income_users_{row}_{col}'] = st.session_state[f'dashboard_income_users_{row}_{col}']
                         dashboard_config[f'dashboard_income_period_{row}_{col}'] = st.session_state[f'dashboard_income_period_{row}_{col}']
+                        dashboard_config[f'dashboard_income_last_{row}_{col}'] = st.session_state[f'dashboard_income_last_{row}_{col}']
+                        dashboard_config[f'dashboard_income_filter_{row}_{col}'] = st.session_state[f'dashboard_income_filter_{row}_{col}']
                     if st.session_state[f'dashboard_type_{row}_{col}'] == "TOP":
                         dashboard_config[f'dashboard_top_symbols_users_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_users_{row}_{col}']
                         dashboard_config[f'dashboard_top_symbols_period_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_period_{row}_{col}']
@@ -486,7 +505,6 @@ class Dashboard():
                 else:
                     dashboard_config[f'dashboard_type_{row}_{col}'] = "NONE"
         self.dashboard_config = dashboard_config
-        print(self.dashboard_config)
         dashboard_path = Path(f'{PBGDIR}/data/dashboards')
         dashboard_path.mkdir(parents=True, exist_ok=True)
         dashboard_file = Path(f'{dashboard_path}/{self.name}.json')
@@ -534,7 +552,11 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
                         self.view_adg(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
-                        self.view_income(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'])
+                        # Compatibility for 1st Income implementation
+                        if f'dashboard_income_last_{row}_1' not in dashboard_config:
+                            dashboard_config[f'dashboard_income_last_{row}_1'] = 0
+                            dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
+                        self.view_income(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
                         self.view_top_symbols(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
@@ -554,7 +576,11 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_2'] == "ADG":
                         self.view_adg(f'{row}_2', dashboard_config[f'dashboard_adg_users_{row}_2'], dashboard_config[f'dashboard_adg_period_{row}_2'], dashboard_config[f'dashboard_adg_mode_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "INCOME":
-                        self.view_income(f'{row}_2', dashboard_config[f'dashboard_income_users_{row}_2'], dashboard_config[f'dashboard_income_period_{row}_2'])
+                        # Compatibility for 1st Income implementation
+                        if f'dashboard_income_last_{row}_2' not in dashboard_config:
+                            dashboard_config[f'dashboard_income_last_{row}_2'] = 0
+                            dashboard_config[f'dashboard_income_filter_{row}_2'] = 0.0
+                        self.view_income(f'{row}_2', dashboard_config[f'dashboard_income_users_{row}_2'], dashboard_config[f'dashboard_income_period_{row}_2'], dashboard_config[f'dashboard_income_last_{row}_2'], dashboard_config[f'dashboard_income_filter_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "TOP":
                         self.view_top_symbols(f'{row}_2', dashboard_config[f'dashboard_top_symbols_users_{row}_2'], dashboard_config[f'dashboard_top_symbols_period_{row}_2'], dashboard_config[f'dashboard_top_symbols_top_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "POSITIONS":
@@ -574,7 +600,11 @@ class Dashboard():
                 if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
                     self.view_adg(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
-                    self.view_income(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'])
+                    # Compatibility for 1st Income implementation
+                    if f'dashboard_income_last_{row}_1' not in dashboard_config:
+                        dashboard_config[f'dashboard_income_last_{row}_1'] = 0
+                        dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
+                    self.view_income(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
                     self.view_top_symbols(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
@@ -666,14 +696,12 @@ class Dashboard():
                     users_selected = users.list()
                 else:
                     users_selected = st.session_state[f'dashboard_adg_users_{position}']
-                print(users_selected)
                 balances = self.db.fetch_balances(users_selected)
 
                 # calculate total PNL
                 total_pnl = sum(row[1] for row in adg if row[1] is not None)
                 
                 # calculate starting balance
-                print(balances)
                 starting_balance = balances[0][2] - total_pnl
 
                 current_balance = balances[0][2]
@@ -803,7 +831,7 @@ class Dashboard():
             st.plotly_chart(fig, key=f"dashboard_ppl_plot_{position}")
 
     @st.fragment
-    def view_income(self, position : str, user : str = None, period : str = None):
+    def view_income(self, position : str, user : str = None, period : str = None, last : int = 0, filter : float = 0.0):
         users = st.session_state.users
         if f"dashboard_income_users_{position}" not in st.session_state:
             if user:
@@ -814,31 +842,57 @@ class Dashboard():
         if f"dashboard_income_period_{position}" not in st.session_state:
             if period:
                 st.session_state[f'dashboard_income_period_{position}'] = period
+        if f"dashboard_income_last_{position}" not in st.session_state:
+            if last:
+                st.session_state[f'dashboard_income_last_{position}'] = last
+        if f"dashboard_income_filter_{position}" not in st.session_state:
+            if filter:
+                st.session_state[f'dashboard_income_filter_{position}'] = filter
         st.markdown("#### :blue[Income]")
-        col1, col2 = st.columns([3,1])
+        col1, col2, col3, col4 = st.columns([2,1,1,1])
         with col1:
             st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_income_users_{position}")
         with col2:
             st.selectbox('period', self.PERIOD, key=f"dashboard_income_period_{position}")
+        with col3:
+            st.number_input('Last N', min_value=0, step=10, key=f"dashboard_income_last_{position}", help=pbgui_help.dashboard_last)
+        with col4:
+            st.number_input('Filter', min_value=0.0, key=f"dashboard_income_filter_{position}", help=pbgui_help.dashboard_filter)
         if st.session_state[f'dashboard_income_users_{position}']:
             if st.session_state[f'dashboard_income_period_{position}'] in self.PERIOD:
                 period_index = self.PERIOD.index(st.session_state[f'dashboard_income_period_{position}'])
                 period_range = getattr(self, self.PERIOD[period_index])
                 income = self.db.select_income_by_symbol(st.session_state[f'dashboard_income_users_{position}'], period_range[0], period_range[1])
-            df = pd.DataFrame(income, columns=['Date', 'Symbol', 'Income'])
+            df = pd.DataFrame(income, columns=['Date', 'Symbol', 'Income', 'User'])
             df['Date'] = pd.to_datetime(df['Date'], unit='ms')
-            income = df[['Date', 'Symbol', 'Income']].copy()
-            income['Income'] = income['Income'].cumsum()
-            fig = px.line(income, x='Date', y='Income', hover_data={'Income':':.2f'}, title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
-            fig['data'][0]['showlegend'] = True
-            fig['data'][0]['name'] = 'Total Income'
-            # Sort df by Symbol
-            df = df.sort_values(by=['Symbol', 'Date'])
-            for symbol in df['Symbol'].unique():
-                symbol_df = df[df['Symbol'] == symbol].copy()
-                symbol_df['Income'] = symbol_df['Income'].cumsum()
-                fig.add_trace(go.Scatter(x=symbol_df['Date'], y=symbol_df['Income'], name=symbol))
-            st.plotly_chart(fig, key=f"dashboard_income_plot_{position}")
+            if st.session_state[f'dashboard_income_last_{position}'] > 0:
+                # filter out lower than
+                filter_value = st.session_state[f'dashboard_income_filter_{position}']
+                df = df[df['Income'] >= filter_value]
+                last_n = int(st.session_state[f'dashboard_income_last_{position}'])
+                df = df.tail(last_n)
+                # Sort by Date, oldest first
+                df = df.sort_values(by='Date', ascending=False)
+
+                # Display as dataframe
+                if len(df) > 25:
+                    height = 36 + 25 * 35
+                else:
+                    height = 36 + (len(df)) * 35
+                st.dataframe(df[['Date', 'User', 'Symbol', 'Income']], height=height, use_container_width=True, hide_index=True)
+            else:
+                income = df[['Date', 'Symbol', 'Income', 'User']].copy()
+                income['Income'] = income['Income'].cumsum()
+                fig = px.line(income, x='Date', y='Income', hover_data={'Income':':.2f'}, title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
+                fig['data'][0]['showlegend'] = True
+                fig['data'][0]['name'] = 'Total Income'
+                # Sort df by Symbol
+                df = df.sort_values(by=['Symbol', 'Date'])
+                for symbol in df['Symbol'].unique():
+                    symbol_df = df[df['Symbol'] == symbol].copy()
+                    symbol_df['Income'] = symbol_df['Income'].cumsum()
+                    fig.add_trace(go.Scatter(x=symbol_df['Date'], y=symbol_df['Income'], name=symbol))
+                st.plotly_chart(fig, key=f"dashboard_income_plot_{position}")
 
     @st.fragment
     def view_top_symbols(self, position : str, user : str = None, period : str = None, top : int = None):

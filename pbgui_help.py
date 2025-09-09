@@ -1384,3 +1384,13 @@ my_archive_access_token = """
     Your github access token that you created for the archive.
     give the token read/write access to content.
     ```"""
+
+dashboard_last = """
+    ```
+    If last_n is set, the dashboard will show the last N entries as a list.
+    ```"""
+
+dashboard_filter = """
+    ```
+    In list view, you can use the filter to narrow down the displayed entries.
+    ```"""

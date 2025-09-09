@@ -567,13 +567,13 @@ class Database():
     # select income grouped by symbol not sum
     def select_income_by_symbol(self, user: list, start: str, end: str):
         if 'ALL' in user:
-            sql = '''SELECT "timestamp", "symbol", "income" FROM "history"
+            sql = '''SELECT "timestamp", "symbol", "income", "user" FROM "history"
                     WHERE "history"."timestamp" >= ?
                         AND "history"."timestamp" <= ?
                     ORDER BY "timestamp" ASC '''
             sql_parameters = (start, end)
         else:
-            sql = '''SELECT "timestamp", "symbol", "income" FROM "history"
+            sql = '''SELECT "timestamp", "symbol", "income", "user" FROM "history"
                     WHERE "history"."user" IN ({})
                         AND "history"."timestamp" >= ?
                         AND "history"."timestamp" <= ?
