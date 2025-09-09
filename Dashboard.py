@@ -868,7 +868,7 @@ class Dashboard():
             if st.session_state[f'dashboard_income_last_{position}'] > 0:
                 # filter out lower than
                 filter_value = st.session_state[f'dashboard_income_filter_{position}']
-                df = df[df['Income'] >= filter_value]
+                df = df[(df['Income'] >= filter_value) | (df['Income'] <= -filter_value)]
                 last_n = int(st.session_state[f'dashboard_income_last_{position}'])
                 df = df.tail(last_n)
                 # Sort by Date, oldest first
