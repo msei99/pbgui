@@ -873,7 +873,8 @@ class Dashboard():
                 df = df.tail(last_n)
                 # Sort by Date, oldest first
                 df = df.sort_values(by='Date', ascending=False)
-
+                # remove ms from Date
+                df['Date'] = df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
                 # Display as dataframe
                 if len(df) > 25:
                     height = 36 + 25 * 35
