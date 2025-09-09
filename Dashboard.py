@@ -879,7 +879,12 @@ class Dashboard():
                     height = 36 + 25 * 35
                 else:
                     height = 36 + (len(df)) * 35
-                st.dataframe(df[['Date', 'User', 'Symbol', 'Income']], height=height, use_container_width=True, hide_index=True)
+                # Colorize Income: positive = green, negative = red
+                def color_income(val):
+                    color = 'green' if val >= 0 else 'red'
+                    return f'color: {color};'
+                styled_df = df[['Date', 'User', 'Symbol', 'Income']].style.map(color_income, subset=['Income']).format({'Income': '{:.2f}'})
+                st.dataframe(styled_df, height=height, use_container_width=True, hide_index=True)
             else:
                 income = df[['Date', 'Symbol', 'Income', 'User']].copy()
                 income['Income'] = income['Income'].cumsum()
