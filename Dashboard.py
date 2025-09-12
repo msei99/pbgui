@@ -698,7 +698,7 @@ class Dashboard():
                     users_selected = st.session_state[f'dashboard_adg_users_{position}']
                 balances = self.db.fetch_balances(users_selected)
                 if not balances:
-                    st.warning("No balances found.")
+                    st.warning("No balance found.")
                     return
 
                 # calculate total PNL
