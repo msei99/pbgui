@@ -1,11 +1,12 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, sync_api
+from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, sync_api, select_file
 from VPSManager import VPSManager, VPS
 import re
 from Monitor import Monitor
 from datetime import datetime
 import psutil
+import os
 
 
 def list_vps():
@@ -591,6 +592,12 @@ def init_vps():
                 error_popup("Error: hostname already exists")
             else:
                 vps.hostname = st.session_state.vps_hostname
+    if "vps_init_methode" in st.session_state:
+        if st.session_state.vps_init_methode != vps.init_methode:
+            vps.init_methode = st.session_state.vps_init_methode
+    if "vps_remove_user" in st.session_state:
+        if st.session_state.vps_remove_user != vps.remove_user:
+            vps.remove_user = st.session_state.vps_remove_user
     if "vps_initial_root_pw" in st.session_state:
         if st.session_state.vps_initial_root_pw != vps.initial_root_pw:
             vps.initial_root_pw = st.session_state.vps_initial_root_pw
@@ -602,6 +609,24 @@ def init_vps():
                 error_popup("Error: root_pw contains '{{' or '}}'")
             else:
                 vps.root_pw = st.session_state.vps_root_pw
+    if "vps_user_sudo" in st.session_state:
+        if st.session_state.vps_user_sudo != vps.user_sudo:
+            vps.user_sudo = st.session_state.vps_user_sudo
+    if "vps_user_sudo_pw" in st.session_state:
+        if st.session_state.vps_user_sudo_pw != vps.user_sudo_pw:
+            if st.session_state.vps_user_sudo_pw != "":
+                #error when user_sudo_pw has {{ or }} in it
+                if "{{" in st.session_state.vps_user_sudo_pw or "}}" in st.session_state.vps_user_sudo_pw:
+                    st.session_state.vps_user_sudo_pw = vps.user_sudo_pw
+                    error_popup("Error: user_sudo_pw contains '{{' or '}}'")
+                else:
+                    vps.user_sudo_pw = st.session_state.vps_user_sudo_pw
+    if "vps_private_key_user" in st.session_state:
+        if st.session_state.vps_private_key_user != vps.private_key_user:
+            vps.private_key_user = st.session_state.vps_private_key_user
+    if "vps_private_key_file" in st.session_state:
+        if st.session_state.vps_private_key_file != vps.private_key_file:
+            vps.private_key_file = st.session_state.vps_private_key_file
     if "vps_user" in st.session_state:
         if st.session_state.vps_user != vps.user:
             vps.user = st.session_state.vps_user
@@ -664,20 +689,40 @@ def init_vps():
         "4. Disable ssh root login\n"
         "5. Add ssh key to new user\n"
     )
+    col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment='bottom')
+    with col1:
+        st.selectbox("Init methode", ["root", "password", "private_key"], index=0, key ="vps_init_methode", help=pbgui_help.vps_init_methode)
+    with col2:
+        if st.session_state.vps_init_methode in ["password", "private_key"]:
+            st.checkbox("Remove user from vps after init", value=vps.remove_user, key="vps_remove_user", help=pbgui_help.vps_remove_user)
     col1, col2, col3, col4 = st.columns([1,1,1,1])
     with col1:
         st.text_input("VPS IPv4", value=vps.ip, key="vps_ip", help=pbgui_help.vps_ip)
     with col2:
         st.text_input("VPS hostname", value=vps.hostname, key="vps_hostname", help=pbgui_help.vps_hostname)
     with col3:
-        st.text_input("VPS root password", value=vps.initial_root_pw, type="password", key="vps_initial_root_pw", help=pbgui_help.vps_initial_root_pw)
+        if st.session_state.vps_init_methode == "private_key":
+            st.text_input("VPS user that have private_key", value=vps.private_key_user, key="vps_private_key_user", help=pbgui_help.vps_private_key_user)
+        elif st.session_state.vps_init_methode == "password":
+            st.text_input("VPS user with sudo rights", value=vps.user_sudo, key="vps_user_sudo", help=pbgui_help.vps_user_sudo)
+        else:
+            st.text_input("VPS root password", value=vps.initial_root_pw, type="password", key="vps_initial_root_pw", help=pbgui_help.vps_initial_root_pw)
     with col4:
-        st.text_input("VPS new root password", value=vps.root_pw, type="password", key="vps_root_pw", help=pbgui_help.vps_root_pw)
+        if st.session_state.vps_init_methode == "private_key":
+            st.text_input("private_key /path/filename.pem", value=vps.private_key_file, key="vps_private_key_file", help=pbgui_help.vps_private_key_file)
+        elif st.session_state.vps_init_methode == "password":
+            st.text_input("VPS sudo user password", value=vps.user_sudo_pw, type="password", key="vps_user_sudo_pw", help=pbgui_help.vps_user_sudo_pw)
+        else:
+            st.text_input("VPS new root password", value=vps.root_pw, type="password", key="vps_root_pw", help=pbgui_help.vps_root_pw)
     col1, col2, col3, col4 = st.columns([1,1,1,1])
     with col1:
         st.text_input("VPS user name", value=vps.user, key="vps_user", help=pbgui_help.vps_user)
     with col2:
         st.text_input("VPS user password", value=vps.user_pw, type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)
+    with col4:
+        if st.session_state.vps_init_methode == "private_key":
+            if st.button("Browse", key="button_browse_private_key"):
+                select_file("vps_private_key_file")
     st.checkbox("Debug", key="init_debug")
     if st.button("Init VPS", disabled=not vps.has_init_parameters()):
          vpsmanager.init_vps(vps, debug = st.session_state.init_debug)

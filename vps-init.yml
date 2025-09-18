@@ -36,13 +36,14 @@
       when: not ssh_key_exists.stat.exists
 
 - hosts: "{{ hostname }}"
-  remote_user: root
+  remote_user: "{{ init_user }}"
   gather_facts: "{{ debug }}"
 
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     ansible_ssh_pass: "{{ initial_root_pw }}"
     ansible_become_password: "{{ initial_root_pw }}"
+    ansible_ssh_private_key_file: "{{ privatel_key_file }}"
     new_root_pw: "{{ root_pw }}"
     user: "{{ user }}"
     user_pw: "{{ user_pw }}"
@@ -82,28 +83,50 @@
         name: root
         password: "{{ new_root_pw | password_hash('sha512') }}"
       become: yes
+      when: 
+        - new_root_pw is defined
+        - new_root_pw != ""
+        - new_root_pw != None
     
-    - name: Disable root login
-      lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: "^PermitRootLogin"
-        line: "PermitRootLogin no"
-        backup: yes
+    - name: change ssh parameters
+      block:
+        - name: Disable root login
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^PermitRootLogin"
+            line: "PermitRootLogin no"
+            backup: yes
+
+        - name: Enable password authentication
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^PasswordAuthentication"
+            line: "PasswordAuthentication yes"
+            backup: yes
+
+        - name: Disable includes
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^Include"
+            state: absent
+
+        - name: restart sshd
+          service:
+            name: ssh
+            state: restarted
+          ignore_errors: yes
       become: yes
-      notify: restart sshd
-
-  handlers:
-    - name: restart sshd
-      service:
-        name: ssh
-        state: restarted
-
+    
 - hosts: "{{ hostname }}"
+  remote_user: "{{ user }}"
   gather_facts: no
 
   vars:
     ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
+    remove_user: "{{ remove_user }}"
+    init_user: "{{ init_user }}"
   
   tasks:
     - name: print user
@@ -120,3 +143,12 @@
       authorized_key:
         user: "{{ user }}"
         key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_rsa.pub') }}"
+
+    - name: remove init user
+      user:
+        name: "{{ init_user }}"
+        state: absent
+        remove: yes
+        force: yes
+      become: yes
+      when: remove_user

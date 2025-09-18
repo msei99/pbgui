@@ -27,6 +27,19 @@ def change_ini(section, parameter):
         if st.button(":red[No]"):
             st.rerun()
 
+@st.dialog("Select file")
+def select_file(parameter):
+    filename = st_file_selector(st, path=st.session_state[parameter], key = f'file_change_{parameter}', label = f'select {parameter}')
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button(":green[OK]"):
+            filename = os.path.abspath(filename)
+            st.session_state[parameter] = filename
+            st.rerun()
+    with col2:
+        if st.button(":red[Cancel]"):
+            st.rerun()
+
 def pbdir(): return load_ini("main", "pbdir")
 
 def pbvenv(): return load_ini("main", "pbvenv")

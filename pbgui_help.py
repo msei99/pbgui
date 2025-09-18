@@ -1218,6 +1218,44 @@ vps_root_pw = """
     This password will be set after the installation
     ```"""
 
+vps_init_methode = """
+    ```
+    Method to access your VPS for initial setup
+    root: Access your vps with root user and password
+    password: Access your vps with user and password (needs a user with sudo rights)
+    private_key: Access your vps with user and private key (needs a user with sudo rights)
+    ```"""
+
+vps_remove_user = """
+    ```
+    Enable to remove the user that was used for initial setup
+    If the init user is not needed anymore, you can remove it for security reasons
+    ```"""
+
+vps_user_sudo = """
+    ```
+    Your user on vps that has sudo rights
+    ```"""
+
+vps_user_sudo_pw = """
+    ```
+    The password of your vps user that has sudo rights
+    ```"""
+
+vps_private_key_user = """
+    ```
+    Your user with private_key on vps that has sudo rights
+    ```"""
+
+vps_private_key_file = """
+    ```
+    The path/file to your private_key that has access to your vps user
+    Example: /home/username/.ssh/username.pem
+    Recommended:
+    For security reasons, set 400 permissions on the private key file
+    chmod 400 /home/username/.ssh/username.pem
+    ```"""
+
 vps_user = """
     ```
     Your linux username
