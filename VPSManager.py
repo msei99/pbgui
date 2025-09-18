@@ -28,6 +28,12 @@ class VPS:
         self.initial_root_pw = None
         self.user = getpass.getuser()
         self.user_pw = None
+        self.private_key_user = None
+        self.private_key_file = None
+        self.user_sudo = None
+        self.user_sudo_pw = None
+        self.init_methode = "root"  # root, password, private_key
+        self.remove_user = False
         self.swap = "2.5G"
         self.last_init = None
         self.last_setup = None
@@ -124,7 +130,11 @@ class VPS:
             return False
     
     def has_init_parameters(self):
-        if self.ip and self.root_pw and self.initial_root_pw and self.user and self.user_pw:
+        if self.ip and self.user and self.user_pw and self.root_pw and self.initial_root_pw:
+            return True
+        elif self.ip and self.user and self.user_pw and self.private_key_user and self.private_key_file:
+            return True
+        elif self.ip and self.user and self.user_pw and self.user_sudo and self.user_sudo_pw:
             return True
         else:
             return False
@@ -380,10 +390,13 @@ class VPSManager:
             extravars={
                 'hostname': vps.hostname,
                 'ip': vps.ip,
-                'initial_root_pw': vps.initial_root_pw,
+                'initial_root_pw': vps.initial_root_pw if vps.init_methode == "root" else vps.user_sudo_pw if vps.init_methode == "password" else "",
+                'init_user': vps.private_key_user if vps.init_methode == "private_key" else vps.user_sudo if vps.init_methode == "password" else "root",
+                'privatel_key_file': vps.private_key_file,
                 'root_pw': vps.root_pw,
                 'user': vps.user,
                 'user_pw': vps.user_pw,
+                'remove_user': vps.remove_user,
                 'debug': debug
             },
             quiet=True,
