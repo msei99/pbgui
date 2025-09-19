@@ -21,6 +21,13 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: Make sure rustup is installed
+      apt:
+        pkg:
+        - rustup
+        clean: yes
+      become: yes
+
     - name: update server
       apt:
         update_cache: yes
