@@ -32,6 +32,12 @@
 
     - name: Update rust
       command: rustup update stable
+      register: update_rust
+
+    - name: print update_rust
+      debug:
+        var: update_rust
+      tags: debug,never
 
     - name: get install_dir
       set_fact:

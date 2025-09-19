@@ -28,15 +28,14 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Make sure rustup is installed
-      apt:
-        pkg:
-        - rustup
-        clean: yes
-      become: yes
-
     - name: Update rust
       command: rustup update stable
+      register: update_rust
+
+    - name: print update_rust
+      debug:
+        var: update_rust
+      tags: debug,never
 
     - name: clone passivbot repository for pb6
       git:

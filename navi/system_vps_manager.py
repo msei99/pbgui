@@ -196,6 +196,13 @@ def manage_master():
         if "sudo_pw" in st.session_state:
             if st.session_state.sudo_pw != "":
                 enable_install = True
+        if st.button("Install rustup", disabled=not enable_install):
+            vpsmanager.command = "master-install-rustup"
+            vpsmanager.command_text = "Install rustup"
+            vpsmanager.update_master(debug = st.session_state.setup_debug, sudo_pw = st.session_state.sudo_pw)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
         if st.button("Install rclone", disabled=not enable_install):
             vpsmanager.command = "master-install-rclone"
             vpsmanager.command_text = "Install rclone"

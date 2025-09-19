@@ -1305,6 +1305,7 @@ sudo_pw = """
     The sudo password of your local user
     This is needed to install:
     - rclone
+    - rustup
     ```"""
    
 smart_filter = """
