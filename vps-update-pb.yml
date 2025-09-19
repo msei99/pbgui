@@ -63,6 +63,9 @@
         var: pb6_repo
       tags: debug,never
 
+    - name: Update rust
+      command: rustup update stable
+
     - name: clone passivbot repository for pb7
       git:
         repo: https://github.com/enarjord/passivbot.git
@@ -121,10 +124,6 @@
         virtualenv: "{{ install_dir }}/venv_pb7"
         requirements: "{{ install_dir }}/pb7/requirements.txt"
         extra_args: --upgrade pip
-      listen: "restart pb7"
-
-    - name: Update rust
-      command: rustup update stable
       listen: "restart pb7"
 
     - name: Build passivbot-rust with maturin
