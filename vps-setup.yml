@@ -204,7 +204,7 @@
         repo: ppa:deadsnakes/ppa
       become: yes
 
-    - name: Install git, python3.10, rclone, rustc, cargo
+    - name: Install git, python3.10, rclone, rustc, cargo, rustup
       apt:
         pkg:
         - git
@@ -212,8 +212,12 @@
         - rclone
         - rustc
         - cargo
+        - rustup
         clean: yes
       become: yes
+
+    - name: update rust
+      command: rustup update stable
 
     - name: clone pbgui repository
       git:
