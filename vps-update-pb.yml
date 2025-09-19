@@ -123,6 +123,10 @@
         extra_args: --upgrade pip
       listen: "restart pb7"
 
+    - name: Update rust
+      command: rustup update stable
+      listen: "restart pb7"
+
     - name: Build passivbot-rust with maturin
       shell: |
         source "{{ install_dir }}/venv_pb7/bin/activate"
