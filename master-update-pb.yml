@@ -27,6 +27,16 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: Make sure rustup is installed
+      apt:
+        pkg:
+        - rustup
+        clean: yes
+      become: yes
+
+    - name: Update rust
+      command: rustup update stable
+
     - name: clone pbgui repository
       git:
         repo: https://github.com/msei99/pbgui.git
