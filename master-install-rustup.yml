@@ -1,0 +1,37 @@
+---
+# Install or Update rclone
+# Steps:
+# 1. fetch install.sh from rclone website
+# 2. Run install.sh
+
+- hosts: localhost
+  # gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    # user: "{{ user }}"
+    # user_pw: "{{ user_pw }}"
+    pbgdir: "{{ pbgdir }}"
+
+  tasks:
+    # - name: display facts
+    #   debug:
+    #     var: ansible_facts
+    #   tags: debug,never
+
+    - name: Install rustup
+      apt:
+        pkg:
+        - rustup
+        clean: yes
+      become: yes
+
+    - name: Update rust
+      command: rustup update stable
+      register: update_rust
+
+    - name: print update_rust
+      debug:
+        var: update_rust
+      tags: debug,never
