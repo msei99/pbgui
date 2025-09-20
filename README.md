@@ -49,7 +49,7 @@ Here are all my copytradings and statistics of them: https://manicpt.streamlit.a
 
 ### Ubuntu installer
 
-There is a install.sh for Ubuntu. Working on Ubuntu from 20.04 to latest 24.04
+There is a install.sh for Ubuntu. Working on Ubuntu 24.04
 ```
 curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.sh | bash
 ```
