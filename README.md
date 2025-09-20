@@ -38,6 +38,7 @@ It has the following functions:
 I recommend the provider IONOS, as their smallest VPS plan is available for only 1 Euro \
 I have been using their services for over a year without any outages \
 Please use my [referral link](https://aklam.io/esMFvG) to obtain a VPS from IONOS \
+RackNerd has also nice small VPS for 11$ year. Please use my [referral link](https://my.racknerd.com/aff.php?aff=15714)
 A good alternative is a VPS from Contabo. Please use my [referral link](https://www.tkqlhce.com/click-101296145-12454592)
 
 ### Support:
