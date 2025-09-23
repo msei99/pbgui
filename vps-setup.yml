@@ -212,6 +212,7 @@
         - rclone
         - rustc
         - cargo
+        - gcc
         clean: yes
       become: yes
 
