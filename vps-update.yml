@@ -21,9 +21,10 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Make sure rustup is installed
+    - name: Make sure rustup and gcc is installed
       apt:
         pkg:
+        - gcc
         - rustup
         clean: yes
       become: yes
