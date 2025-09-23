@@ -168,7 +168,7 @@ class RemoteServer():
 
     def is_online(self):
         """
-        Check if the remote server is online by loading the alive_*.cmd file and checking if the latest is less than 60 seconds ago.
+        Check if the remote server is online by loading the alive_*.cmd file and checking if the latest is less than 300 seconds ago.
 
         Returns:
             bool: True if the remote server is online, False otherwise.
@@ -176,7 +176,7 @@ class RemoteServer():
         self.load()
         timestamp = round(datetime.now().timestamp())
         self._rtd = timestamp - self.ts
-        if self._rtd < 200:
+        if self._rtd < 300:
             return True
         return False
 
