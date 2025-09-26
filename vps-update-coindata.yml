@@ -20,6 +20,16 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: get remote_home and install_dir
+      set_fact:
+        remote_home: "{{ ansible_env.HOME }}"
+        install_dir: "{{ ansible_env.HOME + '/software' }}"
+    
+    - name: print install_dir
+      debug:
+        var: install_dir
+      tags: debug,never
+
     - name: edit pbgui.ini
       replace:
         path: "{{ install_dir }}/pbgui/pbgui.ini"
