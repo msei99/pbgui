@@ -5,6 +5,7 @@ from VPSManager import VPSManager, VPS
 import re
 from Monitor import Monitor
 from datetime import datetime
+from PBCoinData import CoinData
 import psutil
 import os
 
@@ -303,10 +304,12 @@ def manage_vps():
     if "monitor" not in st.session_state:
         st.session_state.monitor = Monitor()
     monitor = st.session_state.monitor
-    # Init coindata
-    coindata = st.session_state.pbcoindata
+    # Init VPS coindata
+    if "vps_coindata" not in st.session_state:
+        st.session_state.vps_coindata = CoinData()
+    vps_coindata = st.session_state.vps_coindata
     if not vps.coinmarketcap_api_key:
-        vps.coinmarketcap_api_key = coindata.api_key
+        vps.coinmarketcap_api_key = vps_coindata.api_key
     # Init keys from session_state
     if vps.is_vps_in_hosts():
         hosts_ok = f' ✅'
@@ -334,6 +337,10 @@ def manage_vps():
     if "vps_swap" in st.session_state:
         if st.session_state.vps_swap != vps.swap:
             vps.swap = st.session_state.vps_swap
+    if "vps_coindata_api_key" in st.session_state:
+        if st.session_state.vps_coindata_api_key != vps.coinmarketcap_api_key:
+            vps.coinmarketcap_api_key = st.session_state.vps_coindata_api_key
+            vps_coindata.api_key = st.session_state.vps_coindata_api_key
     if "vps_install_pb6" in st.session_state:
         if st.session_state.vps_install_pb6 != vps.install_pb6:
             vps.install_pb6 = st.session_state.vps_install_pb6
@@ -359,7 +366,7 @@ def manage_vps():
         rclone_ok = f' ✅'
     else:
         rclone_ok = f' ❌'
-    if coindata.fetch_api_status():
+    if vps_coindata.fetch_api_status():
         coindata_ok = f' ✅'
     else:
         coindata_ok = f' ❌'
@@ -437,6 +444,13 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
+        if st.button("Update CoinData API"):
+            vps.command = "vps-update-coindata"
+            vps.command_text = "Update CoinData API"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
 
     st.subheader(f"VPS Status: {vps.hostname}")
     with st.expander("VPS Setup Settings", expanded = vps.setup_status != "successful"):
@@ -473,11 +487,11 @@ def manage_vps():
                 else:
                     st.write(":red[rclone not installed. Please install rclone.]")
         with col4:
-            if coindata.api_key:
-                if coindata.fetch_api_status():
+            if vps_coindata.api_key:
+                if vps_coindata.fetch_api_status():
                     st.text_input("CoinMarketCap API_Key", value=vps.coinmarketcap_api_key, type="password", key="vps_coindata_api_key", disabled=False, help=pbgui_help.coindata_api_key)
                 else:
-                    st.write(":red[Invalid CoinMarketCap API_Key]")
+                    st.text_input(":red[CoinMarketCap API_Key (Invalid)]", value=vps.coinmarketcap_api_key, type="password", key="vps_coindata_api_key", disabled=False, help=pbgui_help.coindata_api_key)
             else:
                 st.write(":red[Please configure PBCoinData]")
         col1, col2, col3 = st.columns([1,1,2], vertical_alignment='bottom')
