@@ -1,0 +1,57 @@
+---
+# Update CoinData API key on VPS
+# Steps:
+# 1. Update pbgui.ini with new API key
+# 2. Restart pbgui service
+
+- hosts: "{{ hostname }}"
+  gather_facts: "{{ debug }}"
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    api_key: "{{ coinmarketcap_api_key }}"
+    reboot: "{{ reboot }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: edit pbgui.ini
+      replace:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '<api_key>', replace: "{{ api_key }}" }
+
+    - name: Start or Restart PBRun and PBRemote
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      register: starter_result
+
+    - name: print starter result
+      debug:
+        var: starter_result
+      tags: debug,never
+
+    - name: Start or Restart PBCoinData
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      register: starter_result
+
+    - name: print starter result
+      debug:
+        var: starter_result
+      tags: debug,never
