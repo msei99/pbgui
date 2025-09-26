@@ -30,13 +30,12 @@
         var: install_dir
       tags: debug,never
 
-    - name: edit pbgui.ini
-      replace:
+    - name: Change CoinMarketCap API key 
+      ini_file:
         path: "{{ install_dir }}/pbgui/pbgui.ini"
-        regexp: "{{ item.regexp }}"
-        replace: "{{ item.replace }}"
-      loop:
-        - { regexp: '<api_key>', replace: "{{ api_key }}" }
+        section: coinmarketcap
+        option: api_key
+        value: "{{ api_key }}"
 
     - name: Start or Restart PBRun and PBRemote
       shell: |
