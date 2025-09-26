@@ -31,6 +31,7 @@ class OptimizeV7QueueItem:
         self.exchange = None
         self.starting_config = False
         self.log = None
+        self.log_show = False
         self.pid = None
         self.pidfile = None
 
@@ -172,6 +173,9 @@ class OptimizeV7QueueItem:
 class OptimizeV7Queue:
     def __init__(self):
         self.items = []
+        self.d = []
+        self.sort = "Time"
+        self.sort_order = True
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
         if not pb_config.has_section("optimize_v7"):
@@ -180,6 +184,7 @@ class OptimizeV7Queue:
             with open('pbgui.ini', 'w') as f:
                 pb_config.write(f)
         self._autostart = eval(pb_config.get("optimize_v7", "autostart"))
+        self.load_queue_sort()
         if self._autostart:
             self.run()
 
@@ -220,6 +225,7 @@ class OptimizeV7Queue:
                     self.items.remove(item)
         if self._autostart:
             self.run()
+        self.refresh()
 
     def remove_selected(self):
         ed_key = st.session_state.ed_key
@@ -227,8 +233,9 @@ class OptimizeV7Queue:
         for row in ed["edited_rows"]:
             if "delete" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["delete"]:
-                    self.items[row].remove()
-        self.items = []
+                    self.d[row]["item"].remove()
+                    self.items.remove(self.d[row]["item"])
+        self.refresh()
 
     def running(self):
         for item in self.items:
@@ -246,7 +253,6 @@ class OptimizeV7Queue:
         dest = Path(f'{PBGDIR}/data/opt_v7_queue')
         p = str(Path(f'{dest}/*.json'))
         items = glob.glob(p)
-        self.items = []
         for item in items:
             with open(item, "r", encoding='utf-8') as f:
                 q_config = json.load(f)
@@ -260,6 +266,11 @@ class OptimizeV7Queue:
                 qitem.log = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.log')
                 qitem.pidfile = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.pid')
                 self.add(qitem)
+        # Remove items that are not existing anymore
+        for item in self.items[:]:
+            if not Path(f'{PBGDIR}/data/opt_v7_queue/{item.filename}.json').exists():
+                item.remove()
+                self.items.remove(item)
 
     def run(self):
         if not self.is_running():
@@ -297,9 +308,40 @@ class OptimizeV7Queue:
             if any("OptimizeV7.py" in sub for sub in cmdline):
                 return process
 
+    def refresh(self):
+        # Remove items from d that are not in items anymore
+        self.d = [item for item in self.d if item.get('filename') in [i.filename for i in self.items]]
+        # Add items to d that are in items but not in d
+        for item in self.items:
+            if not any(d_item.get('filename') == item.filename for d_item in self.d):
+                self.d.append({
+                    'id': len(self.d),
+                    'run': item.is_running(),
+                    'Status': item.status(),
+                    'edit': False,
+                    'log': item.log_show,
+                    'delete': False,
+                    'starting_config': item.starting_config,
+                    'name': item.name,
+                    'filename': item.filename,
+                    'Time': datetime.datetime.fromtimestamp(Path(f'{PBGDIR}/data/opt_v7_queue/{item.filename}.json').stat().st_mtime),
+                    'exchange': item.exchange,
+                    'finish': item.is_finish(),
+                    'item': item,
+                })
+        # Update status of all items in d
+        for row in self.d:
+            for item in self.items:
+                if row['filename'] == item.filename:
+                    row['run'] = item.is_running()
+                    row['Status'] = item.status()
+                    row['log'] = item.log_show
+                    row['finish'] = item.is_finish()
+
     def view(self):
         if not self.items:
             self.load()
+            self.refresh()
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
@@ -307,56 +349,65 @@ class OptimizeV7Queue:
             ed = st.session_state[f'view_opt_v7_queue_{ed_key}']
             for row in ed["edited_rows"]:
                 if "run" in ed["edited_rows"][row]:
-                    if self.items[row].is_running():
-                        self.items[row].stop()
+                    if ed["edited_rows"][row]["run"]:
+                        self.d[row]["item"].run()
                     else:
-                        self.items[row].run()
-                if "view" in ed["edited_rows"][row]:
-                    opt = OptimizeV7Item(f'{PBGDIR}/data/opt_v7/{self.items[row].name}')
-                    opt.load()
-                    opt.load_results()
-                    st.session_state.opt_v7_results = opt
-                    del st.session_state.opt_v7_queue
-                    st.rerun()
+                        self.d[row]["item"].stop()
+                    self.refresh()
                 if "edit" in ed["edited_rows"][row]:
-                    st.session_state.opt_v7 = OptimizeV7Item(f'{PBGDIR}/data/opt_v7/{self.items[row].name}.json')
+                    st.session_state.opt_v7 = OptimizeV7Item(f'{PBGDIR}/data/opt_v7/{self.d[row]["item"].name}.json')
                     del st.session_state.opt_v7_queue
                     st.rerun()
-        d = []
-        for id, opt in enumerate(self.items):
-            if type(opt.exchange) != list:
-                opt.exchange = [opt.exchange]
-            d.append({
-                'id': id,
-                'run': False,
-                'Status': opt.status(),
-                'edit': False,
-                'log': False,
-                'delete': False,
-                'starting_config': opt.starting_config,
-                'name': opt.name,
-                'filename': opt.filename,
-                'Time': datetime.datetime.fromtimestamp(Path(f'{PBGDIR}/data/opt_v7_queue/{opt.filename}.json').stat().st_mtime),
-                'exchange': opt.exchange,
-                'finish': opt.is_finish(),
-            })
+                if "log" in ed["edited_rows"][row]:
+                    self.d[row]["item"].log_show = ed["edited_rows"][row]["log"]
         column_config = {
             # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
             "edit": st.column_config.CheckboxColumn('Edit'),
             "log": st.column_config.CheckboxColumn(label="View Logfile"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
+            "item": None,
             }
         #Display Queue
-        height = 36+(len(d))*35
+        height = 36+(len(self.d))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
-        if f'view_opt_v7_queue_{ed_key}' in st.session_state:
-            ed = st.session_state[f'view_opt_v7_queue_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "log" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["log"]:
-                        self.items[row].view_log()
+        if "sort_opt_v7_queue" in st.session_state:
+            if st.session_state.sort_opt_v7_queue != self.sort:
+                self.sort = st.session_state.sort_opt_v7_queue
+                self.save_queue_sort()
+        else:
+            st.session_state.sort_opt_v7_queue = self.sort
+        if "sort_opt_v7_queue_order" in st.session_state:
+            if st.session_state.sort_opt_v7_queue_order != self.sort_order:
+                self.sort_order = st.session_state.sort_opt_v7_queue_order
+                self.save_queue_sort()
+        else:
+            st.session_state.sort_opt_v7_queue_order = self.sort_order
+            
+        col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
+        with col1:
+            st.selectbox("Sort by:", ['Time', 'name', 'Status', 'exchange', 'finish'], key=f'sort_opt_v7_queue', index=0)
+        with col2:
+            st.checkbox("Reverse", value=True, key=f'sort_opt_v7_queue_order')
+        self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_opt_v7_queue']], reverse=st.session_state[f'sort_opt_v7_queue_order'])
+        st.data_editor(data=self.d, height=height, use_container_width=True, key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
+        for item in self.items:
+            if item.log_show:
+                item.view_log()
+    
+    def load_queue_sort(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self.sort = pb_config.get("optimize_v7", "queue_sort") if pb_config.has_option("optimize_v7", "queue_sort") else "Time"
+        self.sort_order = eval(pb_config.get("optimize_v7", "queue_sort_order")) if pb_config.has_option("optimize_v7", "queue_sort_order") else True
+
+    def save_queue_sort(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        pb_config.set("optimize_v7", "queue_sort", str(self.sort))
+        pb_config.set("optimize_v7", "queue_sort_order", str(self.sort_order))
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
 
 class OptimizeV7Results:
     def __init__(self):
@@ -703,7 +754,6 @@ class OptimizeV7Results:
         ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
         # Get number of selected paretos
         selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
-        print(selected_count)
         if selected_count == 0:
             error_popup("No paretos selected")
             return

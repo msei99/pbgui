@@ -170,10 +170,7 @@ def opt_v7_queue():
     # Navigation
     with st.sidebar:
         if st.button(":material/refresh:"):
-            opt_v7_queue.items = []
-            if "ed_key" in st.session_state:
-                st.session_state.ed_key += 1
-            st.rerun()
+            opt_v7_queue.refresh()
         if st.button(":material/home:"):
             del st.session_state.opt_v7_queue
             st.rerun()
