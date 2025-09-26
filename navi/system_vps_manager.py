@@ -288,6 +288,8 @@ def manage_vps():
         if st.session_state.manage_vps_select_vps != st.session_state.manage_vps.hostname:
             st.session_state.manage_vps = vpsmanager.find_vps_by_hostname(st.session_state.manage_vps_select_vps)
             del st.session_state.vps_user_pw
+            del st.session_state.vps_coindata_api_key
+            del st.session_state.vps_install_pb6
             del st.session_state.vps_swap
             del st.session_state.vps_firewall
             del st.session_state.vps_firewall_ssh_port
