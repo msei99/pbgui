@@ -1372,7 +1372,6 @@ class ConfigV7Archives:
                 return
             # Test push
             cmd = ["git", "-C", path, "push", url, "--dry-run"]
-            print(cmd)
             try:
                 result = subprocess.run(cmd, capture_output=True, check=True, text=True)
                 log = result.stdout + "\n" + result.stderr
@@ -1690,6 +1689,37 @@ class BacktestV7Results:
                     ConfigV7Archives().add_config(self.results[row].result_path)
         info_popup(f"Selected Backtests added to config archive")
 
+    @st.dialog("Select backtest parameters", width="large")
+    def select_parameters(self, ed):
+        st.session_state.select_bt_v7_run = False
+        start_date = st.date_input("start_date", value="2020-01-01", format="YYYY-MM-DD", key="select_bt_v7_start_date")
+        end_date = st.date_input("end_date", value="today", format="YYYY-MM-DD", key="select_bt_v7_end_date")
+        starting_balance = st.number_input("Starting Balance", value=1000, step=1000, key="select_bt_v7_starting_balance")  
+        exchanges = st.multiselect('Exchanges', ["binance", "bybit", "gateio", "bitget"], default=["binance", "bybit"], key="select_bt_v7_exchanges")
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button("OK"):
+                for row in ed["edited_rows"]:
+                    if "Select" in ed["edited_rows"][row]:
+                        if ed["edited_rows"][row]["Select"]:
+                            bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                            bt_v7.config.backtest.start_date = start_date.strftime("%Y-%m-%d")
+                            bt_v7.config.backtest.end_date = end_date.strftime("%Y-%m-%d")
+                            bt_v7.config.backtest.starting_balance = starting_balance
+                            bt_v7.config.backtest.exchanges = exchanges
+                            bt_v7.name = f'{bt_v7.config.backtest.base_dir.split("/")[-1]}'
+                            bt_v7.save()
+                            bt_v7.save_queue()
+                if "bt_v7_results" in st.session_state:
+                    del st.session_state.bt_v7_results
+                if "config_v7_config_archive" in st.session_state:
+                    del st.session_state.config_v7_config_archive
+                st.session_state.bt_v7_queue = BacktestV7Queue()
+                st.rerun()
+        with col2:
+            if st.button("Cancel"):
+                st.rerun()
+
     def backtest_selected_results(self):
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'select_btv7_result_{ed_key}']
@@ -1698,20 +1728,19 @@ class BacktestV7Results:
         if selected_count == 0:
             error_popup("No Backtests selected")
             return
+        if selected_count > 1:
+            self.select_parameters(ed)
+            return
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    if selected_count == 1:
-                        st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
-                        if "bt_v7_results" in st.session_state:
-                            del st.session_state.bt_v7_results
-                        if "config_v7_config_archive" in st.session_state:
-                            del st.session_state.config_v7_config_archive
-                        st.rerun()
-                    else:                        
-                        bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
-                        bt_v7.save_queue()
-        info_popup(f"Selected Backtests added to queue")
+                    st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                    st.session_state.bt_v7.config.backtest.end_date = "now"
+                    if "bt_v7_results" in st.session_state:
+                        del st.session_state.bt_v7_results
+                    if "config_v7_config_archive" in st.session_state:
+                        del st.session_state.config_v7_config_archive
+                    st.rerun()
     
     def calculate_balance(self):
         ed_key = st.session_state.ed_key
