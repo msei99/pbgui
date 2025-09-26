@@ -310,6 +310,8 @@ def manage_vps():
     vps_coindata = st.session_state.vps_coindata
     if not vps.coinmarketcap_api_key:
         vps.coinmarketcap_api_key = vps_coindata.api_key
+    else:
+        vps_coindata.api_key = vps.coinmarketcap_api_key
     # Init keys from session_state
     if vps.is_vps_in_hosts():
         hosts_ok = f' ✅'
