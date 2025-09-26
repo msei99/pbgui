@@ -184,7 +184,7 @@ class OptimizeV7Queue:
             with open('pbgui.ini', 'w') as f:
                 pb_config.write(f)
         self._autostart = eval(pb_config.get("optimize_v7", "autostart"))
-        self.load_queue_sort()
+        self.load_sort_queue()
         if self._autostart:
             self.run()
 
@@ -374,16 +374,16 @@ class OptimizeV7Queue:
         if "sort_opt_v7_queue" in st.session_state:
             if st.session_state.sort_opt_v7_queue != self.sort:
                 self.sort = st.session_state.sort_opt_v7_queue
-                self.save_queue_sort()
+                self.save_sort_queue()
         else:
             st.session_state.sort_opt_v7_queue = self.sort
         if "sort_opt_v7_queue_order" in st.session_state:
             if st.session_state.sort_opt_v7_queue_order != self.sort_order:
                 self.sort_order = st.session_state.sort_opt_v7_queue_order
-                self.save_queue_sort()
+                self.save_sort_queue()
         else:
             st.session_state.sort_opt_v7_queue_order = self.sort_order
-            
+        # Display sort options
         col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
         with col1:
             st.selectbox("Sort by:", ['Time', 'name', 'Status', 'exchange', 'finish'], key=f'sort_opt_v7_queue', index=0)
@@ -394,18 +394,20 @@ class OptimizeV7Queue:
         for item in self.items:
             if item.log_show:
                 item.view_log()
-    
-    def load_queue_sort(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        self.sort = pb_config.get("optimize_v7", "queue_sort") if pb_config.has_option("optimize_v7", "queue_sort") else "Time"
-        self.sort_order = eval(pb_config.get("optimize_v7", "queue_sort_order")) if pb_config.has_option("optimize_v7", "queue_sort_order") else True
 
-    def save_queue_sort(self):
+    def load_sort_queue(self):
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
-        pb_config.set("optimize_v7", "queue_sort", str(self.sort))
-        pb_config.set("optimize_v7", "queue_sort_order", str(self.sort_order))
+        self.sort = pb_config.get("optimize_v7", "sort_queue") if pb_config.has_option("optimize_v7", "sort_queue") else "Time"
+        self.sort_order = eval(pb_config.get("optimize_v7", "sort_queue_order")) if pb_config.has_option("optimize_v7", "sort_queue_order") else True
+
+    def save_sort_queue(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("optimize_v7"):
+            pb_config.add_section("optimize_v7")
+        pb_config.set("optimize_v7", "sort_queue", str(self.sort))
+        pb_config.set("optimize_v7", "sort_queue_order", str(self.sort_order))
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
 
@@ -416,9 +418,12 @@ class OptimizeV7Results:
         self.selected_analysis = "analyses_combined"
         self.results = []
         self.results_new = []
+        self.sort_results = "Result Time"
+        self.sort_results_order = True
         self.paretos = []
         self.filter = ""
         self.initialize()
+        self.load_sort_results()
     
     def initialize(self):
         self.find_results()
@@ -502,10 +507,16 @@ class OptimizeV7Results:
         if not self.filter == "":
             for result in self.results.copy():
                 name = self.find_result_name(result)
+                if not name:
+                    self.results.remove(result)
+                    continue
                 if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
                     self.results.remove(result)
             for result in self.results_new.copy():
                 name, result_time = self.find_result_name_new(result)
+                if not name:
+                    self.results_new.remove(result)
+                    continue
                 if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
                     self.results_new.remove(result)
 
@@ -536,6 +547,26 @@ class OptimizeV7Results:
             "Result Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Result": st.column_config.TextColumn(label="Result Directory", width="50px"),
         }
+        if "sort_opt_v7_results" in st.session_state:
+            if st.session_state.sort_opt_v7_results != self.sort_results:
+                self.sort_results = st.session_state.sort_opt_v7_results
+                self.save_sort_results()
+        else:
+            st.session_state.sort_opt_v7_results = self.sort_results
+        if "sort_opt_v7_results_order" in st.session_state:
+            if st.session_state.sort_opt_v7_results_order != self.sort_results_order:
+                self.sort_results_order = st.session_state.sort_opt_v7_results_order
+                self.save_sort_results()
+        else:
+            st.session_state.sort_opt_v7_results_order = self.sort_results_order
+        # Display sort options
+        col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
+        with col1:
+            st.selectbox("Sort by:", ['Result Time', 'Name'], key=f'sort_opt_v7_results', index=0)
+        with col2:
+            st.checkbox("Reverse", value=True, key=f'sort_opt_v7_results_order')
+        # Sort results
+        d_new = sorted(d_new, key=lambda x: x[st.session_state[f'sort_opt_v7_results']], reverse=st.session_state[f'sort_opt_v7_results_order'])
         #Display optimizes
         st.data_editor(data=d_new, height=36+(len(d_new))*35, use_container_width=True, key=f'select_optresults_new_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config_new, disabled=['id','name','index'])
         if f'select_optresults_new_{st.session_state.ed_key}' in st.session_state:
@@ -600,6 +631,8 @@ class OptimizeV7Results:
             "Analysis": st.column_config.TextColumn(label="Analysis File", width="50px"),
             "Result": st.column_config.TextColumn(label="Result File", width="50px"),
             }
+        # Sort results
+        d = sorted(d, key=lambda x: x[st.session_state[f'sort_opt_v7_results']], reverse=st.session_state[f'sort_opt_v7_results_order'])
         #Display optimizes
         st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
         if f'select_optresults_{ed_key}' in st.session_state:
@@ -628,6 +661,22 @@ class OptimizeV7Results:
                         if "bt_v7_edit_symbol" in st.session_state:
                             del st.session_state.bt_v7_edit_symbol
                         st.switch_page(get_navi_paths()["V7_BACKTEST"])
+
+    def load_sort_results(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self.sort_results = pb_config.get("optimize_v7", "sort_results") if pb_config.has_option("optimize_v7", "sort_results") else "Result Time"
+        self.sort_results_order = eval(pb_config.get("optimize_v7", "sort_results_order")) if pb_config.has_option("optimize_v7", "sort_results_order") else True
+
+    def save_sort_results(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("optimize_v7"):
+            pb_config.add_section("optimize_v7")
+        pb_config.set("optimize_v7", "sort_results", str(self.sort_results))
+        pb_config.set("optimize_v7", "sort_results_order", str(self.sort_results_order))
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
 
     def run_3d_plot(self, index):
         # run 3d plot
@@ -1270,42 +1319,6 @@ class OptimizeV7Item:
             st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", key="edit_opt_v7_only_cpt", help=pbgui_help.only_cpt)
-
-    # # long_close_grid_markup_range
-    # @st.fragment
-    # def fragment_long_close_grid_markup_range(self):
-    #     if "edit_opt_v7_long_close_grid_markup_range" in st.session_state:
-    #         if st.session_state.edit_opt_v7_long_close_grid_markup_range != (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1):
-    #             self.config.optimize.bounds.long_close_grid_markup_range_0 = st.session_state.edit_opt_v7_long_close_grid_markup_range[0]
-    #             self.config.optimize.bounds.long_close_grid_markup_range_1 = st.session_state.edit_opt_v7_long_close_grid_markup_range[1]
-    #     else:
-    #         st.session_state.edit_opt_v7_long_close_grid_markup_range = (self.config.optimize.bounds.long_close_grid_markup_range_0, self.config.optimize.bounds.long_close_grid_markup_range_1)
-    #     st.slider(
-    #         "long_close_grid_markup_range",
-    #         min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
-    #         max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
-    #         step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
-    #         format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
-    #         key="edit_opt_v7_long_close_grid_markup_range",
-    #         help=pbgui_help.close_grid_parameters)
-    
-    # # long_close_grid_min_markup
-    # @st.fragment
-    # def fragment_long_close_grid_min_markup(self):
-    #     if "edit_opt_v7_long_close_grid_min_markup" in st.session_state:
-    #         if st.session_state.edit_opt_v7_long_close_grid_min_markup != (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1):
-    #             self.config.optimize.bounds.long_close_grid_min_markup_0 = st.session_state.edit_opt_v7_long_close_grid_min_markup[0]
-    #             self.config.optimize.bounds.long_close_grid_min_markup_1 = st.session_state.edit_opt_v7_long_close_grid_min_markup[1]
-    #     else:
-    #         st.session_state.edit_opt_v7_long_close_grid_min_markup = (self.config.optimize.bounds.long_close_grid_min_markup_0, self.config.optimize.bounds.long_close_grid_min_markup_1)
-    #     st.slider(
-    #         "long_close_grid_min_markup",
-    #         min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
-    #         max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
-    #         step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
-    #         format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
-    #         key="edit_opt_v7_long_close_grid_min_markup",
-    #         help=pbgui_help.close_grid_parameters)
 
     # long_close_grid_markup_end
     @st.fragment
