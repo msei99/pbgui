@@ -56,6 +56,7 @@ class RemoteServer():
         self._monitor = []
         self._upgrades = 0
         self._reboot = False
+        self._cmc_credits = 0
         self._pbgui_version = "N/A"
         self._pbgui_commit = None
         self._pb6_version = "N/A"
@@ -106,6 +107,8 @@ class RemoteServer():
     def upgrades(self): return self._upgrades
     @property
     def reboot(self): return self._reboot
+    @property
+    def cmc_credits(self): return self._cmc_credits
     @property
     def pbgui_version(self): return self._pbgui_version
     @property
@@ -220,6 +223,8 @@ class RemoteServer():
                         self._upgrades = cfg["upgrades"]
                     if "reboot" in cfg:
                         self._reboot = cfg["reboot"]
+                    if "cmd" in cfg:
+                        self._cmc_credits = cfg["cmc"]
                     if "pbgv" in cfg:
                         self._pbgui_version = cfg["pbgv"]
                     if "pbgc" in cfg:
@@ -878,6 +883,7 @@ class PBRemote():
         if timestamp - self.systemts > 3600:
             self.local_run.has_upgrades()
             self.local_run.has_reboot()
+            self.local_run.fetch_cmc_credits()
             self.systemts = timestamp
         self.local_run.load_versions()
         self.local_run.load_git_commits()
@@ -903,6 +909,7 @@ class PBRemote():
             "monitor": self.monitor,
             "upgrades": self.local_run.upgrades,
             "reboot": self.local_run.reboot,
+            "cmc": self.local_run.coindata.credits_left,
             "pbgv": self.local_run.pbgui_version,
             "pbgc": self.local_run.pbgui_commit,
             "pb6v": self.local_run.pb6_version,

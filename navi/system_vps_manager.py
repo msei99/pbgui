@@ -541,6 +541,7 @@ def manage_vps():
             "Start": boot,
             "Reboot": reboot,
             "Updates": server.upgrades,
+            "CMC Credits": server.cmc_credits,
             "PBGui": f'{server.pbgui_version}',
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
