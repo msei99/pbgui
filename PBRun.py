@@ -795,6 +795,7 @@ class PBRun():
     """
     def __init__(self):
         # self.run_instances = []
+        self.coindata = CoinData()
         self.pbgui_version = "N/A"
         self.pbgui_version_origin = "N/A"
         self.pb6_version = "N/A"
@@ -1026,6 +1027,9 @@ class PBRun():
                     if version:
                         self.pb7_version = version.group(0)
                         break
+
+    def fetch_cmc_credits(self):
+        self.coindata.fetch_api_status()        
 
     def add_v7(self, run_v7: RunV7):
         if run_v7:
