@@ -223,7 +223,7 @@ class RemoteServer():
                         self._upgrades = cfg["upgrades"]
                     if "reboot" in cfg:
                         self._reboot = cfg["reboot"]
-                    if "cmd" in cfg:
+                    if "cmc" in cfg:
                         self._cmc_credits = cfg["cmc"]
                     if "pbgv" in cfg:
                         self._pbgui_version = cfg["pbgv"]
