@@ -9,7 +9,8 @@ sudo add-apt-repository ppa:deadsnakes/ppa -y
 
 # Install git, python3.10-venv, rclone, rustc and cargo
 sudo apt update
-sudo apt install git python3.10-venv rclone rustc cargo sshpass rustup -y
+sudo apt install git python3.10-venv rclone rustc cargo sshpass -y
+sudo apt install rustup -y
 
 # Update rust
 rustup update stable
