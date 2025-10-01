@@ -74,9 +74,19 @@ def bt_v7_list():
         if st.button("Queue"):
             st.session_state.bt_v7_queue = BacktestV7Queue()
             st.rerun()
-        if st.button("Add Backtest"):
+        if st.button(":material/add:", help="Add new Backtest"):
             st.session_state.bt_v7 = BacktestV7Item()
             st.rerun()
+        if st.button(":material/chart_data:", help="View selected Backtest Results"):
+            bt_v7_list.view_selected()
+        if st.button(":material/edit:", help="Edit selected Backtest"):
+            bt_v7_list.edit_selected()
+        col1, col2 = st.columns([0.5,1])
+        with col1:
+            if st.button(":material/delete:", help="Delete selected Backtests. If none selected all will be deleted"):
+                bt_v7_list.remove_selected()
+        with col2:
+            st.checkbox("Results", key="bt_v7_remove_results", value=False, help="Also remove results of selected Backtests")            
     st.subheader("Available Configs")
     bt_v7_list.view_backtests()
 
