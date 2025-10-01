@@ -36,6 +36,7 @@ class BacktestV7QueueItem():
         self.json = None
         self.exchange = None
         self.log = None
+        self.log_show = False
         self.pid = None
         self.pidfile = None
 
@@ -167,6 +168,10 @@ class BacktestV7QueueItem():
 class BacktestV7Queue:
     def __init__(self):
         self.items = []
+        self.d = []
+        self.sort = "Time"
+        self.sort_order = True
+        self.load_sort_queue()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
         if not pb_config.has_section("backtest_v7"):
@@ -311,9 +316,39 @@ class BacktestV7Queue:
             if any("BacktestV7.py" in sub for sub in cmdline):
                 return process
 
+    def refresh(self):
+        # Remove items from d that are not in items anymore
+        self.d = [item for item in self.d if item.get('filename') in [i.filename for i in self.items]]
+        # Add items to d that are in items but not in d
+        for item in self.items:
+            if not any(d_item.get('filename') == item.filename for d_item in self.d):
+                self.d.append({
+                    'id': len(self.d),
+                    'run': item.is_running(),
+                    'Status': item.status(),
+                    'view': False,
+                    'log': item.log_show,
+                    'delete': False,
+                    'Name': item.name,
+                    'filename': item.filename,
+                    'Time': datetime.datetime.fromtimestamp(Path(f'{PBGDIR}/data/bt_v7_queue/{item.filename}.json').stat().st_mtime),
+                    'exchange': item.exchange,
+                    'finish': item.is_finish(),
+                    'item': item,
+                })
+        # Update status of all items in d
+        for row in self.d:
+            for item in self.items:
+                if row['filename'] == item.filename:
+                    row['run'] = item.is_running()
+                    row['Status'] = item.status()
+                    row['log'] = item.log_show
+                    row['finish'] = item.is_finish()
+
     def view(self):
         if not self.items:
             self.load()
+            self.refresh()
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
@@ -321,33 +356,20 @@ class BacktestV7Queue:
             ed = st.session_state[f'view_bt_v7_queue_{ed_key}']
             for row in ed["edited_rows"]:
                 if "run" in ed["edited_rows"][row]:
-                    if self.items[row].is_running():
-                        self.items[row].stop()
+                    if ed["edited_rows"][row]["run"]:
+                        self.d[row]["item"].run()
                     else:
-                        self.items[row].run()
+                        self.d[row]["item"].stop()
+                    self.refresh()
                 if "view" in ed["edited_rows"][row]:
                     bt = BacktestV7Results()
-                    bt.results_path = f'{pb7dir()}/backtests/pbgui/{self.items[row].name}'
+                    bt.results_path = f'{pb7dir()}/backtests/pbgui/{self.d[row]["item"].name}'
                     st.session_state.bt_v7_results = bt
                     del st.session_state.bt_v7_queue
                     st.rerun()
-        d = []
-        for id, bt in enumerate(self.items):
-            if type(bt.exchange) != list:
-                bt.exchange = [bt.exchange]
-            d.append({
-                'id': id,
-                'run': False,
-                'Status': bt.status(),
-                'view': False,
-                'log': False,
-                'delete': False,
-                'name': bt.name,
-                'filename': bt.filename,
-                'Time': datetime.datetime.fromtimestamp(Path(f'{PBGDIR}/data/bt_v7_queue/{bt.filename}.json').stat().st_mtime),
-                'exchange': bt.exchange,
-                'finish': bt.is_finish(),
-            })
+                if "log" in ed["edited_rows"][row]:
+                    self.d[row]["item"].log_show = ed["edited_rows"][row]["log"]
+                    self.d[row]["log"] = ed["edited_rows"][row]["log"]
         column_config = {
             # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
@@ -355,21 +377,54 @@ class BacktestV7Queue:
             "log": st.column_config.CheckboxColumn(label="View Logfile"),
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             "id": st.column_config.NumberColumn(format="%.0f", label="ID"),
-            "name": st.column_config.TextColumn(label="Name"),
+            "Name": st.column_config.TextColumn(label="Name"),
             "filename": st.column_config.TextColumn(label="Filename"),
             "exchange": st.column_config.ListColumn(label="Exchange"),
             "finish": st.column_config.CheckboxColumn(label="Finished"),
             }
         #Display Queue
-        height = 36+(len(d))*35
+        height = 36+(len(self.d))*35
+        if "sort_bt_v7_queue" in st.session_state:
+            if st.session_state.sort_bt_v7_queue != self.sort:
+                self.sort = st.session_state.sort_bt_v7_queue
+                self.save_sort_queue()
+        else:
+            st.session_state.sort_bt_v7_queue = self.sort
+        if "sort_bt_v7_queue_order" in st.session_state:
+            if st.session_state.sort_bt_v7_queue_order != self.sort_order:
+                self.sort_order = st.session_state.sort_bt_v7_queue_order
+                self.save_sort_queue()
+        else:
+            st.session_state.sort_bt_v7_queue_order = self.sort_order
+        # Display sort options
+        col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
+        with col1:
+            st.selectbox("Sort by:", ['Time', 'Name', 'Status'], key=f'sort_bt_v7_queue', index=0)
+        with col2:
+            st.checkbox("Reverse", value=True, key=f'sort_bt_v7_queue_order')
+        # Sort results
+        self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_bt_v7_queue']], reverse=st.session_state[f'sort_bt_v7_queue_order'])
         if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'view_bt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
-        if f'view_bt_v7_queue_{ed_key}' in st.session_state:
-            ed = st.session_state[f'view_bt_v7_queue_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "log" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["log"]:
-                        self.items[row].view_log()
+        st.data_editor(data=self.d, height=height, use_container_width=True, key=f'view_bt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
+        for item in self.items:
+            if item.log_show:
+                item.view_log()
+
+    def load_sort_queue(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self.sort = pb_config.get("backtest_v7", "sort_queue") if pb_config.has_option("backtest_v7", "sort_queue") else "Time"
+        self.sort_order = eval(pb_config.get("backtest_v7", "sort_queue_order")) if pb_config.has_option("backtest_v7", "sort_queue_order") else True
+
+    def save_sort_queue(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("backtest_v7"):
+            pb_config.add_section("backtest_v7")
+        pb_config.set("backtest_v7", "sort_queue", str(self.sort))
+        pb_config.set("backtest_v7", "sort_queue_order", str(self.sort_order))
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
 
 class BacktestV7Item:
     def __init__(self, backtest_path: str = None):
@@ -1459,6 +1514,9 @@ class BacktestV7Results:
     def __init__(self):
         self.results = []
         self.results_d = []
+        self.sort_results = "Result Time"
+        self.sort_results_order = True
+        self.load_sort_results()
         self.filter = ""
         self.results_path = None
         self.name = None
@@ -1544,15 +1602,16 @@ class BacktestV7Results:
                     'Backtest Name': result_path,
                     'Exch.': result.config.backtest.exchanges,
                     'Result Time': result.time,
-                    'ADG': f"{result.adg:.4f}",
-                    'Gain': f"{gain:.2f}",
-                    'Drawdown Worst': f"{result.drawdown_worst:.4f}",
-                    'Sharpe Ratio': f"{result.sharpe_ratio:.4f}",
-                    'Starting Balance': f"{starting_balance_float:,.0f}",
-                    'Final Balance': f"{final_balance_float:,.0f}",
-                    'Final Balance BTC': result.final_balance_btc,
+                    'ADG': float(f"{result.adg:.4f}"),
+                    'Gain': float(f"{gain:.2f}"),
+                    'Drawdown Worst': float(f"{result.drawdown_worst:.4f}"),
+                    'Sharpe Ratio': float(f"{result.sharpe_ratio:.4f}"),
+                    'Starting Balance': float(f"{starting_balance_float:.0f}"),
+                    'Final Balance': float(f"{final_balance_float:.0f}"),
+                    'Final Balance BTC': float(result.final_balance_btc) if result.final_balance_btc is not None else 0,
                     'TWE': f"{result.config.bot.long.total_wallet_exposure_limit:.2f} / {result.config.bot.short.total_wallet_exposure_limit:.2f}",
                     'POS': f"{result.config.bot.long.n_positions:.2f} / {result.config.bot.short.n_positions:.2f}",
+                    'index': result,
                 })
         column_config = {
             "id": None,
@@ -1570,6 +1629,26 @@ class BacktestV7Results:
             'Final Balance': st.column_config.NumberColumn(label="Final B."),
             'Final Balance BTC': st.column_config.NumberColumn(label="Final B. BTC"),
             }
+        if "sort_bt_v7_results" in st.session_state:
+            if st.session_state.sort_bt_v7_results != self.sort_results:
+                self.sort_results = st.session_state.sort_bt_v7_results
+                self.save_sort_results()
+        else:
+            st.session_state.sort_bt_v7_results = self.sort_results
+        if "sort_bt_v7_results_order" in st.session_state:
+            if st.session_state.sort_bt_v7_results_order != self.sort_results_order:
+                self.sort_results_order = st.session_state.sort_bt_v7_results_order
+                self.save_sort_results()
+        else:
+            st.session_state.sort_bt_v7_results_order = self.sort_results_order
+        # Display sort options
+        col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
+        with col1:
+            st.selectbox("Sort by:", ['Result Time', 'Backtest Name', 'ADG', 'Gain', 'Drawdown Worst', 'Sharpe Ratio', 'Starting Balance', 'Final Balance', 'Final Balance BTC'], key=f'sort_bt_v7_results', index=0)
+        with col2:
+            st.checkbox("Reverse", value=True, key=f'sort_bt_v7_results_order')
+        self.results_d = sorted(self.results_d, key=lambda x: x[st.session_state[f'sort_bt_v7_results']], reverse=st.session_state[f'sort_bt_v7_results_order'])
+
         #Display Backtests
         height = 36+(len(self.results_d))*35
         if height > 1000: height = 1016
@@ -1581,24 +1660,40 @@ class BacktestV7Results:
             for row in ed["edited_rows"]:
                 if "View" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["View"]:
-                        self.results[row].load_fills()
-                        self.results[row].load_be()
-                        self.results[row].view_chart_be()
-                        self.results[row].view_chart_drawdown()
-                        if self.results[row].config.backtest.use_btc_collateral:
-                            self.results[row].view_chart_be_btc()
-                            self.results[row].view_chart_drawdown_btc()
-                        self.results[row].view_chart_symbol()
+                        self.results_d[row]["index"].load_fills()
+                        self.results_d[row]["index"].load_be()
+                        self.results_d[row]["index"].view_chart_be()
+                        self.results_d[row]["index"].view_chart_drawdown()
+                        if self.results_d[row]["index"].config.backtest.use_btc_collateral:
+                            self.results_d[row]["index"].view_chart_be_btc()
+                            self.results_d[row]["index"].view_chart_drawdown_btc()
+                        self.results_d[row]["index"].view_chart_symbol()
                         if "WE" in ed["edited_rows"][row]:
                             if ed["edited_rows"][row]["WE"]:
-                                self.results[row].view_chart_twe()
-                        self.results[row].view()
+                                self.results_d[row]["index"].view_chart_twe()
+                        self.results_d[row]["index"].view()
                 if "Plot" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["Plot"]:
-                        self.results[row].view_plot()
+                        self.results_d[row]["index"].view_plot()
                 if "Fills" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["Fills"]:
-                        self.results[row].view_fills()
+                        self.results_d[row]["index"].view_fills()
+
+    def load_sort_results(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self.sort_results = pb_config.get("backtest_v7", "sort_results") if pb_config.has_option("backtest_v7", "sort_results") else "Result Time"
+        self.sort_results_order = eval(pb_config.get("backtest_v7", "sort_results_order")) if pb_config.has_option("backtest_v7", "sort_results_order") else True
+
+    def save_sort_results(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("backtest_v7"):
+            pb_config.add_section("backtest_v7")
+        pb_config.set("backtest_v7", "sort_results", str(self.sort_results))
+        pb_config.set("backtest_v7", "sort_results_order", str(self.sort_results_order))
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
 
     def add_to_compare(self):
         ed_key = st.session_state.ed_key
@@ -1611,7 +1706,7 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    self.add_compare(self.results[row])
+                    self.add_compare(self.results_d[row]["index"])
 
     def grid_visualizer(self):
         ed_key = st.session_state.ed_key
@@ -1627,8 +1722,8 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    st.session_state.v7_grid_visualizer_config = self.results[row].config
-                    st.session_state.v7_grid_visualizer_config.pbgui.note = f'{self.results[row].config.backtest.base_dir.split("/")[-1]}' 
+                    st.session_state.v7_grid_visualizer_config = self.results_d[row]["index"].config
+                    st.session_state.v7_grid_visualizer_config.pbgui.note = f'{self.results_d[row]["index"].config.backtest.base_dir.split("/")[-1]}'
                     st.switch_page(get_navi_paths()["V7_GRID_VISUALIZER"])
 
     def optimize_from_result(self):
@@ -1646,9 +1741,9 @@ class BacktestV7Results:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
-                    st.session_state.opt_v7.config = self.results[row].config
+                    st.session_state.opt_v7.config = self.results_d[row]["index"].config
                     st.session_state.opt_v7.config.pbgui.starting_config = True
-                    st.session_state.opt_v7.name = self.results[row].config.backtest.base_dir.split('/')[-1]
+                    st.session_state.opt_v7.name = self.results_d[row]["index"].config.backtest.base_dir.split('/')[-1]
                     if "opt_v7_list" in st.session_state:
                         del st.session_state.opt_v7_list
                     if "opt_v7_queue" in st.session_state:
@@ -1676,7 +1771,7 @@ class BacktestV7Results:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.edit_v7_instance = V7Instance()
-                    st.session_state.edit_v7_instance.config = self.results[row].config
+                    st.session_state.edit_v7_instance.config = self.results_d[row]["index"].config
                     st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
                     st.switch_page(get_navi_paths()["V7_RUN"])
 
@@ -1686,7 +1781,7 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    ConfigV7Archives().add_config(self.results[row].result_path)
+                    ConfigV7Archives().add_config(self.results_d[row]["index"].result_path)
         info_popup(f"Selected Backtests added to config archive")
 
     @st.dialog("Select backtest parameters", width="large")
@@ -1702,7 +1797,7 @@ class BacktestV7Results:
                 for row in ed["edited_rows"]:
                     if "Select" in ed["edited_rows"][row]:
                         if ed["edited_rows"][row]["Select"]:
-                            bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                            bt_v7 = BacktestV7Item(f'{self.results_d[row]["index"].result_path}/config.json')
                             bt_v7.config.backtest.start_date = start_date.strftime("%Y-%m-%d")
                             bt_v7.config.backtest.end_date = end_date.strftime("%Y-%m-%d")
                             bt_v7.config.backtest.starting_balance = starting_balance
@@ -1734,7 +1829,7 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    st.session_state.bt_v7 = BacktestV7Item(f'{self.results[row].result_path}/config.json')
+                    st.session_state.bt_v7 = BacktestV7Item(f'{self.results_d[row]["index"].result_path}/config.json')
                     st.session_state.bt_v7.config.backtest.end_date = "now"
                     if "bt_v7_results" in st.session_state:
                         del st.session_state.bt_v7_results
@@ -1756,7 +1851,7 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    st.session_state.balance_calc = BalanceCalculator(f'{self.results[row].result_path}/config.json')
+                    st.session_state.balance_calc = BalanceCalculator(f'{self.results_d[row]["index"].result_path}/config.json')
                     st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
 
     def remove_selected_results(self):
@@ -1765,7 +1860,7 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    self.results[row].remove()
+                    self.results_d[row]["index"].remove()
         for result in self.results[:]:
             if not Path(result.result_path).exists():
                 self.results.remove(result)
@@ -1824,6 +1919,10 @@ class BacktestV7Results:
 class BacktestsV7:
     def __init__(self):
         self.backtests = []
+        self.d = []
+        self.sort = "Time"
+        self.sort_order = True
+        self.load_sort()
 
     def view_backtests(self):
         # Init
@@ -1832,51 +1931,82 @@ class BacktestsV7:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
-        if f'select_backtest_v7_{ed_key}' in st.session_state:
-            ed = st.session_state[f'select_backtest_v7_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "edit" in ed["edited_rows"][row]:
-                    st.session_state.bt_v7 = self.backtests[row]
-                    st.rerun()
-                if "view" in ed["edited_rows"][row]:
-                    # st.session_state.bt_v7_results = self.backtests[row]
-                    st.session_state.bt_v7_results = self.backtests[row].results
-                    st.rerun()
-                if 'delete' in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]['delete']:
-                        self.backtests[row].remove()
-                        self.backtests.pop(row)
-                        st.rerun()
-                if 'delete_results' in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]['delete_results']:
-                        self.backtests[row].results.remove_all_results()
-                        self.backtests[row].remove()
-                        self.backtests.pop(row)
-                        st.rerun()
-        d = []
-        for id, bt in enumerate(self.backtests):
-            d.append({
-                'id': id,
-                'edit': False,
-                'Name': bt.name,
-                'Date': datetime.datetime.fromtimestamp(bt.date),
-                'Exchange': bt.config.backtest.exchanges,
-                'view': False,
-                # 'Backtests': bt.calculate_results(),
-                'Backtests': bt.results.calculate_results(),
-                'delete' : False,
-                'delete_results' : False,
-            })
+        # if f'select_backtest_v7_{ed_key}' in st.session_state:
+        #     ed = st.session_state[f'select_backtest_v7_{ed_key}']
+        #     for row in ed["edited_rows"]:
+        #         if 'delete' in ed["edited_rows"][row]:
+        #             if ed["edited_rows"][row]['delete']:
+        #                 self.backtests[row].remove()
+        #                 self.backtests.pop(row)
+        #                 st.rerun()
+        #         if 'delete_results' in ed["edited_rows"][row]:
+        #             if ed["edited_rows"][row]['delete_results']:
+        #                 self.backtests[row].results.remove_all_results()
+        #                 self.backtests[row].remove()
+        #                 self.backtests.pop(row)
+        #                 st.rerun()
+        if not self.d:
+            for id, bt in enumerate(self.backtests):
+                self.d.append({
+                    'id': id,
+                    'Select': False,
+                    'Results': bt.results.calculate_results(),
+                    'Name': bt.name,
+                    'Time': datetime.datetime.fromtimestamp(bt.date),
+                    'Exchange': bt.config.backtest.exchanges,
+                    # 'view': False,
+                    # 'delete' : False,
+                    # 'delete_results' : False,
+                    'item': bt,
+                })
         column_config = {
             "id": None,
-            "edit": st.column_config.CheckboxColumn(label="Edit"),
-            "Date": st.column_config.DatetimeColumn(label="Date", format="YYYY-MM-DD HH:mm:ss"),
-            "view": st.column_config.CheckboxColumn(label="View Results"),
-            "delete": st.column_config.CheckboxColumn(label="Delete"),
-            "delete_results": st.column_config.CheckboxColumn(label="Delete BT and Results"),
+            "item": None,
+            "Select": st.column_config.CheckboxColumn(label="Select"),
+            "Time": st.column_config.DatetimeColumn(label="Time", format="YYYY-MM-DD HH:mm:ss"),
+            # "view": st.column_config.CheckboxColumn(label="View Results"),
+            # "delete": st.column_config.CheckboxColumn(label="Delete"),
+            # "delete_results": st.column_config.CheckboxColumn(label="Delete BT and Results"),
             }
         #Display Backtests
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_backtest_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        height = 36+(len(self.d))*35
+        if height > 1000: height = 1016
+        if "sort_bt_v7" in st.session_state:
+            if st.session_state.sort_bt_v7 != self.sort:
+                self.sort = st.session_state.sort_bt_v7
+                self.save_sort()
+        else:
+            st.session_state.sort_bt_v7 = self.sort
+        if "sort_bt_v7_order" in st.session_state:
+            if st.session_state.sort_bt_v7_order != self.sort_order:
+                self.sort_order = st.session_state.sort_bt_v7_order
+                self.save_sort()
+        else:
+            st.session_state.sort_bt_v7_order = self.sort_order
+        # Display sort options
+        col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
+        with col1:
+            st.selectbox("Sort by:", ['Time', 'Name', 'Results', 'Exchange'], key=f'sort_bt_v7', index=0)
+        with col2:
+            st.checkbox("Reverse", value=True, key=f'sort_bt_v7_order')
+        self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_bt_v7']], reverse=st.session_state[f'sort_bt_v7_order'])
+        st.data_editor(data=self.d, height=height, use_container_width=True, key=f'select_backtest_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+
+    def load_sort(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self.sort = pb_config.get("backtest_v7", "sort") if pb_config.has_option("backtest_v7", "sort") else "Time"
+        self.sort_order = eval(pb_config.get("backtest_v7", "sort_order")) if pb_config.has_option("backtest_v7", "sort_order") else True
+
+    def save_sort(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("backtest_v7"):
+            pb_config.add_section("backtest_v7")
+        pb_config.set("backtest_v7", "sort", str(self.sort))
+        pb_config.set("backtest_v7", "sort_order", str(self.sort_order))
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
 
     def find_backtests(self):
         self.backtests = []
@@ -1887,6 +2017,77 @@ class BacktestsV7:
                 bt = BacktestV7Item(p)
                 self.backtests.append(bt)
 
+    def view_selected(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_backtest_v7_{ed_key}']
+        # Get number of selected results
+        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
+        if selected_count == 0:
+            error_popup("No Backtests selected")
+            return
+        elif selected_count > 1:
+            error_popup("Please select only one Backtest to view")
+            return
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    st.session_state.bt_v7_results = self.d[row]["item"].results
+                    st.rerun()
+
+    def edit_selected(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_backtest_v7_{ed_key}']
+        # Get number of selected results
+        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
+        if selected_count == 0:
+            error_popup("No Backtests selected")
+            return
+        elif selected_count > 1:
+            error_popup("Please select only one Backtest to view")
+            return
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    st.session_state.bt_v7 = self.d[row]["item"]
+                    st.rerun()
+
+    @st.dialog("No Backtest selected. Delete all?")
+    def remove_all(self):
+        st.warning(f"Delete all Backtests?", icon="⚠️")
+        # reason = st.text_input("Because...")
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button(":green[Yes]"):
+                rmtree(f'{PBGDIR}/data/bt_v7', ignore_errors=True)
+                if "bt_v7_remove_results" in st.session_state:
+                    if st.session_state.bt_v7_remove_results:
+                        for bt in self.backtests:
+                            bt.results.remove_all_results()
+                self.d = []
+                self.backtests = []
+                st.rerun()
+        with col2:
+            if st.button(":red[No]"):
+                st.rerun()
+
+    def remove_selected(self, remove_results=False):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_backtest_v7_{ed_key}']
+        # Get number of selected results
+        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
+        if selected_count == 0:
+            self.remove_all()
+            return
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    self.d[row]["item"].remove()
+                    if "bt_v7_remove_results" in st.session_state:
+                        if st.session_state.bt_v7_remove_results:
+                            self.d[row]["item"].results.remove_all_results()
+        self.d = []
+        self.backtests = []
+        st.rerun()
 
 def main():
     # Disable Streamlit Warnings when running directly

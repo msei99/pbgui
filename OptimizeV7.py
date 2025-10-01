@@ -360,6 +360,7 @@ class OptimizeV7Queue:
                     st.rerun()
                 if "log" in ed["edited_rows"][row]:
                     self.d[row]["item"].log_show = ed["edited_rows"][row]["log"]
+                    self.d[row]["log"] = ed["edited_rows"][row]["log"]
         column_config = {
             # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
