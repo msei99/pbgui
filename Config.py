@@ -3390,7 +3390,7 @@ class ConfigV7():
                     config = json.load(f)
                 self.config = config
             except Exception as e:
-                print(f'Error loding v7 config: {e}')
+                print(f'Error loding v7 config: {file} {e}')
                 traceback.print_exc()
 
 
