@@ -1004,7 +1004,6 @@ class Exchange:
     
     def fetch_symbol_infos(self, symbol: str):
         if not self.instance:
-            print("new connect")
             self.connect()
             self._markets = self.instance.load_markets()
         # symbol = self.symbol_to_exchange_symbol(symbol, "swap")
@@ -1016,7 +1015,7 @@ class Exchange:
         if symbol not in self._markets:
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         symbol_info = self._markets[symbol]
-        print(symbol_info)
+        # print(symbol_info)
         if symbol_info["limits"]["leverage"]["max"] is None:
             lev = "unknown"
         else:
