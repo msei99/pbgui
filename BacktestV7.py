@@ -1615,6 +1615,7 @@ class BacktestV7Results:
                 })
         column_config = {
             "id": None,
+            "index": None,
             'Select': st.column_config.CheckboxColumn(label="Select"),
             'View': st.column_config.CheckboxColumn(label="View"),
             'WE': st.column_config.CheckboxColumn(label="WE"),
@@ -1931,20 +1932,6 @@ class BacktestsV7:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
-        # if f'select_backtest_v7_{ed_key}' in st.session_state:
-        #     ed = st.session_state[f'select_backtest_v7_{ed_key}']
-        #     for row in ed["edited_rows"]:
-        #         if 'delete' in ed["edited_rows"][row]:
-        #             if ed["edited_rows"][row]['delete']:
-        #                 self.backtests[row].remove()
-        #                 self.backtests.pop(row)
-        #                 st.rerun()
-        #         if 'delete_results' in ed["edited_rows"][row]:
-        #             if ed["edited_rows"][row]['delete_results']:
-        #                 self.backtests[row].results.remove_all_results()
-        #                 self.backtests[row].remove()
-        #                 self.backtests.pop(row)
-        #                 st.rerun()
         if not self.d:
             for id, bt in enumerate(self.backtests):
                 self.d.append({
@@ -1954,9 +1941,6 @@ class BacktestsV7:
                     'Name': bt.name,
                     'Time': datetime.datetime.fromtimestamp(bt.date),
                     'Exchange': bt.config.backtest.exchanges,
-                    # 'view': False,
-                    # 'delete' : False,
-                    # 'delete_results' : False,
                     'item': bt,
                 })
         column_config = {
@@ -1964,9 +1948,6 @@ class BacktestsV7:
             "item": None,
             "Select": st.column_config.CheckboxColumn(label="Select"),
             "Time": st.column_config.DatetimeColumn(label="Time", format="YYYY-MM-DD HH:mm:ss"),
-            # "view": st.column_config.CheckboxColumn(label="View Results"),
-            # "delete": st.column_config.CheckboxColumn(label="Delete"),
-            # "delete_results": st.column_config.CheckboxColumn(label="Delete BT and Results"),
             }
         #Display Backtests
         height = 36+(len(self.d))*35
