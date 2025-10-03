@@ -743,7 +743,7 @@ class OptimizeQueue:
                 'finish': item.finish,
                 'remove': False,
             })
-        st.data_editor(data=d, width=None, height=(len(d)+1)*36, use_container_width=True, key=f'editor_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=column_disabled)
+        st.data_editor(data=d, height=(len(d)+1)*36, use_container_width=True, key=f'editor_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=column_disabled)
         if "key_optimize_close_view_log" in st.session_state:
             if st.session_state.key_optimize_close_view_log:
                 if "view_opt_log" in st.session_state:
@@ -955,7 +955,7 @@ class OptimizeResults:
                 'View': False,
                 'Remove': False,
             })
-        st.data_editor(data=d, width=None, height=36+(len(d))*35, use_container_width=True, key=f'editor_opt_results_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['Algorithm / Mode','Results'])
+        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'editor_opt_results_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['Algorithm / Mode','Results'])
 
     def view_results_l2(self):
         # Init
@@ -991,7 +991,7 @@ class OptimizeResults:
                 'View': False,
                 'Remove': False,
             })
-        st.data_editor(data=d, width=None, height=36+(len(d))*35, use_container_width=True, key=f'editor_opt_results_l2_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['Name'])
+        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'editor_opt_results_l2_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['Name'])
 
     def view_results_l3(self):
         # Init
@@ -1064,7 +1064,7 @@ class OptimizeResults:
             st.markdown(f'#### Symbol: {self.symbol_names[0]}')
         height = 36+(len(self.results_d))*35
         if height > 2000: height = 2000
-        results_d = st.data_editor(data=self.results_d, width=None, height=height, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
+        results_d = st.data_editor(data=self.results_d, height=height, use_container_width=True, key=f'editor_opt_results_l3_{ed_key}', column_config=column_config, disabled=['path'])
         self.bt_results.backtests = []
         for view in results_d:
             if view["View"]:

@@ -133,7 +133,7 @@ def bt_queue():
             'Balance': bt.sb,
             'Delete': False,
         })
-    selected = st.data_editor(data=d, width=None, height=(len(my_btq.items)+1)*36, use_container_width=True, key=f'editor_{st.session_state.ed_bt_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['User','Symbol','Exchange','Start','End','Balance'])
+    selected = st.data_editor(data=d, height=(len(my_btq.items)+1)*36, use_container_width=True, key=f'editor_{st.session_state.ed_bt_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['User','Symbol','Exchange','Start','End','Balance'])
     for line in selected:
         if line["Run"]:
             if not my_btq.items[line["id"]].is_running() and not my_btq.items[line["id"]].is_finish():

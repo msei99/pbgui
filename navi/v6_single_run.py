@@ -154,9 +154,9 @@ def select_instance():
     column_config = {
         "id": None}
     st.subheader("Single Instances")
-    st.data_editor(data=d, width=None, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On','Version','Remote','Remote Version'])
+    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On','Version','Remote','Remote Version'])
     st.subheader("Instances used in Multi configuration")
-    st.data_editor(data=d_multi, width=None, height=36+(len(d_multi))*35, use_container_width=True, key="editor_select_instance_multi", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On'])
+    st.data_editor(data=d_multi, height=36+(len(d_multi))*35, use_container_width=True, key="editor_select_instance_multi", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Symbol','Market_type','Enabled On'])
 
 def edit_instance():
     # Display Error
