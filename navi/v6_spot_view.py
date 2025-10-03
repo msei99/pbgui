@@ -72,7 +72,7 @@ def select_instance():
         st.session_state.spot_instances = d
         df = pd.DataFrame(d)
         sdf = df.style.map(bgcolor_positive_or_negative, subset=['uPnl'])
-        st.data_editor(data=sdf, width=None, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
+        st.data_editor(data=sdf, height=36+(len(d))*35, use_container_width=True, key="editor_select_instance", hide_index=None, column_order=None, column_config=column_config, disabled=['id','Running','User','Symbol','Market_type','Balance','uPnl','Position','Price','Entry','DCA','Next DCA','Next TP','Wallet Exposure'])
 
 def view_instance():
     # Init instance
