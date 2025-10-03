@@ -179,24 +179,44 @@
       become: yes
       when: swapfile_status.stat.exists == false
       
-    - name: Disable IPv6
-      block:
-        - name: Add GRUB command to disable IPv6 GRUB_CMDLINE_LINUX_DEFAULT
-          ansible.builtin.lineinfile:
-            path: /etc/default/grub
-            regexp: '^GRUB_CMDLINE_LINUX_DEFAULT'
-            line: 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash ipv6.disable=1"'
-            state: present
+    - name: Read the current /etc/default/grub content
+      ansible.builtin.slurp:
+        src: /etc/default/grub
+      register: grub_content_b64
 
-        - name: Add GRUB command to disable IPv6 GRUB_CMDLINE_LINUX
-          ansible.builtin.lineinfile:
-            path: /etc/default/grub
-            regexp: '^GRUB_CMDLINE_LINUX'
-            line: 'GRUB_CMDLINE_LINUX="ipv6.disable=1"'
-            state: present
+    - name: Set the current line variable
+      set_fact:
+        current_grub_content: "{{ grub_content_b64.content | b64decode }}"
 
-        - name: Update GRUB configuration
-          command: update-grub
+    - name: Extract current GRUB_CMDLINE_LINUX value
+      set_fact:
+        current_cmdline: "{{ current_grub_content | regex_search('^GRUB_CMDLINE_LINUX=\"([^\"]*)\"', '\\1', multiline=True) | join(' ') }}"
+
+    - name: Ensure 'ipv6.disable=1' is present in the cmdline
+      set_fact:
+        new_cmdline: >-
+          {% if current_cmdline is defined and 'ipv6.disable=1' not in current_cmdline %}
+            {{ current_cmdline }} ipv6.disable=1
+          {% elif current_cmdline is undefined %}
+            ipv6.disable=1
+          {% else %}
+            {{ current_cmdline }}
+          {% endif %}
+
+    - name: Clean up new_cmdline
+      set_fact:
+        new_cmdline: "{{ new_cmdline | trim }}"
+
+    - name: Replace the line in /etc/default/grub
+      ansible.builtin.replace:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX="[^"]*"'
+        replace: 'GRUB_CMDLINE_LINUX="{{ new_cmdline }}"'
+      when: new_cmdline is defined
+      become: yes
+
+    - name: Update GRUB configuration
+      command: update-grub
       become: yes
 
     - name: Add deadsnakes/ppa for installing python3.10
