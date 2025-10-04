@@ -109,7 +109,7 @@ class BacktestItem(Base):
             if market:
                 df_min = df_min[df_min['market'].isin(market)]
         df_min = df_min.reset_index(drop=True)
-        selected = st.data_editor(data=df_min, height=1200, use_container_width=True, hide_index=None, column_order=None, column_config=column_config)
+        selected = st.data_editor(data=df_min, height=1200, hide_index=None, column_order=None, column_config=column_config)
         col_image, col_config = st.columns([1,1])
         view = selected[selected['View']==True]
         view = view.reset_index()
@@ -583,7 +583,7 @@ class BacktestResults:
                 if col not in st.session_state.backtest_view_keys:
                     self.view_col.remove(col)
         st.multiselect("Setup Table (remove all and save for reset to default)", st.session_state.backtest_view_keys, default=self.view_col, key="setup_backtest_col", on_change=None, args=None)
-        st.dataframe(data=self.results_d, height=36+(len(self.results_d))*35, use_container_width=True, hide_index=None, column_order=None, column_config=st.session_state.setup_column_config)
+        st.dataframe(data=self.results_d, height=36+(len(self.results_d))*35, hide_index=None, column_order=None, column_config=st.session_state.setup_column_config)
 
     def view(self, trades: pd.DataFrame = None, only : bool = False):
         if f'setup_table_bt_{self}' in st.session_state and st.session_state.page == "PBv6Single Backtest":
@@ -690,7 +690,7 @@ class BacktestResults:
                         column_config[item] = None
                     if item.split("_")[-1] in ["short", "long"] and item.split("_")[-1] not in self.side_selected:
                         column_config[item] = None
-                results_d = st.data_editor(data=self.results_d, height=36+(len(self.results_d))*35, use_container_width=True, key="editor_backtest_view_{self}", hide_index=None, column_order=None, column_config=column_config, disabled="id")
+                results_d = st.data_editor(data=self.results_d, height=36+(len(self.results_d))*35, key="editor_backtest_view_{self}", hide_index=None, column_order=None, column_config=column_config, disabled="id")
                 for line in results_d:
                     if line["show"]:
                         self.backtests[line["id"]].selected = True

@@ -175,7 +175,7 @@ class Monitor():
             sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.traceback_warning_v7 else 'color: orange' if x < self.monitor_config.traceback_error_v7 else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
             #PNL green if > 0, orange if 0 else red
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
-            st.dataframe(data=sdf, use_container_width=True, height=36+(len(self.d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
+            st.dataframe(data=sdf, height=36+(len(self.d_v7))*35, key="pbremote_v7_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if v7_selected:
                 if v7_selected["selection"]["rows"]:
                     row = v7_selected["selection"]["rows"][0]
@@ -216,7 +216,7 @@ class Monitor():
             sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.traceback_warning_multi else 'color: orange' if x < self.monitor_config.traceback_error_multi else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
             #PNL green if > 0, orange if 0 else red
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
-            st.dataframe(data=sdf, use_container_width=True, height=36+(len(self.d_multi))*35, key="pbremote_multi_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
+            st.dataframe(data=sdf, height=36+(len(self.d_multi))*35, key="pbremote_multi_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if multi_selected:
                 if multi_selected["selection"]["rows"]:
                     row = multi_selected["selection"]["rows"][0]
@@ -239,7 +239,7 @@ class Monitor():
             sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.traceback_warning_single else 'color: orange' if x < self.monitor_config.traceback_error_single else 'color: red', subset=['Tracebacks Today', 'Tracebacks Yesterday'])
             #PNL green if > 0, orange if 0 else red
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: LightCoral', subset=['PNL Today', 'PNL Yesterday'])
-            st.dataframe(data=sdf, use_container_width=True, height=36+(len(self.d_single))*35, key="pbremote_single_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
+            st.dataframe(data=sdf, height=36+(len(self.d_single))*35, key="pbremote_single_select" ,selection_mode='single-row', on_select="rerun", column_config=column_config)
             if single_selected:
                 if single_selected["selection"]["rows"]:
                     row = single_selected["selection"]["rows"][0]

@@ -888,7 +888,7 @@ class Dashboard():
                     color = 'green' if val >= 0 else 'red'
                     return f'color: {color};'
                 styled_df = df[['Date', 'User', 'Symbol', 'Income']].style.map(color_income, subset=['Income']).format({'Income': '{:.2f}'})
-                st.dataframe(styled_df, height=height, use_container_width=True, hide_index=True)
+                st.dataframe(styled_df, height=height, hide_index=True)
             else:
                 income = df[['Date', 'Symbol', 'Income', 'User']].copy()
                 income['Income'] = income['Income'].cumsum()
@@ -1006,7 +1006,7 @@ class Dashboard():
             }
             df = df[['Id', 'User', 'Date', 'Balance', 'uPnl', 'WE']]
             sdf = df.style.map(self.color_we, subset=['WE']).map(self.color_upnl, subset=['uPnl']).format({'Balance': "{:.2f}"})
-            st.dataframe(sdf, height=36+(len(df))*35, use_container_width=True, key=f"dashboard_balance_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
+            st.dataframe(sdf, height=36+(len(df))*35, key=f"dashboard_balance_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
 
     def bgcolor_positive_or_negative(self, value):
         bgcolor = "red" if value < 0 else "green"
@@ -1083,7 +1083,7 @@ class Dashboard():
                 "Id": None,
                 "PosId": None
             }
-            st.dataframe(sdf, height=36+(len(df))*35, use_container_width=True, key=f"dashboard_positions_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
+            st.dataframe(sdf, height=36+(len(df))*35, key=f"dashboard_positions_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
 
     @st.fragment
     def view_orders(self, pos : str, orders : str = None, tf : str = "4h", edit : bool = False):
