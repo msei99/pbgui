@@ -1125,7 +1125,7 @@ class MultiInstance():
                 st.warning(f'{coin}: {coindata.symbols_notices[coin]}')
         # Display Symbols
         with st.expander("Symbols Config", expanded=True):
-            st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
+            st.data_editor(data=slist, height=36+(len(slist))*35, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
         st.multiselect('approved_symbols', coindata.symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
         st.multiselect('ignored_symbols', coindata.symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
         # Display dynamic ignored coins

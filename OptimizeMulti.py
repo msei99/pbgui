@@ -300,7 +300,7 @@ class OptimizeMultiQueue:
         #Display Queue
         height = 36+(len(d))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'view_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
+        st.data_editor(data=d, height=height, key=f'view_opt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
         if f'view_opt_queue_{ed_key}' in st.session_state:
             ed = st.session_state[f'view_opt_queue_{ed_key}']
             for row in ed["edited_rows"]:
@@ -365,7 +365,7 @@ class OptimizeMultiResults:
             "backtest": st.column_config.CheckboxColumn(label="Backtest"),
             }
         #Display optimizes
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        st.data_editor(data=d, height=36+(len(d))*35, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
         if f'select_optresults_{ed_key}' in st.session_state:
             ed = st.session_state[f'select_optresults_{ed_key}']
             for row in ed["edited_rows"]:
@@ -874,7 +874,7 @@ class OptimizesMulti:
             "edit": st.column_config.CheckboxColumn(label="Edit"),
             }
         #Display optimizes
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optimize_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        st.data_editor(data=d, height=36+(len(d))*35, key=f'select_optimize_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
 
     def find_optimizes(self):
         p = str(Path(f'{PBGDIR}/data/opt_multi/*.hjson'))

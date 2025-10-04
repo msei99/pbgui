@@ -405,7 +405,7 @@ class BacktestV7Queue:
         # Sort results
         self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_bt_v7_queue']], reverse=st.session_state[f'sort_bt_v7_queue_order'])
         if height > 1000: height = 1016
-        st.data_editor(data=self.d, height=height, use_container_width=True, key=f'view_bt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
+        st.data_editor(data=self.d, height=height, key=f'view_bt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
         for item in self.items:
             if item.log_show:
                 item.view_log()
@@ -1329,7 +1329,6 @@ class ConfigV7Archives:
         # Display Config Archives
         st.data_editor(
             data,
-            use_container_width=True,
             column_config=column_config,
             key=f"select_config_v7_archives_{ed_key}",
             hide_index=True
@@ -1653,7 +1652,7 @@ class BacktestV7Results:
         #Display Backtests
         height = 36+(len(self.results_d))*35
         if height > 1000: height = 1016
-        st.data_editor(data=self.results_d, height=height, use_container_width=True, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
+        st.data_editor(data=self.results_d, height=height, key=f'select_btv7_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
         if st.session_state.btv7_compare_results:
             self.view_compare()
         if f'select_btv7_result_{ed_key}' in st.session_state:
@@ -1971,7 +1970,7 @@ class BacktestsV7:
         with col2:
             st.checkbox("Reverse", value=True, key=f'sort_bt_v7_order')
         self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_bt_v7']], reverse=st.session_state[f'sort_bt_v7_order'])
-        st.data_editor(data=self.d, height=height, use_container_width=True, key=f'select_backtest_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        st.data_editor(data=self.d, height=height, key=f'select_backtest_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
 
     def load_sort(self):
         pb_config = configparser.ConfigParser()

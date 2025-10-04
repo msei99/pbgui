@@ -343,7 +343,7 @@ class BacktestMultiQueue:
         #Display Queue
         height = 36+(len(d))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'view_bt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
+        st.data_editor(data=d, height=height, key=f'view_bt_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
         if f'view_bt_queue_{ed_key}' in st.session_state:
             ed = st.session_state[f'view_bt_queue_{ed_key}']
             for row in ed["edited_rows"]:
@@ -752,7 +752,7 @@ class BacktestMultiItem:
         with col4:
             st.number_input("execution_delay_seconds", min_value=1, max_value=60, value=self.execution_delay_seconds, step=1, format="%.d", key="edit_bt_multi_execution_delay_seconds", help=pbgui_help.execution_delay_seconds)
         # Display Symbols
-        st.data_editor(data=slist, height=36+(len(slist))*35, use_container_width=True, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_we','short','short_we'])
+        st.data_editor(data=slist, height=36+(len(slist))*35, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_we','short','short_we'])
         if f'select_symbol_{ed_key}' in st.session_state:
             ed = st.session_state[f'select_symbol_{ed_key}']
             for row in ed["edited_rows"]:
@@ -827,7 +827,7 @@ class BacktestMultiItem:
         #Display Backtests
         height = 36+(len(d))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d, height=height, use_container_width=True, key=f'select_btmulti_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
+        st.data_editor(data=d, height=height, key=f'select_btmulti_result_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','drawdown_max','final_balance'])
         if f'select_btmulti_result_{ed_key}' in st.session_state:
             ed = st.session_state[f'select_btmulti_result_{ed_key}']
             for row in ed["edited_rows"]:
@@ -1206,7 +1206,7 @@ class BacktestsMulti:
             "delete": st.column_config.CheckboxColumn(label="Delete"),
             }
         #Display Backtests
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_backtest_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        st.data_editor(data=d, height=36+(len(d))*35, key=f'select_backtest_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
 
     def find_backtests(self):
         p = str(Path(f'{PBGDIR}/data/bt_multi/**/backtest.hjson'))

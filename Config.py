@@ -3433,7 +3433,7 @@ class ConfigV7():
             # Display coin_overrides
             if st.session_state.co_data and not "edit_coin_override" in st.session_state:
                 d = st.session_state.co_data
-                st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_coins_{ed_key}', disabled=['coin', 'override_config_path', 'config.bot.long parameters', 'config.bot.short parameters', 'config.live parameters'])
+                st.data_editor(data=d, height=36+(len(d))*35, key=f'select_coins_{ed_key}', disabled=['coin', 'override_config_path', 'config.bot.long parameters', 'config.bot.short parameters', 'config.live parameters'])
             if "edit_run_v7_add_coin_override_button" in st.session_state:
                 if st.session_state.edit_run_v7_add_coin_override_button:
                     if self.config_file is None:
@@ -3589,7 +3589,7 @@ class ConfigV7():
         st.write(f"{symbol}")
         if st.session_state.co_parameters:
             d = st.session_state.co_parameters
-            st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'edit_run_v7_co_parameters_{ed_key}', disabled=['parameter', 'side', 'value'])
+            st.data_editor(data=d, height=36+(len(d))*35, key=f'edit_run_v7_co_parameters_{ed_key}', disabled=['parameter', 'side', 'value'])
         # config.live parameters
         col1, col2, col3, col4 = st.columns([1,1,1,3], vertical_alignment="bottom")
         with col1:

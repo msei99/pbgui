@@ -391,7 +391,7 @@ class OptimizeV7Queue:
         with col2:
             st.checkbox("Reverse", value=True, key=f'sort_opt_v7_queue_order')
         self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_opt_v7_queue']], reverse=st.session_state[f'sort_opt_v7_queue_order'])
-        st.data_editor(data=self.d, height=height, use_container_width=True, key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
+        st.data_editor(data=self.d, height=height, key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
         for item in self.items:
             if item.log_show:
                 item.view_log()
@@ -569,7 +569,7 @@ class OptimizeV7Results:
         # Sort results
         d_new = sorted(d_new, key=lambda x: x[st.session_state[f'sort_opt_v7_results']], reverse=st.session_state[f'sort_opt_v7_results_order'])
         #Display optimizes
-        st.data_editor(data=d_new, height=36+(len(d_new))*35, use_container_width=True, key=f'select_optresults_new_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config_new, disabled=['id','name','index'])
+        st.data_editor(data=d_new, height=36+(len(d_new))*35, key=f'select_optresults_new_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config_new, disabled=['id','name','index'])
         if f'select_optresults_new_{st.session_state.ed_key}' in st.session_state:
             ed = st.session_state[f'select_optresults_new_{st.session_state.ed_key}']
             for row in ed["edited_rows"]:
@@ -635,7 +635,7 @@ class OptimizeV7Results:
         # Sort results
         d = sorted(d, key=lambda x: x[st.session_state[f'sort_opt_v7_results']], reverse=st.session_state[f'sort_opt_v7_results_order'])
         #Display optimizes
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        st.data_editor(data=d, height=36+(len(d))*35, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
         if f'select_optresults_{ed_key}' in st.session_state:
             ed = st.session_state[f'select_optresults_{ed_key}']
             for row in ed["edited_rows"]:
@@ -774,7 +774,7 @@ class OptimizeV7Results:
         #Display paretos
         height = 36+(len(d_paretos))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d_paretos, height=height, use_container_width=True, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','file'])
+        st.data_editor(data=d_paretos, height=height, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','file'])
         if f'select_paretos_{st.session_state.ed_key}' in st.session_state:
             ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
             for row in ed["edited_rows"]:
@@ -2435,7 +2435,7 @@ class OptimizeV7Item:
             # Display limits
             if st.session_state.limits_data and not "edit_limits" in st.session_state:
                 d = st.session_state.limits_data
-                st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_limits_{ed_key}', disabled=['limit','value'])
+                st.data_editor(data=d, height=36+(len(d))*35, key=f'select_limits_{ed_key}', disabled=['limit','value'])
             if "edit_opt_v7_add_limits_greater" in st.session_state:
                 if st.session_state.edit_opt_v7_add_limits_greater_button:
                     self.config.optimize.limits[f'penalize_if_greater_than_{st.session_state.edit_opt_v7_add_limits_greater}'] = st.session_state.edit_opt_v7_add_limits_greater_value
@@ -2728,7 +2728,7 @@ class OptimizesV7:
             "Date": st.column_config.DatetimeColumn(label="Date", format="YYYY-MM-DD HH:mm:ss"),
             }
         #Display optimizes
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f'select_optimize_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        st.data_editor(data=d, height=36+(len(d))*35, key=f'select_optimize_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
 
     def find_optimizes(self):
         p = str(Path(f'{PBGDIR}/data/opt_v7/*.json'))
