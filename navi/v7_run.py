@@ -22,6 +22,7 @@ def edit_v7_instance():
             v7_instance.activate()
         if st.button("Backtest"):
             st.session_state.bt_v7 = BacktestV7Item(v7_instance.config.config_file)
+            st.session_state.bt_v7.config.backtest.end_date = "now"
             del st.session_state.edit_v7_instance
             if "bt_v7_queue" in st.session_state:
                 del st.session_state.bt_v7_queue
