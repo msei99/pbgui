@@ -47,7 +47,7 @@ def view_coindata():
         "link": st.column_config.LinkColumn(display_text="CoinMarketCap")
     }
     if coindata.symbols_data:
-        st.dataframe(coindata.symbols_data, height=36+(len(coindata.symbols_data))*35, use_container_width=True, column_config=column_config)
+        st.dataframe(coindata.symbols_data, height=36+(len(coindata.symbols_data))*35, column_config=column_config)
 
 def setup_coindata():
     # Navigation
