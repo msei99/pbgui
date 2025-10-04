@@ -127,7 +127,7 @@ def select_instance():
         })
     column_config = {
         "id": None}
-    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"editor_select_v7_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
+    st.data_editor(data=d, height=36+(len(d))*35, key=f"editor_select_v7_instance_{st.session_state.ed_key}", hide_index=None, column_order=None, column_config=column_config, disabled=['id','User'])
     
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():

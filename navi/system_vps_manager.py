@@ -148,7 +148,7 @@ def list_vps():
             "PB7 github": pb7,
             "API Sync": api_sync
         })
-    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
+    st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
     st.info("Select your VPS in the sidebar to get a detailed VPS report.")
     with st.sidebar:
         sync_api()
@@ -275,7 +275,7 @@ def manage_master():
         "PB7": f'{pbremote.pb7_version}',
         "PB7 github": pb7
     })
-    st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
+    st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
     monitor.server = pbremote
     monitor.servers = []
     monitor.servers.append(monitor.server)
@@ -549,7 +549,7 @@ def manage_vps():
             "PB7": f'{server.pb7_version}',
             "PB7 github": pb7
         })
-        st.data_editor(data=d, height=36+(len(d))*35, use_container_width=True, key=f"vps_overview_{st.session_state.ed_key}")
+        st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
         monitor.server = server
         monitor.servers = []
         monitor.servers.append(monitor.server)
