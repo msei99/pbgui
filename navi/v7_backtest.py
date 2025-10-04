@@ -177,6 +177,12 @@ def bt_v7_results():
         if st.button(":material/home:"):
             del st.session_state.bt_v7_results
             st.rerun()
+        if st.button("All Results"):
+            bt_v7_results.results = []
+            bt_v7_results.results_d = []
+            bt_v7_results.results_path = f'{pb7dir()}/backtests/pbgui'
+            bt_v7_results.name = "All Results"
+            st.rerun()    
         if st.button("Queue"):
             st.session_state.bt_v7_queue = BacktestV7Queue()
             del st.session_state.bt_v7_results
