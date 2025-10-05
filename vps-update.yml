@@ -21,6 +21,17 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: remove rustc and cargo if installed via apt
+      apt:
+        name:
+        - rustc
+        - cargo
+        state: absent
+        purge: yes
+        autoremove: yes
+        clean: yes
+      become: yes
+
     - name: Make sure rustup and gcc is installed
       apt:
         pkg:

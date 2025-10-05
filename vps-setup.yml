@@ -224,14 +224,12 @@
         repo: ppa:deadsnakes/ppa
       become: yes
 
-    - name: Install git, python3.10, rclone, rustc, cargo
+    - name: Install git, python3.10, rclone, gcc
       apt:
         pkg:
         - git
         - python3.10-venv
         - rclone
-        - rustc
-        - cargo
         - gcc
         clean: yes
       become: yes
