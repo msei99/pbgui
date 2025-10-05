@@ -338,6 +338,8 @@ def manage_vps():
     if "vps_user_pw" in st.session_state:
         if st.session_state.vps_user_pw != vps.user_pw:
             vps.user_pw = st.session_state.vps_user_pw
+    else:
+        st.session_state.vps_user_pw = vps.user_pw
     if "vps_swap" in st.session_state:
         if st.session_state.vps_swap != vps.swap:
             vps.swap = st.session_state.vps_swap
@@ -347,6 +349,8 @@ def manage_vps():
         if st.session_state.vps_coindata_api_key != vps.coinmarketcap_api_key:
             vps.coinmarketcap_api_key = st.session_state.vps_coindata_api_key
             vps_coindata.api_key = st.session_state.vps_coindata_api_key
+    else:
+        st.session_state.vps_coindata_api_key = vps.coinmarketcap_api_key
     if "vps_install_pb6" in st.session_state:
         if st.session_state.vps_install_pb6 != vps.install_pb6:
             vps.install_pb6 = st.session_state.vps_install_pb6
@@ -355,9 +359,13 @@ def manage_vps():
     if "vps_firewall" in st.session_state:
         if st.session_state.vps_firewall != vps.firewall:
             vps.firewall = st.session_state.vps_firewall
+    else:
+        st.session_state.vps_firewall = vps.firewall
     if "vps_firewall_ssh_port" in st.session_state:
         if st.session_state.vps_firewall_ssh_port != vps.firewall_ssh_port:
             vps.firewall_ssh_port = st.session_state.vps_firewall_ssh_port
+    else:
+        st.session_state.vps_firewall_ssh_port = vps.firewall_ssh_port
     if "vps_firewall_ssh_ips" in st.session_state:
         if st.session_state.vps_firewall_ssh_ips != vps.firewall_ssh_ips:
             # regex for ip check: "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
@@ -367,6 +375,8 @@ def manage_vps():
                 vps.firewall_ssh_ips = st.session_state.vps_firewall_ssh_ips
             else:
                 st.session_state.vps_firewall_ssh_ips = vps.firewall_ssh_ips
+    else:
+        st.session_state.vps_firewall_ssh_ips = vps.firewall_ssh_ips
     # Init Status
     if "rclone_test" not in st.session_state:
         st.session_state.rclone_test, detail_result = pbremote.test_bucket()
