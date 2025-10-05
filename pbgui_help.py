@@ -1194,7 +1194,7 @@ vps_swap = """
     ```
     recommended swap size for VPS
     2GB for VPS with 1GB RAM and 10GB SSD
-    5GB for VPS with 2GB RAM and 25GB SSD
+    4GB for VPS with 2GB RAM and 25GB SSD
     8GB for VPS with 4GB RAM and 50GB SSD
     ```"""
 
