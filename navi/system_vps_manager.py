@@ -688,12 +688,12 @@ def init_vps():
     st.subheader("Step 1: Get your VPS")
     st.write(
         "- I can recommend you the following VPS from IONOS\n"
-        "- VPS Linux XS, 1 vCore, 1 GB RAM, 10 GB SSD, 1 €/Monat\n"
+        "- VPS Linux XS, 1 vCore, 1 GB RAM, 10 GB SSD, 1 €/Monat (max 6 running v7 passivbots)\n"
         "- VPS Linux S, 2 vCores, 2 GB RAM, 80 GB SSD, 3 €/Monat\n"
         "- VPS Linux M, 2 vCores, 4 GB RAM, 120 GB SSD, 6 €/Monat\n"
         "- Please use my [referral link](https://aklam.io/esMFvG)\n"
         "- RackNerd has also nice small VPS for 11$ year\n"
-        "- Please use my [referral link](https://my.racknerd.com/aff.php?aff=15714)"
+        "- Please use my [referral link](https://my.racknerd.com/aff.php?aff=15714)\n"
         "- A good alternative is a VPS from Contabo\n"
         "- VPS 1, 4 vCores, 6 GB RAM, 100 GB SSD, 4,50 €/Monat\n"
         "- Please use my [referral link](https://www.tkqlhce.com/click-101296145-12454592)\n"
