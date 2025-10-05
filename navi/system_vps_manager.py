@@ -341,6 +341,8 @@ def manage_vps():
     if "vps_swap" in st.session_state:
         if st.session_state.vps_swap != vps.swap:
             vps.swap = st.session_state.vps_swap
+    else:
+        st.session_state.vps_swap = vps.swap
     if "vps_coindata_api_key" in st.session_state:
         if st.session_state.vps_coindata_api_key != vps.coinmarketcap_api_key:
             vps.coinmarketcap_api_key = st.session_state.vps_coindata_api_key
@@ -348,6 +350,8 @@ def manage_vps():
     if "vps_install_pb6" in st.session_state:
         if st.session_state.vps_install_pb6 != vps.install_pb6:
             vps.install_pb6 = st.session_state.vps_install_pb6
+    else:
+        st.session_state.vps_install_pb6 = vps.install_pb6
     if "vps_firewall" in st.session_state:
         if st.session_state.vps_firewall != vps.firewall:
             vps.firewall = st.session_state.vps_firewall

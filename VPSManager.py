@@ -34,7 +34,7 @@ class VPS:
         self.user_sudo_pw = None
         self.init_methode = "root"  # root, password, private_key
         self.remove_user = False
-        self.swap = "2.5G"
+        self.swap = "2G"
         self.last_init = None
         self.last_setup = None
         self.last_update = None
