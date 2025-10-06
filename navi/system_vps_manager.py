@@ -63,7 +63,7 @@ def list_vps():
                         rtd = server.rtd
                         if rtd > 9999:
                             rtd = 9999
-                if st.button(f':{color}[{vps.hostname} ({rtd}s)]'):
+                if st.button(f':{color}[{vps.hostname} ({rtd}s)]', key=f'vps_{vps.hostname}'):
                     if "monitor" in st.session_state:
                         st.session_state.monitor.d_v7 = []
                         st.session_state.monitor.d_multi = []
