@@ -262,7 +262,6 @@ class RemoteServer():
             status_ts = self.instances_status_v7.status_ts
             self.instances_status_v7.update_status()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_v7 ts: {self.name} old: {status_ts} new: {self.instances_status_v7.status_ts}')
-            self.load()
 
     def sync_multi_down(self):
         """Sync the multi configurations from the remote storage to the local machine."""
@@ -1207,14 +1206,16 @@ def main():
             remote.sync_multi_up()
             remote.sync_single_up()
             remote.check_if_api_synced()
-            remote.alive()
+            # remote.alive()
             # remote.sync('down', 'cmd')
             remote.sync_status_down()
             remote.update_remote_servers()
             for server in remote.remote_servers:
-                server.load()
-                server.sync_v7_down(remote.role)
                 remote.alive()
+                for s in remote.remote_servers:
+                    s.load()
+                # server.load()
+                server.sync_v7_down(remote.role)
                 server.sync_multi_down()
                 server.sync_single_down()
                 server.sync_api()
