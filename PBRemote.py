@@ -241,13 +241,16 @@ class RemoteServer():
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
 
-    def sync_v7_down(self):
+    def sync_v7_down(self, role: str):
         """Sync the v7 configurations from the remote storage to the local machine."""
         if self.instances_status_v7.has_new_status():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_v7.json from: {self.name}')
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync v7 from: {self.name}')
             pbgdir = Path.cwd()
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
+            if role == "master":
+                cmd = ['rclone', 'sync', '-v', '--include', f'{{cmd_**/alive_*.cmd*,run_v7_{self.name}/**/*.json}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+            else:
+                cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
             log = open(logfile,"ab")
             if platform.system() == "Windows":
@@ -259,6 +262,7 @@ class RemoteServer():
             status_ts = self.instances_status_v7.status_ts
             self.instances_status_v7.update_status()
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_v7 ts: {self.name} old: {status_ts} new: {self.instances_status_v7.status_ts}')
+            self.load()
 
     def sync_multi_down(self):
         """Sync the multi configurations from the remote storage to the local machine."""
@@ -1209,7 +1213,7 @@ def main():
             remote.update_remote_servers()
             for server in remote.remote_servers:
                 server.load()
-                server.sync_v7_down()
+                server.sync_v7_down(remote.role)
                 server.sync_multi_down()
                 server.sync_single_down()
                 server.sync_api()
