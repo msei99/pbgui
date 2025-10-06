@@ -1214,6 +1214,7 @@ def main():
             for server in remote.remote_servers:
                 server.load()
                 server.sync_v7_down(remote.role)
+                remote.alive()
                 server.sync_multi_down()
                 server.sync_single_down()
                 server.sync_api()
