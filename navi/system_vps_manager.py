@@ -58,7 +58,7 @@ def list_vps():
                 if server:
                     if server.is_online():
                         color = "green"
-                if st.button(f':{color}[{vps.hostname}]'):
+                if st.button(f':{color}[{vps.hostname} ({server.rtd}s)]'):
                     if "monitor" in st.session_state:
                         st.session_state.monitor.d_v7 = []
                         st.session_state.monitor.d_multi = []
