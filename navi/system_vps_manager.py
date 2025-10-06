@@ -55,10 +55,15 @@ def list_vps():
             if vps.hostname:
                 server = pbremote.find_server(vps.hostname)
                 color = "red"
+                rtd = 9999
                 if server:
                     if server.is_online():
                         color = "green"
-                if st.button(f':{color}[{vps.hostname} ({server.rtd}s)]'):
+                    if server.rtd:
+                        rtd = server.rtd
+                        if rtd > 9999:
+                            rtd = 9999
+                if st.button(f':{color}[{vps.hostname} ({rtd}s)]'):
                     if "monitor" in st.session_state:
                         st.session_state.monitor.d_v7 = []
                         st.session_state.monitor.d_multi = []
