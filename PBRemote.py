@@ -568,7 +568,7 @@ class PBRemote():
                         color_mem = "red"
                     else:
                         color_mem = "green"
-                    if int(server.swap[2] / 1024 / 1024) <= 250:
+                    if int(server.swap[2] / 1024 / 1024) <= 200:
                         color_swap = "red"
                     else:
                         color_swap = "green"
