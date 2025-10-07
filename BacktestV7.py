@@ -247,7 +247,7 @@ class BacktestV7Queue:
         for row in ed["edited_rows"]:
             if "delete" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["delete"]:
-                    self.items[row].remove()
+                    self.d[row]['item'].remove()
         self.items = []
 
     def running(self):
