@@ -560,7 +560,7 @@ class PBRemote():
             else:
                 if (
                     int(server.mem[1] / 1024 / 1024) <= 25 or
-                    int(server.swap[2] / 1024 / 1024) <= 250 or
+                    int(server.swap[2] / 1024 / 1024) <= 200 or
                     int(server.disk[2] / 1024 / 1024) <= 500 or
                     server.cpu >= 90
                 ):
