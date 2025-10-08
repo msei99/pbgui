@@ -461,6 +461,7 @@ class VPSManager:
                 'hostname': vps.hostname,
                 'user': vps.user,
                 'user_pw': vps.user_pw,
+                'swap_size': vps.swap,
                 'coinmarketcap_api_key': vps.coinmarketcap_api_key,
                 'firewall': vps.firewall,
                 'firewall_ssh_port': vps.firewall_ssh_port,
