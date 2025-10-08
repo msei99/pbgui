@@ -467,6 +467,13 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
+        if st.button("Resize Swap", disabled=not vps.has_user_pw()):
+            vps.command = "vps-resize-swap"
+            vps.command_text = "Resize Swap"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
         if st.button("Update CoinData API"):
             vps.command = "vps-update-coindata"
             vps.command_text = "Update CoinData API"
