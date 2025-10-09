@@ -85,9 +85,13 @@ class OptimizeV7QueueItem:
         else:
             return "not started"
 
+    def is_existing(self):
+        if Path(f'{PBGDIR}/data/opt_v7_queue/{self.filename}.json').exists():
+            return True
+        return False
+
     def is_running(self):
-        if not self.pid:
-            self.load_pid()
+        self.load_pid()
         try:
             if self.pid and psutil.pid_exists(self.pid) and any(sub.lower().endswith("optimize.py") for sub in psutil.Process(self.pid).cmdline()):
                 return True
@@ -2796,10 +2800,13 @@ def main():
             pb_config.read('pbgui.ini')
             if not eval(pb_config.get("optimize_v7", "autostart")):
                 return
-            if item.status() == "not started" or item.status() == "error":
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')
-                item.run()
-                time.sleep(1)
+            if item.is_existing():
+                if item.status() == "not started" or item.status() == "error":
+                    print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')
+                    item.run()
+                    time.sleep(1)
+            else:
+                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimize config file for {item.filename} not found, jumping to next in queue')
         time.sleep(60)
 
 if __name__ == '__main__':
