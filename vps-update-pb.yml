@@ -23,8 +23,11 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: remove stable toolchain if exists
+      command: rustup toolchain uninstall stable
+
     - name: Update rust
-      command: rustup update stable
+      command: rustup update 1.78.0
       register: update_rust
 
     - name: print update_rust

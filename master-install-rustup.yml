@@ -28,7 +28,7 @@
       become: yes
 
     - name: Update rust
-      command: rustup update stable
+      command: rustup update 1.78.0
       register: update_rust
 
     - name: print update_rust
