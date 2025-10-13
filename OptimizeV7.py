@@ -419,10 +419,9 @@ class OptimizeV7Queue:
 class OptimizeV7Results:
     def __init__(self):
         self.results_path = Path(f'{pb7dir()}/optimize_results')
-        self.analysis_path = Path(f'{pb7dir()}/optimize_results_analysis')
         self.selected_analysis = "analyses_combined"
-        self.results = []
         self.results_new = []
+        self.results_d = []
         self.sort_results = "Result Time"
         self.sort_results_order = True
         self.paretos = []
@@ -433,46 +432,11 @@ class OptimizeV7Results:
     def initialize(self):
         self.find_results()
     
-    def remove(self, file_name):
-        Path(file_name).unlink(missing_ok=True)
-        Path(f'{file_name}.bak').unlink(missing_ok=True)
-        analysis = PurePath(file_name).stem[0:19]
-        analysis = str(self.analysis_path) + f'/{analysis}*.json'
-        analysis = glob.glob(analysis, recursive=False)
-        if analysis:
-            for a in analysis:
-                Path(a).unlink(missing_ok=True)
-
     def find_results(self):
-        self.results = []
         if self.results_path.exists():
-            p = str(self.results_path) + "/*.txt"
-            self.results = glob.glob(p, recursive=False)
             p = str(self.results_path) + "/*/all_results.bin"
             self.results_new = glob.glob(p, recursive=False)
-            if "opt_v7_results_d_new" in st.session_state:
-                del st.session_state.opt_v7_results_d_new
-            if "opt_v7_results_d" in st.session_state:
-                del st.session_state.opt_v7_results_d
-    
-    def find_result_name(self, result_file):
-        with open(result_file, "r", encoding='utf-8') as f:
-            first_line = f.readline()
-            if not first_line:
-                return "Empty Result"
-            try:
-                config = json.loads(first_line)
-            except Exception as e:
-                return "Corrupt Result"
-            if "config" not in config:
-                if "backtest" not in config:
-                    return "Corrupt Result"
-                else:
-                    backtest_name = config["backtest"]["base_dir"].split("/")[-1]
-                    return backtest_name
-            else:
-                backtest_name = config["config"]["backtest"]["base_dir"].split("/")[-1]
-                return backtest_name
+            self.results_d = []
     
     def find_result_name_new(self, result_file):
         p = str(PurePath(result_file).parent / "pareto" / "*.json")
@@ -485,12 +449,6 @@ class OptimizeV7Results:
         else:
             return None, None
 
-    def view_analysis(self, analysis):
-        file = Path(f'{self.analysis_path}/{analysis}.json')
-        with open(file, "r", encoding='utf-8') as f:
-            config = json.load(f)
-            st.code(json.dumps(config, indent=4))
-
     def view_results(self):
         # Init
         if not "ed_key" in st.session_state:
@@ -500,23 +458,14 @@ class OptimizeV7Results:
         if "select_opt_v7_result_filter" in st.session_state:
             if st.session_state.select_opt_v7_result_filter != self.filter:
                 self.filter = st.session_state.select_opt_v7_result_filter
-                self.results = []
                 self.results_new = []
-                del st.session_state.opt_v7_results_d
-                del st.session_state.opt_v7_results_d_new
+                self.results_d = []
                 self.find_results()
         else:
             st.session_state.select_opt_v7_result_filter = self.filter
 
         # Remove results that are not in the filter
         if not self.filter == "":
-            for result in self.results.copy():
-                name = self.find_result_name(result)
-                if not name:
-                    self.results.remove(result)
-                    continue
-                if not fnmatch.fnmatch(name.lower(), self.filter.lower()):
-                    self.results.remove(result)
             for result in self.results_new.copy():
                 name, result_time = self.find_result_name_new(result)
                 if not name:
@@ -527,13 +476,12 @@ class OptimizeV7Results:
 
         st.text_input("Filter by Optimize Name", value="", help=pbgui_help.smart_filter, key="select_opt_v7_result_filter")
 
-        if not "opt_v7_results_d_new" in st.session_state:
-            d = []
+        if not self.results_d:
             for id, opt in enumerate(self.results_new):
                 name, result_time = self.find_result_name_new(opt)
                 if name:
                     result = PurePath(opt).parent.name
-                    d.append({
+                    self.results_d.append({
                         'id': id,
                         'Name': name,
                         'Result Time': datetime.datetime.fromtimestamp(result_time),
@@ -543,8 +491,6 @@ class OptimizeV7Results:
                         'Result': result,
                         'index': opt,
                     })
-            st.session_state.opt_v7_results_d_new = d
-        d_new = st.session_state.opt_v7_results_d_new
         column_config_new = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
@@ -571,101 +517,23 @@ class OptimizeV7Results:
         with col2:
             st.checkbox("Reverse", value=True, key=f'sort_opt_v7_results_order')
         # Sort results
-        d_new = sorted(d_new, key=lambda x: x[st.session_state[f'sort_opt_v7_results']], reverse=st.session_state[f'sort_opt_v7_results_order'])
+        self.results_d = sorted(self.results_d, key=lambda x: x[st.session_state[f'sort_opt_v7_results']], reverse=st.session_state[f'sort_opt_v7_results_order'])
         #Display optimizes
-        st.data_editor(data=d_new, height=36+(len(d_new))*35, key=f'select_optresults_new_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config_new, disabled=['id','name','index'])
+        st.data_editor(data=self.results_d, height=36+(len(self.results_d))*35, key=f'select_optresults_new_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config_new, disabled=['id','name','index'])
         if f'select_optresults_new_{st.session_state.ed_key}' in st.session_state:
             ed = st.session_state[f'select_optresults_new_{st.session_state.ed_key}']
             for row in ed["edited_rows"]:
                 if "view" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["view"]:
-                        if d_new[row]["Result"]:
-                            st.session_state.opt_v7_pareto = d_new[row]["index"]
-                            st.session_state.opt_v7_pareto_name = d_new[row]["Name"]
-                            st.session_state.opt_v7_pareto_directory = d_new[row]["Result"]
+                        if self.results_d[row]["Result"]:
+                            st.session_state.opt_v7_pareto = self.results_d[row]["index"]
+                            st.session_state.opt_v7_pareto_name = self.results_d[row]["Name"]
+                            st.session_state.opt_v7_pareto_directory = self.results_d[row]["Result"]
                             st.rerun()
                 if "3d plot" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["3d plot"]:
-                        self.run_3d_plot(d_new[row]["index"])
+                        self.run_3d_plot(self.results_d[row]["index"])
                         st.session_state.ed_key += 1
-        
-        if not "opt_v7_results_d" in st.session_state:
-            d = []
-            for id, opt in enumerate(self.results):
-                name = self.find_result_name(opt)
-                opt_item = OptimizeV7Item(name)
-                name = self.find_result_name(opt)
-                analysis = PurePath(opt).stem[0:19]
-                analysis = str(self.analysis_path) + f'/{analysis}*.json'
-                analysis = glob.glob(analysis, recursive=False)
-                if analysis:
-                    # find newest analysis file
-                    analysis_time = 0
-                    for a in analysis.copy():
-                        mtime = Path(a).stat().st_mtime
-                        if mtime > analysis_time:
-                            analysis_time = mtime
-                            analysis = PurePath(a).stem
-                else:
-                    analysis = None
-                result = PurePath(opt).stem
-                result_time = Path(opt).stat().st_mtime
-                d.append({
-                    'id': id,
-                    'Name': name,
-                    'Result Time': datetime.datetime.fromtimestamp(result_time),
-                    'BT Count': opt_item.backtest_count,
-                    'view': False,
-                    "generate": False,
-                    'backtest': False,
-                    'delete' : False,
-                    'Result': result,
-                    'Analysis': analysis,
-                    'Analysis Time': datetime.datetime.fromtimestamp(analysis_time) if analysis else None,
-                })
-            st.session_state.opt_v7_results_d = d
-        d = st.session_state.opt_v7_results_d
-        column_config = {
-            "id": None,
-            "edit": st.column_config.CheckboxColumn(label="Edit"),
-            "view": st.column_config.CheckboxColumn(label="View Analysis"),
-            "generate": st.column_config.CheckboxColumn(label="Generate Analysis"),
-            "backtest": st.column_config.CheckboxColumn(label="Backtest"),
-            "Result Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
-            "Analysis Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
-            "Analysis": st.column_config.TextColumn(label="Analysis File", width="50px"),
-            "Result": st.column_config.TextColumn(label="Result File", width="50px"),
-            }
-        # Sort results
-        d = sorted(d, key=lambda x: x[st.session_state[f'sort_opt_v7_results']], reverse=st.session_state[f'sort_opt_v7_results_order'])
-        #Display optimizes
-        st.data_editor(data=d, height=36+(len(d))*35, key=f'select_optresults_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
-        if f'select_optresults_{ed_key}' in st.session_state:
-            ed = st.session_state[f'select_optresults_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "view" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["view"]:
-                        if d[row]["Analysis"]:
-                            self.view_analysis(d[row]["Analysis"])
-                if "generate" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["generate"]:
-                        result_name = PurePath(f'{self.results_path}/{d[row]["Result"]}.txt')
-                        self.generate_analysis(result_name)
-                        st.session_state.ed_key += 1
-                        if "opt_v7_results_d" in st.session_state:
-                            del st.session_state.opt_v7_results_d
-                        # st.rerun()
-                if "backtest" in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]["backtest"]:
-                        backtest_name = PurePath(f'{self.analysis_path}/{d[row]["Analysis"]}.json')
-                        st.session_state.bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
-                        if "bt_v7_queue" in st.session_state:
-                            del st.session_state.bt_v7_queue
-                        if "bt_v7_results" in st.session_state:
-                            del st.session_state.bt_v7_results
-                        if "bt_v7_edit_symbol" in st.session_state:
-                            del st.session_state.bt_v7_edit_symbol
-                        st.switch_page(get_navi_paths()["V7_BACKTEST"])
 
     def load_sort_results(self):
         pb_config = configparser.ConfigParser()
@@ -844,45 +712,21 @@ class OptimizeV7Results:
         st.switch_page(get_navi_paths()["V7_BACKTEST"])
 
 
-    def generate_analysis(self, result_file):
-        # create a copy of result_file
-        result_file = Path(result_file)
-        result_file_copy = Path(f'{result_file}.bak')
-        shutil.copy(result_file, result_file_copy)
-        # run extract_best_config.py on result_file_copy
-        cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/tools/extract_best_config.py'), str(result_file_copy)]
-        with st.spinner('Generating Result...'):
-            if platform.system() == "Windows":
-                creationflags = subprocess.CREATE_NO_WINDOW
-                result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, creationflags=creationflags)
-            else:
-                result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
-        if "error" in result.stdout:
-            error_popup(result.stdout)
-        else:
-            info_popup(f"Analysis Generated {result.stdout}")
-
     def remove_selected_results(self):
         ed_key = st.session_state.ed_key
-        ed = st.session_state[f'select_optresults_{ed_key}']
-        for row in ed["edited_rows"]:
-            if "delete" in ed["edited_rows"][row]:
-                if ed["edited_rows"][row]["delete"]:
-                    self.remove(self.results[row])
+        if not self.results_d:
+            return
         ed = st.session_state[f'select_optresults_new_{ed_key}']
         for row in ed["edited_rows"]:
             if "delete" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["delete"]:
-                    directory = Path(self.results_new[row]).parent
+                    directory = Path(self.results_d[row]["index"]).parent
                     shutil.rmtree(directory, ignore_errors=True)
-        self.results = []
-        self.results_new = []
         self.find_results()
 
     def remove_all_results(self):
         shutil.rmtree(self.results_path, ignore_errors=True)
-        shutil.rmtree(self.analysis_path, ignore_errors=True)
-        self.results = []
+        self.results_d = []
         self.results_new = []
 
 class OptimizeV7Item:
