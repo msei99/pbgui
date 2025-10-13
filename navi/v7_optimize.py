@@ -87,13 +87,7 @@ def opt_v7_results():
     # Navigation
     with st.sidebar:
         if st.button(":material/refresh:"):
-            opt_v7_results.results = []
-            opt_v7_results.results_new = []
             opt_v7_results.find_results()
-            if "opt_v7_results_d" in st.session_state:
-                del st.session_state.opt_v7_results_d
-            if "opt_v7_results_d_new" in st.session_state:
-                del st.session_state.opt_v7_results_d_new
             st.rerun()
         if st.button(":material/home:"):
             del st.session_state.opt_v7_results
@@ -104,17 +98,9 @@ def opt_v7_results():
             st.rerun()
         if st.button(":material/delete: selected"):
             opt_v7_results.remove_selected_results()
-            if "opt_v7_results_d" in st.session_state:
-                del st.session_state.opt_v7_results_d
-            if "opt_v7_results_d_new" in st.session_state:
-                del st.session_state.opt_v7_results_d_new
             st.rerun()
         if st.button(":material/delete: all"):
             opt_v7_results.remove_all_results()
-            if "opt_v7_results_d" in st.session_state:
-                del st.session_state.opt_v7_results_d
-            if "opt_v7_results_d_new" in st.session_state:
-                del st.session_state.opt_v7_results_d_new
             st.rerun()
     st.subheader("All Results")
     opt_v7_results.view_results()
