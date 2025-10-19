@@ -663,6 +663,23 @@ ohlcvs_1m_update_after_minutes = """
     Increase this number if rate limiting becomes an issue.
     ```"""
 
+inactive_coin_candle_ttl_minutes = """
+    ```
+    to control how long 1m candles for inactive symbols are kept in RAM before being refreshed
+    ```"""
+
+max_disk_candles_per_symbol_per_tf = """
+    ```
+    Maximum number of candles to store on disk per symbol per timeframe.
+    Older candles will be deleted when this limit is exceeded.
+    ```"""
+
+max_memory_candles_per_symbol = """
+    ```
+    Maximum number of candles to keep in memory per symbol.
+    Older candles will be deleted from memory when this limit is exceeded.
+    ```"""
+
 filter_by_min_effective_cost = """
     ```
     if true, will disallow symbols where balance * WE_limit * initial_qty_pct < min_effective_cost
@@ -917,6 +934,14 @@ entry_grid_double_down_factor = """
     quantity of next grid entry is position size times double down factor.
     E.g. if position size is 1.4 and double_down_factor is 0.9, then next entry quantity is 1.4 * 0.9 == 1.26.
     also applies to trailing entries.
+    ```"""
+
+entry_grid_spacing_log = """
+    ```
+    entry_grid_spacing_log_weight, entry_grid_spacing_log_span_hours
+        The log_component in the multiplier above is derived from the EMA of the per-candle log range ln(high/low).
+        entry_grid_spacing_log_weight controls how strongly the recent log range widens or narrows spacing. A value of 0 disables the log-based adjustment.
+        entry_grid_spacing_log_span_hours sets the EMA span (in hours) used when smoothing the log-range signal before applying the weight.
     ```"""
 
 entry_grid_spacing = """

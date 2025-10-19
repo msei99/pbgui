@@ -854,7 +854,8 @@ class BacktestV7Item:
                 try:
                     self.config.config = json.loads(st.session_state.import_backtest_v7_config)
                 except:
-                    error_popup("Invalid JSON")
+                    st.error("Invalid JSON")
+                    # error_popup("Invalid JSON")
             st.session_state.import_backtest_v7_config = json.dumps(self.config.config, indent=4)
         # Display import
         st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_backtest_v7_config", height=500)
@@ -1948,9 +1949,7 @@ class BacktestsV7:
             "Select": st.column_config.CheckboxColumn(label="Select"),
             "Time": st.column_config.DatetimeColumn(label="Time", format="YYYY-MM-DD HH:mm:ss"),
             }
-        #Display Backtests
-        height = 36+(len(self.d))*35
-        if height > 1000: height = 1016
+        # Display Backtests
         if "sort_bt_v7" in st.session_state:
             if st.session_state.sort_bt_v7 != self.sort:
                 self.sort = st.session_state.sort_bt_v7
@@ -1970,6 +1969,8 @@ class BacktestsV7:
         with col2:
             st.checkbox("Reverse", value=True, key=f'sort_bt_v7_order')
         self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_bt_v7']], reverse=st.session_state[f'sort_bt_v7_order'])
+        height = 36+(len(self.d))*35
+        if height > 1000: height = 1016
         st.data_editor(data=self.d, height=height, key=f'select_backtest_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
 
     def load_sort(self):
