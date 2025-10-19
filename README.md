@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.36
+# v1.37
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -25,7 +25,7 @@ It has the following functions:
 
 ### Requirements
 - Python 3.10
-- Streamlit 1.40.0
+- Streamlit 1.50.0
 - Linux
 
 ### Recommendation
@@ -211,6 +211,17 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.37 (19-10-2025)
+- Compatible with passivbot 7.4.1
+- Resize swap size on vps
+- PBRemote optimized for more than 10 vps
+- Update to Streamlit 1.50
+- Save default sort options
+- Display CMC Credits left for vps
+- Dashboard new income as list
+- Setup vps with privat key or user/pw
+- Bugfixes
 
 ## v1.36 (07-08-2025)
 - Added coin_overrides and removed old coin_flags
