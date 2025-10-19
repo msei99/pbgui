@@ -1021,6 +1021,7 @@ class OptimizeV7Item:
             "expected_shortfall_1pct",
             "exponential_fit_error",
             "exponential_fit_error_w",
+            "flat_btc_balance_hours",
             "gain",
             "gain_per_exposure_long",
             "gain_per_exposure_short",
@@ -1371,6 +1372,42 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_entry_grid_double_down_factor",
             help=pbgui_help.entry_grid_double_down_factor)
     
+    # long_entry_grid_spacing_log_span_hours
+    @st.fragment
+    def fragment_long_entry_grid_spacing_log_span_hours(self):
+        if "edit_opt_v7_long_entry_grid_spacing_log_span_hours" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours != (self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_1):
+                self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours[0]
+                self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours = (self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_1)
+        st.slider(
+            "long_entry_grid_spacing_log_span_hours",
+            min_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_FORMAT,
+            key="edit_opt_v7_long_entry_grid_spacing_log_span_hours",
+            help=pbgui_help.entry_grid_spacing_log)
+
+    # long_entry_grid_spacing_log_weight
+    @st.fragment
+    def fragment_long_entry_grid_spacing_log_weight(self):
+        if "edit_opt_v7_long_entry_grid_spacing_log_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight != (self.config.optimize.bounds.long_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_log_weight_1):
+                self.config.optimize.bounds.long_entry_grid_spacing_log_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight[0]
+                self.config.optimize.bounds.long_entry_grid_spacing_log_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight = (self.config.optimize.bounds.long_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_log_weight_1)
+        st.slider(
+            "long_entry_grid_spacing_log_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_grid_spacing_log_weight",
+            help=pbgui_help.entry_grid_spacing_log)
+
     # long_entry_grid_spacing_pct
     @st.fragment
     def fragment_long_entry_grid_spacing_pct(self):
@@ -1389,22 +1426,22 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_entry_grid_spacing_pct",
             help=pbgui_help.entry_grid_spacing)
     
-    # long_entry_grid_spacing_weight
+    # long_entry_grid_spacing_we_weight
     @st.fragment
-    def fragment_long_entry_grid_spacing_weight(self):
-        if "edit_opt_v7_long_entry_grid_spacing_weight" in st.session_state:
-            if st.session_state.edit_opt_v7_long_entry_grid_spacing_weight != (self.config.optimize.bounds.long_entry_grid_spacing_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_weight_1):
-                self.config.optimize.bounds.long_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight[0]
-                self.config.optimize.bounds.long_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_weight[1]
+    def fragment_long_entry_grid_spacing_we_weight(self):
+        if "edit_opt_v7_long_entry_grid_spacing_we_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight != (self.config.optimize.bounds.long_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_we_weight_1):
+                self.config.optimize.bounds.long_entry_grid_spacing_we_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight[0]
+                self.config.optimize.bounds.long_entry_grid_spacing_we_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight[1]
         else:
-            st.session_state.edit_opt_v7_long_entry_grid_spacing_weight = (self.config.optimize.bounds.long_entry_grid_spacing_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_weight_1)
+            st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight = (self.config.optimize.bounds.long_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_we_weight_1)
         st.slider(
-            "long_entry_grid_spacing_weight",
-            min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN,
-            max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX,
-            step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP,
-            format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT,
-            key="edit_opt_v7_long_entry_grid_spacing_weight",
+            "long_entry_grid_spacing_we_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_grid_spacing_we_weight",
             help=pbgui_help.entry_grid_spacing)
     
     # long_entry_initial_ema_dist
@@ -1515,22 +1552,22 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_entry_trailing_threshold_pct",
             help=pbgui_help.trailing_parameters)
     
-    # long_filter_noisiness_rolling_window
+    # long_filter_log_range_ema_span
     @st.fragment
-    def fragment_long_filter_noisiness_rolling_window(self):
-        if "edit_opt_v7_long_filter_noisiness_rolling_window" in st.session_state:
-            if st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window != (self.config.optimize.bounds.long_filter_noisiness_rolling_window_0, self.config.optimize.bounds.long_filter_noisiness_rolling_window_1):
-                self.config.optimize.bounds.long_filter_noisiness_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window[0]
-                self.config.optimize.bounds.long_filter_noisiness_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window[1]
+    def fragment_long_filter_log_range_ema_span(self):
+        if "edit_opt_v7_long_filter_log_range_ema_span" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_log_range_ema_span != (self.config.optimize.bounds.long_filter_log_range_ema_span_0, self.config.optimize.bounds.long_filter_log_range_ema_span_1):
+                self.config.optimize.bounds.long_filter_log_range_ema_span_0 = st.session_state.edit_opt_v7_long_filter_log_range_ema_span[0]
+                self.config.optimize.bounds.long_filter_log_range_ema_span_1 = st.session_state.edit_opt_v7_long_filter_log_range_ema_span[1]
         else:
-            st.session_state.edit_opt_v7_long_filter_noisiness_rolling_window = (self.config.optimize.bounds.long_filter_noisiness_rolling_window_0, self.config.optimize.bounds.long_filter_noisiness_rolling_window_1)
+            st.session_state.edit_opt_v7_long_filter_log_range_ema_span = (self.config.optimize.bounds.long_filter_log_range_ema_span_0, self.config.optimize.bounds.long_filter_log_range_ema_span_1)
         st.slider(
-            "long_filter_noisiness_rolling_window",
-            min_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MIN,
-            max_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MAX,
-            step=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_STEP,
-            format=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_FORMAT,
-            key="edit_opt_v7_long_filter_noisiness_rolling_window",
+            "long_filter_log_range_ema_span",
+            min_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MIN,
+            max_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MAX,
+            step=Bounds.FILTER_LOG_RANGE_EMA_SPAN_STEP,
+            format=Bounds.FILTER_LOG_RANGE_EMA_SPAN_FORMAT,
+            key="edit_opt_v7_long_filter_log_range_ema_span",
             help=pbgui_help.filter_rolling_window)
 
     # long_filter_volume_drop_pct
@@ -1551,22 +1588,22 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_filter_volume_drop_pct",
             help=pbgui_help.filter_volume_drop_pct)
     
-    # long_filter_volume_rolling_window
+    # long_filter_volume_ema_span
     @st.fragment
-    def fragment_long_filter_volume_rolling_window(self):
-        if "edit_opt_v7_long_filter_volume_rolling_window" in st.session_state:
-            if st.session_state.edit_opt_v7_long_filter_volume_rolling_window != (self.config.optimize.bounds.long_filter_volume_rolling_window_0, self.config.optimize.bounds.long_filter_volume_rolling_window_1):
-                self.config.optimize.bounds.long_filter_volume_rolling_window_0 = st.session_state.edit_opt_v7_long_filter_volume_rolling_window[0]
-                self.config.optimize.bounds.long_filter_volume_rolling_window_1 = st.session_state.edit_opt_v7_long_filter_volume_rolling_window[1]
+    def fragment_long_filter_volume_ema_span(self):
+        if "edit_opt_v7_long_filter_volume_ema_span" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_volume_ema_span != (self.config.optimize.bounds.long_filter_volume_ema_span_0, self.config.optimize.bounds.long_filter_volume_ema_span_1):
+                self.config.optimize.bounds.long_filter_volume_ema_span_0 = st.session_state.edit_opt_v7_long_filter_volume_ema_span[0]
+                self.config.optimize.bounds.long_filter_volume_ema_span_1 = st.session_state.edit_opt_v7_long_filter_volume_ema_span[1]
         else:
-            st.session_state.edit_opt_v7_long_filter_volume_rolling_window = (self.config.optimize.bounds.long_filter_volume_rolling_window_0, self.config.optimize.bounds.long_filter_volume_rolling_window_1)
+            st.session_state.edit_opt_v7_long_filter_volume_ema_span = (self.config.optimize.bounds.long_filter_volume_ema_span_0, self.config.optimize.bounds.long_filter_volume_ema_span_1)
         st.slider(
-            "long_filter_volume_rolling_window",
-            min_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MIN,
-            max_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MAX,
-            step=Bounds.FILTER_VOLUME_ROLLING_WINDOW_STEP,
-            format=Bounds.FILTER_VOLUME_ROLLING_WINDOW_FORMAT,
-            key="edit_opt_v7_long_filter_volume_rolling_window",
+            "long_filter_volume_ema_span",
+            min_value=Bounds.FILTER_VOLUME_EMA_SPAN_MIN,
+            max_value=Bounds.FILTER_VOLUME_EMA_SPAN_MAX,
+            step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
+            format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
+            key="edit_opt_v7_long_filter_volume_ema_span",
             help=pbgui_help.filter_rolling_window)
 
     # long_n_positions
@@ -1893,6 +1930,42 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_entry_grid_double_down_factor",
             help=pbgui_help.entry_grid_double_down_factor)
 
+    # short_entry_grid_spacing_log_span_hours
+    @st.fragment
+    def fragment_short_entry_grid_spacing_log_span_hours(self):
+        if "edit_opt_v7_short_entry_grid_spacing_log_span_hours" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours != (self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_1):
+                self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours[0]
+                self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours = (self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_1)
+        st.slider(
+            "short_entry_grid_spacing_log_span_hours",
+            min_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_FORMAT,
+            key="edit_opt_v7_short_entry_grid_spacing_log_span_hours",
+            help=pbgui_help.entry_grid_spacing_log)
+
+    # short_entry_grid_spacing_log_weight
+    @st.fragment
+    def fragment_short_entry_grid_spacing_log_weight(self):
+        if "edit_opt_v7_short_entry_grid_spacing_log_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight != (self.config.optimize.bounds.short_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_log_weight_1):
+                self.config.optimize.bounds.short_entry_grid_spacing_log_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight[0]
+                self.config.optimize.bounds.short_entry_grid_spacing_log_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight = (self.config.optimize.bounds.short_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_log_weight_1)
+        st.slider(
+            "short_entry_grid_spacing_log_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_grid_spacing_log_weight",
+            help=pbgui_help.entry_grid_spacing_log)
+
     # short_entry_grid_spacing_pct
     @st.fragment
     def fragment_short_entry_grid_spacing_pct(self):
@@ -1911,22 +1984,22 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_entry_grid_spacing_pct",
             help=pbgui_help.entry_grid_spacing)
     
-    # short_entry_grid_spacing_weight
+    # short_entry_grid_spacing_we_weight
     @st.fragment
-    def fragment_short_entry_grid_spacing_weight(self):
-        if "edit_opt_v7_short_entry_grid_spacing_weight" in st.session_state:
-            if st.session_state.edit_opt_v7_short_entry_grid_spacing_weight != (self.config.optimize.bounds.short_entry_grid_spacing_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_weight_1):
-                self.config.optimize.bounds.short_entry_grid_spacing_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight[0]
-                self.config.optimize.bounds.short_entry_grid_spacing_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_weight[1]
+    def fragment_short_entry_grid_spacing_we_weight(self):
+        if "edit_opt_v7_short_entry_grid_spacing_we_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight != (self.config.optimize.bounds.short_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_we_weight_1):
+                self.config.optimize.bounds.short_entry_grid_spacing_we_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight[0]
+                self.config.optimize.bounds.short_entry_grid_spacing_we_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight[1]
         else:
-            st.session_state.edit_opt_v7_short_entry_grid_spacing_weight = (self.config.optimize.bounds.short_entry_grid_spacing_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_weight_1)
+            st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight = (self.config.optimize.bounds.short_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_we_weight_1)
         st.slider(
-            "short_entry_grid_spacing_weight",
-            min_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MIN,
-            max_value=Bounds.ENTRY_GRID_SPACING_WEIGHT_MAX,
-            step=Bounds.ENTRY_GRID_SPACING_WEIGHT_STEP,
-            format=Bounds.ENTRY_GRID_SPACING_WEIGHT_FORMAT,
-            key="edit_opt_v7_short_entry_grid_spacing_weight",
+            "short_entry_grid_spacing_we_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_grid_spacing_we_weight",
             help=pbgui_help.entry_grid_spacing)
     
     # short_entry_initial_ema_dist
@@ -2037,22 +2110,22 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_entry_trailing_threshold_pct",
             help=pbgui_help.trailing_parameters)
     
-    # short_filter_noisiness_rolling_window
+    # short_filter_log_range_ema_span
     @st.fragment
-    def fragment_short_filter_noisiness_rolling_window(self):
-        if "edit_opt_v7_short_filter_noisiness_rolling_window" in st.session_state:
-            if st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window != (self.config.optimize.bounds.short_filter_noisiness_rolling_window_0, self.config.optimize.bounds.short_filter_noisiness_rolling_window_1):
-                self.config.optimize.bounds.short_filter_noisiness_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window[0]
-                self.config.optimize.bounds.short_filter_noisiness_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window[1]
+    def fragment_short_filter_log_range_ema_span(self):
+        if "edit_opt_v7_short_filter_log_range_ema_span" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_log_range_ema_span != (self.config.optimize.bounds.short_filter_log_range_ema_span_0, self.config.optimize.bounds.short_filter_log_range_ema_span_1):
+                self.config.optimize.bounds.short_filter_log_range_ema_span_0 = st.session_state.edit_opt_v7_short_filter_log_range_ema_span[0]
+                self.config.optimize.bounds.short_filter_log_range_ema_span_1 = st.session_state.edit_opt_v7_short_filter_log_range_ema_span[1]
         else:
-            st.session_state.edit_opt_v7_short_filter_noisiness_rolling_window = (self.config.optimize.bounds.short_filter_noisiness_rolling_window_0, self.config.optimize.bounds.short_filter_noisiness_rolling_window_1)
+            st.session_state.edit_opt_v7_short_filter_log_range_ema_span = (self.config.optimize.bounds.short_filter_log_range_ema_span_0, self.config.optimize.bounds.short_filter_log_range_ema_span_1)
         st.slider(
-            "short_filter_noisiness_rolling_window",
-            min_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MIN,
-            max_value=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_MAX,
-            step=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_STEP,
-            format=Bounds.FILTER_NOISINESS_ROLLING_WINDOW_FORMAT,
-            key="edit_opt_v7_short_filter_noisiness_rolling_window",
+            "short_filter_log_range_ema_span",
+            min_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MIN,
+            max_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MAX,
+            step=Bounds.FILTER_LOG_RANGE_EMA_SPAN_STEP,
+            format=Bounds.FILTER_LOG_RANGE_EMA_SPAN_FORMAT,
+            key="edit_opt_v7_short_filter_log_range_ema_span",
             help=pbgui_help.filter_rolling_window)
     
     # short_filter_volume_drop_pct
@@ -2073,22 +2146,22 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_filter_volume_drop_pct",
             help=pbgui_help.filter_volume_drop_pct)
 
-    # short_filter_volume_rolling_window
+    # short_filter_volume_ema_span
     @st.fragment
-    def fragment_short_filter_volume_rolling_window(self):
-        if "edit_opt_v7_short_filter_volume_rolling_window" in st.session_state:
-            if st.session_state.edit_opt_v7_short_filter_volume_rolling_window != (self.config.optimize.bounds.short_filter_volume_rolling_window_0, self.config.optimize.bounds.short_filter_volume_rolling_window_1):
-                self.config.optimize.bounds.short_filter_volume_rolling_window_0 = st.session_state.edit_opt_v7_short_filter_volume_rolling_window[0]
-                self.config.optimize.bounds.short_filter_volume_rolling_window_1 = st.session_state.edit_opt_v7_short_filter_volume_rolling_window[1]
+    def fragment_short_filter_volume_ema_span(self):
+        if "edit_opt_v7_short_filter_volume_ema_span" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_volume_ema_span != (self.config.optimize.bounds.short_filter_volume_ema_span_0, self.config.optimize.bounds.short_filter_volume_ema_span_1):
+                self.config.optimize.bounds.short_filter_volume_ema_span_0 = st.session_state.edit_opt_v7_short_filter_volume_ema_span[0]
+                self.config.optimize.bounds.short_filter_volume_ema_span_1 = st.session_state.edit_opt_v7_short_filter_volume_ema_span[1]
         else:
-            st.session_state.edit_opt_v7_short_filter_volume_rolling_window = (self.config.optimize.bounds.short_filter_volume_rolling_window_0, self.config.optimize.bounds.short_filter_volume_rolling_window_1)
+            st.session_state.edit_opt_v7_short_filter_volume_ema_span = (self.config.optimize.bounds.short_filter_volume_ema_span_0, self.config.optimize.bounds.short_filter_volume_ema_span_1)
         st.slider(
-            "short_filter_volume_rolling_window",
-            min_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MIN,
-            max_value=Bounds.FILTER_VOLUME_ROLLING_WINDOW_MAX,
-            step=Bounds.FILTER_VOLUME_ROLLING_WINDOW_STEP,
-            format=Bounds.FILTER_VOLUME_ROLLING_WINDOW_FORMAT,
-            key="edit_opt_v7_short_filter_volume_rolling_window",
+            "short_filter_volume_ema_span",
+            min_value=Bounds.FILTER_VOLUME_EMA_SPAN_MIN,
+            max_value=Bounds.FILTER_VOLUME_EMA_SPAN_MAX,
+            step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
+            format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
+            key="edit_opt_v7_short_filter_volume_ema_span",
             help=pbgui_help.filter_rolling_window)
 
     # short_n_positions
@@ -2457,17 +2530,19 @@ class OptimizeV7Item:
                 self.fragment_long_ema_span_0()
                 self.fragment_long_ema_span_1()
                 self.fragment_long_entry_grid_double_down_factor()
+                self.fragment_long_entry_grid_spacing_log_span_hours()
+                self.fragment_long_entry_grid_spacing_log_weight()
                 self.fragment_long_entry_grid_spacing_pct()
-                self.fragment_long_entry_grid_spacing_weight()
+                self.fragment_long_entry_grid_spacing_we_weight()
                 self.fragment_long_entry_initial_ema_dist()
                 self.fragment_long_entry_initial_qty_pct()
                 self.fragment_long_entry_trailing_double_down_factor()
                 self.fragment_long_entry_trailing_grid_ratio()
                 self.fragment_long_entry_trailing_retracement_pct()
                 self.fragment_long_entry_trailing_threshold_pct()
-                self.fragment_long_filter_noisiness_rolling_window()
+                self.fragment_long_filter_log_range_ema_span()
                 self.fragment_long_filter_volume_drop_pct()
-                self.fragment_long_filter_volume_rolling_window()
+                self.fragment_long_filter_volume_ema_span()
                 self.fragment_long_n_positions()
                 self.fragment_long_total_wallet_exposure_limit()
                 self.fragment_long_unstuck_close_pct()
@@ -2490,17 +2565,19 @@ class OptimizeV7Item:
                 self.fragment_short_ema_span_0()
                 self.fragment_short_ema_span_1()
                 self.fragment_short_entry_grid_double_down_factor()
+                self.fragment_short_entry_grid_spacing_log_span_hours()
+                self.fragment_short_entry_grid_spacing_log_weight()
                 self.fragment_short_entry_grid_spacing_pct()
-                self.fragment_short_entry_grid_spacing_weight()
+                self.fragment_short_entry_grid_spacing_we_weight()
                 self.fragment_short_entry_initial_ema_dist()
                 self.fragment_short_entry_initial_qty_pct()
                 self.fragment_short_entry_trailing_double_down_factor()
                 self.fragment_short_entry_trailing_grid_ratio()
                 self.fragment_short_entry_trailing_retracement_pct()
                 self.fragment_short_entry_trailing_threshold_pct()
-                self.fragment_short_filter_noisiness_rolling_window()
+                self.fragment_short_filter_log_range_ema_span()
                 self.fragment_short_filter_volume_drop_pct()
-                self.fragment_short_filter_volume_rolling_window()
+                self.fragment_short_filter_volume_ema_span()
                 self.fragment_short_n_positions()
                 self.fragment_short_total_wallet_exposure_limit()
                 self.fragment_short_unstuck_close_pct()
@@ -2584,6 +2661,10 @@ class OptimizeV7Item:
 class OptimizesV7:
     def __init__(self):
         self.optimizes = []
+        self.d = []
+        self.sort = "Time"
+        self.sort_order = True
+        self.load_sort()
 
     def view_optimizes(self):
         # Init
@@ -2603,24 +2684,61 @@ class OptimizesV7:
                         self.optimizes[row].remove()
                         self.optimizes.pop(row)
                         st.rerun()
-        d = []
-        for id, opt in enumerate(self.optimizes):
-            d.append({
-                'id': id,
-                'edit': False,
-                'Name': opt.name,
-                'Date': opt.time,
-                'Exchange': opt.config.backtest.exchanges,
-                'BT Count': opt.backtest_count,
-                'delete' : False,
-            })
+        if not self.d:
+            for id, opt in enumerate(self.optimizes):
+                self.d.append({
+                    'id': id,
+                    'edit': False,
+                    'Name': opt.name,
+                    'Time': opt.time,
+                    'Exchange': opt.config.backtest.exchanges,
+                    'BT Count': opt.backtest_count,
+                    'delete' : False,
+                })
         column_config = {
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
-            "Date": st.column_config.DatetimeColumn(label="Date", format="YYYY-MM-DD HH:mm:ss"),
+            "Time": st.column_config.DatetimeColumn(label="Time", format="YYYY-MM-DD HH:mm:ss"),
             }
-        #Display optimizes
-        st.data_editor(data=d, height=36+(len(d))*35, key=f'select_optimize_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+        # Display optimizes
+        if "sort_opt_v7" in st.session_state:
+            if st.session_state.sort_opt_v7 != self.sort:
+                self.sort = st.session_state.sort_opt_v7
+                self.save_sort()
+        else:
+            st.session_state.sort_opt_v7 = self.sort
+        if "sort_opt_v7_order" in st.session_state:
+            if st.session_state.sort_opt_v7_order != self.sort_order:
+                self.sort_order = st.session_state.sort_opt_v7_order
+                self.save_sort()
+        else:
+            st.session_state.sort_opt_v7_order = self.sort_order
+        # Display sort options
+        col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
+        with col1:
+            st.selectbox("Sort by:", ['Time', 'Name', 'BT Count', 'Exchange'], key=f'sort_opt_v7', index=0)
+        with col2:
+            st.checkbox("Reverse", value=True, key=f'sort_opt_v7_order')
+        self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_opt_v7']], reverse=st.session_state[f'sort_opt_v7_order'])
+        height = 36+(len(self.d))*35
+        if height > 1000: height = 1016
+        st.data_editor(data=self.d, height=height, key=f'select_optimize_v7_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','name'])
+
+    def load_sort(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        self.sort = pb_config.get("optimize_v7", "sort") if pb_config.has_option("optimize_v7", "sort") else "Time"
+        self.sort_order = eval(pb_config.get("optimize_v7", "sort_order")) if pb_config.has_option("optimize_v7", "sort_order") else True
+
+    def save_sort(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("optimize_v7"):
+            pb_config.add_section("optimize_v7")
+        pb_config.set("optimize_v7", "sort", str(self.sort))
+        pb_config.set("optimize_v7", "sort_order", str(self.sort_order))
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
 
     def find_optimizes(self):
         p = str(Path(f'{PBGDIR}/data/opt_v7/*.json'))
