@@ -211,13 +211,22 @@ class V7Instance():
         st.checkbox("auto_gs", help=pbgui_help.auto_gs, key="edit_run_v7_auto_gs")
 
     @st.fragment
-    def fragment_mimic_backtest_1m_delay(self):
-        if "edit_run_v7_mimic_backtest_1m_delay" in st.session_state:
-            if st.session_state.edit_run_v7_mimic_backtest_1m_delay != self.config.live.mimic_backtest_1m_delay:
-                self.config.live.mimic_backtest_1m_delay = st.session_state.edit_run_v7_mimic_backtest_1m_delay
+    def inactive_coin_candle_ttl_minutes(self):
+        if "edit_run_v7_inactive_coin_candle_ttl_minutes" in st.session_state:
+            if st.session_state.edit_run_v7_inactive_coin_candle_ttl_minutes != self.config.live.inactive_coin_candle_ttl_minutes:
+                self.config.live.inactive_coin_candle_ttl_minutes = st.session_state.edit_run_v7_inactive_coin_candle_ttl_minutes
         else:
-            st.session_state.edit_run_v7_mimic_backtest_1m_delay = self.config.live.mimic_backtest_1m_delay
-        st.checkbox("mimic_backtest_1m_delay", help=pbgui_help.mimic_backtest_1m_delay, key="edit_run_v7_mimic_backtest_1m_delay")
+            st.session_state.edit_run_v7_inactive_coin_candle_ttl_minutes = float(round(self.config.live.inactive_coin_candle_ttl_minutes, 0))
+        st.number_input("inactive_coin_candle_ttl_minutes", min_value=0.0, step=1.0, format="%.1f", key="edit_run_v7_inactive_coin_candle_ttl_minutes", help=pbgui_help.inactive_coin_candle_ttl_minutes)
+
+    # @st.fragment
+    # def fragment_mimic_backtest_1m_delay(self):
+    #     if "edit_run_v7_mimic_backtest_1m_delay" in st.session_state:
+    #         if st.session_state.edit_run_v7_mimic_backtest_1m_delay != self.config.live.mimic_backtest_1m_delay:
+    #             self.config.live.mimic_backtest_1m_delay = st.session_state.edit_run_v7_mimic_backtest_1m_delay
+    #     else:
+    #         st.session_state.edit_run_v7_mimic_backtest_1m_delay = self.config.live.mimic_backtest_1m_delay
+    #     st.checkbox("mimic_backtest_1m_delay", help=pbgui_help.mimic_backtest_1m_delay, key="edit_run_v7_mimic_backtest_1m_delay")
 
     @st.fragment
     def fragment_max_n_cancellations_per_batch(self):
@@ -265,22 +274,39 @@ class V7Instance():
         st.number_input("max_n_restarts_per_day", min_value=0, max_value=100, step=1, format="%.d", key="edit_run_v7_max_n_restarts_per_day", help=pbgui_help.max_n_restarts_per_day)
 
     @st.fragment
-    def fragement_ohlcvs_1m_rolling_window_days(self):
-        if "edit_run_v7_ohlcvs_1m_rolling_window_days" in st.session_state:
-            if st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days != self.config.live.ohlcvs_1m_rolling_window_days:
-                self.config.live.ohlcvs_1m_rolling_window_days = st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days
+    def fragement_max_disk_candles_per_symbol_per_tf(self):
+        if "edit_run_v7_max_disk_candles_per_symbol_per_tf" in st.session_state:
+            if st.session_state.edit_run_v7_max_disk_candles_per_symbol_per_tf != self.config.live.max_disk_candles_per_symbol_per_tf:
+                self.config.live.max_disk_candles_per_symbol_per_tf = st.session_state.edit_run_v7_max_disk_candles_per_symbol_per_tf
         else:
-            st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days = float(round(self.config.live.ohlcvs_1m_rolling_window_days, 0))
-        st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
-
+            st.session_state.edit_run_v7_max_disk_candles_per_symbol_per_tf = self.config.live.max_disk_candles_per_symbol_per_tf
+        st.number_input("max_disk_candles_per_symbol_per_tf", min_value=0, max_value=10000000, step=10000, format="%.d", key="edit_run_v7_max_disk_candles_per_symbol_per_tf", help=pbgui_help.max_disk_candles_per_symbol_per_tf)
     @st.fragment
-    def fragment_ohlcvs_1m_update_after_minutes(self):
-        if "edit_run_v7_ohlcvs_1m_update_after_minutes" in st.session_state:
-            if st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes != self.config.live.ohlcvs_1m_update_after_minutes:
-                self.config.live.ohlcvs_1m_update_after_minutes = st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes
+    def fragment_max_memory_candles_per_symbol(self):
+        if "edit_run_v7_max_memory_candles_per_symbol" in st.session_state:
+            if st.session_state.edit_run_v7_max_memory_candles_per_symbol != self.config.live.max_memory_candles_per_symbol:
+                self.config.live.max_memory_candles_per_symbol = st.session_state.edit_run_v7_max_memory_candles_per_symbol
         else:
-            st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes = float(round(self.config.live.ohlcvs_1m_update_after_minutes, 0))
-        st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, max_value=60.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
+            st.session_state.edit_run_v7_max_memory_candles_per_symbol = self.config.live.max_memory_candles_per_symbol
+        st.number_input("max_memory_candles_per_symbol", min_value=0, max_value=10000000, step=10000, format="%.d", key="edit_run_v7_max_memory_candles_per_symbol", help=pbgui_help.max_memory_candles_per_symbol)
+
+    # @st.fragment
+    # def fragement_ohlcvs_1m_rolling_window_days(self):
+    #     if "edit_run_v7_ohlcvs_1m_rolling_window_days" in st.session_state:
+    #         if st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days != self.config.live.ohlcvs_1m_rolling_window_days:
+    #             self.config.live.ohlcvs_1m_rolling_window_days = st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days
+    #     else:
+    #         st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days = float(round(self.config.live.ohlcvs_1m_rolling_window_days, 0))
+    #     st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
+
+    # @st.fragment
+    # def fragment_ohlcvs_1m_update_after_minutes(self):
+    #     if "edit_run_v7_ohlcvs_1m_update_after_minutes" in st.session_state:
+    #         if st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes != self.config.live.ohlcvs_1m_update_after_minutes:
+    #             self.config.live.ohlcvs_1m_update_after_minutes = st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes
+    #     else:
+    #         st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes = float(round(self.config.live.ohlcvs_1m_update_after_minutes, 0))
+    #     st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, max_value=60.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
 
     @st.fragment
     def fragment_time_in_force(self):
@@ -503,7 +529,7 @@ class V7Instance():
             self.fragment_market_orders_allowed()
         with col4:
             self.fragment_auto_gs()
-            self.fragment_mimic_backtest_1m_delay()
+            # self.fragment_mimic_backtest_1m_delay()
 
         # Advanced Settings
         with st.expander("Advanced Settings", expanded=False):
@@ -520,11 +546,14 @@ class V7Instance():
             with col1:
                 self.fragment_max_n_restarts_per_day()
             with col2:
-                self.fragement_ohlcvs_1m_rolling_window_days()
+                self.fragement_max_disk_candles_per_symbol_per_tf()
             with col3:
-                self.fragment_ohlcvs_1m_update_after_minutes()
+                self.fragment_max_memory_candles_per_symbol()
             with col4:
                 self.fragment_time_in_force()
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                self.inactive_coin_candle_ttl_minutes()
 
         #Filters
         self.fragment_filter_coins()
@@ -603,8 +632,8 @@ class V7Instance():
                 del st.session_state.edit_run_v7_forced_mode_short
                 del st.session_state.edit_run_v7_time_in_force
                 del st.session_state.edit_run_v7_max_n_restarts_per_day
-                del st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days
-                del st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes
+                del st.session_state.edit_run_v7_max_disk_candles_per_symbol_per_tf
+                del st.session_state.edit_run_v7_max_memory_candles_per_symbol
                 del st.session_state.edit_run_v7_market_cap
                 del st.session_state.edit_run_v7_vol_mcap
                 del st.session_state.edit_run_v7_dynamic_ignore

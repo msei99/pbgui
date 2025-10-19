@@ -232,6 +232,7 @@ def bt_v7_queue():
     with st.sidebar:
         if st.button(":material/refresh:"):
             bt_v7_queue.items = []
+            bt_v7_queue.d = []
             st.rerun()
         if st.button(":material/home:"):
             del st.session_state.bt_v7_queue

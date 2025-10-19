@@ -287,7 +287,7 @@ class Config:
 #               "end_date": "now",
 #               "exchanges": ["binance", "bybit"],
 #               "gap_tolerance_ohlcvs_minutes": 120,
-#               "start_date": "2020-04-01",
+#               "start_date": "2020-01-01",
 #               "starting_balance": 100000,
 #               "use_btc_collateral": true},
 #  "bot": {"long": {"close_grid_markup_end": 0.003354,
@@ -301,17 +301,19 @@ class Config:
 #                   "ema_span_1": 475.6,
 #                   "enforce_exposure_limit": true,
 #                   "entry_grid_double_down_factor": 0.8473,
+#                   "entry_grid_spacing_log_span_hours": 72,
+#                   "entry_grid_spacing_log_weight": 0.0,
 #                   "entry_grid_spacing_pct": 0.02744,
-#                   "entry_grid_spacing_weight": 0.313,
+#                   "entry_grid_spacing_we_weight": 0.313,
 #                   "entry_initial_ema_dist": -0.00364,
 #                   "entry_initial_qty_pct": 0.01633,
 #                   "entry_trailing_double_down_factor": 3.042,
 #                   "entry_trailing_grid_ratio": 0.007105,
 #                   "entry_trailing_retracement_pct": 0.01368,
 #                   "entry_trailing_threshold_pct": 0.06497,
-#                   "filter_noisiness_rolling_window": 39.82,
+#                   "filter_log_range_ema_span": 39.82,
 #                   "filter_volume_drop_pct": 0.5077,
-#                   "filter_volume_rolling_window": 1886,
+#                   "filter_volume_ema_span": 1886,
 #                   "n_positions": 7.057,
 #                   "total_wallet_exposure_limit": 2,
 #                   "unstuck_close_pct": 0.04102,
@@ -329,17 +331,19 @@ class Config:
 #                    "ema_span_1": 985.1,
 #                    "enforce_exposure_limit": true,
 #                    "entry_grid_double_down_factor": 3.41,
+#                    "entry_grid_spacing_log_span_hours": 72,
+#                    "entry_grid_spacing_log_weight": 0.0,
 #                    "entry_grid_spacing_pct": 0.03714,
-#                    "entry_grid_spacing_weight": 1.656,
+#                    "entry_grid_spacing_we_weight": 1.656,
 #                    "entry_initial_ema_dist": -0.09702,
 #                    "entry_initial_qty_pct": 0.009357,
 #                    "entry_trailing_double_down_factor": 0.01,
 #                    "entry_trailing_grid_ratio": -0.9565,
 #                    "entry_trailing_retracement_pct": 0.08704,
 #                    "entry_trailing_threshold_pct": 0.04012,
-#                    "filter_noisiness_rolling_window": 335.7,
+#                    "filter_log_range_ema_span": 335.7,
 #                    "filter_volume_drop_pct": 0.5257,
-#                    "filter_volume_rolling_window": 2643,
+#                    "filter_volume_ema_span": 2643,
 #                    "n_positions": 7.211,
 #                    "total_wallet_exposure_limit": 0,
 #                    "unstuck_close_pct": 0.074,
@@ -349,6 +353,7 @@ class Config:
 #  "coin_overrides": {},
 #  "live": {"approved_coins": "configs/approved_coins_top23mcap.json",
 #           "auto_gs": true,
+#           "inactive_coin_candle_ttl": 10.0,
 #           "empty_means_all_approved": true,
 #           "execution_delay_seconds": 2,
 #           "filter_by_min_effective_cost": true,
@@ -356,14 +361,13 @@ class Config:
 #           "forced_mode_short": "",
 #           "ignored_coins": {"long": [], "short": []},
 #           "leverage": 10,
-#           "market_orders_allowed": true,
+#           "market_orders_allowed": false,
+#           "max_disk_candles_per_symbol_per_tf": 2000000,
+#           "max_memory_candles_per_symbol":200000,
 #           "max_n_cancellations_per_batch": 5,
 #           "max_n_creations_per_batch": 3,
 #           "max_n_restarts_per_day": 10,
-#           "mimic_backtest_1m_delay": false,
 #           "minimum_coin_age_days": 180,
-#           "ohlcvs_1m_rolling_window_days": 4,
-#           "ohlcvs_1m_update_after_minutes": 10,
 #           "pnls_max_lookback_days": 30,
 #           "price_distance_threshold": 0.002,
 #           "time_in_force": "good_till_cancelled",
@@ -378,17 +382,19 @@ class Config:
 #                          "long_ema_span_0": [200, 1440],
 #                          "long_ema_span_1": [200, 1440],
 #                          "long_entry_grid_double_down_factor": [0.01, 4],
+#                          "long_entry_grid_spacing_log_span_hours": [672, 2688],
+#                          "long_entry_grid_spacing_log_weight": [0.1, 400],
 #                          "long_entry_grid_spacing_pct": [0.001, 0.06],
-#                          "long_entry_grid_spacing_weight": [0, 10],
+#                          "long_entry_grid_spacing_we_weight": [0, 10],
 #                          "long_entry_initial_ema_dist": [-0.1, 0.003],
-#                          "long_entry_initial_qty_pct": [0.004, 0.02],
+#                          "long_entry_initial_qty_pct": [0.004, 0.1],
 #                          "long_entry_trailing_double_down_factor": [0.01, 4],
 #                          "long_entry_trailing_grid_ratio": [-1, 1],
 #                          "long_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "long_entry_trailing_threshold_pct": [-0.01, 0.1],
-#                          "long_filter_noisiness_rolling_window": [10, 360],
+#                          "long_filter_log_range_ema_span": [10, 360],
 #                          "long_filter_volume_drop_pct": [0.5, 1],
-#                          "long_filter_volume_rolling_window": [360, 2880],
+#                          "long_filter_volume_ema_span": [360, 2880],
 #                          "long_n_positions": [7, 20],
 #                          "long_total_wallet_exposure_limit": [2, 2],
 #                          "long_unstuck_close_pct": [0.001, 0.1],
@@ -405,17 +411,19 @@ class Config:
 #                          "short_ema_span_0": [200, 1440],
 #                          "short_ema_span_1": [200, 1440],
 #                          "short_entry_grid_double_down_factor": [0.01, 4],
+#                          "short_entry_grid_spacing_log_span_hours": [672, 2688],
+#                          "short_entry_grid_spacing_log_weight": [0.1, 400],
 #                          "short_entry_grid_spacing_pct": [0.001, 0.06],
-#                          "short_entry_grid_spacing_weight": [0, 10],
+#                          "short_entry_grid_spacing_we_weight": [0, 10],
 #                          "short_entry_initial_ema_dist": [-0.1, 0.003],
-#                          "short_entry_initial_qty_pct": [0.004, 0.02],
+#                          "short_entry_initial_qty_pct": [0.004, 0.1],
 #                          "short_entry_trailing_double_down_factor": [0.01, 4],
 #                          "short_entry_trailing_grid_ratio": [-1, 1],
 #                          "short_entry_trailing_retracement_pct": [0.0001, 0.1],
 #                          "short_entry_trailing_threshold_pct": [-0.01, 0.1],
-#                          "short_filter_noisiness_rolling_window": [10, 360],
+#                          "short_filter_log_range_ema_span": [10, 360],
 #                          "short_filter_volume_drop_pct": [0.5, 1],
-#                          "short_filter_volume_rolling_window": [360, 2880],
+#                          "short_filter_volume_ema_span": [360, 2880],
 #                          "short_n_positions": [0, 0],
 #                          "short_total_wallet_exposure_limit": [0, 0],
 #                          "short_unstuck_close_pct": [0.001, 0.1],
@@ -427,15 +435,15 @@ class Config:
 #               "enable_overrides": [],
 #               "iters": 300000,
 #               "limits": {"penalize_if_greater_than_btc_drawdown_worst": 0.5,
-#                          "penalize_if_greater_than_loss_profit_ratio": 0.2,
-#                          "penalize_if_greater_than_position_unchanged_hours_max": 504},
+#                          "penalize_if_greater_than_flat_btc_balance_hours": 672,
+#                          "penalize_if_greater_than_loss_profit_ratio": 0.35},
 #               "mutation_probability": 0.34,
-#               "n_cpus": 5,
-#               "population_size": 1000,
+#               "n_cpus": 6,
+#               "population_size": 300,
 #               "round_to_n_significant_digits": 4,
 #               "scoring": ["btc_adg_w",
 #                           "btc_mdg_w",
-#                           "equity_balance_diff_neg_mean"],
+#                           "btc_sharpe_ratio"],
 #               "write_all_results": false}}
 
 
@@ -497,7 +505,7 @@ class Backtest:
     @property
     def end_date(self):
         if self._end_date == "now":
-            return datetime.datetime.now().strftime("%Y-%m-%d")
+            return (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
         return self._end_date
     @property
     def exchanges(self): return self._exchanges
@@ -743,8 +751,10 @@ class Long:
         self._ema_span_1 = 1118.9
         self._enforce_exposure_limit = True
         self._entry_grid_double_down_factor = 2.3738
+        self._entry_grid_spacing_log_span_hours = 72
+        self._entry_grid_spacing_log_weight = 0.0
         self._entry_grid_spacing_pct = 0.052372
-        self._entry_grid_spacing_weight = 0.17715
+        self._entry_grid_spacing_we_weight = 0.17715
         self._entry_initial_ema_dist = -0.0060574
         self._entry_initial_qty_pct = 0.019955
         self._entry_trailing_double_down_factor = 1.441
@@ -752,8 +762,8 @@ class Long:
         self._entry_trailing_retracement_pct = 0.0024762
         self._entry_trailing_threshold_pct = 0.014956
         self._filter_volume_drop_pct = 0.7021
-        self._filter_volume_rolling_window = 303.6
-        self._filter_noisiness_rolling_window = 303.6
+        self._filter_volume_ema_span = 303.6
+        self._filter_log_range_ema_span = 303.6
         self._n_positions = 9.6662
         self._total_wallet_exposure_limit = 0.8536
         self._unstuck_close_pct = 0.049593
@@ -774,17 +784,19 @@ class Long:
             "ema_span_1": self._ema_span_1,
             "enforce_exposure_limit": self._enforce_exposure_limit,
             "entry_grid_double_down_factor": self._entry_grid_double_down_factor,
+            "entry_grid_spacing_log_span_hours": self._entry_grid_spacing_log_span_hours,
+            "entry_grid_spacing_log_weight": self._entry_grid_spacing_log_weight,
             "entry_grid_spacing_pct": self._entry_grid_spacing_pct,
-            "entry_grid_spacing_weight": self._entry_grid_spacing_weight,
+            "entry_grid_spacing_we_weight": self._entry_grid_spacing_we_weight,
             "entry_initial_ema_dist": self._entry_initial_ema_dist,
             "entry_initial_qty_pct": self._entry_initial_qty_pct,
             "entry_trailing_double_down_factor": self._entry_trailing_double_down_factor,
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
-            "filter_noisiness_rolling_window": self._filter_noisiness_rolling_window,
+            "filter_log_range_ema_span": self._filter_log_range_ema_span,
             "filter_volume_drop_pct": self._filter_volume_drop_pct,
-            "filter_volume_rolling_window": self._filter_volume_rolling_window,
+            "filter_volume_ema_span": self._filter_volume_ema_span,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -826,10 +838,17 @@ class Long:
             self.enforce_exposure_limit = new_long["enforce_exposure_limit"]
         if "entry_grid_double_down_factor" in new_long:
             self.entry_grid_double_down_factor = new_long["entry_grid_double_down_factor"]
+        if "entry_grid_spacing_log_span_hours" in new_long:
+            self.entry_grid_spacing_log_span_hours = new_long["entry_grid_spacing_log_span_hours"]
+        if "entry_grid_spacing_log_weight" in new_long:
+            self.entry_grid_spacing_log_weight = new_long["entry_grid_spacing_log_weight"]
         if "entry_grid_spacing_pct" in new_long:
             self.entry_grid_spacing_pct = new_long["entry_grid_spacing_pct"]
-        if "entry_grid_spacing_weight" in new_long:
-            self.entry_grid_spacing_weight = new_long["entry_grid_spacing_weight"]
+        if "entry_grid_spacing_we_weight" in new_long:
+            self.entry_grid_spacing_we_weight = new_long["entry_grid_spacing_we_weight"]
+        # Fix for old configs
+        elif "entry_grid_spacing_weight" in new_long:
+            self.entry_grid_spacing_we_weight = new_long["entry_grid_spacing_weight"]
         if "entry_initial_ema_dist" in new_long:
             self.entry_initial_ema_dist = new_long["entry_initial_ema_dist"]
         if "entry_initial_qty_pct" in new_long:
@@ -844,21 +863,23 @@ class Long:
             self.entry_trailing_retracement_pct = new_long["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_long:
             self.entry_trailing_threshold_pct = new_long["entry_trailing_threshold_pct"]
-        if "filter_noisiness_rolling_window" in new_long:
-            self.filter_noisiness_rolling_window = new_long["filter_noisiness_rolling_window"]
+        if "filter_log_range_ema_span" in new_long:
+            self.filter_log_range_ema_span = new_long["filter_log_range_ema_span"]
         # Fix for old configs
+        elif "filter_noisiness_rolling_window" in new_long:
+            self.filter_log_range_ema_span = new_long["filter_noisiness_rolling_window"]
         elif "filter_rolling_window" in new_long:
-            self.filter_noisiness_rolling_window = new_long["filter_rolling_window"]
+            self.filter_log_range_ema_span = new_long["filter_rolling_window"]
         if "filter_volume_drop_pct" in new_long:
             self.filter_volume_drop_pct = new_long["filter_volume_drop_pct"]
         # Fix for old configs
         elif "filter_relative_volume_clip_pct" in new_long:
             self.filter_volume_drop_pct = new_long["filter_relative_volume_clip_pct"]
-        if "filter_volume_rolling_window" in new_long:
-            self.filter_volume_rolling_window = new_long["filter_volume_rolling_window"]
+        if "filter_volume_ema_span" in new_long:
+            self.filter_volume_ema_span = new_long["filter_volume_ema_span"]
         # Fix for old configs
         elif "filter_rolling_window" in new_long:
-            self.filter_volume_rolling_window = new_long["filter_rolling_window"]
+            self.filter_volume_ema_span = new_long["filter_rolling_window"]
         if "n_positions" in new_long:
             self.n_positions = new_long["n_positions"]
         if "total_wallet_exposure_limit" in new_long:
@@ -899,9 +920,13 @@ class Long:
     @property
     def entry_grid_double_down_factor(self): return self._entry_grid_double_down_factor
     @property
+    def entry_grid_spacing_log_span_hours(self): return self._entry_grid_spacing_log_span_hours
+    @property
+    def entry_grid_spacing_log_weight(self): return self._entry_grid_spacing_log_weight
+    @property
     def entry_grid_spacing_pct(self): return self._entry_grid_spacing_pct
     @property
-    def entry_grid_spacing_weight(self): return self._entry_grid_spacing_weight
+    def entry_grid_spacing_we_weight(self): return self._entry_grid_spacing_we_weight
     @property
     def entry_initial_ema_dist(self): return self._entry_initial_ema_dist
     @property
@@ -915,11 +940,11 @@ class Long:
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
     @property
-    def filter_noisiness_rolling_window(self): return self._filter_noisiness_rolling_window
+    def filter_log_range_ema_span(self): return self._filter_log_range_ema_span
     @property
     def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
     @property
-    def filter_volume_rolling_window(self): return self._filter_volume_rolling_window
+    def filter_volume_ema_span(self): return self._filter_volume_ema_span
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -985,14 +1010,22 @@ class Long:
     def entry_grid_double_down_factor(self, new_entry_grid_double_down_factor):
         self._entry_grid_double_down_factor = new_entry_grid_double_down_factor
         self._long["entry_grid_double_down_factor"] = self._entry_grid_double_down_factor
+    @entry_grid_spacing_log_span_hours.setter
+    def entry_grid_spacing_log_span_hours(self, new_entry_grid_spacing_log_span_hours):
+        self._entry_grid_spacing_log_span_hours = new_entry_grid_spacing_log_span_hours
+        self._long["entry_grid_spacing_log_span_hours"] = self._entry_grid_spacing_log_span_hours
+    @entry_grid_spacing_log_weight.setter
+    def entry_grid_spacing_log_weight(self, new_entry_grid_spacing_log_weight):
+        self._entry_grid_spacing_log_weight = new_entry_grid_spacing_log_weight
+        self._long["entry_grid_spacing_log_weight"] = self._entry_grid_spacing_log_weight
     @entry_grid_spacing_pct.setter
     def entry_grid_spacing_pct(self, new_entry_grid_spacing_pct):
         self._entry_grid_spacing_pct = new_entry_grid_spacing_pct
         self._long["entry_grid_spacing_pct"] = self._entry_grid_spacing_pct
-    @entry_grid_spacing_weight.setter
-    def entry_grid_spacing_weight(self, new_entry_grid_spacing_weight):
-        self._entry_grid_spacing_weight = new_entry_grid_spacing_weight
-        self._long["entry_grid_spacing_weight"] = self._entry_grid_spacing_weight
+    @entry_grid_spacing_we_weight.setter
+    def entry_grid_spacing_we_weight(self, new_entry_grid_spacing_we_weight):
+        self._entry_grid_spacing_we_weight = new_entry_grid_spacing_we_weight
+        self._long["entry_grid_spacing_we_weight"] = self._entry_grid_spacing_we_weight
     @entry_initial_ema_dist.setter
     def entry_initial_ema_dist(self, new_entry_initial_ema_dist):
         self._entry_initial_ema_dist = new_entry_initial_ema_dist
@@ -1017,18 +1050,18 @@ class Long:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._long["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
-    @filter_noisiness_rolling_window.setter
-    def filter_noisiness_rolling_window(self, new_filter_noisiness_rolling_window):
-        self._filter_noisiness_rolling_window = new_filter_noisiness_rolling_window
-        self._long["filter_noisiness_rolling_window"] = self._filter_noisiness_rolling_window
+    @filter_log_range_ema_span.setter
+    def filter_log_range_ema_span(self, new_filter_log_range_ema_span):
+        self._filter_log_range_ema_span = new_filter_log_range_ema_span
+        self._long["filter_log_range_ema_span"] = self._filter_log_range_ema_span
     @filter_volume_drop_pct.setter
     def filter_volume_drop_pct(self, new_filter_volume_drop_pct):
         self._filter_volume_drop_pct = new_filter_volume_drop_pct
         self._long["filter_volume_drop_pct"] = self._filter_volume_drop_pct
-    @filter_volume_rolling_window.setter
-    def filter_volume_rolling_window(self, new_filter_volume_rolling_window):
-        self._filter_volume_rolling_window = new_filter_volume_rolling_window
-        self._long["filter_volume_rolling_window"] = self._filter_volume_rolling_window
+    @filter_volume_ema_span.setter
+    def filter_volume_ema_span(self, new_filter_volume_ema_span):
+        self._filter_volume_ema_span = new_filter_volume_ema_span
+        self._long["filter_volume_ema_span"] = self._filter_volume_ema_span
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -1069,17 +1102,19 @@ class Short:
         self._ema_span_1 = 1176.7
         self._enforce_exposure_limit = True
         self._entry_grid_double_down_factor = 2.1256
+        self._entry_grid_spacing_log_span_hours = 72
+        self._entry_grid_spacing_log_weight = 0.0
         self._entry_grid_spacing_pct = 0.072906
-        self._entry_grid_spacing_weight = 0.98867
+        self._entry_grid_spacing_we_weight = 0.98867
         self._entry_initial_ema_dist = -0.060333
         self._entry_initial_qty_pct = 0.066426
         self._entry_trailing_double_down_factor = 0.72508
         self._entry_trailing_grid_ratio = -0.026647
         self._entry_trailing_retracement_pct = 0.016626
         self._entry_trailing_threshold_pct = 0.052728
-        self._filter_noisiness_rolling_window = 320.18
+        self._filter_log_range_ema_span = 320.18
         self._filter_volume_drop_pct = 0.57973
-        self._filter_volume_rolling_window = 320.18
+        self._filter_volume_ema_span = 320.18
         self._n_positions = 0.0
         self._total_wallet_exposure_limit = 0.0
         self._unstuck_close_pct = 0.052992
@@ -1100,17 +1135,19 @@ class Short:
             "ema_span_1": self._ema_span_1,
             "enforce_exposure_limit": self._enforce_exposure_limit,
             "entry_grid_double_down_factor": self._entry_grid_double_down_factor,
+            "entry_grid_spacing_log_span_hours": self._entry_grid_spacing_log_span_hours,
+            "entry_grid_spacing_log_weight": self._entry_grid_spacing_log_weight,
             "entry_grid_spacing_pct": self._entry_grid_spacing_pct,
-            "entry_grid_spacing_weight": self._entry_grid_spacing_weight,
+            "entry_grid_spacing_we_weight": self._entry_grid_spacing_we_weight,
             "entry_initial_ema_dist": self._entry_initial_ema_dist,
             "entry_initial_qty_pct": self._entry_initial_qty_pct,
             "entry_trailing_double_down_factor": self._entry_trailing_double_down_factor,
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
-            "filter_noisiness_rolling_window": self._filter_noisiness_rolling_window,
+            "filter_log_range_ema_span": self._filter_log_range_ema_span,
             "filter_volume_drop_pct": self._filter_volume_drop_pct,
-            "filter_volume_rolling_window": self._filter_volume_rolling_window,
+            "filter_volume_ema_span": self._filter_volume_ema_span,
             "n_positions": self._n_positions,
             "total_wallet_exposure_limit": self._total_wallet_exposure_limit,
             "unstuck_close_pct": self._unstuck_close_pct,
@@ -1152,10 +1189,17 @@ class Short:
             self.enforce_exposure_limit = new_short["enforce_exposure_limit"]
         if "entry_grid_double_down_factor" in new_short:
             self.entry_grid_double_down_factor = new_short["entry_grid_double_down_factor"]
+        if "entry_grid_spacing_log_span_hours" in new_short:
+            self.entry_grid_spacing_log_span_hours = new_short["entry_grid_spacing_log_span_hours"]
+        if "entry_grid_spacing_log_weight" in new_short:
+            self.entry_grid_spacing_log_weight = new_short["entry_grid_spacing_log_weight"]
         if "entry_grid_spacing_pct" in new_short:
             self.entry_grid_spacing_pct = new_short["entry_grid_spacing_pct"]
-        if "entry_grid_spacing_weight" in new_short:
-            self.entry_grid_spacing_weight = new_short["entry_grid_spacing_weight"]
+        if "entry_grid_spacing_we_weight" in new_short:
+            self.entry_grid_spacing_we_weight = new_short["entry_grid_spacing_we_weight"]
+        # Fix for old configs
+        elif "entry_grid_spacing_weight" in new_short:
+            self.entry_grid_spacing_we_weight = new_short["entry_grid_spacing_weight"]
         if "entry_initial_ema_dist" in new_short:
             self.entry_initial_ema_dist = new_short["entry_initial_ema_dist"]
         if "entry_initial_qty_pct" in new_short:
@@ -1170,21 +1214,23 @@ class Short:
             self.entry_trailing_retracement_pct = new_short["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_short:
             self.entry_trailing_threshold_pct = new_short["entry_trailing_threshold_pct"]
-        if "filter_noisiness_rolling_window" in new_short:
-            self.filter_noisiness_rolling_window = new_short["filter_noisiness_rolling_window"]
+        if "filter_log_range_ema_span" in new_short:
+            self.filter_log_range_ema_span = new_short["filter_log_range_ema_span"]
         # Fix for old configs
+        elif "filter_noisiness_rolling_window" in new_short:
+            self.filter_log_range_ema_span = new_short["filter_noisiness_rolling_window"]
         elif "filter_rolling_window" in new_short:
-            self.filter_noisiness_rolling_window = new_short["filter_rolling_window"]
+            self.filter_log_range_ema_span = new_short["filter_rolling_window"]
         if "filter_volume_drop_pct" in new_short:
             self.filter_volume_drop_pct = new_short["filter_volume_drop_pct"]
         # Fix for old configs
         elif "filter_relative_volume_clip_pct" in new_short:
             self.filter_volume_drop_pct = new_short["filter_relative_volume_clip_pct"]
-        if "filter_volume_rolling_window" in new_short:
-            self.filter_volume_rolling_window = new_short["filter_volume_rolling_window"]
+        if "filter_volume_ema_span" in new_short:
+            self.filter_volume_ema_span = new_short["filter_volume_ema_span"]
         # Fix for old configs
         elif "filter_rolling_window" in new_short:
-            self.filter_volume_rolling_window = new_short["filter_rolling_window"]
+            self.filter_volume_ema_span = new_short["filter_rolling_window"]
         if "n_positions" in new_short:
             self.n_positions = new_short["n_positions"]
         if "total_wallet_exposure_limit" in new_short:
@@ -1225,9 +1271,13 @@ class Short:
     @property
     def entry_grid_double_down_factor(self): return self._entry_grid_double_down_factor
     @property
+    def entry_grid_spacing_log_span_hours(self): return self._entry_grid_spacing_log_span_hours
+    @property
+    def entry_grid_spacing_log_weight(self): return self._entry_grid_spacing_log_weight
+    @property
     def entry_grid_spacing_pct(self): return self._entry_grid_spacing_pct
     @property
-    def entry_grid_spacing_weight(self): return self._entry_grid_spacing_weight
+    def entry_grid_spacing_we_weight(self): return self._entry_grid_spacing_we_weight
     @property
     def entry_initial_ema_dist(self): return self._entry_initial_ema_dist
     @property
@@ -1241,11 +1291,11 @@ class Short:
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
     @property
-    def filter_noisiness_rolling_window(self): return self._filter_noisiness_rolling_window
+    def filter_log_range_ema_span(self): return self._filter_log_range_ema_span
     @property
     def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
     @property
-    def filter_volume_rolling_window(self): return self._filter_volume_rolling_window
+    def filter_volume_ema_span(self): return self._filter_volume_ema_span
     @property
     def n_positions(self): return self._n_positions
     @property
@@ -1311,14 +1361,22 @@ class Short:
     def entry_grid_double_down_factor(self, new_entry_grid_double_down_factor):
         self._entry_grid_double_down_factor = new_entry_grid_double_down_factor
         self._short["entry_grid_double_down_factor"] = self._entry_grid_double_down_factor
+    @entry_grid_spacing_log_span_hours.setter
+    def entry_grid_spacing_log_span_hours(self, new_entry_grid_spacing_log_span_hours):
+        self._entry_grid_spacing_log_span_hours = new_entry_grid_spacing_log_span_hours
+        self._short["entry_grid_spacing_log_span_hours"] = self._entry_grid_spacing_log_span_hours
+    @entry_grid_spacing_log_weight.setter
+    def entry_grid_spacing_log_weight(self, new_entry_grid_spacing_log_weight):
+        self._entry_grid_spacing_log_weight = new_entry_grid_spacing_log_weight
+        self._short["entry_grid_spacing_log_weight"] = self._entry_grid_spacing_log_weight
     @entry_grid_spacing_pct.setter
     def entry_grid_spacing_pct(self, new_entry_grid_spacing_pct):
         self._entry_grid_spacing_pct = new_entry_grid_spacing_pct
         self._short["entry_grid_spacing_pct"] = self._entry_grid_spacing_pct
-    @entry_grid_spacing_weight.setter
-    def entry_grid_spacing_weight(self, new_entry_grid_spacing_weight):
-        self._entry_grid_spacing_weight = new_entry_grid_spacing_weight
-        self._short["entry_grid_spacing_weight"] = self._entry_grid_spacing_weight
+    @entry_grid_spacing_we_weight.setter
+    def entry_grid_spacing_we_weight(self, new_entry_grid_spacing_we_weight):
+        self._entry_grid_spacing_we_weight = new_entry_grid_spacing_we_weight
+        self._short["entry_grid_spacing_we_weight"] = self._entry_grid_spacing_we_weight
     @entry_initial_ema_dist.setter
     def entry_initial_ema_dist(self, new_entry_initial_ema_dist):
         self._entry_initial_ema_dist = new_entry_initial_ema_dist
@@ -1343,18 +1401,18 @@ class Short:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._short["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
-    @filter_noisiness_rolling_window.setter
-    def filter_noisiness_rolling_window(self, new_filter_noisiness_rolling_window):
-        self._filter_noisiness_rolling_window = new_filter_noisiness_rolling_window
-        self._short["filter_noisiness_rolling_window"] = self._filter_noisiness_rolling_window
+    @filter_log_range_ema_span.setter
+    def filter_log_range_ema_span(self, new_filter_log_range_ema_span):
+        self._filter_log_range_ema_span = new_filter_log_range_ema_span
+        self._short["filter_log_range_ema_span"] = self._filter_log_range_ema_span
     @filter_volume_drop_pct.setter
     def filter_volume_drop_pct(self, new_filter_volume_drop_pct):
         self._filter_volume_drop_pct = new_filter_volume_drop_pct
         self._short["filter_volume_drop_pct"] = self._filter_volume_drop_pct
-    @filter_volume_rolling_window.setter
-    def filter_volume_rolling_window(self, new_filter_volume_rolling_window):
-        self._filter_volume_rolling_window = new_filter_volume_rolling_window
-        self._short["filter_volume_rolling_window"] = self._filter_volume_rolling_window
+    @filter_volume_ema_span.setter
+    def filter_volume_ema_span(self, new_filter_volume_ema_span):
+        self._filter_volume_ema_span = new_filter_volume_ema_span
+        self._short["filter_volume_ema_span"] = self._filter_volume_ema_span
     @n_positions.setter
     def n_positions(self, new_n_positions):
         self._n_positions = new_n_positions
@@ -1470,7 +1528,7 @@ class Live:
     def __init__(self):
         self._approved_coins = ApprovedCoins()
         self._auto_gs = True
-        # self._coin_flags = {}
+        self._inactive_coin_candle_ttl_minutes = 10.0
         self._empty_means_all_approved = False
         self._execution_delay_seconds = 2.0
         self._filter_by_min_effective_cost = True
@@ -1479,13 +1537,15 @@ class Live:
         self._ignored_coins = IgnoredCoins()
         self._leverage = 10.0
         self._market_orders_allowed = True
+        self._max_disk_candles_per_symbol_per_tf = 2000000
+        self._max_memory_candles_per_symbol = 20000
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3
         self._max_n_restarts_per_day = 10
-        self._mimic_backtest_1m_delay = False
+        # self._mimic_backtest_1m_delay = False
         self._minimum_coin_age_days = 30.0
-        self._ohlcvs_1m_rolling_window_days = 4.0
-        self._ohlcvs_1m_update_after_minutes = 10.0
+        # self._ohlcvs_1m_rolling_window_days = 4.0
+        # self._ohlcvs_1m_update_after_minutes = 10.0
         self._pnls_max_lookback_days = 30.0
         self._price_distance_threshold = 0.002
         self._time_in_force = "good_till_cancelled"
@@ -1494,7 +1554,7 @@ class Live:
         self._live = {
             "approved_coins": self._approved_coins._approved_coins,
             "auto_gs": self._auto_gs,
-            # "coin_flags": self._coin_flags,
+            "inactive_coin_candle_ttl_minutes": self._inactive_coin_candle_ttl_minutes,
             "empty_means_all_approved": self._empty_means_all_approved,
             "execution_delay_seconds": self._execution_delay_seconds,
             "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
@@ -1503,13 +1563,15 @@ class Live:
             "ignored_coins": self._ignored_coins._ignored_coins,
             "leverage": self._leverage,
             "market_orders_allowed": self._market_orders_allowed,
+            "max_disk_candles_per_symbol_per_tf": self._max_disk_candles_per_symbol_per_tf,
+            "max_memory_candles_per_symbol": self._max_memory_candles_per_symbol,
             "max_n_cancellations_per_batch": self._max_n_cancellations_per_batch,
             "max_n_creations_per_batch": self._max_n_creations_per_batch,
             "max_n_restarts_per_day": self._max_n_restarts_per_day,
-            "mimic_backtest_1m_delay": self._mimic_backtest_1m_delay,
+            # "mimic_backtest_1m_delay": self._mimic_backtest_1m_delay,
             "minimum_coin_age_days": self._minimum_coin_age_days,
-            "ohlcvs_1m_rolling_window_days": self._ohlcvs_1m_rolling_window_days,
-            "ohlcvs_1m_update_after_minutes": self._ohlcvs_1m_update_after_minutes,
+            # "ohlcvs_1m_rolling_window_days": self._ohlcvs_1m_rolling_window_days,
+            # "ohlcvs_1m_update_after_minutes": self._ohlcvs_1m_update_after_minutes,
             "pnls_max_lookback_days": self._pnls_max_lookback_days,
             "price_distance_threshold": self._price_distance_threshold,
             "time_in_force": self._time_in_force,
@@ -1527,8 +1589,8 @@ class Live:
             self.approved_coins = new_live["approved_coins"]
         if "auto_gs" in new_live:
             self.auto_gs = new_live["auto_gs"]
-        # if "coin_flags" in new_live:
-        #     self.coin_flags = new_live["coin_flags"]
+        if "inactive_coin_candle_ttl_minutes" in new_live:
+            self.inactive_coin_candle_ttl_minutes = new_live["inactive_coin_candle_ttl_minutes"]
         if "empty_means_all_approved" in new_live:
             self.empty_means_all_approved = new_live["empty_means_all_approved"]
         if "execution_delay_seconds" in new_live:
@@ -1545,20 +1607,24 @@ class Live:
             self.leverage = new_live["leverage"]
         if "market_orders_allowed" in new_live:
             self.market_orders_allowed = new_live["market_orders_allowed"]
+        if "max_disk_candles_per_symbol_per_tf" in new_live:
+            self.max_disk_candles_per_symbol_per_tf = new_live["max_disk_candles_per_symbol_per_tf"]
+        if "max_memory_candles_per_symbol" in new_live:
+            self.max_memory_candles_per_symbol = new_live["max_memory_candles_per_symbol"]
         if "max_n_cancellations_per_batch" in new_live:
             self.max_n_cancellations_per_batch = new_live["max_n_cancellations_per_batch"]
         if "max_n_creations_per_batch" in new_live:
             self.max_n_creations_per_batch = new_live["max_n_creations_per_batch"]
         if "max_n_restarts_per_day" in new_live:
             self.max_n_restarts_per_day = new_live["max_n_restarts_per_day"]
-        if "mimic_backtest_1m_delay" in new_live:
-            self.mimic_backtest_1m_delay = new_live["mimic_backtest_1m_delay"]
+        # if "mimic_backtest_1m_delay" in new_live:
+        #     self.mimic_backtest_1m_delay = new_live["mimic_backtest_1m_delay"]
         if "minimum_coin_age_days" in new_live:
             self.minimum_coin_age_days = new_live["minimum_coin_age_days"]
-        if "ohlcvs_1m_rolling_window_days" in new_live:
-            self.ohlcvs_1m_rolling_window_days = new_live["ohlcvs_1m_rolling_window_days"]
-        if "ohlcvs_1m_update_after_minutes" in new_live:
-            self.ohlcvs_1m_update_after_minutes = new_live["ohlcvs_1m_update_after_minutes"]
+        # if "ohlcvs_1m_rolling_window_days" in new_live:
+        #     self.ohlcvs_1m_rolling_window_days = new_live["ohlcvs_1m_rolling_window_days"]
+        # if "ohlcvs_1m_update_after_minutes" in new_live:
+        #     self.ohlcvs_1m_update_after_minutes = new_live["ohlcvs_1m_update_after_minutes"]
         if "pnls_max_lookback_days" in new_live:
             self.pnls_max_lookback_days = new_live["pnls_max_lookback_days"]
         if "price_distance_threshold" in new_live:
@@ -1572,8 +1638,8 @@ class Live:
     def approved_coins(self): return self._approved_coins
     @property
     def auto_gs(self): return self._auto_gs
-    # @property
-    # def coin_flags(self): return self._coin_flags
+    @property
+    def inactive_coin_candle_ttl_minutes(self): return self._inactive_coin_candle_ttl_minutes
     @property
     def empty_means_all_approved(self): return self._empty_means_all_approved
     @property
@@ -1591,19 +1657,23 @@ class Live:
     @property
     def market_orders_allowed(self): return self._market_orders_allowed
     @property
+    def max_disk_candles_per_symbol_per_tf(self): return self._max_disk_candles_per_symbol_per_tf
+    @property
+    def max_memory_candles_per_symbol(self): return self._max_memory_candles_per_symbol
+    @property
     def max_n_cancellations_per_batch(self): return self._max_n_cancellations_per_batch
     @property
     def max_n_creations_per_batch(self): return self._max_n_creations_per_batch
     @property
     def max_n_restarts_per_day(self): return self._max_n_restarts_per_day
-    @property
-    def mimic_backtest_1m_delay(self): return self._mimic_backtest_1m_delay
+    # @property
+    # def mimic_backtest_1m_delay(self): return self._mimic_backtest_1m_delay
     @property
     def minimum_coin_age_days(self): return self._minimum_coin_age_days
-    @property
-    def ohlcvs_1m_rolling_window_days(self): return self._ohlcvs_1m_rolling_window_days
-    @property
-    def ohlcvs_1m_update_after_minutes(self): return self._ohlcvs_1m_update_after_minutes
+    # @property
+    # def ohlcvs_1m_rolling_window_days(self): return self._ohlcvs_1m_rolling_window_days
+    # @property
+    # def ohlcvs_1m_update_after_minutes(self): return self._ohlcvs_1m_update_after_minutes
     @property
     def pnls_max_lookback_days(self): return self._pnls_max_lookback_days
     @property
@@ -1621,10 +1691,10 @@ class Live:
     def auto_gs(self, new_auto_gs):
         self._auto_gs = new_auto_gs
         self._live["auto_gs"] = self._auto_gs
-    # @coin_flags.setter
-    # def coin_flags(self, new_coin_flags):
-    #     self._coin_flags = new_coin_flags
-    #     self._live["coin_flags"] = self._coin_flags
+    @inactive_coin_candle_ttl_minutes.setter
+    def inactive_coin_candle_ttl_minutes(self, new_inactive_coin_candle_ttl_minutes):
+        self._inactive_coin_candle_ttl_minutes = new_inactive_coin_candle_ttl_minutes
+        self._live["inactive_coin_candle_ttl_minutes"] = self._inactive_coin_candle_ttl_minutes
     @empty_means_all_approved.setter
     def empty_means_all_approved(self, new_empty_means_all_approved):
         self._empty_means_all_approved = new_empty_means_all_approved
@@ -1657,6 +1727,14 @@ class Live:
     def market_orders_allowed(self, new_market_orders_allowed):
         self._market_orders_allowed = new_market_orders_allowed
         self._live["market_orders_allowed"] = self._market_orders_allowed
+    @max_disk_candles_per_symbol_per_tf.setter
+    def max_disk_candles_per_symbol_per_tf(self, new_max_disk_candles_per_symbol_per_tf):
+        self._max_disk_candles_per_symbol_per_tf = new_max_disk_candles_per_symbol_per_tf
+        self._live["max_disk_candles_per_symbol_per_tf"] = self._max_disk_candles_per_symbol_per_tf
+    @max_memory_candles_per_symbol.setter
+    def max_memory_candles_per_symbol(self, new_max_memory_candles_per_symbol):
+        self._max_memory_candles_per_symbol = new_max_memory_candles_per_symbol
+        self._live["max_memory_candles_per_symbol"] = self._max_memory_candles_per_symbol
     @max_n_cancellations_per_batch.setter
     def max_n_cancellations_per_batch(self, new_max_n_cancellations_per_batch):
         self._max_n_cancellations_per_batch = new_max_n_cancellations_per_batch
@@ -1669,22 +1747,22 @@ class Live:
     def max_n_restarts_per_day(self, new_max_n_restarts_per_day):
         self._max_n_restarts_per_day = new_max_n_restarts_per_day
         self._live["max_n_restarts_per_day"] = self._max_n_restarts_per_day
-    @mimic_backtest_1m_delay.setter
-    def mimic_backtest_1m_delay(self, new_mimic_backtest_1m_delay):
-        self._mimic_backtest_1m_delay = new_mimic_backtest_1m_delay
-        self._live["mimic_backtest_1m_delay"] = self._mimic_backtest_1m_delay
+    # @mimic_backtest_1m_delay.setter
+    # def mimic_backtest_1m_delay(self, new_mimic_backtest_1m_delay):
+    #     self._mimic_backtest_1m_delay = new_mimic_backtest_1m_delay
+    #     self._live["mimic_backtest_1m_delay"] = self._mimic_backtest_1m_delay
     @minimum_coin_age_days.setter
     def minimum_coin_age_days(self, new_minimum_coin_age_days):
         self._minimum_coin_age_days = new_minimum_coin_age_days
         self._live["minimum_coin_age_days"] = self._minimum_coin_age_days
-    @ohlcvs_1m_rolling_window_days.setter
-    def ohlcvs_1m_rolling_window_days(self, new_ohlcvs_1m_rolling_window_days):
-        self._ohlcvs_1m_rolling_window_days = new_ohlcvs_1m_rolling_window_days
-        self._live["ohlcvs_1m_rolling_window_days"] = self._ohlcvs_1m_rolling_window_days
-    @ohlcvs_1m_update_after_minutes.setter
-    def ohlcvs_1m_update_after_minutes(self, new_ohlcvs_1m_update_after_minutes):
-        self._ohlcvs_1m_update_after_minutes = new_ohlcvs_1m_update_after_minutes
-        self._live["ohlcvs_1m_update_after_minutes"] = self._ohlcvs_1m_update_after_minutes
+    # @ohlcvs_1m_rolling_window_days.setter
+    # def ohlcvs_1m_rolling_window_days(self, new_ohlcvs_1m_rolling_window_days):
+    #     self._ohlcvs_1m_rolling_window_days = new_ohlcvs_1m_rolling_window_days
+    #     self._live["ohlcvs_1m_rolling_window_days"] = self._ohlcvs_1m_rolling_window_days
+    # @ohlcvs_1m_update_after_minutes.setter
+    # def ohlcvs_1m_update_after_minutes(self, new_ohlcvs_1m_update_after_minutes):
+    #     self._ohlcvs_1m_update_after_minutes = new_ohlcvs_1m_update_after_minutes
+    #     self._live["ohlcvs_1m_update_after_minutes"] = self._ohlcvs_1m_update_after_minutes
     @pnls_max_lookback_days.setter
     def pnls_max_lookback_days(self, new_pnls_max_lookback_days):
         self._pnls_max_lookback_days = new_pnls_max_lookback_days
@@ -1909,17 +1987,29 @@ class Bounds:
     ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND = 2
     ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT = f'%.{ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND}f'
 
+    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MIN = 0.0
+    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MAX = 10000.0
+    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_STEP = 1.0
+    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_ROUND = 1
+    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_FORMAT = f'%.{ENTRY_GRID_SPACING_LOG_SPAN_HOURS_ROUND}f'
+
+    ENTRY_GRID_SPACING_LOG_WEIGHT_MIN = 0.0
+    ENTRY_GRID_SPACING_LOG_WEIGHT_MAX = 10000.0
+    ENTRY_GRID_SPACING_LOG_WEIGHT_STEP = 1.0
+    ENTRY_GRID_SPACING_LOG_WEIGHT_ROUND = 1
+    ENTRY_GRID_SPACING_LOG_WEIGHT_FORMAT = f'%.{ENTRY_GRID_SPACING_LOG_WEIGHT_ROUND}f'
+
     ENTRY_GRID_SPACING_PCT_MIN = 0.0
     ENTRY_GRID_SPACING_PCT_MAX = 1.0
     ENTRY_GRID_SPACING_PCT_STEP = 0.001
     ENTRY_GRID_SPACING_PCT_ROUND = 3
     ENTRY_GRID_SPACING_PCT_FORMAT = f'%.{ENTRY_GRID_SPACING_PCT_ROUND}f'
 
-    ENTRY_GRID_SPACING_WEIGHT_MIN = 0.0
-    ENTRY_GRID_SPACING_WEIGHT_MAX = 100.0
-    ENTRY_GRID_SPACING_WEIGHT_STEP = 0.01
-    ENTRY_GRID_SPACING_WEIGHT_ROUND = 2
-    ENTRY_GRID_SPACING_WEIGHT_FORMAT = f'%.{ENTRY_GRID_SPACING_WEIGHT_ROUND}f'
+    ENTRY_GRID_SPACING_WE_WEIGHT_MIN = 0.0
+    ENTRY_GRID_SPACING_WE_WEIGHT_MAX = 100.0
+    ENTRY_GRID_SPACING_WE_WEIGHT_STEP = 0.01
+    ENTRY_GRID_SPACING_WE_WEIGHT_ROUND = 2
+    ENTRY_GRID_SPACING_WE_WEIGHT_FORMAT = f'%.{ENTRY_GRID_SPACING_WE_WEIGHT_ROUND}f'
 
     ENTRY_INITIAL_EMA_DIST_MIN = -1.0
     ENTRY_INITIAL_EMA_DIST_MAX = 1.0
@@ -1957,11 +2047,11 @@ class Bounds:
     ENTRY_TRAILING_THRESHOLD_PCT_ROUND = 4
     ENTRY_TRAILING_THRESHOLD_PCT_FORMAT = f'%.{ENTRY_TRAILING_THRESHOLD_PCT_ROUND}f'
 
-    FILTER_NOISINESS_ROLLING_WINDOW_MIN = 0.0
-    FILTER_NOISINESS_ROLLING_WINDOW_MAX = 10000.0
-    FILTER_NOISINESS_ROLLING_WINDOW_STEP = 1.0
-    FILTER_NOISINESS_ROLLING_WINDOW_ROUND = 0
-    FILTER_NOISINESS_ROLLING_WINDOW_FORMAT = f'%.{FILTER_NOISINESS_ROLLING_WINDOW_ROUND}f'
+    FILTER_LOG_RANGE_EMA_SPAN_MIN = 0.0
+    FILTER_LOG_RANGE_EMA_SPAN_MAX = 10000.0
+    FILTER_LOG_RANGE_EMA_SPAN_STEP = 1.0
+    FILTER_LOG_RANGE_EMA_SPAN_ROUND = 0
+    FILTER_LOG_RANGE_EMA_SPAN_FORMAT = f'%.{FILTER_LOG_RANGE_EMA_SPAN_ROUND}f'
 
     FILTER_VOLUME_DROP_PCT_MIN = 0.0
     FILTER_VOLUME_DROP_PCT_MAX = 1.0
@@ -1969,11 +2059,11 @@ class Bounds:
     FILTER_VOLUME_DROP_PCT_ROUND = 2
     FILTER_VOLUME_DROP_PCT_FORMAT = f'%.{FILTER_VOLUME_DROP_PCT_ROUND}f'
 
-    FILTER_VOLUME_ROLLING_WINDOW_MIN = 0.0
-    FILTER_VOLUME_ROLLING_WINDOW_MAX = 10000.0
-    FILTER_VOLUME_ROLLING_WINDOW_STEP = 1.0
-    FILTER_VOLUME_ROLLING_WINDOW_ROUND = 0
-    FILTER_VOLUME_ROLLING_WINDOW_FORMAT = f'%.{FILTER_VOLUME_ROLLING_WINDOW_ROUND}f'
+    FILTER_VOLUME_EMA_SPAN_MIN = 0.0
+    FILTER_VOLUME_EMA_SPAN_MAX = 10000.0
+    FILTER_VOLUME_EMA_SPAN_STEP = 1.0
+    FILTER_VOLUME_EMA_SPAN_ROUND = 0
+    FILTER_VOLUME_EMA_SPAN_FORMAT = f'%.{FILTER_VOLUME_EMA_SPAN_ROUND}f'
 
     N_POSITIONS_MIN = 0.0
     N_POSITIONS_MAX = 100.0
@@ -2037,10 +2127,14 @@ class Bounds:
         self._long_ema_span_1_1 = 1440.0
         self._long_entry_grid_double_down_factor_0 = 0.1
         self._long_entry_grid_double_down_factor_1 = 3.0
+        self._long_entry_grid_spacing_log_span_hours_0 = 24.0
+        self._long_entry_grid_spacing_log_span_hours_1 = 336.0
+        self._long_entry_grid_spacing_log_weight_0 = 0.0
+        self._long_entry_grid_spacing_log_weight_1 = 400.0
         self._long_entry_grid_spacing_pct_0 = 0.001
         self._long_entry_grid_spacing_pct_1 = 0.12
-        self._long_entry_grid_spacing_weight_0 = 0.0
-        self._long_entry_grid_spacing_weight_1 = 10.0
+        self._long_entry_grid_spacing_we_weight_0 = 0.0
+        self._long_entry_grid_spacing_we_weight_1 = 10.0
         self._long_entry_initial_ema_dist_0 = -0.1
         self._long_entry_initial_ema_dist_1 = 0.003
         self._long_entry_initial_qty_pct_0 = 0.005
@@ -2053,12 +2147,12 @@ class Bounds:
         self._long_entry_trailing_retracement_pct_1 = 0.1
         self._long_entry_trailing_threshold_pct_0 = -0.1
         self._long_entry_trailing_threshold_pct_1 = 0.1
-        self._long_filter_noisiness_rolling_window_0 = 10.0
-        self._long_filter_noisiness_rolling_window_1 = 360.0
+        self._long_filter_log_range_ema_span_0 = 10.0
+        self._long_filter_log_range_ema_span_1 = 360.0
         self._long_filter_volume_drop_pct_0 = 0.5
         self._long_filter_volume_drop_pct_1 = 1.0
-        self._long_filter_volume_rolling_window_0 = 10.0
-        self._long_filter_volume_rolling_window_1 = 360.0
+        self._long_filter_volume_ema_span_0 = 10.0
+        self._long_filter_volume_ema_span_1 = 360.0
         self._long_n_positions_0 = 1.0
         self._long_n_positions_1 = 20.0
         self._long_total_wallet_exposure_limit_0 = 0.0
@@ -2096,10 +2190,14 @@ class Bounds:
         self._short_ema_span_1_1 = 1440.0
         self._short_entry_grid_double_down_factor_0 = 0.1
         self._short_entry_grid_double_down_factor_1 = 3.0
+        self._short_entry_grid_spacing_log_span_hours_0 = 24.0
+        self._short_entry_grid_spacing_log_span_hours_1 = 336.0
+        self._short_entry_grid_spacing_log_weight_0 = 0.0
+        self._short_entry_grid_spacing_log_weight_1 = 400.0
         self._short_entry_grid_spacing_pct_0 = 0.001
         self._short_entry_grid_spacing_pct_1 = 0.12
-        self._short_entry_grid_spacing_weight_0 = 0.0
-        self._short_entry_grid_spacing_weight_1 = 10.0
+        self._short_entry_grid_spacing_we_weight_0 = 0.0
+        self._short_entry_grid_spacing_we_weight_1 = 10.0
         self._short_entry_initial_ema_dist_0 = -0.1
         self._short_entry_initial_ema_dist_1 = 0.003
         self._short_entry_initial_qty_pct_0 = 0.005
@@ -2112,12 +2210,12 @@ class Bounds:
         self._short_entry_trailing_retracement_pct_1 = 0.1
         self._short_entry_trailing_threshold_pct_0 = -0.1
         self._short_entry_trailing_threshold_pct_1 = 0.1
-        self._short_filter_noisiness_rolling_window_0 = 10.0
-        self._short_filter_noisiness_rolling_window_1 = 360.0
+        self._short_filter_log_range_ema_span_0 = 10.0
+        self._short_filter_log_range_ema_span_1 = 360.0
         self._short_filter_volume_drop_pct_0 = 0.5
         self._short_filter_volume_drop_pct_1 = 1.0
-        self._short_filter_volume_rolling_window_0 = 10.0
-        self._short_filter_volume_rolling_window_1 = 360.0
+        self._short_filter_volume_ema_span_0 = 10.0
+        self._short_filter_volume_ema_span_1 = 360.0
         self._short_n_positions_0 = 1.0
         self._short_n_positions_1 = 20.0
         self._short_total_wallet_exposure_limit_0 = 0.0
@@ -2143,17 +2241,19 @@ class Bounds:
                 "long_ema_span_0": [self._long_ema_span_0_0, self._long_ema_span_0_1],
                 "long_ema_span_1": [self._long_ema_span_1_0, self._long_ema_span_1_1],
                 "long_entry_grid_double_down_factor": [self._long_entry_grid_double_down_factor_0, self._long_entry_grid_double_down_factor_1],
+                "long_entry_grid_spacing_log_span_hours": [self._long_entry_grid_spacing_log_span_hours_0, self._long_entry_grid_spacing_log_span_hours_1],
+                "long_entry_grid_spacing_log_weight": [self._long_entry_grid_spacing_log_weight_0, self._long_entry_grid_spacing_log_weight_1],
                 "long_entry_grid_spacing_pct": [self._long_entry_grid_spacing_pct_0, self._long_entry_grid_spacing_pct_1],
-                "long_entry_grid_spacing_weight": [self._long_entry_grid_spacing_weight_0, self._long_entry_grid_spacing_weight_1],
+                "long_entry_grid_spacing_we_weight": [self._long_entry_grid_spacing_we_weight_0, self._long_entry_grid_spacing_we_weight_1],
                 "long_entry_initial_ema_dist": [self._long_entry_initial_ema_dist_0, self._long_entry_initial_ema_dist_1],
                 "long_entry_initial_qty_pct": [self._long_entry_initial_qty_pct_0, self._long_entry_initial_qty_pct_1],
                 "long_entry_trailing_double_down_factor": [self._long_entry_trailing_double_down_factor_0, self._long_entry_trailing_double_down_factor_1],
                 "long_entry_trailing_grid_ratio": [self._long_entry_trailing_grid_ratio_0, self._long_entry_trailing_grid_ratio_1],
                 "long_entry_trailing_retracement_pct": [self._long_entry_trailing_retracement_pct_0, self._long_entry_trailing_retracement_pct_1],
                 "long_entry_trailing_threshold_pct": [self._long_entry_trailing_threshold_pct_0, self._long_entry_trailing_threshold_pct_1],
-                "long_filter_noisiness_rolling_window": [self._long_filter_noisiness_rolling_window_0, self._long_filter_noisiness_rolling_window_1],
+                "long_filter_log_range_ema_span": [self._long_filter_log_range_ema_span_0, self._long_filter_log_range_ema_span_1],
                 "long_filter_volume_drop_pct": [self._long_filter_volume_drop_pct_0, self._long_filter_volume_drop_pct_1],
-                "long_filter_volume_rolling_window": [self._long_filter_volume_rolling_window_0, self._long_filter_volume_rolling_window_1],
+                "long_filter_volume_ema_span": [self._long_filter_volume_ema_span_0, self._long_filter_volume_ema_span_1],
                 "long_n_positions": [self._long_n_positions_0, self._long_n_positions_1],
                 "long_total_wallet_exposure_limit": [self._long_total_wallet_exposure_limit_0, self._long_total_wallet_exposure_limit_1],
                 "long_unstuck_close_pct": [self._long_unstuck_close_pct_0, self._long_unstuck_close_pct_1],
@@ -2172,17 +2272,19 @@ class Bounds:
                 "short_ema_span_0": [self._short_ema_span_0_0, self._short_ema_span_0_1],
                 "short_ema_span_1": [self._short_ema_span_1_0, self._short_ema_span_1_1],
                 "short_entry_grid_double_down_factor": [self._short_entry_grid_double_down_factor_0, self._short_entry_grid_double_down_factor_1],
+                "short_entry_grid_spacing_log_span_hours": [self._short_entry_grid_spacing_log_span_hours_0, self._short_entry_grid_spacing_log_span_hours_1],
+                "short_entry_grid_spacing_log_weight": [self._short_entry_grid_spacing_log_weight_0, self._short_entry_grid_spacing_log_weight_1],
                 "short_entry_grid_spacing_pct": [self._short_entry_grid_spacing_pct_0, self._short_entry_grid_spacing_pct_1],
-                "short_entry_grid_spacing_weight": [self._short_entry_grid_spacing_weight_0, self._short_entry_grid_spacing_weight_1],
+                "short_entry_grid_spacing_we_weight": [self._short_entry_grid_spacing_we_weight_0, self._short_entry_grid_spacing_we_weight_1],
                 "short_entry_initial_ema_dist": [self._short_entry_initial_ema_dist_0, self._short_entry_initial_ema_dist_1],
                 "short_entry_initial_qty_pct": [self._short_entry_initial_qty_pct_0, self._short_entry_initial_qty_pct_1],
                 "short_entry_trailing_double_down_factor": [self._short_entry_trailing_double_down_factor_0, self._short_entry_trailing_double_down_factor_1],
                 "short_entry_trailing_grid_ratio": [self._short_entry_trailing_grid_ratio_0, self._short_entry_trailing_grid_ratio_1],
                 "short_entry_trailing_retracement_pct": [self._short_entry_trailing_retracement_pct_0, self._short_entry_trailing_retracement_pct_1],
                 "short_entry_trailing_threshold_pct": [self._short_entry_trailing_threshold_pct_0, self._short_entry_trailing_threshold_pct_1],
-                "short_filter_noisiness_rolling_window": [self._short_filter_noisiness_rolling_window_0, self._short_filter_noisiness_rolling_window_1],
+                "short_filter_log_range_ema_span": [self._short_filter_log_range_ema_span_0, self._short_filter_log_range_ema_span_1],
                 "short_filter_volume_drop_pct": [self._short_filter_volume_drop_pct_0, self._short_filter_volume_drop_pct_1],
-                "short_filter_volume_rolling_window": [self._short_filter_volume_rolling_window_0, self._short_filter_volume_rolling_window_1],
+                "short_filter_volume_ema_span": [self._short_filter_volume_ema_span_0, self._short_filter_volume_ema_span_1],
                 "short_n_positions": [self._short_n_positions_0, self._short_n_positions_1],
                 "short_total_wallet_exposure_limit": [self._short_total_wallet_exposure_limit_0, self._short_total_wallet_exposure_limit_1],
                 "short_unstuck_close_pct": [self._short_unstuck_close_pct_0, self._short_unstuck_close_pct_1],
@@ -2235,12 +2337,18 @@ class Bounds:
         if "long_entry_grid_double_down_factor" in new_bounds:
             self.long_entry_grid_double_down_factor_0 = new_bounds["long_entry_grid_double_down_factor"][0]
             self.long_entry_grid_double_down_factor_1 = new_bounds["long_entry_grid_double_down_factor"][1]
+        if "long_entry_grid_spacing_log_span_hours" in new_bounds:
+            self.long_entry_grid_spacing_log_span_hours_0 = new_bounds["long_entry_grid_spacing_log_span_hours"][0]
+            self.long_entry_grid_spacing_log_span_hours_1 = new_bounds["long_entry_grid_spacing_log_span_hours"][1]
+        if "long_entry_grid_spacing_log_weight" in new_bounds:
+            self.long_entry_grid_spacing_log_weight_0 = new_bounds["long_entry_grid_spacing_log_weight"][0]
+            self.long_entry_grid_spacing_log_weight_1 = new_bounds["long_entry_grid_spacing_log_weight"][1]
         if "long_entry_grid_spacing_pct" in new_bounds:
             self.long_entry_grid_spacing_pct_0 = new_bounds["long_entry_grid_spacing_pct"][0]
             self.long_entry_grid_spacing_pct_1 = new_bounds["long_entry_grid_spacing_pct"][1]
-        if "long_entry_grid_spacing_weight" in new_bounds:
-            self.long_entry_grid_spacing_weight_0 = new_bounds["long_entry_grid_spacing_weight"][0]
-            self.long_entry_grid_spacing_weight_1 = new_bounds["long_entry_grid_spacing_weight"][1]
+        if "long_entry_grid_spacing_we_weight" in new_bounds:
+            self.long_entry_grid_spacing_we_weight_0 = new_bounds["long_entry_grid_spacing_we_weight"][0]
+            self.long_entry_grid_spacing_we_weight_1 = new_bounds["long_entry_grid_spacing_we_weight"][1]
         if "long_entry_initial_ema_dist" in new_bounds:
             self.long_entry_initial_ema_dist_0 = new_bounds["long_entry_initial_ema_dist"][0]
             self.long_entry_initial_ema_dist_1 = new_bounds["long_entry_initial_ema_dist"][1]
@@ -2259,13 +2367,16 @@ class Bounds:
         if "long_entry_trailing_threshold_pct" in new_bounds:
             self.long_entry_trailing_threshold_pct_0 = new_bounds["long_entry_trailing_threshold_pct"][0]
             self.long_entry_trailing_threshold_pct_1 = new_bounds["long_entry_trailing_threshold_pct"][1]
-        if "long_filter_noisiness_rolling_window" in new_bounds:
-            self.long_filter_noisiness_rolling_window_0 = new_bounds["long_filter_noisiness_rolling_window"][0]
-            self.long_filter_noisiness_rolling_window_1 = new_bounds["long_filter_noisiness_rolling_window"][1]
+        if "long_filter_log_range_ema_span" in new_bounds:
+            self.long_filter_log_range_ema_span_0 = new_bounds["long_filter_log_range_ema_span"][0]
+            self.long_filter_log_range_ema_span_1 = new_bounds["long_filter_log_range_ema_span"][1]
         # Fix for old configs
+        elif "long_filter_noisiness_rolling_window" in new_bounds:
+            self.long_filter_log_range_ema_span_0 = new_bounds["long_filter_noisiness_rolling_window"][0]
+            self.long_filter_log_range_ema_span_1 = new_bounds["long_filter_noisiness_rolling_window"][1]
         elif "long_filter_rolling_window" in new_bounds:
-            self.long_filter_noisiness_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
-            self.long_filter_noisiness_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
+            self.long_filter_log_range_ema_span_0 = new_bounds["long_filter_rolling_window"][0]
+            self.long_filter_log_range_ema_span_1 = new_bounds["long_filter_rolling_window"][1]
         if "long_filter_volume_drop_pct" in new_bounds:
             self.long_filter_volume_drop_pct_0 = new_bounds["long_filter_volume_drop_pct"][0]
             self.long_filter_volume_drop_pct_1 = new_bounds["long_filter_volume_drop_pct"][1]
@@ -2273,13 +2384,13 @@ class Bounds:
         elif "long_filter_relative_volume_clip_pct" in new_bounds:
             self.long_filter_volume_drop_pct_0 = new_bounds["long_filter_relative_volume_clip_pct"][0]
             self.long_filter_volume_drop_pct_1 = new_bounds["long_filter_relative_volume_clip_pct"][1]
-        if "long_filter_volume_rolling_window" in new_bounds:
-            self.long_filter_volume_rolling_window_0 = new_bounds["long_filter_volume_rolling_window"][0]
-            self.long_filter_volume_rolling_window_1 = new_bounds["long_filter_volume_rolling_window"][1]
+        if "long_filter_volume_ema_span" in new_bounds:
+            self.long_filter_volume_ema_span_0 = new_bounds["long_filter_volume_ema_span"][0]
+            self.long_filter_volume_ema_span_1 = new_bounds["long_filter_volume_ema_span"][1]
         # Fix for old configs
         elif "long_filter_rolling_window" in new_bounds:
-            self.long_filter_volume_rolling_window_0 = new_bounds["long_filter_rolling_window"][0]
-            self.long_filter_volume_rolling_window_1 = new_bounds["long_filter_rolling_window"][1]
+            self.long_filter_volume_ema_span_0 = new_bounds["long_filter_rolling_window"][0]
+            self.long_filter_volume_ema_span_1 = new_bounds["long_filter_rolling_window"][1]
         if "long_n_positions" in new_bounds:
             self.long_n_positions_0 = new_bounds["long_n_positions"][0]
             self.long_n_positions_1 = new_bounds["long_n_positions"][1]
@@ -2336,12 +2447,18 @@ class Bounds:
         if "short_entry_grid_double_down_factor" in new_bounds:
             self.short_entry_grid_double_down_factor_0 = new_bounds["short_entry_grid_double_down_factor"][0]
             self.short_entry_grid_double_down_factor_1 = new_bounds["short_entry_grid_double_down_factor"][1]
+        if "short_entry_grid_spacing_log_span_hours" in new_bounds:
+            self.short_entry_grid_spacing_log_span_hours_0 = new_bounds["short_entry_grid_spacing_log_span_hours"][0]
+            self.short_entry_grid_spacing_log_span_hours_1 = new_bounds["short_entry_grid_spacing_log_span_hours"][1]
+        if "short_entry_grid_spacing_log_weight" in new_bounds:
+            self.short_entry_grid_spacing_log_weight_0 = new_bounds["short_entry_grid_spacing_log_weight"][0]
+            self.short_entry_grid_spacing_log_weight_1 = new_bounds["short_entry_grid_spacing_log_weight"][1]
         if "short_entry_grid_spacing_pct" in new_bounds:
             self.short_entry_grid_spacing_pct_0 = new_bounds["short_entry_grid_spacing_pct"][0]
             self.short_entry_grid_spacing_pct_1 = new_bounds["short_entry_grid_spacing_pct"][1]
-        if "short_entry_grid_spacing_weight" in new_bounds:
-            self.short_entry_grid_spacing_weight_0 = new_bounds["short_entry_grid_spacing_weight"][0]
-            self.short_entry_grid_spacing_weight_1 = new_bounds["short_entry_grid_spacing_weight"][1]
+        if "short_entry_grid_spacing_we_weight" in new_bounds:
+            self.short_entry_grid_spacing_we_weight_0 = new_bounds["short_entry_grid_spacing_we_weight"][0]
+            self.short_entry_grid_spacing_we_weight_1 = new_bounds["short_entry_grid_spacing_we_weight"][1]
         if "short_entry_initial_ema_dist" in new_bounds:
             self.short_entry_initial_ema_dist_0 = new_bounds["short_entry_initial_ema_dist"][0]
             self.short_entry_initial_ema_dist_1 = new_bounds["short_entry_initial_ema_dist"][1]
@@ -2360,13 +2477,16 @@ class Bounds:
         if "short_entry_trailing_threshold_pct" in new_bounds:
             self.short_entry_trailing_threshold_pct_0 = new_bounds["short_entry_trailing_threshold_pct"][0]
             self.short_entry_trailing_threshold_pct_1 = new_bounds["short_entry_trailing_threshold_pct"][1]
-        if "short_filter_noisiness_rolling_window" in new_bounds:
-            self.short_filter_noisiness_rolling_window_0 = new_bounds["short_filter_noisiness_rolling_window"][0]
-            self.short_filter_noisiness_rolling_window_1 = new_bounds["short_filter_noisiness_rolling_window"][1]
+        if "short_filter_log_range_ema_span" in new_bounds:
+            self.short_filter_log_range_ema_span_0 = new_bounds["short_filter_log_range_ema_span"][0]
+            self.short_filter_log_range_ema_span_1 = new_bounds["short_filter_log_range_ema_span"][1]
         # Fix for old configs
+        elif "short_filter_noisiness_rolling_window" in new_bounds:
+            self.short_filter_log_range_ema_span_0 = new_bounds["short_filter_noisiness_rolling_window"][0]
+            self.short_filter_log_range_ema_span_1 = new_bounds["short_filter_noisiness_rolling_window"][1]
         elif "short_filter_rolling_window" in new_bounds:
-            self.short_filter_noisiness_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
-            self.short_filter_noisiness_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
+            self.short_filter_log_range_ema_span_0 = new_bounds["short_filter_rolling_window"][0]
+            self.short_filter_log_range_ema_span_1 = new_bounds["short_filter_rolling_window"][1]
         if "short_filter_volume_drop_pct" in new_bounds:
             self.short_filter_volume_drop_pct_0 = new_bounds["short_filter_volume_drop_pct"][0]
             self.short_filter_volume_drop_pct_1 = new_bounds["short_filter_volume_drop_pct"][1]
@@ -2374,13 +2494,13 @@ class Bounds:
         elif "short_filter_relative_volume_clip_pct" in new_bounds:
             self.short_filter_volume_drop_pct_0 = new_bounds["short_filter_relative_volume_clip_pct"][0]
             self.short_filter_volume_drop_pct_1 = new_bounds["short_filter_relative_volume_clip_pct"][1]
-        if "short_filter_volume_rolling_window" in new_bounds:
-            self.short_filter_volume_rolling_window_0 = new_bounds["short_filter_volume_rolling_window"][0]
-            self.short_filter_volume_rolling_window_1 = new_bounds["short_filter_volume_rolling_window"][1]
+        if "short_filter_volume_ema_span" in new_bounds:
+            self.short_filter_volume_ema_span_0 = new_bounds["short_filter_volume_ema_span"][0]
+            self.short_filter_volume_ema_span_1 = new_bounds["short_filter_volume_ema_span"][1]
         # Fix for old configs
         elif "short_filter_rolling_window" in new_bounds:
-            self.short_filter_volume_rolling_window_0 = new_bounds["short_filter_rolling_window"][0]
-            self.short_filter_volume_rolling_window_1 = new_bounds["short_filter_rolling_window"][1]
+            self.short_filter_volume_ema_span_0 = new_bounds["short_filter_rolling_window"][0]
+            self.short_filter_volume_ema_span_1 = new_bounds["short_filter_rolling_window"][1]
         if "short_n_positions" in new_bounds:
             self.short_n_positions_0 = new_bounds["short_n_positions"][0]
             self.short_n_positions_1 = new_bounds["short_n_positions"][1]
@@ -2450,13 +2570,21 @@ class Bounds:
     @property
     def long_entry_grid_double_down_factor_1(self): return self._long_entry_grid_double_down_factor_1
     @property
+    def long_entry_grid_spacing_log_span_hours_0(self): return self._long_entry_grid_spacing_log_span_hours_0
+    @property
+    def long_entry_grid_spacing_log_span_hours_1(self): return self._long_entry_grid_spacing_log_span_hours_1
+    @property
+    def long_entry_grid_spacing_log_weight_0(self): return self._long_entry_grid_spacing_log_weight_0
+    @property
+    def long_entry_grid_spacing_log_weight_1(self): return self._long_entry_grid_spacing_log_weight_1
+    @property
     def long_entry_grid_spacing_pct_0(self): return self._long_entry_grid_spacing_pct_0
     @property
     def long_entry_grid_spacing_pct_1(self): return self._long_entry_grid_spacing_pct_1
     @property
-    def long_entry_grid_spacing_weight_0(self): return self._long_entry_grid_spacing_weight_0
+    def long_entry_grid_spacing_we_weight_0(self): return self._long_entry_grid_spacing_we_weight_0
     @property
-    def long_entry_grid_spacing_weight_1(self): return self._long_entry_grid_spacing_weight_1
+    def long_entry_grid_spacing_we_weight_1(self): return self._long_entry_grid_spacing_we_weight_1
     @property
     def long_entry_initial_ema_dist_0(self): return self._long_entry_initial_ema_dist_0
     @property
@@ -2482,17 +2610,17 @@ class Bounds:
     @property
     def long_entry_trailing_threshold_pct_1(self): return self._long_entry_trailing_threshold_pct_1
     @property
-    def long_filter_noisiness_rolling_window_0(self): return self._long_filter_noisiness_rolling_window_0
+    def long_filter_log_range_ema_span_0(self): return self._long_filter_log_range_ema_span_0
     @property
-    def long_filter_noisiness_rolling_window_1(self): return self._long_filter_noisiness_rolling_window_1
+    def long_filter_log_range_ema_span_1(self): return self._long_filter_log_range_ema_span_1
     @property
     def long_filter_volume_drop_pct_0(self): return self._long_filter_volume_drop_pct_0
     @property
     def long_filter_volume_drop_pct_1(self): return self._long_filter_volume_drop_pct_1
     @property
-    def long_filter_volume_rolling_window_0(self): return self._long_filter_volume_rolling_window_0
+    def long_filter_volume_ema_span_0(self): return self._long_filter_volume_ema_span_0
     @property
-    def long_filter_volume_rolling_window_1(self): return self._long_filter_volume_rolling_window_1
+    def long_filter_volume_ema_span_1(self): return self._long_filter_volume_ema_span_1
     @property
     def long_n_positions_0(self): return self._long_n_positions_0
     @property
@@ -2570,13 +2698,21 @@ class Bounds:
     @property
     def short_entry_grid_double_down_factor_1(self): return self._short_entry_grid_double_down_factor_1
     @property
+    def short_entry_grid_spacing_log_span_hours_0(self): return self._short_entry_grid_spacing_log_span_hours_0
+    @property
+    def short_entry_grid_spacing_log_span_hours_1(self): return self._short_entry_grid_spacing_log_span_hours_1
+    @property
+    def short_entry_grid_spacing_log_weight_0(self): return self._short_entry_grid_spacing_log_weight_0
+    @property
+    def short_entry_grid_spacing_log_weight_1(self): return self._short_entry_grid_spacing_log_weight_1
+    @property
     def short_entry_grid_spacing_pct_0(self): return self._short_entry_grid_spacing_pct_0
     @property
     def short_entry_grid_spacing_pct_1(self): return self._short_entry_grid_spacing_pct_1
     @property
-    def short_entry_grid_spacing_weight_0(self): return self._short_entry_grid_spacing_weight_0
+    def short_entry_grid_spacing_we_weight_0(self): return self._short_entry_grid_spacing_we_weight_0
     @property
-    def short_entry_grid_spacing_weight_1(self): return self._short_entry_grid_spacing_weight_1
+    def short_entry_grid_spacing_we_weight_1(self): return self._short_entry_grid_spacing_we_weight_1
     @property
     def short_entry_initial_ema_dist_0(self): return self._short_entry_initial_ema_dist_0
     @property
@@ -2602,17 +2738,17 @@ class Bounds:
     @property
     def short_entry_trailing_threshold_pct_1(self): return self._short_entry_trailing_threshold_pct_1
     @property
-    def short_filter_noisiness_rolling_window_0(self): return self._short_filter_noisiness_rolling_window_0
+    def short_filter_log_range_ema_span_0(self): return self._short_filter_log_range_ema_span_0
     @property
-    def short_filter_noisiness_rolling_window_1(self): return self._short_filter_noisiness_rolling_window_1
+    def short_filter_log_range_ema_span_1(self): return self._short_filter_log_range_ema_span_1
     @property
     def short_filter_volume_drop_pct_0(self): return self._short_filter_volume_drop_pct_0
     @property
     def short_filter_volume_drop_pct_1(self): return self._short_filter_volume_drop_pct_1
     @property
-    def short_filter_volume_rolling_window_0(self): return self._short_filter_volume_rolling_window_0
+    def short_filter_volume_ema_span_0(self): return self._short_filter_volume_ema_span_0
     @property
-    def short_filter_volume_rolling_window_1(self): return self._short_filter_volume_rolling_window_1
+    def short_filter_volume_ema_span_1(self): return self._short_filter_volume_ema_span_1
     @property
     def short_n_positions_0(self): return self._short_n_positions_0
     @property
@@ -2735,6 +2871,22 @@ class Bounds:
     def long_entry_grid_double_down_factor_1(self, new_value):
         self._long_entry_grid_double_down_factor_1 = new_value
         self._bounds["long_entry_grid_double_down_factor"][1] = new_value
+    @long_entry_grid_spacing_log_span_hours_0.setter
+    def long_entry_grid_spacing_log_span_hours_0(self, new_value):
+        self._long_entry_grid_spacing_log_span_hours_0 = new_value
+        self._bounds["long_entry_grid_spacing_log_span_hours"][0] = new_value
+    @long_entry_grid_spacing_log_span_hours_1.setter
+    def long_entry_grid_spacing_log_span_hours_1(self, new_value):
+        self._long_entry_grid_spacing_log_span_hours_1 = new_value
+        self._bounds["long_entry_grid_spacing_log_span_hours"][1] = new_value
+    @long_entry_grid_spacing_log_weight_0.setter
+    def long_entry_grid_spacing_log_weight_0(self, new_value):
+        self._long_entry_grid_spacing_log_weight_0 = new_value
+        self._bounds["long_entry_grid_spacing_log_weight"][0] = new_value
+    @long_entry_grid_spacing_log_weight_1.setter
+    def long_entry_grid_spacing_log_weight_1(self, new_value):
+        self._long_entry_grid_spacing_log_weight_1 = new_value
+        self._bounds["long_entry_grid_spacing_log_weight"][1] = new_value
     @long_entry_grid_spacing_pct_0.setter
     def long_entry_grid_spacing_pct_0(self, new_value):
         self._long_entry_grid_spacing_pct_0 = new_value
@@ -2743,14 +2895,14 @@ class Bounds:
     def long_entry_grid_spacing_pct_1(self, new_value):
         self._long_entry_grid_spacing_pct_1 = new_value
         self._bounds["long_entry_grid_spacing_pct"][1] = new_value
-    @long_entry_grid_spacing_weight_0.setter
-    def long_entry_grid_spacing_weight_0(self, new_value):
-        self._long_entry_grid_spacing_weight_0 = new_value
-        self._bounds["long_entry_grid_spacing_weight"][0] = new_value
-    @long_entry_grid_spacing_weight_1.setter
-    def long_entry_grid_spacing_weight_1(self, new_value):
-        self._long_entry_grid_spacing_weight_1 = new_value
-        self._bounds["long_entry_grid_spacing_weight"][1] = new_value
+    @long_entry_grid_spacing_we_weight_0.setter
+    def long_entry_grid_spacing_we_weight_0(self, new_value):
+        self._long_entry_grid_spacing_we_weight_0 = new_value
+        self._bounds["long_entry_grid_spacing_we_weight"][0] = new_value
+    @long_entry_grid_spacing_we_weight_1.setter
+    def long_entry_grid_spacing_we_weight_1(self, new_value):
+        self._long_entry_grid_spacing_we_weight_1 = new_value
+        self._bounds["long_entry_grid_spacing_we_weight"][1] = new_value
     @long_entry_initial_ema_dist_0.setter
     def long_entry_initial_ema_dist_0(self, new_value):
         self._long_entry_initial_ema_dist_0 = new_value
@@ -2799,14 +2951,14 @@ class Bounds:
     def long_entry_trailing_threshold_pct_1(self, new_value):
         self._long_entry_trailing_threshold_pct_1 = new_value
         self._bounds["long_entry_trailing_threshold_pct"][1] = new_value
-    @long_filter_noisiness_rolling_window_0.setter
-    def long_filter_noisiness_rolling_window_0(self, new_value):
-        self._long_filter_noisiness_rolling_window_0 = new_value
-        self._bounds["long_filter_noisiness_rolling_window"][0] = new_value
-    @long_filter_noisiness_rolling_window_1.setter
-    def long_filter_noisiness_rolling_window_1(self, new_value):
-        self._long_filter_noisiness_rolling_window_1 = new_value
-        self._bounds["long_filter_noisiness_rolling_window"][1] = new_value
+    @long_filter_log_range_ema_span_0.setter
+    def long_filter_log_range_ema_span_0(self, new_value):
+        self._long_filter_log_range_ema_span_0 = new_value
+        self._bounds["long_filter_log_range_ema_span"][0] = new_value
+    @long_filter_log_range_ema_span_1.setter
+    def long_filter_log_range_ema_span_1(self, new_value):
+        self._long_filter_log_range_ema_span_1 = new_value
+        self._bounds["long_filter_log_range_ema_span"][1] = new_value
     @long_filter_volume_drop_pct_0.setter
     def long_filter_volume_drop_pct_0(self, new_value):
         self._long_filter_volume_drop_pct_0 = new_value
@@ -2815,14 +2967,14 @@ class Bounds:
     def long_filter_volume_drop_pct_1(self, new_value):
         self._long_filter_volume_drop_pct_1 = new_value
         self._bounds["long_filter_volume_drop_pct"][1] = new_value
-    @long_filter_volume_rolling_window_0.setter
-    def long_filter_volume_rolling_window_0(self, new_value):
-        self._long_filter_volume_rolling_window_0 = new_value
-        self._bounds["long_filter_volume_rolling_window"][0] = new_value
-    @long_filter_volume_rolling_window_1.setter
-    def long_filter_volume_rolling_window_1(self, new_value):
-        self._long_filter_volume_rolling_window_1 = new_value
-        self._bounds["long_filter_volume_rolling_window"][1] = new_value
+    @long_filter_volume_ema_span_0.setter
+    def long_filter_volume_ema_span_0(self, new_value):
+        self._long_filter_volume_ema_span_0 = new_value
+        self._bounds["long_filter_volume_ema_span"][0] = new_value
+    @long_filter_volume_ema_span_1.setter
+    def long_filter_volume_ema_span_1(self, new_value):
+        self._long_filter_volume_ema_span_1 = new_value
+        self._bounds["long_filter_volume_ema_span"][1] = new_value
     @long_n_positions_0.setter
     def long_n_positions_0(self, new_value):
         self._long_n_positions_0 = new_value
@@ -2969,6 +3121,22 @@ class Bounds:
     def short_entry_grid_double_down_factor_1(self, new_value):
         self._short_entry_grid_double_down_factor_1 = new_value
         self._bounds["short_entry_grid_double_down_factor"][1] = new_value
+    @short_entry_grid_spacing_log_span_hours_0.setter
+    def short_entry_grid_spacing_log_span_hours_0(self, new_value):
+        self._short_entry_grid_spacing_log_span_hours_0 = new_value
+        self._bounds["short_entry_grid_spacing_log_span_hours"][0] = new_value
+    @short_entry_grid_spacing_log_span_hours_1.setter
+    def short_entry_grid_spacing_log_span_hours_1(self, new_value):
+        self._short_entry_grid_spacing_log_span_hours_1 = new_value
+        self._bounds["short_entry_grid_spacing_log_span_hours"][1] = new_value
+    @short_entry_grid_spacing_log_weight_0.setter
+    def short_entry_grid_spacing_log_weight_0(self, new_value):
+        self._short_entry_grid_spacing_log_weight_0 = new_value
+        self._bounds["short_entry_grid_spacing_log_weight"][0] = new_value
+    @short_entry_grid_spacing_log_weight_1.setter
+    def short_entry_grid_spacing_log_weight_1(self, new_value):
+        self._short_entry_grid_spacing_log_weight_1 = new_value
+        self._bounds["short_entry_grid_spacing_log_weight"][1] = new_value
     @short_entry_grid_spacing_pct_0.setter
     def short_entry_grid_spacing_pct_0(self, new_value):
         self._short_entry_grid_spacing_pct_0 = new_value
@@ -2977,14 +3145,14 @@ class Bounds:
     def short_entry_grid_spacing_pct_1(self, new_value):
         self._short_entry_grid_spacing_pct_1 = new_value
         self._bounds["short_entry_grid_spacing_pct"][1] = new_value
-    @short_entry_grid_spacing_weight_0.setter
-    def short_entry_grid_spacing_weight_0(self, new_value):
-        self._short_entry_grid_spacing_weight_0 = new_value
-        self._bounds["short_entry_grid_spacing_weight"][0] = new_value
-    @short_entry_grid_spacing_weight_1.setter
-    def short_entry_grid_spacing_weight_1(self, new_value):
-        self._short_entry_grid_spacing_weight_1 = new_value
-        self._bounds["short_entry_grid_spacing_weight"][1] = new_value
+    @short_entry_grid_spacing_we_weight_0.setter
+    def short_entry_grid_spacing_we_weight_0(self, new_value):
+        self._short_entry_grid_spacing_we_weight_0 = new_value
+        self._bounds["short_entry_grid_spacing_we_weight"][0] = new_value
+    @short_entry_grid_spacing_we_weight_1.setter
+    def short_entry_grid_spacing_we_weight_1(self, new_value):
+        self._short_entry_grid_spacing_we_weight_1 = new_value
+        self._bounds["short_entry_grid_spacing_we_weight"][1] = new_value
     @short_entry_initial_ema_dist_0.setter
     def short_entry_initial_ema_dist_0(self, new_value):
         self._short_entry_initial_ema_dist_0 = new_value
@@ -3033,14 +3201,14 @@ class Bounds:
     def short_entry_trailing_threshold_pct_1(self, new_value):
         self._short_entry_trailing_threshold_pct_1 = new_value
         self._bounds["short_entry_trailing_threshold_pct"][1] = new_value
-    @short_filter_noisiness_rolling_window_0.setter
-    def short_filter_noisiness_rolling_window_0(self, new_value):
-        self._short_filter_noisiness_rolling_window_0 = new_value
-        self._bounds["short_filter_noisiness_rolling_window"][0] = new_value
-    @short_filter_noisiness_rolling_window_1.setter
-    def short_filter_noisiness_rolling_window_1(self, new_value):
-        self._short_filter_noisiness_rolling_window_1 = new_value
-        self._bounds["short_filter_noisiness_rolling_window"][1] = new_value
+    @short_filter_log_range_ema_span_0.setter
+    def short_filter_log_range_ema_span_0(self, new_value):
+        self._short_filter_log_range_ema_span_0 = new_value
+        self._bounds["short_filter_log_range_ema_span"][0] = new_value
+    @short_filter_log_range_ema_span_1.setter
+    def short_filter_log_range_ema_span_1(self, new_value):
+        self._short_filter_log_range_ema_span_1 = new_value
+        self._bounds["short_filter_log_range_ema_span"][1] = new_value
     @short_filter_volume_drop_pct_0.setter
     def short_filter_volume_drop_pct_0(self, new_value):
         self._short_filter_volume_drop_pct_0 = new_value
@@ -3049,14 +3217,14 @@ class Bounds:
     def short_filter_volume_drop_pct_1(self, new_value):
         self._short_filter_volume_drop_pct_1 = new_value
         self._bounds["short_filter_volume_drop_pct"][1] = new_value
-    @short_filter_volume_rolling_window_0.setter
-    def short_filter_volume_rolling_window_0(self, new_value):
-        self._short_filter_volume_rolling_window_0 = new_value
-        self._bounds["short_filter_volume_rolling_window"][0] = new_value
-    @short_filter_volume_rolling_window_1.setter
-    def short_filter_volume_rolling_window_1(self, new_value):
-        self._short_filter_volume_rolling_window_1 = new_value
-        self._bounds["short_filter_volume_rolling_window"][1] = new_value
+    @short_filter_volume_ema_span_0.setter
+    def short_filter_volume_ema_span_0(self, new_value):
+        self._short_filter_volume_ema_span_0 = new_value
+        self._bounds["short_filter_volume_ema_span"][0] = new_value
+    @short_filter_volume_ema_span_1.setter
+    def short_filter_volume_ema_span_1(self, new_value):
+        self._short_filter_volume_ema_span_1 = new_value
+        self._bounds["short_filter_volume_ema_span"][1] = new_value
     @short_n_positions_0.setter
     def short_n_positions_0(self, new_value):
         self._short_n_positions_0 = new_value
@@ -3473,8 +3641,10 @@ class ConfigV7():
             "ema_span_1",
             "enforce_exposure_limit",
             "entry_grid_double_down_factor",
+            "entry_grid_spacing_log_span_hours",
+            "entry_grid_spacing_log_weight",
             "entry_grid_spacing_pct",
-            "entry_grid_spacing_weight",
+            "entry_grid_spacing_we_weight",
             "entry_initial_ema_dist",
             "entry_initial_qty_pct",
             "entry_trailing_double_down_factor",

@@ -12,6 +12,8 @@ from pbgui_func import PBGDIR
 from Database import Database
 from User import Users
 import configparser
+from collections import defaultdict
+import asyncio
 
 class PBData():
     def __init__(self):
@@ -116,6 +118,46 @@ class PBData():
                 self.db.update_prices(user)
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch balance for {user.name}')
                 self.db.update_balances(user)
+
+    async def update_db_async(self):
+        self.load_fetch_users()
+        self.users.load()
+
+        # Group users by exchange
+        users_by_exchange = defaultdict(list)
+        for user in self.users:
+            if user.name in self.fetch_users:
+                users_by_exchange[user.exchange()].append(user)
+
+        # For each exchange, create a task to process its users serially
+        exchange_tasks = []
+
+        for exchange, users in users_by_exchange.items():
+            # Run each exchange's users sequentially
+            exchange_tasks.append(self.process_exchange(users))
+
+        # Run all exchanges concurrently
+        await asyncio.gather(*exchange_tasks)
+
+    async def process_exchange(self, users):
+        # Process users serially within this exchange
+        for user in users:
+            await self.update_user_series(user)
+
+    async def update_user_series(self, user):
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch history for {user.name}')
+        await self.db.update_history(user)
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch positions for {user.name}')
+        await self.db.update_positions(user)
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetch orders for {user.name}')
+        await self.db.update_orders(user)
+
+        # Run prices and balances concurrently
+        await asyncio.gather(
+            self.db.update_prices(user),
+            self.db.update_balances(user)
+        )
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Updated prices and balances for {user.name}')
 
 def main():
     dest = Path(f'{PBGDIR}/data/logs')
