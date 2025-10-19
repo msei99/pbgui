@@ -13,7 +13,7 @@ sudo apt install git python3.10-venv rclone rustc cargo sshpass -y
 sudo apt install rustup -y
 
 # Update rust
-rustup update stable
+rustup update 1.78.0
 
 # get current directory
 DIR=$(pwd)
