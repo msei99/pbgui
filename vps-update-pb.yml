@@ -24,10 +24,10 @@
       tags: debug,never
 
     - name: remove stable toolchain if exists
-      command: rustup toolchain uninstall stable
+      command: rustup toolchain uninstall stable 1.78.0
 
     - name: Update rust
-      command: rustup update 1.78.0
+      command: rustup update 1.90.0
       register: update_rust
 
     - name: print update_rust
