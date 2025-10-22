@@ -17,7 +17,7 @@ from PBCoinData import CoinData
 import uuid
 from Base import Base
 from Exchange import Exchange
-from Config import Config, ConfigV7, BalanceCalculator
+from Config import Config, ConfigV7, BalanceCalculator, Logging
 from pathlib import Path, PurePath
 from shutil import rmtree, copytree
 import shutil
@@ -26,7 +26,6 @@ import OptimizeV7
 import datetime
 import logging
 import os
-import datetime
 import fnmatch
 
 class BacktestV7QueueItem():
@@ -495,6 +494,16 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_end_date = datetime.datetime.strptime(self.config.backtest.end_date, '%Y-%m-%d')
         st.date_input("end_date", format="YYYY-MM-DD", key="edit_bt_v7_end_date")
 
+    # logging
+    @st.fragment
+    def fragment_logging(self):
+        if "edit_bt_v7_logging_level" in st.session_state:
+            if st.session_state.edit_bt_v7_logging_level != self.config.logging.level:
+                self.config.logging.level = st.session_state.edit_bt_v7_logging_level
+        else:
+            st.session_state.edit_bt_v7_logging_level = self.config.logging.level
+        st.selectbox("logging level", Logging.LEVEL, format_func=lambda x: Logging.LEVEL.get(x), key="edit_bt_v7_logging_level", help=pbgui_help.logging_level)
+
     # starting_balance
     @st.fragment
     def fragment_starting_balance(self):
@@ -772,7 +781,7 @@ class BacktestV7Item:
             st.session_state.coindata_bitget = CoinData()
             st.session_state.coindata_bitget.exchange = "bitget"
         # Display Editor
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,1])
         with col1:
             self.fragment_exchanges()
         with col2:
@@ -781,6 +790,8 @@ class BacktestV7Item:
             self.fragment_start_date()
         with col4:
             self.fragment_end_date()
+        with col5:
+            self.fragment_logging()
         col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5])
         with col1:
             self.fragment_starting_balance()
@@ -2051,7 +2062,7 @@ class BacktestsV7:
             if st.button(":red[No]"):
                 st.rerun()
 
-    def remove_selected(self, remove_results=False):
+    def remove_selected(self):
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'select_backtest_v7_{ed_key}']
         # Get number of selected results
