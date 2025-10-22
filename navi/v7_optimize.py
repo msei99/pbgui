@@ -75,9 +75,13 @@ def opt_v7_list():
         if st.button("Queue"):
             st.session_state.opt_v7_queue = OptimizeV7Queue()
             st.rerun()
-        if st.button("Add Optimize"):
+        if st.button(":material/add:", help="Add new Optimize"):
             st.session_state.opt_v7 = OptimizeV7Item()
             st.rerun()
+        if st.button(":material/edit:", help="Edit selected Optimize"):
+            opt_v7_list.edit_selected()
+        if st.button(":material/delete:", help="Delete selected Optimizes. If none selected all will be deleted"):
+            opt_v7_list.remove_selected()
     st.subheader("Available Configs")
     opt_v7_list.view_optimizes()
 

@@ -18,7 +18,7 @@ from User import Users
 import shutil
 import datetime
 import BacktestV7
-from Config import ConfigV7, Bounds
+from Config import ConfigV7, Bounds, Logging
 import logging
 import os
 import fnmatch
@@ -848,6 +848,16 @@ class OptimizeV7Item:
         else:
             st.session_state.edit_opt_v7_end_date = datetime.datetime.strptime(self.config.backtest.end_date, '%Y-%m-%d')
         st.date_input("end_date", format="YYYY-MM-DD", key="edit_opt_v7_end_date")
+
+    # logging
+    @st.fragment
+    def fragment_logging(self):
+        if "edit_opt_v7_logging_level" in st.session_state:
+            if st.session_state.edit_opt_v7_logging_level != self.config.logging.level:
+                self.config.logging.level = st.session_state.edit_opt_v7_logging_level
+        else:
+            st.session_state.edit_opt_v7_logging_level = self.config.logging.level
+        st.selectbox("logging level", Logging.LEVEL, format_func=lambda x: Logging.LEVEL.get(x), key="edit_opt_v7_logging_level", help=pbgui_help.logging_level)
 
     # starting_balance
     @st.fragment
@@ -2471,7 +2481,7 @@ class OptimizeV7Item:
             st.session_state.coindata_bitget = CoinData()
             st.session_state.coindata_bitget.exchange = "bitget"
         # Display Editor
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,1])
         with col1:
             self.fragment_exchanges()
         with col2:
@@ -2480,6 +2490,8 @@ class OptimizeV7Item:
             self.fragment_start_date()
         with col4:
             self.fragment_end_date()
+        with col5:
+            self.fragment_logging()
         col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
         with col1:
             self.fragment_starting_balance()
@@ -2673,31 +2685,21 @@ class OptimizesV7:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
-        if f'select_optimize_v7_{ed_key}' in st.session_state:
-            ed = st.session_state[f'select_optimize_v7_{ed_key}']
-            for row in ed["edited_rows"]:
-                if "edit" in ed["edited_rows"][row]:
-                    st.session_state.opt_v7 = self.optimizes[row]
-                    st.rerun()
-                if 'delete' in ed["edited_rows"][row]:
-                    if ed["edited_rows"][row]['delete']:
-                        self.optimizes[row].remove()
-                        self.optimizes.pop(row)
-                        st.rerun()
         if not self.d:
             for id, opt in enumerate(self.optimizes):
                 self.d.append({
                     'id': id,
-                    'edit': False,
+                    'Select': False,
                     'Name': opt.name,
                     'Time': opt.time,
                     'Exchange': opt.config.backtest.exchanges,
                     'BT Count': opt.backtest_count,
-                    'delete' : False,
+                    'item': opt,
                 })
         column_config = {
             "id": None,
-            "edit": st.column_config.CheckboxColumn(label="Edit"),
+            'item': None,
+            "Select": st.column_config.CheckboxColumn(label="Select"),
             "Time": st.column_config.DatetimeColumn(label="Time", format="YYYY-MM-DD HH:mm:ss"),
             }
         # Display optimizes
@@ -2747,7 +2749,55 @@ class OptimizesV7:
             for p in found_opt:
                 opt = OptimizeV7Item(p)
                 self.optimizes.append(opt)
-    
+
+    def edit_selected(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_optimize_v7_{ed_key}']
+        # Get number of selected results
+        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
+        if selected_count == 0:
+            error_popup("No Optimizes selected")
+            return
+        elif selected_count > 1:
+            error_popup("Please select only one Optimize to view")
+            return
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    st.session_state.opt_v7 = self.d[row]["item"]
+                    st.rerun()
+
+    @st.dialog("No Optimize selected. Delete all?")
+    def remove_all(self):
+        st.warning(f"Delete all Optimizes?", icon="⚠️")
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button(":green[Yes]"):
+                shutil.rmtree(f'{PBGDIR}/data/opt_v7', ignore_errors=True)
+                self.d = []
+                self.optimizes = []
+                st.rerun()
+        with col2:
+            if st.button(":red[No]"):
+                st.rerun()
+
+    def remove_selected(self):
+        ed_key = st.session_state.ed_key
+        ed = st.session_state[f'select_optimize_v7_{ed_key}']
+        # Get number of selected results
+        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
+        if selected_count == 0:
+            self.remove_all()
+            return
+        for row in ed["edited_rows"]:
+            if "Select" in ed["edited_rows"][row]:
+                if ed["edited_rows"][row]["Select"]:
+                    self.d[row]["item"].remove()
+        self.d = []
+        self.optimizes = []
+        st.rerun()
+
+
 def main():
     # Disable Streamlit Warnings when running directly
     logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
