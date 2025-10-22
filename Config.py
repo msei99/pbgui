@@ -447,6 +447,37 @@ class Config:
 #               "write_all_results": false}}
 
 
+class Logging:
+
+    LEVEL = {
+        0: "warnings",
+        1: "info",
+        2: "debug",
+        3: "trace"}
+
+    def __init__(self):
+        self._level = 1
+        self._logging = {
+            "level": self._level
+        }
+    
+    def __repr__(self):
+        return str(self._logging)
+
+    @property
+    def logging(self): return self._logging
+    @logging.setter
+    def logging(self, new_logging):
+        if "level" in new_logging:
+            self.level = new_logging["level"]
+    
+    @property
+    def level(self): return self._level
+    @level.setter
+    def level(self, new_level):
+        self._level = new_level
+        self._logging["level"] = self._level
+
 class Backtest:
     def __init__(self):
         self._base_dir = "backtests"
@@ -3392,6 +3423,7 @@ class PBGui:
 class ConfigV7():
     def __init__(self, file_name = None):
         self._config_file = file_name
+        self._logging = Logging()
         self._backtest = Backtest()
         self._bot = Bot()
         self._coin_overrides = {}
@@ -3400,6 +3432,7 @@ class ConfigV7():
         self._pbgui = PBGui()
 
         self._config = {
+            "logging": self._logging._logging,
             "backtest": self._backtest._backtest,
             "bot": self._bot._bot,
             "coin_overrides": self._coin_overrides,
@@ -3413,6 +3446,13 @@ class ConfigV7():
     @config_file.setter
     def config_file(self, new_value):
         self._config_file = new_value
+
+    @property
+    def logging(self): return self._logging
+    @logging.setter
+    def logging(self, new_value):
+        self._logging.logging = new_value
+        self._config["logging"] = self._logging.logging
 
     @property
     def backtest(self): return self._backtest
@@ -3460,6 +3500,8 @@ class ConfigV7():
     def config(self): return self._config
     @config.setter
     def config(self, new_value):
+        if "logging" in new_value:
+            self.logging = new_value["logging"]
         if "backtest" in new_value:
             self.backtest = new_value["backtest"]
         if "bot" in new_value:

@@ -549,6 +549,12 @@ leverage = """
     leverage set on exchange
     ```"""
 
+logging_level = """
+    ```
+    Controls global verbosity for Passivbot and tooling.
+    Accepted values: 0 (warnings), 1 (info), 2 (debug), 3 (trace).
+    ```"""
+
 loss_allowance_pct = """
     ```
     multisym auto unstuck: will use profits from other positions to offset

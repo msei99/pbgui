@@ -4,7 +4,7 @@ import pbgui_help
 from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
 from PBRemote import PBRemote
 from User import Users
-from Config import Config, ConfigV7
+from Config import Config, ConfigV7, Logging
 from Exchange import Exchange
 from pathlib import Path
 import glob
@@ -137,6 +137,15 @@ class V7Instance():
         else:
             st.session_state.edit_run_v7_leverage = float(round(self.config.live.leverage, 0))
         st.number_input("leverage", min_value=0.0, max_value=100.0, step=1.0, format="%.1f", key="edit_run_v7_leverage", help=pbgui_help.leverage)
+
+    @st.fragment
+    def fragment_logging(self):
+        if "edit_run_v7_logging_level" in st.session_state:
+            if st.session_state.edit_run_v7_logging_level != self.config.logging.level:
+                self.config.logging.level = st.session_state.edit_run_v7_logging_level
+        else:
+            st.session_state.edit_run_v7_logging_level = self.config.logging.level
+        st.selectbox('logging level', Logging.LEVEL, format_func=lambda x: Logging.LEVEL.get(x), key="edit_run_v7_logging_level", help=pbgui_help.logging_level)
 
     @st.fragment
     def fragment_minimum_coin_age_days(self):
@@ -486,7 +495,7 @@ class V7Instance():
             self.config.live.approved_coins.long = []
             self.config.live.approved_coins.short = []
         # Display Editor
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,1])
         with col1:
             # Select User
             if "edit_run_v7_user" in st.session_state:
@@ -512,6 +521,8 @@ class V7Instance():
             st.number_input("config version", min_value=self.config.pbgui.version, step=1, format="%.d", key="edit_run_v7_version", help=pbgui_help.config_version)
         with col4:
             self.fragment_leverage()
+        with col5:
+            self.fragment_logging()
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             self.fragment_minimum_coin_age_days()
