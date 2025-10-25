@@ -7,6 +7,8 @@ class MonitorConfig():
         self.logfiles = []
         self.mem_warning_v7 = 250.0
         self.mem_error_v7 = 500.0
+        self.swap_warning_v7 = 250.0
+        self.swap_error_v7 = 500.0
         self.cpu_warning_v7 = 10.0
         self.cpu_error_v7 = 15.0
         self.error_warning_v7 = 100.0
@@ -15,6 +17,8 @@ class MonitorConfig():
         self.traceback_error_v7 = 250.0
         self.mem_warning_multi = 250.0
         self.mem_error_multi = 500.0
+        self.swap_warning_multi = 250.0
+        self.swap_error_multi = 500.0
         self.cpu_warning_multi = 5.0
         self.cpu_error_multi = 10.0
         self.error_warning_multi = 25.0
@@ -23,6 +27,8 @@ class MonitorConfig():
         self.traceback_error_multi = 50.0
         self.mem_warning_single = 50.0
         self.mem_error_single = 100.0
+        self.swap_warning_single = 50.0
+        self.swap_error_single = 100.0
         self.cpu_warning_single = 5.0
         self.cpu_error_single = 10.0
         self.error_warning_single = 25.0
@@ -38,6 +44,12 @@ class MonitorConfig():
         mem_error_v7 = load_ini("monitor", "mem_error_v7")
         if mem_error_v7:
             self.mem_error_v7 = float(mem_error_v7)
+        swap_warning_v7 = load_ini("monitor", "swap_warning_v7")
+        if swap_warning_v7:
+            self.swap_warning_v7 = float(swap_warning_v7)
+        swap_error_v7 = load_ini("monitor", "swap_error_v7")
+        if swap_error_v7:
+            self.swap_error_v7 = float(swap_error_v7)
         cpu_warning_v7 = load_ini("monitor", "cpu_warning_v7")
         if cpu_warning_v7:
             self.cpu_warning_v7 = float(cpu_warning_v7)
@@ -63,6 +75,12 @@ class MonitorConfig():
         mem_error_multi = load_ini("monitor", "mem_error_multi")
         if mem_error_multi:
             self.mem_error_multi = float(mem_error_multi)
+        swap_warning_multi = load_ini("monitor", "swap_warning_multi")
+        if swap_warning_multi:
+            self.swap_warning_multi = float(swap_warning_multi)
+        swap_error_multi = load_ini("monitor", "swap_error_multi")
+        if swap_error_multi:
+            self.swap_error_multi = float(swap_error_multi)
         cpu_warning_multi = load_ini("monitor", "cpu_warning_multi")
         if cpu_warning_multi:
             self.cpu_warning_multi = float(cpu_warning_multi)
@@ -88,6 +106,12 @@ class MonitorConfig():
         mem_error_single = load_ini("monitor", "mem_error_single")
         if mem_error_single:
             self.mem_error_single = float(mem_error_single)
+        swap_warning_single = load_ini("monitor", "swap_warning_single")
+        if swap_warning_single:
+            self.swap_warning_single = float(swap_warning_single)
+        swap_error_single = load_ini("monitor", "swap_error_single")
+        if swap_error_single:
+            self.swap_error_single = float(swap_error_single)
         cpu_warning_single = load_ini("monitor", "cpu_warning_single")
         if cpu_warning_single:
             self.cpu_warning_single = float(cpu_warning_single)
@@ -110,6 +134,8 @@ class MonitorConfig():
     def save_monitor_config(self):
         save_ini("monitor", "mem_warning_v7", str(self.mem_warning_v7))
         save_ini("monitor", "mem_error_v7", str(self.mem_error_v7))
+        save_ini("monitor", "swap_warning_v7", str(self.swap_warning_v7))
+        save_ini("monitor", "swap_error_v7", str(self.swap_error_v7))
         save_ini("monitor", "cpu_warning_v7", str(self.cpu_warning_v7))
         save_ini("monitor", "cpu_error_v7", str(self.cpu_error_v7))
         save_ini("monitor", "error_warning_v7", str(self.error_warning_v7))
@@ -118,6 +144,8 @@ class MonitorConfig():
         save_ini("monitor", "traceback_error_v7", str(self.traceback_error_v7))
         save_ini("monitor", "mem_warning_multi", str(self.mem_warning_multi))
         save_ini("monitor", "mem_error_multi", str(self.mem_error_multi))
+        save_ini("monitor", "swap_warning_multi", str(self.swap_warning_multi))
+        save_ini("monitor", "swap_error_multi", str(self.swap_error_multi))
         save_ini("monitor", "cpu_warning_multi", str(self.cpu_warning_multi))
         save_ini("monitor", "cpu_error_multi", str(self.cpu_error_multi))
         save_ini("monitor", "error_warning_multi", str(self.error_warning_multi))
@@ -126,6 +154,8 @@ class MonitorConfig():
         save_ini("monitor", "traceback_error_multi", str(self.traceback_error_multi))
         save_ini("monitor", "mem_warning_single", str(self.mem_warning_single))
         save_ini("monitor", "mem_error_single", str(self.mem_error_single))
+        save_ini("monitor", "swap_warning_single", str(self.swap_warning_single))
+        save_ini("monitor", "swap_error_single", str(self.swap_error_single))
         save_ini("monitor", "cpu_warning_single", str(self.cpu_warning_single))
         save_ini("monitor", "cpu_error_single", str(self.cpu_error_single))
         save_ini("monitor", "error_warning_single", str(self.error_warning_single))
