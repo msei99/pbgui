@@ -100,6 +100,10 @@ class Monitor():
                             version = server.pb7_version
                         else:
                             version = server.pb6_version
+                        if len(monitor["m"]) == 10:
+                            swap_value = monitor["m"][9]
+                        else:
+                            swap_value = 0
                         info = ({
                             # u = user
                             # p = pb_version
@@ -127,6 +131,7 @@ class Monitor():
                             'Version': version,
                             'Start Time': datetime.fromtimestamp(monitor["st"]),
                             'Memory': monitor["m"][0]/1024/1024,
+                            'Swap': swap_value/1024/1024,
                             'CPU': monitor["c"],
                             'PNLs Today': monitor["ct"],
                             'PNL Today': monitor["pt"],
@@ -158,6 +163,7 @@ class Monitor():
             "Last Error": None,
             "Last Traceback": None,
             "Memory": st.column_config.NumberColumn(format="%.2f MB"),
+            "Swap": st.column_config.NumberColumn(format="%.2f MB"),
             "CPU": st.column_config.NumberColumn(format="%.2f %%"),
         }
 
@@ -166,7 +172,8 @@ class Monitor():
             df = pd.DataFrame(self.d_v7)
             sdf = df.style.map(lambda x: 'color: green' if x < self.monitor_config.cpu_warning_v7 else 'color: orange' if x < self.monitor_config.cpu_error_v7 else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.mem_warning_v7 else 'color: orange' if x < self.monitor_config.mem_error_v7 else 'color: red', subset=['Memory'])
-            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.swap_warning_v7 else 'color: orange' if x < self.monitor_config.swap_error_v7 else 'color: red', subset=['Swap'])
+            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB", 'Swap': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
@@ -207,7 +214,8 @@ class Monitor():
             df = pd.DataFrame(self.d_multi)
             sdf = df.style.map(lambda x: 'color: green' if x < self.monitor_config.cpu_warning_multi else 'color: orange' if x < self.monitor_config.cpu_error_multi else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.mem_warning_multi else 'color: orange' if x < self.monitor_config.mem_error_multi else 'color: red', subset=['Memory'])
-            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.swap_warning_multi else 'color: orange' if x < self.monitor_config.swap_error_multi else 'color: red', subset=['Swap'])
+            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB", 'Swap': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
@@ -230,7 +238,8 @@ class Monitor():
             df = pd.DataFrame(self.d_single)
             sdf = df.style.map(lambda x: 'color: green' if x < self.monitor_config.cpu_warning_single else 'color: orange' if x < self.monitor_config.cpu_error_single else 'color: red', subset=['CPU'])
             sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.mem_warning_single else 'color: orange' if x < self.monitor_config.mem_error_single else 'color: red', subset=['Memory'])
-            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB"})
+            sdf = sdf.map(lambda x: 'color: green' if x < self.monitor_config.swap_warning_single else 'color: orange' if x < self.monitor_config.swap_error_single else 'color: red', subset=['Swap'])
+            sdf = sdf.format({'CPU': "{:.2f} %", 'Start Time': "{:%Y-%m-%d %H:%M:%S}", 'Memory': "{:.2f} MB", 'Swap': "{:.2f} MB"})
             #Infos green if > 0, orange if 0 and red if none
             sdf = sdf.map(lambda x: 'color: green' if x > 0 else 'color: orange' if x == 0 else 'color: red', subset=['Infos Today', 'Infos Yesterday'])
             #Errors green if 0, orange if <10 else red
@@ -260,6 +269,16 @@ class Monitor():
                 self.monitor_config.mem_error_v7 = st.session_state.edit_mem_error_v7
         else:
             st.session_state.edit_mem_error_v7 = self.monitor_config.mem_error_v7
+        if "edit_swap_warning_v7" in st.session_state:
+            if self.monitor_config.swap_warning_v7 != st.session_state.edit_swap_warning_v7:
+                self.monitor_config.swap_warning_v7 = st.session_state.edit_swap_warning_v7
+        else:
+            st.session_state.edit_swap_warning_v7 = self.monitor_config.swap_warning_v7
+        if "edit_swap_error_v7" in st.session_state:
+            if self.monitor_config.swap_error_v7 != st.session_state.edit_swap_error_v7:
+                self.monitor_config.swap_error_v7 = st.session_state.edit_swap_error_v7
+        else:
+            st.session_state.edit_swap_error_v7 = self.monitor_config.swap_error_v7
         if "edit_cpu_warning_v7" in st.session_state:
             if self.monitor_config.cpu_warning_v7 != st.session_state.edit_cpu_warning_v7:
                 self.monitor_config.cpu_warning_v7 = st.session_state.edit_cpu_warning_v7
@@ -301,6 +320,16 @@ class Monitor():
                 self.monitor_config.mem_error_multi = st.session_state.edit_mem_error_multi
         else:
             st.session_state.edit_mem_error_multi = self.monitor_config.mem_error_multi
+        if "edit_swap_warning_multi" in st.session_state:
+            if self.monitor_config.swap_warning_multi != st.session_state.edit_swap_warning_multi:
+                self.monitor_config.swap_warning_multi = st.session_state.edit_swap_warning_multi
+        else:
+            st.session_state.edit_swap_warning_multi = self.monitor_config.swap_warning_multi
+        if "edit_swap_error_multi" in st.session_state:
+            if self.monitor_config.swap_error_multi != st.session_state.edit_swap_error_multi:
+                self.monitor_config.swap_error_multi = st.session_state.edit_swap_error_multi
+        else:
+            st.session_state.edit_swap_error_multi = self.monitor_config.swap_error_multi
         if "edit_cpu_warning_multi" in st.session_state:
             if self.monitor_config.cpu_warning_multi != st.session_state.edit_cpu_warning_multi:
                 self.monitor_config.cpu_warning_multi = st.session_state.edit_cpu_warning_multi
@@ -342,6 +371,16 @@ class Monitor():
                 self.monitor_config.mem_error_single = st.session_state.edit_mem_error_single
         else:
             st.session_state.edit_mem_error_single = self.monitor_config.mem_error_single
+        if "edit_swap_warning_single" in st.session_state:
+            if self.monitor_config.swap_warning_single != st.session_state.edit_swap_warning_single:
+                self.monitor_config.swap_warning_single = st.session_state.edit_swap_warning_single
+        else:
+            st.session_state.edit_swap_warning_single = self.monitor_config.swap_warning_single
+        if "edit_swap_error_single" in st.session_state:
+            if self.monitor_config.swap_error_single != st.session_state.edit_swap_error_single:
+                self.monitor_config.swap_error_single = st.session_state.edit_swap_error_single
+        else:
+            st.session_state.edit_swap_error_single = self.monitor_config.swap_error_single
         if "edit_cpu_warning_single" in st.session_state:
             if self.monitor_config.cpu_warning_single != st.session_state.edit_cpu_warning_single:
                 self.monitor_config.cpu_warning_single = st.session_state.edit_cpu_warning_single
@@ -377,6 +416,8 @@ class Monitor():
             if st.button(":material/home:"):
                 del st.session_state.edit_mem_warning_v7
                 del st.session_state.edit_mem_error_v7
+                del st.session_state.edit_swap_warning_v7
+                del st.session_state.edit_swap_error_v7
                 del st.session_state.edit_cpu_warning_v7
                 del st.session_state.edit_cpu_error_v7
                 del st.session_state.edit_error_warning_v7
@@ -412,9 +453,11 @@ class Monitor():
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.number_input('Memory Warning', step=10.0, format="%.1f", key="edit_mem_warning_v7")
+            st.number_input('Swap Warning', step=10.0, format="%.1f", key="edit_swap_warning_v7")
             st.number_input('Error Warning', step=1.0, format="%.1f", key="edit_error_warning_v7")
         with col2:
             st.number_input('Memory Error', step=10.0, format="%.1f", key="edit_mem_error_v7")
+            st.number_input('Swap Error', step=10.0, format="%.1f", key="edit_swap_error_v7")
             st.number_input('Error Error', step=1.0, format="%.1f", key="edit_error_error_v7")
         with col3:
             st.number_input('CPU Warning', step=1.0, format="%.1f", key="edit_cpu_warning_v7")
@@ -426,9 +469,11 @@ class Monitor():
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.number_input('Memory Warning', step=10.0, format="%.1f", key="edit_mem_warning_multi")
+            st.number_input('Swap Warning', step=10.0, format="%.1f", key="edit_swap_warning_multi")
             st.number_input('Error Warning', step=1.0, format="%.1f", key="edit_error_warning_multi")
         with col2:
             st.number_input('Memory Error', step=10.0, format="%.1f", key="edit_mem_error_multi")
+            st.number_input('Swap Error', step=10.0, format="%.1f", key="edit_swap_error_multi")
             st.number_input('Error Error', step=1.0, format="%.1f", key="edit_error_error_multi")
         with col3:
             st.number_input('CPU Warning', step=1.0, format="%.1f", key="edit_cpu_warning_multi")
@@ -440,9 +485,11 @@ class Monitor():
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
             st.number_input('Memory Warning', step=10.0, format="%.1f", key="edit_mem_warning_single")
+            st.number_input('Swap Warning', step=10.0, format="%.1f", key="edit_swap_warning_single")
             st.number_input('Error Warning', step=1.0, format="%.1f", key="edit_error_warning_single")
         with col2:
             st.number_input('Memory Error', step=10.0, format="%.1f", key="edit_mem_error_single")
+            st.number_input('Swap Error', step=10.0, format="%.1f", key="edit_swap_error_single")
             st.number_input('Error Error', step=1.0, format="%.1f", key="edit_error_error_single")
         with col3:
             st.number_input('CPU Warning', step=1.0, format="%.1f", key="edit_cpu_warning_single")
