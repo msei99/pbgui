@@ -165,6 +165,16 @@ class V7Instance():
             st.session_state.edit_run_v7_pnls_max_lookback_days = float(round(self.config.live.pnls_max_lookback_days, 0))
         st.number_input("pnls_max_lookback_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_pnls_max_lookback_days", help=pbgui_help.pnls_max_lookback_days)
 
+    # warmup_ratio
+    @st.fragment
+    def fragment_warmup_ratio(self):
+        if "edit_run_v7_warmup_ratio" in st.session_state:
+            if st.session_state.edit_run_v7_warmup_ratio != self.config.live.warmup_ratio:
+                self.config.live.warmup_ratio = st.session_state.edit_run_v7_warmup_ratio
+        else:
+            st.session_state.edit_run_v7_warmup_ratio = float(round(self.config.live.warmup_ratio, 2))
+        st.number_input("warmup_ratio", min_value=0.0, step=0.1, max_value=1.0, format="%.2f", key="edit_run_v7_warmup_ratio", help=pbgui_help.warmup_ratio)
+
     @st.fragment
     def fragment_note(self):
         if "edit_run_v7_note" in st.session_state:
@@ -228,15 +238,6 @@ class V7Instance():
             st.session_state.edit_run_v7_inactive_coin_candle_ttl_minutes = float(round(self.config.live.inactive_coin_candle_ttl_minutes, 0))
         st.number_input("inactive_coin_candle_ttl_minutes", min_value=0.0, step=1.0, format="%.1f", key="edit_run_v7_inactive_coin_candle_ttl_minutes", help=pbgui_help.inactive_coin_candle_ttl_minutes)
 
-    # @st.fragment
-    # def fragment_mimic_backtest_1m_delay(self):
-    #     if "edit_run_v7_mimic_backtest_1m_delay" in st.session_state:
-    #         if st.session_state.edit_run_v7_mimic_backtest_1m_delay != self.config.live.mimic_backtest_1m_delay:
-    #             self.config.live.mimic_backtest_1m_delay = st.session_state.edit_run_v7_mimic_backtest_1m_delay
-    #     else:
-    #         st.session_state.edit_run_v7_mimic_backtest_1m_delay = self.config.live.mimic_backtest_1m_delay
-    #     st.checkbox("mimic_backtest_1m_delay", help=pbgui_help.mimic_backtest_1m_delay, key="edit_run_v7_mimic_backtest_1m_delay")
-
     @st.fragment
     def fragment_max_n_cancellations_per_batch(self):
         if "edit_run_v7_max_n_cancellations_per_batch" in st.session_state:
@@ -298,24 +299,6 @@ class V7Instance():
         else:
             st.session_state.edit_run_v7_max_memory_candles_per_symbol = self.config.live.max_memory_candles_per_symbol
         st.number_input("max_memory_candles_per_symbol", min_value=0, max_value=10000000, step=10000, format="%.d", key="edit_run_v7_max_memory_candles_per_symbol", help=pbgui_help.max_memory_candles_per_symbol)
-
-    # @st.fragment
-    # def fragement_ohlcvs_1m_rolling_window_days(self):
-    #     if "edit_run_v7_ohlcvs_1m_rolling_window_days" in st.session_state:
-    #         if st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days != self.config.live.ohlcvs_1m_rolling_window_days:
-    #             self.config.live.ohlcvs_1m_rolling_window_days = st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days
-    #     else:
-    #         st.session_state.edit_run_v7_ohlcvs_1m_rolling_window_days = float(round(self.config.live.ohlcvs_1m_rolling_window_days, 0))
-    #     st.number_input("ohlcvs_1m_rolling_window_days", min_value=0.0, max_value=365.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_rolling_window_days", help=pbgui_help.ohlcvs_1m_rolling_window_days)
-
-    # @st.fragment
-    # def fragment_ohlcvs_1m_update_after_minutes(self):
-    #     if "edit_run_v7_ohlcvs_1m_update_after_minutes" in st.session_state:
-    #         if st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes != self.config.live.ohlcvs_1m_update_after_minutes:
-    #             self.config.live.ohlcvs_1m_update_after_minutes = st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes
-    #     else:
-    #         st.session_state.edit_run_v7_ohlcvs_1m_update_after_minutes = float(round(self.config.live.ohlcvs_1m_update_after_minutes, 0))
-    #     st.number_input("ohlcvs_1m_update_after_minutes", min_value=0.0, max_value=60.0, step=1.0, format="%.1f", key="edit_run_v7_ohlcvs_1m_update_after_minutes", help=pbgui_help.ohlcvs_1m_update_after_minutes)
 
     @st.fragment
     def fragment_time_in_force(self):
@@ -529,6 +512,8 @@ class V7Instance():
         with col2:
             self.fragement_pnls_max_lookback_days()
         with col3:
+            self.fragment_warmup_ratio()
+        with col4:
             self.fragment_note()
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
@@ -540,7 +525,6 @@ class V7Instance():
             self.fragment_market_orders_allowed()
         with col4:
             self.fragment_auto_gs()
-            # self.fragment_mimic_backtest_1m_delay()
 
         # Advanced Settings
         with st.expander("Advanced Settings", expanded=False):

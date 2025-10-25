@@ -489,6 +489,7 @@ class Backtest:
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
         self._use_btc_collateral = False
+        self._max_warmup_minutes = 0.0
         self._backtest = {
             "base_dir": self._base_dir,
             "combine_ohlcvs": self._combine_ohlcvs,
@@ -498,7 +499,8 @@ class Backtest:
             "gap_tolerance_ohlcvs_minutes": self._gap_tolerance_ohlcvs_minutes,
             "start_date": self._start_date,
             "starting_balance": self._starting_balance,
-            "use_btc_collateral": self._use_btc_collateral
+            "use_btc_collateral": self._use_btc_collateral,
+            "max_warmup_minutes": self._max_warmup_minutes
         }
     
     def __repr__(self):
@@ -526,6 +528,8 @@ class Backtest:
             self.starting_balance = new_backtest["starting_balance"]
         if "use_btc_collateral" in new_backtest:
             self.use_btc_collateral = new_backtest["use_btc_collateral"]
+        if "max_warmup_minutes" in new_backtest:
+            self.max_warmup_minutes = new_backtest["max_warmup_minutes"]
     
     @property
     def base_dir(self): return self._base_dir
@@ -548,6 +552,8 @@ class Backtest:
     def starting_balance(self): return self._starting_balance
     @property
     def use_btc_collateral(self): return self._use_btc_collateral
+    @property
+    def max_warmup_minutes(self): return self._max_warmup_minutes
 
     @base_dir.setter
     def base_dir(self, new_base_dir):
@@ -585,6 +591,10 @@ class Backtest:
     def use_btc_collateral(self, new_use_btc_collateral):
         self._use_btc_collateral = new_use_btc_collateral
         self._backtest["use_btc_collateral"] = self._use_btc_collateral
+    @max_warmup_minutes.setter
+    def max_warmup_minutes(self, new_max_warmup_minutes):
+        self._max_warmup_minutes = new_max_warmup_minutes
+        self._backtest["max_warmup_minutes"] = self._max_warmup_minutes
 
 class Bot:
     def __init__(self):
@@ -1573,13 +1583,11 @@ class Live:
         self._max_n_cancellations_per_batch = 5
         self._max_n_creations_per_batch = 3
         self._max_n_restarts_per_day = 10
-        # self._mimic_backtest_1m_delay = False
         self._minimum_coin_age_days = 30.0
-        # self._ohlcvs_1m_rolling_window_days = 4.0
-        # self._ohlcvs_1m_update_after_minutes = 10.0
         self._pnls_max_lookback_days = 30.0
         self._price_distance_threshold = 0.002
         self._time_in_force = "good_till_cancelled"
+        self._warmup_ratio = 0.2
         self._user = "bybit_01"
 
         self._live = {
@@ -1599,13 +1607,11 @@ class Live:
             "max_n_cancellations_per_batch": self._max_n_cancellations_per_batch,
             "max_n_creations_per_batch": self._max_n_creations_per_batch,
             "max_n_restarts_per_day": self._max_n_restarts_per_day,
-            # "mimic_backtest_1m_delay": self._mimic_backtest_1m_delay,
             "minimum_coin_age_days": self._minimum_coin_age_days,
-            # "ohlcvs_1m_rolling_window_days": self._ohlcvs_1m_rolling_window_days,
-            # "ohlcvs_1m_update_after_minutes": self._ohlcvs_1m_update_after_minutes,
             "pnls_max_lookback_days": self._pnls_max_lookback_days,
             "price_distance_threshold": self._price_distance_threshold,
             "time_in_force": self._time_in_force,
+            "warmup_ratio": self._warmup_ratio,
             "user": self._user
         }
     
@@ -1648,20 +1654,16 @@ class Live:
             self.max_n_creations_per_batch = new_live["max_n_creations_per_batch"]
         if "max_n_restarts_per_day" in new_live:
             self.max_n_restarts_per_day = new_live["max_n_restarts_per_day"]
-        # if "mimic_backtest_1m_delay" in new_live:
-        #     self.mimic_backtest_1m_delay = new_live["mimic_backtest_1m_delay"]
         if "minimum_coin_age_days" in new_live:
             self.minimum_coin_age_days = new_live["minimum_coin_age_days"]
-        # if "ohlcvs_1m_rolling_window_days" in new_live:
-        #     self.ohlcvs_1m_rolling_window_days = new_live["ohlcvs_1m_rolling_window_days"]
-        # if "ohlcvs_1m_update_after_minutes" in new_live:
-        #     self.ohlcvs_1m_update_after_minutes = new_live["ohlcvs_1m_update_after_minutes"]
         if "pnls_max_lookback_days" in new_live:
             self.pnls_max_lookback_days = new_live["pnls_max_lookback_days"]
         if "price_distance_threshold" in new_live:
             self.price_distance_threshold = new_live["price_distance_threshold"]
         if "time_in_force" in new_live:
             self.time_in_force = new_live["time_in_force"]
+        if "warmup_ratio" in new_live:
+            self._warmup_ratio = new_live["warmup_ratio"]
         if "user" in new_live:
             self.user = new_live["user"]
     
@@ -1697,20 +1699,16 @@ class Live:
     def max_n_creations_per_batch(self): return self._max_n_creations_per_batch
     @property
     def max_n_restarts_per_day(self): return self._max_n_restarts_per_day
-    # @property
-    # def mimic_backtest_1m_delay(self): return self._mimic_backtest_1m_delay
     @property
     def minimum_coin_age_days(self): return self._minimum_coin_age_days
-    # @property
-    # def ohlcvs_1m_rolling_window_days(self): return self._ohlcvs_1m_rolling_window_days
-    # @property
-    # def ohlcvs_1m_update_after_minutes(self): return self._ohlcvs_1m_update_after_minutes
     @property
     def pnls_max_lookback_days(self): return self._pnls_max_lookback_days
     @property
     def price_distance_threshold(self): return self._price_distance_threshold
     @property
     def time_in_force(self): return self._time_in_force
+    @property
+    def warmup_ratio(self): return self._warmup_ratio
     @property
     def user(self): return self._user
 
@@ -1778,22 +1776,10 @@ class Live:
     def max_n_restarts_per_day(self, new_max_n_restarts_per_day):
         self._max_n_restarts_per_day = new_max_n_restarts_per_day
         self._live["max_n_restarts_per_day"] = self._max_n_restarts_per_day
-    # @mimic_backtest_1m_delay.setter
-    # def mimic_backtest_1m_delay(self, new_mimic_backtest_1m_delay):
-    #     self._mimic_backtest_1m_delay = new_mimic_backtest_1m_delay
-    #     self._live["mimic_backtest_1m_delay"] = self._mimic_backtest_1m_delay
     @minimum_coin_age_days.setter
     def minimum_coin_age_days(self, new_minimum_coin_age_days):
         self._minimum_coin_age_days = new_minimum_coin_age_days
         self._live["minimum_coin_age_days"] = self._minimum_coin_age_days
-    # @ohlcvs_1m_rolling_window_days.setter
-    # def ohlcvs_1m_rolling_window_days(self, new_ohlcvs_1m_rolling_window_days):
-    #     self._ohlcvs_1m_rolling_window_days = new_ohlcvs_1m_rolling_window_days
-    #     self._live["ohlcvs_1m_rolling_window_days"] = self._ohlcvs_1m_rolling_window_days
-    # @ohlcvs_1m_update_after_minutes.setter
-    # def ohlcvs_1m_update_after_minutes(self, new_ohlcvs_1m_update_after_minutes):
-    #     self._ohlcvs_1m_update_after_minutes = new_ohlcvs_1m_update_after_minutes
-    #     self._live["ohlcvs_1m_update_after_minutes"] = self._ohlcvs_1m_update_after_minutes
     @pnls_max_lookback_days.setter
     def pnls_max_lookback_days(self, new_pnls_max_lookback_days):
         self._pnls_max_lookback_days = new_pnls_max_lookback_days
@@ -1806,6 +1792,10 @@ class Live:
     def time_in_force(self, new_time_in_force):
         self._time_in_force = new_time_in_force
         self._live["time_in_force"] = self._time_in_force
+    @warmup_ratio.setter
+    def warmup_ratio(self, new_warmup_ratio):
+        self._warmup_ratio = new_warmup_ratio
+        self._live["warmup_ratio"] = self._warmup_ratio
     @user.setter
     def user(self, new_user):
         self._user = new_user
@@ -1818,27 +1808,37 @@ class Optimize:
         # optimize
         self._compress_results_file = True
         self._crossover_probability = 0.7
+        self._crossover_eta = 20.0
         self._enable_overrides = []
         self._iters = 100000
-        self._mutation_probability = 0.2
+        self._mutation_probability = 0.45
+        self._mutation_eta = 20.0
+        self._mutation_indpb = 0.0
         self._n_cpus = 5
-        self._population_size = 500
+        self._offspring_multiplier = 1.0
+        self._population_size = 1000
         self._round_to_n_significant_digits = 5
         # scoring
         self._scoring = ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]
+        self._write_all_results = True
 
         self._optimize = {
             "bounds": self._bounds._bounds,
             "compress_results_file": self._compress_results_file,
             "crossover_probability": self._crossover_probability,
+            "crossover_eta": self._crossover_eta,
             "enable_overrides": self._enable_overrides,
             "iters": self._iters,
             "limits": self._limits,
             "mutation_probability": self._mutation_probability,
+            "mutation_eta": self._mutation_eta,
+            "mutation_indpb": self._mutation_indpb,
             "n_cpus": self._n_cpus,
+            "offspring_multiplier": self._offspring_multiplier,
             "population_size": self._population_size,
             "round_to_n_significant_digits": self._round_to_n_significant_digits,
-            "scoring": self._scoring
+            "scoring": self._scoring,
+            "write_all_results": self._write_all_results
         }
     
     def __repr__(self):
@@ -1854,6 +1854,8 @@ class Optimize:
             self.compress_results_file = new_optimize["compress_results_file"]
         if "crossover_probability" in new_optimize:
             self.crossover_probability = new_optimize["crossover_probability"]
+        if "crossover_eta" in new_optimize:
+            self.crossover_eta = new_optimize["crossover_eta"]
         if "enable_overrides" in new_optimize:
             self.enable_overrides = new_optimize["enable_overrides"]
         if "iters" in new_optimize:
@@ -1862,15 +1864,23 @@ class Optimize:
             self.limits = new_optimize["limits"]
         if "mutation_probability" in new_optimize:
             self.mutation_probability = new_optimize["mutation_probability"]
+        if "mutation_eta" in new_optimize:
+            self.mutation_eta = new_optimize["mutation_eta"]
+        if "mutation_indpb" in new_optimize:
+            self.mutation_indpb = new_optimize["mutation_indpb"]
         if "n_cpus" in new_optimize:
             self.n_cpus = new_optimize["n_cpus"]
+        if "offspring_multiplier" in new_optimize:
+            self.offspring_multiplier = new_optimize["offspring_multiplier"]
         if "population_size" in new_optimize:
             self.population_size = new_optimize["population_size"]
         if "round_to_n_significant_digits" in new_optimize:
             self.round_to_n_significant_digits = new_optimize["round_to_n_significant_digits"]
         if "scoring" in new_optimize:
             self.scoring = new_optimize["scoring"]
-    
+        if "write_all_results" in new_optimize:
+            self.write_all_results = new_optimize["write_all_results"]
+
     @property
     def bounds(self): return self._bounds
     @property
@@ -1880,22 +1890,32 @@ class Optimize:
     @property
     def crossover_probability(self): return self._crossover_probability
     @property
+    def crossover_eta(self): return self._crossover_eta
+    @property
     def enable_overrides(self): return self._enable_overrides
     @property
     def iters(self): return self._iters
     @property
     def mutation_probability(self): return self._mutation_probability
     @property
+    def mutation_eta(self): return self._mutation_eta
+    @property
+    def mutation_indpb(self): return self._mutation_indpb
+    @property
     def n_cpus(self):
         if self._n_cpus > multiprocessing.cpu_count():
             self.n_cpus = multiprocessing.cpu_count()
         return self._n_cpus
+    @property
+    def offspring_multiplier(self): return self._offspring_multiplier
     @property
     def population_size(self): return self._population_size
     @property
     def round_to_n_significant_digits(self): return self._round_to_n_significant_digits
     @property
     def scoring(self): return self._scoring
+    @property
+    def write_all_results(self): return self._write_all_results
 
     @bounds.setter
     def bounds(self, new_bounds):
@@ -1913,6 +1933,10 @@ class Optimize:
     def crossover_probability(self, new_crossover_probability):
         self._crossover_probability = new_crossover_probability
         self._optimize["crossover_probability"] = self._crossover_probability
+    @crossover_eta.setter
+    def crossover_eta(self, new_crossover_eta):
+        self._crossover_eta = new_crossover_eta
+        self._optimize["crossover_eta"] = self._crossover_eta
     @enable_overrides.setter
     def enable_overrides(self, new_enable_overrides):
         self._enable_overrides = new_enable_overrides
@@ -1925,12 +1949,24 @@ class Optimize:
     def mutation_probability(self, new_mutation_probability):
         self._mutation_probability = new_mutation_probability
         self._optimize["mutation_probability"] = self._mutation_probability
+    @mutation_eta.setter
+    def mutation_eta(self, new_mutation_eta):
+        self._mutation_eta = new_mutation_eta
+        self._optimize["mutation_eta"] = self._mutation_eta
+    @mutation_indpb.setter
+    def mutation_indpb(self, new_mutation_indpb):
+        self._mutation_indpb = new_mutation_indpb
+        self._optimize["mutation_indpb"] = self._mutation_indpb
     @n_cpus.setter
     def n_cpus(self, new_n_cpus):
         self._n_cpus = new_n_cpus
         self._optimize["n_cpus"] = self._n_cpus
         if self._n_cpus > multiprocessing.cpu_count():
             self.n_cpus = multiprocessing.cpu_count()
+    @offspring_multiplier.setter
+    def offspring_multiplier(self, new_offspring_multiplier):
+        self._offspring_multiplier = new_offspring_multiplier
+        self._optimize["offspring_multiplier"] = self._offspring_multiplier
     @population_size.setter
     def population_size(self, new_population_size):
         self._population_size = new_population_size
@@ -1943,6 +1979,10 @@ class Optimize:
     def scoring(self, new_scoring):
         self._scoring = new_scoring
         self._optimize["scoring"] = self._scoring
+    @write_all_results.setter
+    def write_all_results(self, new_write_all_results):
+        self._write_all_results = new_write_all_results
+        self._optimize["write_all_results"] = self._write_all_results
 
 class Bounds:
 
