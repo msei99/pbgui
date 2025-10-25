@@ -871,16 +871,41 @@ population_size = """
     size of population for genetic optimization algorithm
     ```"""
 
+offspring_multiplier = """
+    ```
+    Multiplier applied to population_size to determine how many offspring (λ) are produced
+    each generation in the μ+λ evolution strategy. Values >1.0 increase exploration by sampling
+    more children per generation. Default is 1.0.
+    ```"""
+
 crossover_probability = """
     ```
     The probability of performing crossover between two individuals in the genetic algorithm.
     It determines how often parents will exchange genetic information to create offspring.
     ```"""
 
+crossover_eta = """
+    ```
+    Crowding factor (η) for simulated-binary crossover. Lower values (<20) allow offspring
+    to move farther away from their parents; higher values keep them closer. Default is 20.0
+    ```"""
+
 mutation_probability = """
     ```
     The probability of performing crossover between two individuals in the genetic algorithm.
     It determines how often parents will exchange genetic information to create offspring.
+    ```"""
+
+mutation_eta = """
+    ```
+    Probability that each attribute mutates when a mutation is triggered. Set to 0 (default)
+    to auto-scale to 1 / number_of_parameters, or supply an explicit probability between 0 and 1
+    ```"""
+
+mutation_indpb = """
+    ```
+    Independent probability for each gene to be mutated during mutation operation.
+    Higher values increase exploration by allowing more parameters to change per mutation.
     ```"""
 
 scoring = """
@@ -1188,6 +1213,21 @@ gap_tolerance_ohlcvs_minutes = """
     If the gap between two consecutive ohlcvs is greater than this value, the bot will not backtest.
     ```"""
 
+max_warmup_minutes = """
+    ```
+    Per-coin warm-up window (in minutes) derived from warmup_ratio, indicator spans, and the optional
+    backtest.max_warmup_minutes ceiling. This value is used by the backtester and CandlestickManager
+    to skip the earliest candles until indicators are fully primed; adjust warmup_ratio or the spans
+    themselves to change it.
+    ```"""
+
+warmup_ratio = """
+    ```
+    Multiplier applied to the longest EMA or log-range span (in minutes) across long/short settings
+    to decide how much 1m history to prefetch before trading. A value of 0.2,
+    for example, warmups ~20% of the deepest lookback, capped by backtest.max_warmup_minutes
+    ```"""
+
 combine_ohlcvs = """
     ```
     If true, will combine ohlcvs from all exchanges.
@@ -1214,6 +1254,11 @@ use_btc_collateral = """
 compress_results_file = """
     ```
     If true, will compress optimize output results file to save space.
+    ```"""
+
+write_all_results = """
+    ```
+    If true, will write all optimize results to output file.
     ```"""
 
 starting_config = """

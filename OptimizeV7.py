@@ -929,15 +929,15 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_use_btc_collateral = self.config.backtest.use_btc_collateral
         st.checkbox("use_btc_collateral", key="edit_opt_v7_use_btc_collateral", help=pbgui_help.use_btc_collateral)
 
-    # mutation_probability
+    # write_all_results
     @st.fragment
-    def fragment_mutation_probability(self):
-        if "edit_opt_v7_mutation_probability" in st.session_state:
-            if st.session_state.edit_opt_v7_mutation_probability != self.config.optimize.mutation_probability:
-                self.config.optimize.mutation_probability = st.session_state.edit_opt_v7_mutation_probability
+    def fragment_write_all_results(self):
+        if "edit_opt_v7_write_all_results" in st.session_state:
+            if st.session_state.edit_opt_v7_write_all_results != self.config.optimize.write_all_results:
+                self.config.optimize.write_all_results = st.session_state.edit_opt_v7_write_all_results
         else:
-            st.session_state.edit_opt_v7_mutation_probability = self.config.optimize.mutation_probability
-        st.number_input("mutation_probability", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
+            st.session_state.edit_opt_v7_write_all_results = self.config.optimize.write_all_results
+        st.checkbox("write_all_results", key="edit_opt_v7_write_all_results", help=pbgui_help.write_all_results)
 
     # population_size
     @st.fragment
@@ -949,6 +949,16 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_population_size = self.config.optimize.population_size
         st.number_input("population_size", min_value=1, max_value=10000, step=1, format="%d", key="edit_opt_v7_population_size", help=pbgui_help.population_size)
 
+    # offspring_multiplier
+    @st.fragment
+    def fragment_offspring_multiplier(self):
+        if "edit_opt_v7_offspring_multiplier" in st.session_state:
+            if st.session_state.edit_opt_v7_offspring_multiplier != self.config.optimize.offspring_multiplier:
+                self.config.optimize.offspring_multiplier = st.session_state.edit_opt_v7_offspring_multiplier
+        else:
+            st.session_state.edit_opt_v7_offspring_multiplier = self.config.optimize.offspring_multiplier
+        st.number_input("offspring_multiplier", min_value=0.0, max_value=10000.0, step=0.1, format="%.2f", key="edit_opt_v7_offspring_multiplier", help=pbgui_help.offspring_multiplier)
+
     # crossover_probability
     @st.fragment
     def fragment_crossover_probability(self):
@@ -958,6 +968,46 @@ class OptimizeV7Item:
         else:
             st.session_state.edit_opt_v7_crossover_probability = self.config.optimize.crossover_probability
         st.number_input("crossover_probability", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_crossover_probability", help=pbgui_help.crossover_probability)
+    
+    # crossover_eta
+    @st.fragment
+    def fragment_crossover_eta(self):
+        if "edit_opt_v7_crossover_eta" in st.session_state:
+            if st.session_state.edit_opt_v7_crossover_eta != self.config.optimize.crossover_eta:
+                self.config.optimize.crossover_eta = st.session_state.edit_opt_v7_crossover_eta
+        else:
+            st.session_state.edit_opt_v7_crossover_eta = self.config.optimize.crossover_eta
+        st.number_input("crossover_eta", min_value=0.0, max_value=10000.0, step=1.0, format="%.2f", key="edit_opt_v7_crossover_eta", help=pbgui_help.crossover_eta)
+    
+    # mutation_probability
+    @st.fragment
+    def fragment_mutation_probability(self):
+        if "edit_opt_v7_mutation_probability" in st.session_state:
+            if st.session_state.edit_opt_v7_mutation_probability != self.config.optimize.mutation_probability:
+                self.config.optimize.mutation_probability = st.session_state.edit_opt_v7_mutation_probability
+        else:
+            st.session_state.edit_opt_v7_mutation_probability = self.config.optimize.mutation_probability
+        st.number_input("mutation_probability", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
+
+    # mutation_eta
+    @st.fragment
+    def fragment_mutation_eta(self):
+        if "edit_opt_v7_mutation_eta" in st.session_state:
+            if st.session_state.edit_opt_v7_mutation_eta != self.config.optimize.mutation_eta:
+                self.config.optimize.mutation_eta = st.session_state.edit_opt_v7_mutation_eta
+        else:
+            st.session_state.edit_opt_v7_mutation_eta = self.config.optimize.mutation_eta
+        st.number_input("mutation_eta", min_value=0.0, max_value=10000.0, step=1.0, format="%.2f", key="edit_opt_v7_mutation_eta", help=pbgui_help.mutation_eta)
+
+    # mutation_indpb
+    @st.fragment
+    def fragment_mutation_indpb(self):
+        if "edit_opt_v7_mutation_indpb" in st.session_state:
+            if st.session_state.edit_opt_v7_mutation_indpb != self.config.optimize.mutation_indpb:
+                self.config.optimize.mutation_indpb = st.session_state.edit_opt_v7_mutation_indpb
+        else:
+            st.session_state.edit_opt_v7_mutation_indpb = self.config.optimize.mutation_indpb
+        st.number_input("mutation_indpb", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_mutation_indpb", help=pbgui_help.mutation_indpb)
     
     # scoring
     @st.fragment
@@ -2492,7 +2542,7 @@ class OptimizeV7Item:
             self.fragment_end_date()
         with col5:
             self.fragment_logging()
-        col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
+        col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5], vertical_alignment="bottom")
         with col1:
             self.fragment_starting_balance()
         with col2:
@@ -2505,6 +2555,8 @@ class OptimizeV7Item:
         with col5:
             self.fragment_combine_ohlcvs()
             self.fragment_compress_results_file()
+        with col6:
+            self.fragment_write_all_results()
         with st.expander("Edit Config", expanded=False):
             self.config.bot.edit()
 
@@ -2516,9 +2568,18 @@ class OptimizeV7Item:
         with col1:
             self.fragment_population_size()
         with col2:
-            self.fragment_crossover_probability()
+            self.fragment_offspring_multiplier()
         with col3:
+            self.fragment_crossover_probability()
+        with col4:
+            self.fragment_crossover_eta()
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
             self.fragment_mutation_probability()
+        with col2:
+            self.fragment_mutation_eta()
+        with col3:
+            self.fragment_mutation_indpb()
         with col4:
             self.fragment_scoring()
 
