@@ -594,7 +594,7 @@ class PBRemote():
                     # Determine swap value, fix if vps not reporting swap
                     if len(monitor["m"]) == 10:
                         if monitor["m"][9] > 0:
-                            swap_value = monitor["m"][9]/1024/1024
+                            swap_value = round(monitor["m"][9]/1024/1024, 1)
                         else:
                             swap_value = 0
                     else:
@@ -640,7 +640,7 @@ class PBRemote():
                             error = ({
                                 "server": f':blue[{server.name}]',
                                 "name": f':blue[{monitor["u"]}]',
-                                "mem": f':{color_mem}[{monitor["m"][0]/1024/1024}]',
+                                "mem": f':{color_mem}[{round(monitor["m"][0]/1024/1024,1)}]',
                                 "swap": f':{color_swap}[{swap_value}]',
                                 "cpu": f':{color_cpu}[{monitor["c"]}]',
                                 "error": f':{color_error}[{monitor["et"]}]',
@@ -688,7 +688,7 @@ class PBRemote():
                             error = ({
                                 "server": f':blue[{server.name}]',
                                 "name": f':blue[{monitor["u"]}]',
-                                "mem": f':{color_mem}[{monitor["m"][0]/1024/1024}]',
+                                "mem": f':{color_mem}[{round(monitor["m"][0]/1024/1024, 1)}]',
                                 "swap": f':{color_swap}[{swap_value}]',
                                 "cpu": f':{color_cpu}[{monitor["c"]}]',
                                 "error": f':{color_error}[{monitor["et"]}]',
@@ -736,7 +736,7 @@ class PBRemote():
                             error = ({
                                 "server": f':blue[{server.name}]',
                                 "name": f':blue[{monitor["u"]}]',
-                                "mem": f':{color_mem}[{monitor["m"][0]/1024/1024}]',
+                                "mem": f':{color_mem}[{round(monitor["m"][0]/1024/1024, 1)}]',
                                 "swap": f':{color_swap}[{swap_value}]',
                                 "cpu": f':{color_cpu}[{monitor["c"]}]',
                                 "error": f':{color_error}[{monitor["et"]}]',
