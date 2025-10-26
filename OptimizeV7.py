@@ -395,7 +395,7 @@ class OptimizeV7Queue:
         with col2:
             st.checkbox("Reverse", value=True, key=f'sort_opt_v7_queue_order')
         self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_opt_v7_queue']], reverse=st.session_state[f'sort_opt_v7_queue_order'])
-        st.data_editor(data=self.d, height=height, key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
+        st.data_editor(data=self.d, height="auto", key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
         for item in self.items:
             if item.log_show:
                 item.view_log()
@@ -646,7 +646,7 @@ class OptimizeV7Results:
         #Display paretos
         height = 36+(len(d_paretos))*35
         if height > 1000: height = 1016
-        st.data_editor(data=d_paretos, height=height, key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','file'])
+        st.data_editor(data=d_paretos, height="auto", key=f'select_paretos_{st.session_state.ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','file'])
         if f'select_paretos_{st.session_state.ed_key}' in st.session_state:
             ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
             for row in ed["edited_rows"]:
