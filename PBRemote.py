@@ -591,9 +591,18 @@ class PBRemote():
                     errors.append(error)
             if server.monitor:
                 for monitor in server.monitor:
+                    # Determine swap value, fix if vps not reporting swap
+                    if len(monitor["m"]) == 10:
+                        if monitor["m"][9] > 0:
+                            swap_value = monitor["m"][9]/1024/1024
+                        else:
+                            swap_value = 0
+                    else:
+                        swap_value = 0
                     if monitor["p"] == "7":
                         if (
                             monitor["m"][0]/1024/1024 > monitor_config.mem_error_v7 or
+                            swap_value > monitor_config.swap_error_v7 or
                             monitor["c"] > monitor_config.cpu_error_v7 or
                             monitor["et"] > monitor_config.error_error_v7 or
                             monitor["tt"] > monitor_config.traceback_error_v7
@@ -604,6 +613,12 @@ class PBRemote():
                                 color_mem = "orange"
                             else:
                                 color_mem = "green"
+                            if swap_value > monitor_config.swap_error_v7:
+                                color_swap = "red"
+                            elif swap_value > monitor_config.swap_warning_v7:
+                                color_swap = "orange"
+                            else:
+                                color_swap = "green"
                             if monitor["c"] > monitor_config.cpu_error_v7:
                                 color_cpu = "red"
                             elif monitor["c"] > monitor_config.cpu_warning_v7:
@@ -626,6 +641,7 @@ class PBRemote():
                                 "server": f':blue[{server.name}]',
                                 "name": f':blue[{monitor["u"]}]',
                                 "mem": f':{color_mem}[{monitor["m"][0]/1024/1024}]',
+                                "swap": f':{color_swap}[{swap_value}]',
                                 "cpu": f':{color_cpu}[{monitor["c"]}]',
                                 "error": f':{color_error}[{monitor["et"]}]',
                                 "traceback": f':{color_traceback}[{monitor["tt"]}]'
@@ -634,6 +650,7 @@ class PBRemote():
                     elif monitor["p"] == "6":
                         if (
                             monitor["m"][0]/1024/1024 > monitor_config.mem_error_multi or
+                            swap_value > monitor_config.swap_error_multi or
                             monitor["c"] > monitor_config.cpu_error_multi or
                             monitor["et"] > monitor_config.error_error_multi or
                             monitor["tt"] > monitor_config.traceback_error_multi
@@ -644,6 +661,12 @@ class PBRemote():
                                 color_mem = "orange"
                             else:
                                 color_mem = "green"
+                            if swap_value > monitor_config.swap_error_multi:
+                                color_swap = "red"
+                            elif swap_value > monitor_config.swap_warning_multi:
+                                color_swap = "orange"
+                            else:
+                                color_swap = "green"
                             if monitor["c"] > monitor_config.cpu_error_multi:
                                 color_cpu = "red"
                             elif monitor["c"] > monitor_config.cpu_warning_multi:
@@ -666,6 +689,7 @@ class PBRemote():
                                 "server": f':blue[{server.name}]',
                                 "name": f':blue[{monitor["u"]}]',
                                 "mem": f':{color_mem}[{monitor["m"][0]/1024/1024}]',
+                                "swap": f':{color_swap}[{swap_value}]',
                                 "cpu": f':{color_cpu}[{monitor["c"]}]',
                                 "error": f':{color_error}[{monitor["et"]}]',
                                 "traceback": f':{color_traceback}[{monitor["tt"]}]'
@@ -674,6 +698,7 @@ class PBRemote():
                     elif monitor["p"] == "s":
                         if (
                             monitor["m"][0]/1024/1024 > monitor_config.mem_error_single or
+                            swap_value > monitor_config.swap_error_single or
                             monitor["c"] > monitor_config.cpu_error_single or
                             monitor["et"] > monitor_config.error_error_single or
                             monitor["tt"] > monitor_config.traceback_error_single
@@ -684,6 +709,12 @@ class PBRemote():
                                 color_mem = "orange"
                             else:
                                 color_mem = "green"
+                            if swap_value > monitor_config.swap_error_single:
+                                color_swap = "red"
+                            elif swap_value > monitor_config.swap_warning_single:
+                                color_swap = "orange"
+                            else:
+                                color_swap = "green"
                             if monitor["c"] > monitor_config.cpu_error_single:
                                 color_cpu = "red"
                             elif monitor["c"] > monitor_config.cpu_warning_single:
@@ -706,6 +737,7 @@ class PBRemote():
                                 "server": f':blue[{server.name}]',
                                 "name": f':blue[{monitor["u"]}]',
                                 "mem": f':{color_mem}[{monitor["m"][0]/1024/1024}]',
+                                "swap": f':{color_swap}[{swap_value}]',
                                 "cpu": f':{color_cpu}[{monitor["c"]}]',
                                 "error": f':{color_error}[{monitor["et"]}]',
                                 "traceback": f':{color_traceback}[{monitor["tt"]}]'

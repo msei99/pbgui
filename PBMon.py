@@ -122,7 +122,7 @@ class PBMon():
                 else:
                     if error["name"] not in self.instance_error:
                         self.instance_error.append(error["name"])
-                        msg = msg + f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}\n'
+                        msg = msg + f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} Swap: {error["swap"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}\n'
             # remove errors that are no longer present
             self.offline_error = [error for error in self.offline_error if error in [error["server"] for error in errors if error["name"] == "offline"]]
             self.system_error = [error for error in self.system_error if error in [error["server"] for error in errors if error["name"] == "system"]]
