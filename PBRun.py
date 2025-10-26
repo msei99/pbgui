@@ -1531,6 +1531,39 @@ class PBRun():
                 self.instances_status.remove(instance)
         self.instances_status.save()
 
+    def find_high_memory_bot(self):
+        """Finds the bot with the highest memory usage."""
+        high_mem = 0
+        high_bot = None
+        for v7 in self.run_v7:
+            mem = v7.monitor.memory[0] + v7.monitor.memory[9]
+            if mem > high_mem:
+                high_mem = mem
+                high_bot = v7
+        for multi in self.run_multi:
+            mem = multi.monitor.memory[0] + multi.monitor.memory[9]
+            if mem > high_mem:
+                high_mem = mem
+                high_bot = multi
+        for single in self.run_single:
+            mem = single.monitor.memory[0] + single.monitor.memory[9]
+            if mem > high_mem:
+                high_mem = mem
+                high_bot = single
+        return high_bot
+    
+    def watch_memory(self):
+        """Watches the memory usage of the System and restart Passivbot if necessary."""
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        free = (mem.available + swap.free) / 1024 / 1024  # in MB
+        if free < 200:
+            high_bot = self.find_high_memory_bot()
+            if high_bot:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Low System memory {free:.2f}MB, restarting bot {high_bot.user}')
+                high_bot.stop()
+                high_bot.start()
+
     def run(self):
         if not self.is_running():
             pbgdir = Path.cwd()
@@ -1620,6 +1653,7 @@ def main():
                     logfile.replace(f'{str(logfile)}.old')
                     sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
                     sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
+            run.watch_memory()
             run.has_activate()
             run.has_update_status()
             if run.pb7dir:
