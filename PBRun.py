@@ -1557,7 +1557,7 @@ class PBRun():
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
         free = (mem.available + swap.free) / 1024 / 1024  # in MB
-        if free < 200:
+        if free < 250:
             high_bot = self.find_high_memory_bot()
             if high_bot:
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Low System memory {free:.2f}MB, restarting bot {high_bot.user}')
