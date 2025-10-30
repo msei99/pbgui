@@ -153,18 +153,18 @@ class BacktestV7QueueItem():
             if self.config.pbgui.backtest_div_by != 60:
                 # copy backtest.py to backtest_div_by.py
                 src = Path(f'{pb7dir()}/src/backtest.py')
-                dest = Path(f'{pb7dir()}/src/backtest_div_by.py')
-                shutil.copyfile(src, dest)
-                # modify backtest_div_by.py to set div_by
-                with open(dest, 'r') as f:
-                    content = f.read()
-                content = content.replace("div_by = 60", f"div_by = {self.config.pbgui.backtest_div_by}")
-                with open(dest, 'w') as f:
-                    f.write(content)
-                backtest_py = "backtest_div_by.py"
+                dest = Path(f'{pb7dir()}/src/backtest_{self.config.pbgui.backtest_div_by}.py')
+                if not dest.exists():
+                    shutil.copyfile(src, dest)
+                    # modify backtest_div_by.py to set div_by
+                    with open(dest, 'r') as f:
+                        content = f.read()
+                    content = content.replace("div_by = 60", f"div_by = {self.config.pbgui.backtest_div_by}")
+                    with open(dest, 'w') as f:
+                        f.write(content)
+                backtest_py = f"backtest_{self.config.pbgui.backtest_div_by}.py"
             else:
                 backtest_py = "backtest.py"
-                
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(pb7venv()) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
