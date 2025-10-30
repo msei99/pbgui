@@ -555,6 +555,15 @@ logging_level = """
     Accepted values: 0 (warnings), 1 (info), 2 (debug), 3 (trace).
     ```"""
 
+backtest_div_by = """
+    ```
+    Divisor for backtesting. Determines the granularity of backtesting csv results.
+    Default is 60, meaning that results are recorded every 60 minutes.
+    Warning: Lower values increase the size of the backtest result files.
+    A setting of 1 will create very large files and should only be used for small timeframes.
+    Viewing large backtest result files may be slow or crash the browser.
+    ```"""
+
 loss_allowance_pct = """
     ```
     multisym auto unstuck: will use profits from other positions to offset

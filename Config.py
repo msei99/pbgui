@@ -3357,6 +3357,7 @@ class PBGui:
         self._dynamic_ignore = False
         self._notices_ignore = False
         self._note = ''
+        self._backtest_div_by = 60
         self._pbgui = {
             "version": self._version,
             "enabled_on": self._enabled_on,
@@ -3368,6 +3369,7 @@ class PBGui:
             "dynamic_ignore": self._dynamic_ignore,
             "notices_ignore": self._notices_ignore,
             "note": self._note,
+            "backtest_div_by": self._backtest_div_by,
         }
     
     def __repr__(self):
@@ -3397,7 +3399,9 @@ class PBGui:
             self.notices_ignore = new_pbgui["notices_ignore"]
         if "note" in new_pbgui:
             self.note = new_pbgui["note"]
-    
+        if "backtest_div_by" in new_pbgui:
+            self.backtest_div_by = new_pbgui["backtest_div_by"]
+
     @property
     def version(self): return self._version
     @property
@@ -3418,6 +3422,8 @@ class PBGui:
     def notices_ignore(self): return self._notices_ignore
     @property
     def note(self): return self._note
+    @property
+    def backtest_div_by(self): return self._backtest_div_by
 
     @version.setter
     def version(self, new_version):
@@ -3459,6 +3465,10 @@ class PBGui:
     def note(self, new_note):
         self._note = new_note
         self._pbgui["note"] = self._note
+    @backtest_div_by.setter
+    def backtest_div_by(self, new_backtest_div_by):
+        self._backtest_div_by = new_backtest_div_by
+        self._pbgui["backtest_div_by"] = self._backtest_div_by
 
 class ConfigV7():
     def __init__(self, file_name = None):
