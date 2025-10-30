@@ -38,6 +38,7 @@ class BacktestV7QueueItem():
         self.log_show = False
         self.pid = None
         self.pidfile = None
+        self.config = ConfigV7()
 
     def remove(self):
         self.stop()
@@ -149,10 +150,25 @@ class BacktestV7QueueItem():
 
     def run(self):
         if not self.is_finish() and not self.is_running():
+            if self.config.pbgui.backtest_div_by != 60:
+                # copy backtest.py to backtest_div_by.py
+                src = Path(f'{pb7dir()}/src/backtest.py')
+                dest = Path(f'{pb7dir()}/src/backtest_div_by.py')
+                shutil.copyfile(src, dest)
+                # modify backtest_div_by.py to set div_by
+                with open(dest, 'r') as f:
+                    content = f.read()
+                content = content.replace("div_by = 60", f"div_by = {self.config.pbgui.backtest_div_by}")
+                with open(dest, 'w') as f:
+                    f.write(content)
+                backtest_py = "backtest_div_by.py"
+            else:
+                backtest_py = "backtest.py"
+                
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(pb7venv()) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
-            cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/backtest.py'), str(PurePath(f'{self.json}'))]
+            cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/{backtest_py}'), str(PurePath(f'{self.json}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -277,6 +293,8 @@ class BacktestV7Queue:
                 qitem.exchange = config["exchange"]
                 qitem.log = Path(f'{PBGDIR}/data/bt_v7_queue/{qitem.filename}.log')
                 qitem.pidfile = Path(f'{PBGDIR}/data/bt_v7_queue/{qitem.filename}.pid')
+                qitem.config.config_file = qitem.json
+                qitem.config.load_config()
                 self.add(qitem)
 
     def run(self):
@@ -493,6 +511,16 @@ class BacktestV7Item:
         else:
             st.session_state.edit_bt_v7_end_date = datetime.datetime.strptime(self.config.backtest.end_date, '%Y-%m-%d')
         st.date_input("end_date", format="YYYY-MM-DD", key="edit_bt_v7_end_date")
+
+    # div_by
+    @st.fragment
+    def fragment_div_by(self):
+        if "edit_bt_v7_div_by" in st.session_state:
+            if st.session_state.edit_bt_v7_div_by != self.config.pbgui.backtest_div_by:
+                self.config.pbgui.backtest_div_by = st.session_state.edit_bt_v7_div_by
+        else:
+            st.session_state.edit_bt_v7_div_by = self.config.pbgui.backtest_div_by
+        st.number_input("div_by", min_value=1, step=1, key="edit_bt_v7_div_by", help=pbgui_help.backtest_div_by)
 
     # logging
     @st.fragment
@@ -791,7 +819,7 @@ class BacktestV7Item:
             st.session_state.coindata_bitget = CoinData()
             st.session_state.coindata_bitget.exchange = "bitget"
         # Display Editor
-        col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,1])
+        col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5])
         with col1:
             self.fragment_exchanges()
         with col2:
@@ -801,6 +829,8 @@ class BacktestV7Item:
         with col4:
             self.fragment_end_date()
         with col5:
+            self.fragment_div_by()
+        with col6:
             self.fragment_logging()
         col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5])
         with col1:
