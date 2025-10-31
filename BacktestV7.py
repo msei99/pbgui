@@ -94,7 +94,7 @@ class BacktestV7QueueItem():
         if not self.pid:
             self.load_pid()
         try:
-            if self.pid and psutil.pid_exists(self.pid) and any(sub.lower().endswith("backtest.py") for sub in psutil.Process(self.pid).cmdline()):
+            if self.pid and psutil.pid_exists(self.pid) and (any(sub.lower().endswith("backtest.py") or sub.lower().endswith(f"backtest_{self.config.pbgui.backtest_div_by}.py") for sub in psutil.Process(self.pid).cmdline())):
                 return True
         except psutil.NoSuchProcess:
             pass
