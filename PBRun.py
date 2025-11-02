@@ -1135,7 +1135,7 @@ class PBRun():
         """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_v7_ts:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate v7: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
                 status = self.instances_status_v7.find_name(instance.name)
                 if status is not None:
@@ -1211,7 +1211,7 @@ class PBRun():
         """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_single_ts:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate single: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
                 status = self.instances_status_single.find_name(instance.name)
                 if status is not None:
@@ -1280,7 +1280,7 @@ class PBRun():
         """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_ts:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate multi: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
             for instance in new_status:
                 status = self.instances_status.find_name(instance.name)
                 if status is not None:
