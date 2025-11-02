@@ -249,7 +249,7 @@ class RemoteServer():
             pbgdir = Path.cwd()
             if role == "master":
                 # cmd = ['rclone', 'sync', '-v', '--include', f'{{cmd_**/alive_*.cmd*,run_v7_{self.name}/**/*.json}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
-                cmd = ['rclone', 'sync', '-v', '--filter', f'- cmd_{self.name}/*', '--filter', '+ cmd_**/alive_*.cmd*', '--filter', f'+ run_v7_{self.name}/**/*.json', '--filter', '- *', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+                cmd = ['rclone', 'sync', '-v', '--filter', f'- cmd_{self.pbname}/*', '--filter', '+ cmd_**/alive_*.cmd*', '--filter', f'+ run_v7_{self.name}/**/*.json', '--filter', '- *', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
             else:
                 cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
