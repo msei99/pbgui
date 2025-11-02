@@ -18,7 +18,7 @@ import hjson
 from io import TextIOWrapper
 from datetime import datetime, date, timedelta
 import platform
-from shutil import copy, copytree, rmtree
+from shutil import copy, copytree, rmtree, ignore_patterns
 import os
 import traceback
 import uuid
@@ -1140,6 +1140,13 @@ class PBRun():
                 status = self.instances_status_v7.find_name(instance.name)
                 if status is not None:
                     if instance.version > status.version:
+                        # Backup old v7 config
+                        source = f'{self.v7_path}/{instance.name}'
+                        if Path(source).exists():
+                            destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{instance.version}')
+                            if not destination.exists():
+                                destination.mkdir(parents=True)
+                            copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         # Install new v7 version
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New V7 Version {instance.name} Old: {status.version} New: {instance.version}')
                         # Remove old *.json configs
@@ -1181,7 +1188,7 @@ class PBRun():
                         destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True)
+                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         rmtree(source, ignore_errors=True)
                         remove_instances.append(instance)
             if remove_instances:
@@ -1209,6 +1216,13 @@ class PBRun():
                 status = self.instances_status_single.find_name(instance.name)
                 if status is not None:
                     if instance.version > status.version:
+                        # Backup old single config
+                        source = f'{self.single_path}/{instance.name}'
+                        if Path(source).exists():
+                            destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{instance.version}')
+                            if not destination.exists():
+                                destination.mkdir(parents=True)
+                            copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         # Install new single version
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Version {instance.name} Old: {status.version} New: {instance.version}')
                         src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
@@ -1243,7 +1257,7 @@ class PBRun():
                         destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True)
+                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         rmtree(source, ignore_errors=True)
                         remove_instances.append(instance)
             if remove_instances:
@@ -1271,6 +1285,13 @@ class PBRun():
                 status = self.instances_status.find_name(instance.name)
                 if status is not None:
                     if instance.version > status.version:
+                        # Backup old multi config
+                        source = f'{self.multi_path}/{instance.name}'
+                        if Path(source).exists():
+                            destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{instance.version}')
+                            if not destination.exists():
+                                destination.mkdir(parents=True)
+                            copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         # Install new multi version
                         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}')
                         # Remove old *.json configs
@@ -1311,7 +1332,7 @@ class PBRun():
                         destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{date}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True)
+                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         rmtree(source, ignore_errors=True)
                         remove_instances.append(instance)
             if remove_instances:
