@@ -1143,7 +1143,7 @@ class PBRun():
                         # Backup old v7 config
                         source = f'{self.v7_path}/{instance.name}'
                         if Path(source).exists():
-                            destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{instance.version}')
+                            destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{status.version}')
                             if not destination.exists():
                                 destination.mkdir(parents=True)
                             copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
@@ -1219,7 +1219,7 @@ class PBRun():
                         # Backup old single config
                         source = f'{self.single_path}/{instance.name}'
                         if Path(source).exists():
-                            destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{instance.version}')
+                            destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{status.version}')
                             if not destination.exists():
                                 destination.mkdir(parents=True)
                             copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
@@ -1288,7 +1288,7 @@ class PBRun():
                         # Backup old multi config
                         source = f'{self.multi_path}/{instance.name}'
                         if Path(source).exists():
-                            destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{instance.version}')
+                            destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{status.version}')
                             if not destination.exists():
                                 destination.mkdir(parents=True)
                             copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
