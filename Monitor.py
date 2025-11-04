@@ -70,9 +70,9 @@ class Monitor():
             swap_usage = min(int(server.swap[3]),100)
             st.progress(swap_usage, text=f'### Swap Free: :green[{swap_free}] MB  |  Used: :red[{swap_used}] MB  |  Total: :blue[{swap_total}] MB')
             boot = datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S")
-            if server.cpu > 90:
+            if server.cpu > self.monitor_config.cpu_error_server:
                 cpu_color = "red"
-            elif server.cpu < 50:
+            elif server.cpu < self.monitor_config.cpu_warning_server:
                 cpu_color = "green"
             else:
                 cpu_color = "orange"
@@ -259,6 +259,48 @@ class Monitor():
 
     def edit_monitor_config(self):
         # Load config
+        # Server
+        if "edit_mem_warning_server" in st.session_state:
+            if self.monitor_config.mem_warning_server != st.session_state.edit_mem_warning_server:
+                self.monitor_config.mem_warning_server = st.session_state.edit_mem_warning_server
+        else:
+            st.session_state.edit_mem_warning_server = self.monitor_config.mem_warning_server
+        if "edit_mem_error_server" in st.session_state:
+            if self.monitor_config.mem_error_server != st.session_state.edit_mem_error_server:
+                self.monitor_config.mem_error_server = st.session_state.edit_mem_error_server
+        else:
+            st.session_state.edit_mem_error_server = self.monitor_config.mem_error_server
+        if "edit_swap_warning_server" in st.session_state:
+            if self.monitor_config.swap_warning_server != st.session_state.edit_swap_warning_server:
+                self.monitor_config.swap_warning_server = st.session_state.edit_swap_warning_server
+        else:
+            st.session_state.edit_swap_warning_server = self.monitor_config.swap_warning_server
+        if "edit_swap_error_server" in st.session_state:
+            if self.monitor_config.swap_error_server != st.session_state.edit_swap_error_server:
+                self.monitor_config.swap_error_server = st.session_state.edit_swap_error_server
+        else:
+            st.session_state.edit_swap_error_server = self.monitor_config.swap_error_server
+        if "edit_cpu_warning_server" in st.session_state:
+            if self.monitor_config.cpu_warning_server != st.session_state.edit_cpu_warning_server:
+                self.monitor_config.cpu_warning_server = st.session_state.edit_cpu_warning_server
+        else:
+            st.session_state.edit_cpu_warning_server = self.monitor_config.cpu_warning_server
+        if "edit_cpu_error_server" in st.session_state:
+            if self.monitor_config.cpu_error_server != st.session_state.edit_cpu_error_server:
+                self.monitor_config.cpu_error_server = st.session_state.edit_cpu_error_server
+        else:
+            st.session_state.edit_cpu_error_server = self.monitor_config.cpu_error_server
+        if "edit_disk_warning_server" in st.session_state:
+            if self.monitor_config.disk_warning_server != st.session_state.edit_disk_warning_server:
+                self.monitor_config.disk_warning_server = st.session_state.edit_disk_warning_server
+        else:
+            st.session_state.edit_disk_warning_server = self.monitor_config.disk_warning_server
+        if "edit_disk_error_server" in st.session_state:
+            if self.monitor_config.disk_error_server != st.session_state.edit_disk_error_server:
+                self.monitor_config.disk_error_server = st.session_state.edit_disk_error_server
+        else:
+            st.session_state.edit_disk_error_server = self.monitor_config.disk_error_server
+        # V7
         if "edit_mem_warning_v7" in st.session_state:
             if self.monitor_config.mem_warning_v7 != st.session_state.edit_mem_warning_v7:
                 self.monitor_config.mem_warning_v7 = st.session_state.edit_mem_warning_v7
@@ -414,6 +456,14 @@ class Monitor():
         # Navigation
         with st.sidebar:
             if st.button(":material/home:"):
+                del st.session_state.edit_mem_warning_server
+                del st.session_state.edit_mem_error_server
+                del st.session_state.edit_swap_warning_server
+                del st.session_state.edit_swap_error_server
+                del st.session_state.edit_cpu_warning_server
+                del st.session_state.edit_cpu_error_server
+                del st.session_state.edit_disk_warning_server
+                del st.session_state.edit_disk_error_server
                 del st.session_state.edit_mem_warning_v7
                 del st.session_state.edit_mem_error_v7
                 del st.session_state.edit_swap_warning_v7
@@ -449,6 +499,20 @@ class Monitor():
                 del st.session_state.monitor_edit
                 st.rerun()
         st.header("Edit Monitor Settings")
+        st.subheader("Server Monitor Settings")
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            st.number_input('Memory Warning', step=10.0, format="%.1f", key="edit_mem_warning_server")
+            st.number_input('Swap Warning', step=10.0, format="%.1f", key="edit_swap_warning_server")
+        with col2:
+            st.number_input('Memory Error', step=10.0, format="%.1f", key="edit_mem_error_server")
+            st.number_input('Swap Error', step=10.0, format="%.1f", key="edit_swap_error_server")
+        with col3:
+            st.number_input('Disk Warning', step=10.0, format="%.1f", key="edit_disk_warning_server")
+            st.number_input('CPU Warning', step=1.0, format="%.1f", key="edit_cpu_warning_server")
+        with col4:
+            st.number_input('Disk Error', step=10.0, format="%.1f", key="edit_disk_error_server")
+            st.number_input('CPU Error', step=1.0, format="%.1f", key="edit_cpu_error_server")
         st.subheader("V7 Monitor Settings")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:

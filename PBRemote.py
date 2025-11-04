@@ -559,25 +559,33 @@ class PBRemote():
                 errors.append(error)
             else:
                 if (
-                    int(server.mem[1] / 1024 / 1024) <= 25 or
-                    int(server.swap[2] / 1024 / 1024) <= 200 or
-                    int(server.disk[2] / 1024 / 1024) <= 500 or
-                    server.cpu >= 90
+                    int(server.mem[1] / 1024 / 1024) <= monitor_config.mem_error_server or
+                    int(server.swap[2] / 1024 / 1024) <= monitor_config.swap_error_server or
+                    int(server.disk[2] / 1024 / 1024) <= monitor_config.disk_error_server or
+                    server.cpu >= monitor_config.cpu_error_server
                 ):
-                    if int(server.mem[1] / 1024 / 1024) <= 25:
+                    if int(server.mem[1] / 1024 / 1024) <= monitor_config.mem_error_server:
                         color_mem = "red"
+                    elif int(server.mem[1] / 1024 / 1024) <= monitor_config.mem_warning_server:
+                        color_mem = "orange"
                     else:
                         color_mem = "green"
-                    if int(server.swap[2] / 1024 / 1024) <= 200:
+                    if int(server.swap[2] / 1024 / 1024) <= monitor_config.swap_error_server:
                         color_swap = "red"
+                    elif int(server.swap[2] / 1024 / 1024) <= monitor_config.swap_warning_server:
+                        color_swap = "orange"
                     else:
                         color_swap = "green"
-                    if int(server.disk[2] / 1024 / 1024) <= 500:
+                    if int(server.disk[2] / 1024 / 1024) <= monitor_config.disk_error_server:
                         color_disk = "red"
+                    elif int(server.disk[2] / 1024 / 1024) <= monitor_config.disk_warning_server:
+                        color_disk = "orange"
                     else:
                         color_disk = "green"
-                    if server.cpu >= 80:
+                    if server.cpu >= monitor_config.cpu_error_server:
                         color_cpu = "red"
+                    elif server.cpu >= monitor_config.cpu_warning_server:
+                        color_cpu = "orange"
                     else:
                         color_cpu = "green"
                     error = ({
