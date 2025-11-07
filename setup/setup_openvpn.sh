@@ -88,17 +88,20 @@ port 1194
 proto udp
 dev tun
 
+# Drop privileges
 user nobody
 group nogroup
 persist-key
 persist-tun
 
+# Certificates
 ca ca.crt
 cert server.crt
 key server.key
 dh none
 ecdh-curve prime256v1
 
+# TLS security
 tls-server
 tls-version-min 1.3
 tls-ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
@@ -109,19 +112,32 @@ ncp-ciphers AES-256-GCM:CHACHA20-POLY1305
 data-ciphers AES-256-GCM:CHACHA20-POLY1305
 data-ciphers-fallback AES-256-GCM
 
+# VPN network
 server 10.8.0.0 255.255.255.0
 topology subnet
+#push "redirect-gateway def1 bypass-dhcp"
+#push "dhcp-option DNS 1.1.1.1"
+#push "dhcp-option DNS 9.9.9.9"
 
+# PAM + Google Authenticator MFA
+plugin /usr/lib/x86_64-linux-gnu/openvpn/plugins/openvpn-plugin-auth-pam.so openvpn
+verify-client-cert required
+username-as-common-name
+auth-nocache
+
+# Keepalive & connection options
 keepalive 10 120
 explicit-exit-notify 1
 client-to-client
 duplicate-cn
 
+# Logging
 status /var/log/openvpn-status.log
 log-append /var/log/openvpn.log
 verb 3
 mute 10
 
+# Security
 script-security 2
 capath /etc/ssl/certs
 remote-cert-eku "TLS Web Client Authentication"
