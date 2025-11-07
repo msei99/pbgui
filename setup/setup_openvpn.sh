@@ -121,7 +121,7 @@ topology subnet
 
 # PAM + Google Authenticator MFA
 plugin /usr/lib/x86_64-linux-gnu/openvpn/plugins/openvpn-plugin-auth-pam.so openvpn
-verify-client-cert required
+verify-client-cert require
 username-as-common-name
 auth-nocache
 
