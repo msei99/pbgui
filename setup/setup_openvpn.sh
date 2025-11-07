@@ -181,11 +181,11 @@ $(sudo cat "$OVPN_DIR/ca.crt")
 </ca>
 
 <cert>
-$(cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.crt")
+$(sudo cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.crt")
 </cert>
 
 <key>
-$(cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.key")
+$(sudo cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.key")
 </key>
 
 <tls-crypt>
