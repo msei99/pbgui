@@ -74,13 +74,12 @@ sudo mkdir -p "$EASYRSA_DIR"
 sudo cp -r /usr/share/easy-rsa/* "$EASYRSA_DIR"
 cd "$EASYRSA_DIR"
 
-# ----------[ Non-interactive PKI with friendly CA name ]----------
-export EASYRSA_BATCH=1
+# Use hostname-based CA name to avoid prompts
 HOSTNAME=$(hostname)
-export EASYRSA_REQ_CN="OpenVPN-CA-$HOSTNAME"
+CA_NAME="OpenVPN-CA-$HOSTNAME"
 
 sudo ./easyrsa init-pki
-sudo ./easyrsa build-ca nopass        # uses OpenVPN-CA-<hostname> as CN
+sudo ./easyrsa --batch --req-cn="$CA_NAME" build-ca nopass
 sudo ./easyrsa gen-req server nopass
 echo "yes" | sudo ./easyrsa sign-req server server
 success "PKI and server certificates generated."
@@ -221,8 +220,7 @@ echo
 echo -e "${BOLD}✅ OpenVPN Setup Complete${RESET}"
 echo -e "-----------------------------------------------"
 echo -e "• Server Directory : ${GREEN}${OVPN_DIR}${RESET}"
-echo -e "• Client Config    : ${GREEN}${CLIENT_FILE}${RESET}"
-echo -e "• CA Name          : ${GREEN}OpenVPN-CA-${HOSTNAME}${RESET}"
+echo -e "• Client Config   : ${GREEN}${CLIENT_FILE}${RESET}"
 echo -e "-----------------------------------------------"
 echo -e "🎉 Use username '$USER_NAME' and client .ovpn to connect"
 echo
