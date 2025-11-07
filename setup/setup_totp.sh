@@ -62,14 +62,14 @@ ACCOUNT="$USER_NAME@$(hostname)"
 
 # Create the Google Authenticator secret file
 info "Creating Google Authenticator secret for user: $USER_NAME"
-sudo -u "$USER_NAME" bash -c "cat > '$GA_SECRET_FILE' <<EOF
-$SECRET
-RESETTING_TIME_SKEW
-RATE_LIMIT 3 30
-WINDOW_SIZE 17
-DISALLOW_REUSE
-TOTP_AUTH
-EOF"
+sudo -u "$USER_NAME" bash -c 'cat > "'"$GA_SECRET_FILE"'" <<EOF
+'"$SECRET"'
+" RESETTING_TIME_SKEW
+" RATE_LIMIT 3 30
+" WINDOW_SIZE 17
+" DISALLOW_REUSE
+" TOTP_AUTH
+EOF'
 sudo chmod 600 "$GA_SECRET_FILE"
 
 # Generate the ASCII QR code for the user
