@@ -1,47 +1,52 @@
 #!/usr/bin/env bash
+# 🚀 OpenVPN Server Setup with Google Authenticator (2FA)
+# Usage:
+#   bash setup_openvpn.sh <user_name>
+#   OR
+#   curl -fsSL <URL> | bash -s -- <user_name>
+
 set -euo pipefail
 
-# =============================================================================
-# 🧩 OpenVPN Server Setup Script (Ubuntu)
-# =============================================================================
-# Installs and configures a hardened OpenVPN 2.6+ server.
-# Generates certificates, configures security, and creates a client .ovpn file.
-# Usage: bash setup_openvpn.sh <user_name>
-# =============================================================================
+# ----------------------
+# Color definitions
+# ----------------------
+GREEN="\033[1;32m"
+YELLOW="\033[1;33m"
+RED="\033[1;31m"
+CYAN="\033[1;36m"
+NC="\033[0m" # No Color
 
-# --- Colors (safe) ---
-if [ -t 1 ]; then
-    GREEN='\033[0;32m'
-    BLUE='\033[0;34m'
-    YELLOW='\033[1;33m'
-    RED='\033[0;31m'
-    BOLD='\033[1m'
-    NC='\033[0m'
-else
-    GREEN=""; BLUE=""; YELLOW=""; RED=""; BOLD=""; NC=""
-fi
+echo -e "${CYAN}🚀 Starting OpenVPN server setup...${NC}"
 
-echo -e "${BLUE}🚀 Starting OpenVPN server setup...${NC}"
-
-# --- Check Ubuntu ---
-if [ "$(lsb_release -si)" != "Ubuntu" ]; then
-    echo -e "${RED}❌ This script only works on Ubuntu.${NC}"
-    exit 1
-fi
-
-# --- Args ---
+# ----------------------
+# Argument handling
+# ----------------------
 if [ "$#" -ne 1 ]; then
-    echo -e "${YELLOW}Usage:${NC} bash $0 <user_name>"
+    echo -e "${YELLOW}Usage:${NC} bash setup_openvpn.sh <user_name>"
+    echo -e "Or via curl: curl -fsSL <URL> | bash -s -- <user_name>"
     exit 1
 fi
 
 USER_NAME="$1"
 
-echo -e "${BLUE}🔧 Installing dependencies...${NC}"
-sudo apt update -y
-sudo apt install -y openvpn easy-rsa
+# ----------------------
+# Check Ubuntu
+# ----------------------
+if [ "$(lsb_release -si)" != "Ubuntu" ]; then
+    echo -e "${RED}Error:${NC} This script only works on Ubuntu."
+    exit 1
+fi
 
-# --- Easy-RSA setup ---
+# ----------------------
+# Install dependencies
+# ----------------------
+echo -e "${CYAN}📦 Installing dependencies...${NC}"
+sudo apt update
+sudo apt install -y openvpn easy-rsa libpam-google-authenticator oathtool qrencode ufw
+
+# ----------------------
+# Setup Easy-RSA
+# ----------------------
 EASYRSA_DIR="/root/easy-rsa"
 rm -rf "$EASYRSA_DIR"
 mkdir -p "$EASYRSA_DIR"
@@ -51,24 +56,28 @@ cd "$EASYRSA_DIR"
 export EASYRSA_BATCH=1
 export EASYRSA_REQ_CN="server"
 
-echo -e "${BLUE}🔐 Generating CA and server certificates...${NC}"
+echo -e "${CYAN}🛠 Initializing PKI and generating server certs...${NC}"
 ./easyrsa init-pki
 ./easyrsa build-ca nopass
 ./easyrsa gen-req server nopass
 echo "yes" | ./easyrsa sign-req server server
 
-# --- Copy certs/keys to OpenVPN dir ---
+# ----------------------
+# Copy certs to OpenVPN
+# ----------------------
 OVPN_DIR="/etc/openvpn/server"
 sudo mkdir -p "$OVPN_DIR"
 sudo cp pki/ca.crt pki/issued/server.crt pki/private/server.key "$OVPN_DIR/"
 
-# --- Generate ECDH and tls-crypt key ---
-echo -e "${BLUE}🧬 Generating ECDH and tls-crypt keys...${NC}"
+# ----------------------
+# Generate ECDH and tls-crypt key
+# ----------------------
 sudo openssl ecparam -name prime256v1 -out "$OVPN_DIR/ecdh.pem"
 sudo openvpn --genkey secret "$OVPN_DIR/ta.key"
 
-# --- OpenVPN configuration ---
-echo -e "${BLUE}⚙️  Writing OpenVPN server configuration...${NC}"
+# ----------------------
+# OpenVPN server config
+# ----------------------
 sudo tee "$OVPN_DIR/server.conf" > /dev/null <<'EOF'
 port 1194
 proto udp
@@ -91,6 +100,7 @@ tls-ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
 tls-crypt ta.key
 auth SHA256
 cipher AES-256-GCM
+ncp-ciphers AES-256-GCM:CHACHA20-POLY1305
 data-ciphers AES-256-GCM:CHACHA20-POLY1305
 data-ciphers-fallback AES-256-GCM
 
@@ -117,43 +127,94 @@ capath /etc/ssl/certs
 remote-cert-eku "TLS Web Client Authentication"
 EOF
 
-# --- Ensure /dev/net/tun exists ---
+# ----------------------
+# Ensure /dev/net/tun exists
+# ----------------------
 if [ ! -c /dev/net/tun ]; then
     sudo mkdir -p /dev/net
     sudo mknod /dev/net/tun c 10 200
     sudo chmod 600 /dev/net/tun
 fi
 
-# --- Permissions ---
+# ----------------------
+# Permissions
+# ----------------------
 sudo chown -R root:root "$OVPN_DIR"
 sudo chmod 600 "$OVPN_DIR/server.key" "$OVPN_DIR/ta.key"
 sudo chmod 644 "$OVPN_DIR/ca.crt" "$OVPN_DIR/server.crt"
 
-# --- Enable & start OpenVPN ---
-echo -e "${BLUE}🚦 Enabling and starting OpenVPN service...${NC}"
+# ----------------------
+# PAM service for OpenVPN + Google Authenticator
+# ----------------------
+GA_PAM_DIR="/etc/openvpn/google-auth"
+sudo mkdir -p "$GA_PAM_DIR"
+sudo chmod 700 "$GA_PAM_DIR"
+
+sudo tee /etc/pam.d/openvpn > /dev/null <<EOF
+auth required pam_google_authenticator.so secret=/etc/openvpn/google-auth/${USER_NAME} user=root
+account required pam_unix.so
+EOF
+
+# ----------------------
+# Enable & start OpenVPN
+# ----------------------
 sudo systemctl daemon-reload
 sudo systemctl enable openvpn-server@server.service
 sudo systemctl restart openvpn-server@server.service
 
-# --- Generate client .ovpn securely ---
-echo -e "${BLUE}📦 Generating secure client configuration...${NC}"
+# ----------------------
+# Firewall setup (separate)
+# ----------------------
+sudo ufw allow 1194/udp
+sudo ufw allow OpenSSH
+sudo ufw --force enable
 
+# ----------------------
+# Google Authenticator setup
+# ----------------------
 USER_HOME=$(eval echo "~$USER_NAME")
-CLIENT_DIR="$USER_HOME/openvpn_client"
+GA_FILE="$USER_HOME/GA-QR.txt"
+GA_SECRET_FILE="$USER_HOME/.google_authenticator"
+
+SECRET=$(head -c 10 /dev/urandom | base32 | tr -d '=' | tr -d '\n' | cut -c1-16)
+ISSUER="OpenVPN"
+ACCOUNT="$USER_NAME@$(hostname)"
+
+sudo -u "$USER_NAME" bash -c "cat > '$GA_SECRET_FILE' <<EOF
+$SECRET
+RESETTING_TIME_SKEW
+RATE_LIMIT 3 30
+WINDOW_SIZE 17
+DISALLOW_REUSE
+TOTP_AUTH
+EOF"
+
+sudo chmod 600 "$GA_SECRET_FILE"
+sudo -u "$USER_NAME" bash -c "qrencode -t ASCII 'otpauth://totp/$ACCOUNT?secret=$SECRET&issuer=$ISSUER' > '$GA_FILE'"
+sudo chmod 644 "$GA_FILE"
+
+sudo cp "$GA_SECRET_FILE" "$GA_PAM_DIR/$USER_NAME"
+sudo chown root:root "$GA_PAM_DIR/$USER_NAME"
+sudo chmod 600 "$GA_PAM_DIR/$USER_NAME"
+
+echo -e "${GREEN}✅ Google Authenticator QR code available at:${NC} $GA_FILE"
+
+# ----------------------
+# Generate client .ovpn securely
+# ----------------------
+CLIENT_DIR="$USER_HOME/${USER_NAME}_client"
+mkdir -p "$CLIENT_DIR"
 CLIENT_FILE="$CLIENT_DIR/${USER_NAME}.ovpn"
-SERVER_IP=$(hostname -I | awk '{print $1}')
 
-sudo mkdir -p "$CLIENT_DIR"
-sudo chmod 700 "$CLIENT_DIR"
-sudo chown "$USER_NAME:$USER_NAME" "$CLIENT_DIR"
-
-sudo tee "$CLIENT_FILE" > /dev/null <<EOF
+cat > "$CLIENT_FILE" <<EOF
 client
 dev tun
 proto udp
-remote $SERVER_IP 1194
+remote $(hostname) 1194
 resolv-retry infinite
 nobind
+user nobody
+group nogroup
 persist-key
 persist-tun
 auth SHA256
@@ -179,18 +240,12 @@ $(sudo cat /etc/openvpn/server/server.key)
 $(sudo cat /etc/openvpn/server/ta.key)
 </tls-crypt>
 
-# Username: $USER_NAME
-# Enter your TOTP when prompted.
+# Username: $USER_NAME, TOTP from QR: $GA_FILE
 EOF
 
-sudo chmod 600 "$CLIENT_FILE"
+chmod 600 "$CLIENT_FILE"
 sudo chown "$USER_NAME:$USER_NAME" "$CLIENT_FILE"
 
-echo -e "${GREEN}✅ Client configuration created:${NC} $CLIENT_FILE"
-echo -e "   Only accessible by user '${BOLD}$USER_NAME${NC}'"
-echo "-----------------------------------------------------"
-echo -e "💾 To download securely:"
-echo -e "   scp ${BOLD}$USER_NAME@<server_ip>:${CLIENT_FILE}${NC} ./"
-echo "-----------------------------------------------------"
-
-echo -e "${GREEN}🎉 OpenVPN setup complete!${NC}"
+echo -e "${GREEN}✅ Client config created:${NC} $CLIENT_FILE"
+echo -e "Use username '$USER_NAME' and the TOTP from the ASCII QR code to connect."
+echo -e "${CYAN}🎉 OpenVPN setup complete!${NC}"
