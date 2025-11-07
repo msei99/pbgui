@@ -2,32 +2,42 @@
 set -euo pipefail
 
 # =============================================================================
-# OpenVPN Server Setup Script
+# 🧩 OpenVPN Server Setup Script (Ubuntu)
 # =============================================================================
-# Installs and configures a hardened OpenVPN 2.6+ server:
-#  - Installs dependencies
-#  - Generates certificates and keys with Easy-RSA
-#  - Configures OpenVPN
-#  - Creates a secure client .ovpn file
+# Installs and configures a hardened OpenVPN 2.6+ server.
+# Generates certificates, configures security, and creates a client .ovpn file.
+# Usage: bash setup_openvpn.sh <user_name>
 # =============================================================================
 
-echo "🚀 Starting OpenVPN server setup..."
+# --- Colors (safe) ---
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    YELLOW='\033[1;33m'
+    RED='\033[0;31m'
+    BOLD='\033[1m'
+    NC='\033[0m'
+else
+    GREEN=""; BLUE=""; YELLOW=""; RED=""; BOLD=""; NC=""
+fi
+
+echo -e "${BLUE}🚀 Starting OpenVPN server setup...${NC}"
 
 # --- Check Ubuntu ---
 if [ "$(lsb_release -si)" != "Ubuntu" ]; then
-    echo "❌ This script only works on Ubuntu."
+    echo -e "${RED}❌ This script only works on Ubuntu.${NC}"
     exit 1
 fi
 
 # --- Args ---
 if [ "$#" -ne 1 ]; then
-    echo "Usage: $0 <user_name>"
+    echo -e "${YELLOW}Usage:${NC} bash $0 <user_name>"
     exit 1
 fi
 
 USER_NAME="$1"
 
-# --- Install dependencies ---
+echo -e "${BLUE}🔧 Installing dependencies...${NC}"
 sudo apt update -y
 sudo apt install -y openvpn easy-rsa
 
@@ -41,6 +51,7 @@ cd "$EASYRSA_DIR"
 export EASYRSA_BATCH=1
 export EASYRSA_REQ_CN="server"
 
+echo -e "${BLUE}🔐 Generating CA and server certificates...${NC}"
 ./easyrsa init-pki
 ./easyrsa build-ca nopass
 ./easyrsa gen-req server nopass
@@ -52,10 +63,12 @@ sudo mkdir -p "$OVPN_DIR"
 sudo cp pki/ca.crt pki/issued/server.crt pki/private/server.key "$OVPN_DIR/"
 
 # --- Generate ECDH and tls-crypt key ---
+echo -e "${BLUE}🧬 Generating ECDH and tls-crypt keys...${NC}"
 sudo openssl ecparam -name prime256v1 -out "$OVPN_DIR/ecdh.pem"
 sudo openvpn --genkey secret "$OVPN_DIR/ta.key"
 
 # --- OpenVPN configuration ---
+echo -e "${BLUE}⚙️  Writing OpenVPN server configuration...${NC}"
 sudo tee "$OVPN_DIR/server.conf" > /dev/null <<'EOF'
 port 1194
 proto udp
@@ -83,11 +96,6 @@ data-ciphers-fallback AES-256-GCM
 
 server 10.8.0.0 255.255.255.0
 topology subnet
-
-# (No redirect-gateway — only VPN access)
-#push "redirect-gateway def1 bypass-dhcp"
-#push "dhcp-option DNS 1.1.1.1"
-#push "dhcp-option DNS 9.9.9.9"
 
 plugin /usr/lib/x86_64-linux-gnu/openvpn/plugins/openvpn-plugin-auth-pam.so openvpn
 verify-client-cert none
@@ -122,12 +130,13 @@ sudo chmod 600 "$OVPN_DIR/server.key" "$OVPN_DIR/ta.key"
 sudo chmod 644 "$OVPN_DIR/ca.crt" "$OVPN_DIR/server.crt"
 
 # --- Enable & start OpenVPN ---
+echo -e "${BLUE}🚦 Enabling and starting OpenVPN service...${NC}"
 sudo systemctl daemon-reload
 sudo systemctl enable openvpn-server@server.service
 sudo systemctl restart openvpn-server@server.service
 
 # --- Generate client .ovpn securely ---
-echo "📦 Generating secure client configuration..."
+echo -e "${BLUE}📦 Generating secure client configuration...${NC}"
 
 USER_HOME=$(eval echo "~$USER_NAME")
 CLIENT_DIR="$USER_HOME/openvpn_client"
@@ -171,18 +180,17 @@ $(sudo cat /etc/openvpn/server/ta.key)
 </tls-crypt>
 
 # Username: $USER_NAME
-# Enter your TOTP from Google Authenticator when prompted.
+# Enter your TOTP when prompted.
 EOF
 
 sudo chmod 600 "$CLIENT_FILE"
 sudo chown "$USER_NAME:$USER_NAME" "$CLIENT_FILE"
 
-echo "✅ Client configuration created at:"
-echo "   $CLIENT_FILE"
-echo "   (Only accessible by user '$USER_NAME')"
+echo -e "${GREEN}✅ Client configuration created:${NC} $CLIENT_FILE"
+echo -e "   Only accessible by user '${BOLD}$USER_NAME${NC}'"
 echo "-----------------------------------------------------"
-echo "You can transfer it securely via:"
-echo "   scp $USER_NAME@<server_ip>:$CLIENT_FILE ./"
+echo -e "💾 To download securely:"
+echo -e "   scp ${BOLD}$USER_NAME@<server_ip>:${CLIENT_FILE}${NC} ./"
 echo "-----------------------------------------------------"
 
-echo "🎉 OpenVPN setup complete."
+echo -e "${GREEN}🎉 OpenVPN setup complete!${NC}"
