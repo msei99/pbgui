@@ -55,9 +55,13 @@ if [ "$#" -ne 1 ]; then
 fi
 
 USER_NAME="$1"
+HOSTNAME="$(hostname)"
+CA_NAME="CA-$HOSTNAME"
+
 echo
 info "Configuration:"
 echo "  • OpenVPN will be configured for user: $USER_NAME"
+echo "  • CA Common Name will be: $CA_NAME"
 echo
 
 # ----------[ Install dependencies ]----------
@@ -74,12 +78,15 @@ sudo mkdir -p "$EASYRSA_DIR"
 sudo cp -r /usr/share/easy-rsa/* "$EASYRSA_DIR"
 cd "$EASYRSA_DIR"
 
-# Use hostname-based CA name to avoid prompts
-HOSTNAME=$(hostname)
-CA_NAME="OpenVPN-CA-$HOSTNAME"
+# ----------[ Non-interactive CA & Server Certs ]----------
+export EASYRSA_BATCH=1
+export EASYRSA_REQ_CN="$CA_NAME"
 
 sudo ./easyrsa init-pki
-sudo ./easyrsa --batch --req-cn="$CA_NAME" build-ca nopass
+sudo ./easyrsa build-ca nopass
+
+# Server certificate
+export EASYRSA_REQ_CN="server-$HOSTNAME"
 sudo ./easyrsa gen-req server nopass
 echo "yes" | sudo ./easyrsa sign-req server server
 success "PKI and server certificates generated."
