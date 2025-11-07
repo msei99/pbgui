@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # ======================================================
-# 🚀 OpenVPN Server Setup Script
+# 🔧 OpenVPN Server Setup - Secure Configuration
 # ------------------------------------------------------
-# This script installs and configures a secure OpenVPN server.
-# It generates server certificates, keys, and config files.
+# This script sets up an OpenVPN server on Ubuntu.
+# Google Authenticator 2FA and firewall configuration
+# should be done in separate scripts.
 #
 # Usage:
 #   bash setup_openvpn.sh <user_name>
@@ -40,7 +41,12 @@ fi
 success "Ubuntu detected."
 
 # ----------[ Usage / Argument Validation ]----------
-SCRIPT_NAME=${BASH_SOURCE[0]:-"setup_openvpn.sh"}
+# Fix ugly /dev/fd/xx usage when using curl or process substitution
+if [[ "${BASH_SOURCE[0]}" == /dev/fd/* ]]; then
+    SCRIPT_NAME="setup_openvpn.sh"
+else
+    SCRIPT_NAME="${BASH_SOURCE[0]}"
+fi
 
 if [ "$#" -ne 1 ]; then
     echo -e "${YELLOW}Usage:${RESET} bash $SCRIPT_NAME <user_name>"
@@ -49,17 +55,21 @@ if [ "$#" -ne 1 ]; then
 fi
 
 USER_NAME="$1"
-info "User for OpenVPN setup: $USER_NAME"
+echo
+info "Configuration:"
+echo "  • OpenVPN will be configured for user: $USER_NAME"
+echo
 
 # ----------[ Install dependencies ]----------
-info "Installing required packages..."
+info "Installing necessary packages..."
 sudo apt update
-sudo apt install -y openvpn easy-rsa
+sudo apt install -y openvpn easy-rsa openssl
+success "Required packages installed."
 
-# ----------[ Setup Easy-RSA ]----------
-EASYRSA_DIR="/root/easy-rsa"
-info "Setting up Easy-RSA directory..."
-sudo rm -rf "$EASYRSA_DIR" || true
+# ----------[ Setup Easy-RSA PKI ]----------
+EASYRSA_DIR="/etc/openvpn/easy-rsa"
+info "Setting up Easy-RSA in $EASYRSA_DIR..."
+sudo rm -rf "$EASYRSA_DIR"
 sudo mkdir -p "$EASYRSA_DIR"
 sudo cp -r /usr/share/easy-rsa/* "$EASYRSA_DIR"
 cd "$EASYRSA_DIR"
@@ -67,27 +77,25 @@ cd "$EASYRSA_DIR"
 export EASYRSA_BATCH=1
 export EASYRSA_REQ_CN="server"
 
-info "Initializing PKI..."
-./easyrsa init-pki
-info "Building CA..."
-./easyrsa build-ca nopass
-info "Generating server request..."
-./easyrsa gen-req server nopass
-info "Signing server certificate..."
-echo "yes" | ./easyrsa sign-req server server
+sudo ./easyrsa init-pki
+sudo ./easyrsa build-ca nopass
+sudo ./easyrsa gen-req server nopass
+echo "yes" | sudo ./easyrsa sign-req server server
+success "PKI and server certificates generated."
 
-# ----------[ Copy certs/keys to OpenVPN directory ]----------
+# ----------[ Copy certificates to OpenVPN directory ]----------
 OVPN_DIR="/etc/openvpn/server"
-info "Copying server certificates to $OVPN_DIR..."
 sudo mkdir -p "$OVPN_DIR"
 sudo cp pki/ca.crt pki/issued/server.crt pki/private/server.key "$OVPN_DIR/"
 
-info "Generating ECDH and TLS key..."
+# ----------[ Generate ECDH and tls-crypt key ]----------
+info "Generating ECDH and TLS keys..."
 sudo openssl ecparam -name prime256v1 -out "$OVPN_DIR/ecdh.pem"
 sudo openvpn --genkey secret "$OVPN_DIR/ta.key"
+success "Keys generated."
 
-# ----------[ OpenVPN server configuration ]----------
-info "Creating server configuration..."
+# ----------[ OpenVPN server config ]----------
+info "Writing OpenVPN server configuration..."
 sudo tee "$OVPN_DIR/server.conf" > /dev/null <<'EOF'
 port 1194
 proto udp
@@ -136,34 +144,84 @@ script-security 2
 capath /etc/ssl/certs
 remote-cert-eku "TLS Web Client Authentication"
 EOF
+success "OpenVPN configuration written."
 
 # ----------[ Ensure /dev/net/tun exists ]----------
+info "Ensuring /dev/net/tun exists..."
 if [ ! -c /dev/net/tun ]; then
-    info "Creating /dev/net/tun..."
     sudo mkdir -p /dev/net
     sudo mknod /dev/net/tun c 10 200
     sudo chmod 600 /dev/net/tun
 fi
+success "/dev/net/tun ready."
 
-# ----------[ Permissions ]----------
+# ----------[ Set permissions ]----------
 sudo chown -R root:root "$OVPN_DIR"
 sudo chmod 600 "$OVPN_DIR/server.key" "$OVPN_DIR/ta.key"
 sudo chmod 644 "$OVPN_DIR/ca.crt" "$OVPN_DIR/server.crt"
+success "Certificate and key permissions set."
 
-# ----------[ Enable & start OpenVPN ]----------
+# ----------[ Enable & start OpenVPN service ]----------
 info "Enabling and starting OpenVPN service..."
 sudo systemctl daemon-reload
 sudo systemctl enable openvpn-server@server.service
 sudo systemctl restart openvpn-server@server.service
-success "OpenVPN server is up and running."
+success "OpenVPN service started."
 
+# ----------[ Client .ovpn generation ]----------
+info "Generating client .ovpn configuration..."
+USER_HOME=$(eval echo "~$USER_NAME")
+CLIENT_DIR="$USER_HOME/${USER_NAME}_client"
+mkdir -p "$CLIENT_DIR"
+CLIENT_FILE="$CLIENT_DIR/${USER_NAME}.ovpn"
+
+cat > "$CLIENT_FILE" <<EOF
+client
+dev tun
+proto udp
+remote $(hostname -I | awk '{print $1}') 1194
+resolv-retry infinite
+nobind
+user nobody
+group nogroup
+persist-key
+persist-tun
+auth SHA256
+cipher AES-256-GCM
+key-direction 1
+remote-cert-tls server
+auth-user-pass
+verb 3
+
+<ca>
+$(sudo cat /etc/openvpn/server/ca.crt)
+</ca>
+
+<cert>
+$(sudo cat /etc/openvpn/server/server.crt)
+</cert>
+
+<key>
+$(sudo cat /etc/openvpn/server/server.key)
+</key>
+
+<tls-crypt>
+$(sudo cat /etc/openvpn/server/ta.key)
+</tls-crypt>
+EOF
+
+sudo chown "$USER_NAME":"$USER_NAME" "$CLIENT_FILE"
+chmod 600 "$CLIENT_FILE"
+success "Client config created at $CLIENT_FILE"
+
+# ----------[ Summary ]----------
 echo
-echo -e "${BOLD}✅ OpenVPN Server Setup Complete${RESET}"
+echo -e "${BOLD}✅ OpenVPN Setup Complete${RESET}"
 echo -e "-----------------------------------------------"
-echo -e "• User        : ${GREEN}$USER_NAME${RESET}"
-echo -e "• Server dir  : ${GREEN}$OVPN_DIR${RESET}"
-echo -e "• OpenVPN port: ${GREEN}1194/UDP${RESET}"
+echo -e "• Server Directory : ${GREEN}${OVPN_DIR}${RESET}"
+echo -e "• Client Config   : ${GREEN}${CLIENT_FILE}${RESET}"
 echo -e "-----------------------------------------------"
-echo -e "🎉 Client configuration and MFA setup should be done separately."
+echo -e "🎉 Use username '$USER_NAME' and client .ovpn to connect"
 echo
+
 exit 0
