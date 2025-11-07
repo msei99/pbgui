@@ -22,11 +22,22 @@ error()   { echo -e "${RED}[ERR ]${RESET} $*" >&2; }
 # =============================================================================
 
 SSH_IPS=""   # Comma-separated list of IPs for SSH
+VPN_ONLY=false
 
-while getopts ":i:" opt; do
+while getopts ":i::" opt; do
   case $opt in
-    i) SSH_IPS="$OPTARG" ;;
-    \?) echo "Usage: $0 [-i SSH_IPS]"; exit 1 ;;
+    i)
+      if [[ -z "${OPTARG:-}" ]]; then
+        VPN_ONLY=true
+      else
+        SSH_IPS="$OPTARG"
+      fi
+      ;;
+    \?)
+      echo "Usage: $0 [-i [SSH_IPS]]"
+      echo "  -i without argument => allow SSH only via VPN"
+      exit 1
+      ;;
   esac
 done
 
@@ -92,7 +103,11 @@ sudo ufw allow 1194/udp comment 'OpenVPN UDP'
 # --- SSH access logic ---
 SSH_ALLOWED=()
 
-if [[ -n "$SSH_IPS" ]]; then
+if $VPN_ONLY; then
+  info "SSH restricted to VPN clients only."
+  SSH_ALLOWED+=("$VPN_CIDR")
+
+elif [[ -n "$SSH_IPS" ]]; then
   SSH_ALLOWED+=($(echo "$SSH_IPS" | tr ',' ' '))
   SSH_ALLOWED+=("$VPN_CIDR")
 fi
@@ -122,6 +137,8 @@ success "Firewall configured and enabled."
 echo -e "\n${BOLD}${GREEN}✅ Firewall setup complete!${RESET}"
 if [[ ${#SSH_ALLOWED[@]} -eq 0 ]]; then
     echo -e "   - SSH access: Allowed from all IPs (default)"
+elif $VPN_ONLY; then
+    echo -e "   - SSH access: ${YELLOW}VPN-only mode enabled${RESET} (${GREEN}${VPN_CIDR}${RESET})"
 else
     echo -e "   - SSH access: Allowed from: ${SSH_ALLOWED[*]}"
 fi
