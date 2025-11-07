@@ -25,7 +25,7 @@ SERVER_NAME=$(hostname)
 CLIENT_NAME=$(whoami)
 OVPN_DIR="/etc/openvpn/server"
 EASYRSA_DIR="/etc/openvpn/easy-rsa"
-CLIENT_KEYS_DIR="$HOME/client_keys"
+CLIENT_KEYS_DIR="/etc/openvpn/client_keys"
 CLIENT_OVPN_DIR="$HOME/${CLIENT_NAME}_client"
 CLIENT_FILE="$CLIENT_OVPN_DIR/${CLIENT_NAME}.ovpn"
 
@@ -150,9 +150,11 @@ success "OpenVPN service started."
 
 # --- Prepare client files ---
 info "Preparing client files..."
-mkdir -p "$CLIENT_KEYS_DIR"
+
+# Move client keys directory to a more secure location
+sudo mkdir -p "$CLIENT_KEYS_DIR"
 sudo cp "$OVPN_DIR/${CLIENT_NAME}.crt" "$OVPN_DIR/${CLIENT_NAME}.key" "$CLIENT_KEYS_DIR/"
-sudo chown $(whoami):$(whoami) "$CLIENT_KEYS_DIR"/*
+sudo chown root:root "$CLIENT_KEYS_DIR"/*
 
 mkdir -p "$CLIENT_OVPN_DIR"
 
