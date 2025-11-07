@@ -122,6 +122,11 @@ else
   done
 fi
 
+# --- PBGui access logic (port 8501) ---
+info "Allowing PBGui access over VPN..."
+sudo ufw allow from "$VPN_CIDR" to any port 8501 proto tcp comment "PBGui via VPN"
+
+# --- Default policies and enable UFW ---
 info "Setting default policies..."
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
