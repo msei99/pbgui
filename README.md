@@ -48,22 +48,99 @@ Here are all my copytradings and statistics of them: https://manicpt.streamlit.a
 
 ## Installation
 
+### Install PBGui Master on a vps
+
+Step 1: Get a Linux VPS from IONOS. Please use my [referral link](https://aklam.io/esMFvG)
+- Select Server Linux VPS
+- For the beginning the VPS S is good for running a few bots, the dashboard and some backtests
+- For optimization you need a bigger system like VPS XL, XXL or a dedicated server.
+- Install the VPS with Ubuntu 24.04
+
+Step 2: Connect to your new VPS and run Initial Setup
+- Add your VPS IP and VPN IP to your hosts (/etc/hosts)
+
+```
+Syntax:
+<ip> <hostname>
+10.8.0.1 <hostname>-vpn
+
+Example:
+87.106.x.x manibot01
+10.8.0.1 manibot01-vpn
+```
+
+- Connect with ssh to your new VPS and login as root with the temporary root pw
+```
+ssh root@<hostname>
+
+# Setup hostname and user. Disable root login
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/master_vps_init.sh) <hostname> <user>
+```
+
+Step 3: Connect as new user and Setup PBGui Master by running this commands
+```
+# Disconnect as root
+exit
+
+# ssh to your vps
+ssh <user>@<hostname>
+
+# Create swap
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_swap.sh) <size>
+
+#  Setup openvpn
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_openvpn.sh)
+
+# Setup google-authenticator and add QR code to your TOTP App
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_totp.sh)
+cat /home/mani/GA-QR.txt
+
+# Setup Firewall
+The Firewall Setup can be run in 3 ways.
+1. Default — allow SSH from everywhere (low secure)
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_firewall.sh)
+2. VPN-only SSH access (high secure)
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_firewall.sh) -i
+3. Specific IPs + VPN
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_firewall.sh) -i 1.2.3.4,1.2.3.5
+
+# Setup PBGui
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.sh)
+
+# Setup crontab for autostart
+bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_autostart.sh)
+```
+
+Step 5: Setup OpenVPN Client
+- Get <user>.ovpn
+```
+scp <hostanme>:/home/<user>/<user>_client/<user>.ovpn .
+```
+- Import the ovpn to your OpenVPN Client
+
+Step 6: Connect your VPN
+- Use the GUI or connect from shell with 
+```
+sudo openvpn --config <user>.ovpn
+```
+
+Step 7: Connect to PBGui
+- Now you are ready to connect to PBGui by open this url: http://<hostname>-vpn:8501/
+
+
 ### Ubuntu installer
 
-There is a install.sh for Ubuntu. Working on Ubuntu 24.04
+There is a install.sh for Ubuntu. Working 2n Ubunt24.04
 ```
 curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.sh | bash
 ```
 
-### Manual installation for all Linux distributions
+### Manual 8allation for all Linux distributions
 
 Clone pbgui and passivbot v6 and v7
 ```
 git clone https://github.com/msei99/pbgui.git
-git clone https://github.com/enarjord/passivbot.git pb6
-git clone https://github.com/enarjord/passivbot.git pb7
-```
-Create needed venv's
+git clone https://github.com/enarjord/passivbot.git's
 ```
 python3.10 -m venv venv_pbgui
 python3.10 -m venv venv_pb6
