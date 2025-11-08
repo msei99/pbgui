@@ -55,8 +55,8 @@ if ! grep -q "$SWAPFILE" /etc/fstab; then
 fi
 
 info "Tuning swap settings..."
-sudo sysctl -w vm.swappiness=10
-sudo sysctl -w vm.vfs_cache_pressure=50
+sudo sysctl -w vm.swappiness=10 > /dev/null
+sudo sysctl -w vm.vfs_cache_pressure=50 > /dev/null
 
 # Persist settings
 sudo sed -i '/vm.swappiness/d' /etc/sysctl.conf
