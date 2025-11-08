@@ -189,13 +189,23 @@ sudo mkdir -p "$CLIENT_KEYS_DIR"
 sudo cp "$OVPN_DIR/${CLIENT_NAME}.crt" "$OVPN_DIR/${CLIENT_NAME}.key" "$CLIENT_KEYS_DIR/"
 sudo chown root:root "$CLIENT_KEYS_DIR"/*
 
+# --- Detect external IP ---
+info "Detecting external IP..."
+EXTERNAL_IP=$(curl -s https://api.ipify.org)
+if [[ -z "$EXTERNAL_IP" ]]; then
+    warn "Could not detect external IP automatically — using hostname instead."
+    EXTERNAL_IP="$SERVER_NAME"
+else
+    success "Detected external IP: $EXTERNAL_IP"
+fi
+
 mkdir -p "$CLIENT_OVPN_DIR"
 
 cat > "$CLIENT_FILE" <<EOF
 client
 dev tun
 proto udp
-remote $SERVER_NAME 1194
+remote $EXTERNAL_IP 1194
 resolv-retry infinite
 nobind
 user nobody
