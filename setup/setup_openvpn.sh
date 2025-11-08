@@ -116,6 +116,8 @@ data-ciphers-fallback AES-256-GCM
 server 10.8.0.0 255.255.255.0
 topology subnet
 push "route 10.8.0.0 255.255.255.0"
+push "redirect-gateway def1"
+
 
 # PAM + Google Authenticator MFA
 plugin /usr/lib/x86_64-linux-gnu/openvpn/plugins/openvpn-plugin-auth-pam.so openvpn
@@ -154,6 +156,22 @@ sudo chown -R root:root "$OVPN_DIR"
 sudo chmod 600 "$OVPN_DIR/server.key" "$OVPN_DIR/ta.key"
 sudo chmod 644 "$OVPN_DIR/server.crt" "$OVPN_DIR/ca.crt" "$OVPN_DIR/${CLIENT_NAME}.crt"
 success "Permissions set."
+
+# --- Create systemd override for proper logging and PID ---
+info "Configuring systemd override for OpenVPN..."
+sudo mkdir -p /etc/systemd/system/openvpn-server@server.service.d
+
+sudo tee /etc/systemd/system/openvpn-server@server.service.d/override.conf > /dev/null <<EOF
+[Service]
+# Clear the original ExecStart
+ExecStart=
+# Start OpenVPN with your server.conf, timestamps enabled, and write PID
+ExecStart=/usr/sbin/openvpn --config /etc/openvpn/server/server.conf --writepid /run/openvpn/server.pid
+EOF
+
+# Reload systemd to pick up override
+sudo systemctl daemon-reload
+success "Systemd override created."
 
 # --- Enable & start OpenVPN ---
 info "Enabling and starting OpenVPN service..."
