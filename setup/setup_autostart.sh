@@ -18,13 +18,13 @@ error()   { echo -e "\e[31m[ERR ]\e[0m $*" >&2; }
 info "Creating start_streamlit.sh script for Streamlit..."
 cat << EOF > "$START_SCRIPT"
 #!/usr/bin/env bash
+set -euo pipefail
 
-# Path to the streamlit process name
-STREAMLIT_PROCESS_NAME="streamlit"
+STREAMLIT_SCRIPT="pbgui.py"
 
-# Function to check if streamlit is running
+# Function to check if Streamlit is running
 is_streamlit_running() {
-    pgrep -f "\$STREAMLIT_PROCESS_NAME" > /dev/null 2>&1
+    pgrep -f "streamlit run \$STREAMLIT_SCRIPT" > /dev/null 2>&1
 }
 
 # Change directory to where your app is located
@@ -33,12 +33,12 @@ cd "$BASE_DIR"
 # Activate the virtual environment
 source "$BASE_DIR_VENV/bin/activate"
 
-# Check if streamlit is already running
+# Check if Streamlit is already running
 if is_streamlit_running; then
     echo "[INFO] Streamlit is already running. Skipping start."
 else
     echo "[INFO] Streamlit is not running. Starting streamlit..."
-    streamlit run pbgui.py &
+    nohup streamlit run "\$STREAMLIT_SCRIPT" &
     echo "[INFO] Streamlit started."
 fi
 EOF
@@ -52,16 +52,16 @@ info "Adding cron jobs to autostart scripts on reboot..."
 
 # Function to add a cron job if it doesn't already exist
 add_cron_job() {
-    local job="$1"
-    if crontab -l 2>/dev/null | grep -Fq "$job"; then
-        info "Cron job already exists: $job"
+    local job="\$1"
+    if crontab -l 2>/dev/null | grep -Fq "\$job"; then
+        info "Cron job already exists: \$job"
     else
-        (crontab -l 2>/dev/null; echo "$job") | crontab -
-        success "Cron job added: $job"
+        (crontab -l 2>/dev/null; echo "\$job") | crontab -
+        success "Cron job added: \$job"
     fi
 }
 
 add_cron_job "$CRON_JOB"
 add_cron_job "$CRON_JOB2"
 
-echo -e "\n[INFO] Setup complete! The streamlit app will now autostart on reboot."
+echo -e "\n[INFO] Setup complete! The Streamlit app will now autostart on reboot."
