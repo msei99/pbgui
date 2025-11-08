@@ -130,7 +130,7 @@ Step 7: Connect to PBGui
 
 ### Ubuntu installer
 
-There is a install.sh for Ubuntu. Working 2n Ubunt24.04
+There is a install.sh for Ubuntu. Working on Ubunt24.04
 ```
 curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.sh | bash
 ```
