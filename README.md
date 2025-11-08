@@ -48,7 +48,7 @@ Here are all my copytradings and statistics of them: https://manicpt.streamlit.a
 
 ## Installation
 
-### Install PBGui Master on a vps
+### Install PBGui Master on a vps (Best Option)
 
 Step 1: Get a Linux VPS from IONOS. Please use my [referral link](https://aklam.io/esMFvG)
 - Select Server Linux VPS
@@ -135,7 +135,7 @@ There is a install.sh for Ubuntu. Working on Ubunt24.04
 curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.sh | bash
 ```
 
-### Manual 8allation for all Linux distributions
+### Manual Installation for all Linux distributions
 
 Clone pbgui and passivbot v6 and v7
 ```
