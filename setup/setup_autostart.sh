@@ -47,21 +47,20 @@ EOF
 chmod +x "$START_SCRIPT"
 success "start_streamlit.sh script created and made executable."
 
-# --- Add cron job to autostart on reboot ---
+# --- Add cron jobs to autostart on reboot ---
 info "Adding cron jobs to autostart scripts on reboot..."
 
-# Function to add a cron job if it doesn't already exist
-add_cron_job() {
-    local job="\$1"
-    if crontab -l 2>/dev/null | grep -Fq "\$job"; then
-        info "Cron job already exists: \$job"
-    else
-        (crontab -l 2>/dev/null; echo "\$job") | crontab -
-        success "Cron job added: \$job"
-    fi
-}
+# Use a temporary file to safely update crontab
+tmpfile=$(mktemp)
+crontab -l 2>/dev/null > "$tmpfile" || true
 
-add_cron_job "$CRON_JOB"
-add_cron_job "$CRON_JOB2"
+# Add the jobs if they don't already exist
+grep -Fq "$CRON_JOB" "$tmpfile" || echo "$CRON_JOB" >> "$tmpfile"
+grep -Fq "$CRON_JOB2" "$tmpfile" || echo "$CRON_JOB2" >> "$tmpfile"
+
+# Install the updated crontab
+crontab "$tmpfile"
+rm "$tmpfile"
+success "Cron jobs added/verified successfully."
 
 echo -e "\n[INFO] Setup complete! The Streamlit app will now autostart on reboot."
