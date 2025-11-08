@@ -130,6 +130,7 @@ keepalive 10 120
 explicit-exit-notify 1
 client-to-client
 duplicate-cn
+reneg-sec 31536000
 
 # Logging
 status /var/log/openvpn-status.log
