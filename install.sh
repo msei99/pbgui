@@ -63,16 +63,30 @@ pip install --upgrade pip
 # Install the requirements for pbgui
 pip install -r pbgui/requirements.txt
 
-# Create a start.sh file to start pbgui
-echo "cd $DIR/pbgui" > pbgui/start.sh
-echo "source $DIR/venv_pbgui/bin/activate" >> pbgui/start.sh
-echo "python PBRun.py &" >> pbgui/start.sh
-echo "python PBRemote.py &" >> pbgui/start.sh
-echo "python PBStat.py &" >> pbgui/start.sh
-echo "python PBData.py &" >> pbgui/start.sh
-echo "python PBCoinData.py &" >> pbgui/start.sh
-# Make the start.sh file executable
-chmod +x pbgui/start.sh
+# Create start.sh file to start pbgui scripts
+cat > "$DIR/pbgui/start.sh" << EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Go to app directory
+cd "$DIR/pbgui"
+
+# Activate virtual environment
+source "$DIR/venv_pbgui/bin/activate"
+
+# Python executable inside virtualenv
+PYTHON_BIN="$DIR/venv_pbgui/bin/python"
+
+# Start scripts with nohup so they persist after cron exits
+nohup "\$PYTHON_BIN" PBRun.py &
+nohup "\$PYTHON_BIN" PBRemote.py &
+nohup "\$PYTHON_BIN" PBStat.py &
+nohup "\$PYTHON_BIN" PBData.py &
+nohup "\$PYTHON_BIN" PBCoinData.py &
+EOF
+
+# Make start.sh executable
+chmod +x "$DIR/pbgui/start.sh"
 
 # Create pbgui.ini
 echo "[main]" > pbgui/pbgui.ini
@@ -85,9 +99,8 @@ echo "role = master" >> pbgui/pbgui.ini
 # start pbgui
 cd pbgui
 echo ""
-echo "starting pbgui with command streamlit run pbgui.py"
-echo "press ctrl+c for stopping pbgui"
-echo "you can run pbgui in background with this command: streamlit run pbgui.py &"
+echo "starting PBGui in background with command start_streamlit.sh"
+echo "starting PBGui Services in background with command start.sh"
 echo ""
 echo 'Login with password: PBGui$Bot!'
-streamlit run pbgui.py
+./start_streamlit.sh
