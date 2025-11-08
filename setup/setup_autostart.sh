@@ -4,6 +4,7 @@ set -euo pipefail
 # --- Variables ---
 USER=$(whoami)
 BASE_DIR="/home/$USER/pbgui"
+BASE_DIR_VENV="/home/$USER/pbgui_venv"
 START_SCRIPT="$BASE_DIR/start_streamlit.sh"
 CRON_JOB="@reboot $BASE_DIR/start_streamlit.sh"
 CRON_JOB2="@reboot $BASE_DIR/start.sh"
@@ -30,7 +31,7 @@ is_streamlit_running() {
 cd "$BASE_DIR"
 
 # Activate the virtual environment
-source "$BASE_DIR/venv_pbgui/bin/activate"
+source "$BASE_DIR_VENV/bin/activate"
 
 # Check if streamlit is already running
 if is_streamlit_running; then
