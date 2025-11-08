@@ -4,7 +4,7 @@ set -euo pipefail
 # --- Variables ---
 USER=$(whoami)
 BASE_DIR="/home/$USER/pbgui"
-BASE_DIR_VENV="/home/$USER/pbgui_venv"
+BASE_DIR_VENV="/home/$USER/venv_pbgui"
 START_SCRIPT="$BASE_DIR/start_streamlit.sh"
 CRON_JOB="@reboot $BASE_DIR/start_streamlit.sh"
 CRON_JOB2="@reboot $BASE_DIR/start.sh"
