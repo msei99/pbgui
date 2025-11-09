@@ -7,7 +7,7 @@ from Monitor import Monitor
 from datetime import datetime
 from PBCoinData import CoinData
 import psutil
-import os
+import subprocess
 
 
 def list_vps():
@@ -113,6 +113,102 @@ def list_vps():
     # Add VPS
     all_api_sync = True
     for server in sorted(st.session_state.pbremote.remote_servers, key=lambda s: s.name):
+        if server.name not in [vps.hostname for vps in vpsmanager.vpss]:
+            if server.role == "slave":
+                if f'add_vps_{server.name}' not in st.session_state:
+                    st.session_state[f'add_vps_{server.name}'] = vpsmanager.add_vps()
+                vps = st.session_state[f'add_vps_{server.name}']
+                vps.hostname = server.name
+                st.write(f"Detected missing VPS :green[{server.name}]")
+                vps.ip = vps.fetch_vps_ip_from_hosts()
+                if not vps.ip:
+                    st.write("VPS IP not found in /etc/hosts.")
+                    if "vps_ip" in st.session_state:
+                        if st.session_state.vps_ip != vps.ip:
+                            # Check if self.ip is a valid IPv4 address
+                            if re.match(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$", st.session_state.vps_ip):
+                                vps.ip = st.session_state.vps_ip
+                            else:
+                                st.session_state.vps_ip = vps.ip
+                                error_popup("Error: IP address is not valid")
+                    else:
+                        st.session_state.vps_ip = vps.ip
+                    st.text_input("VPS IPv4", key="vps_ip", help=pbgui_help.vps_ip)
+                    st.text_input("Master user name", value=vps.user, key="master_user", disabled=True)
+                    st.text_input("Master user password", type="password", value="", key="master_user_pw", help=pbgui_help.master_user_pw)
+                    if st.button("Add IP to /etc/hosts", 
+                                 disabled=not st.session_state.master_user_pw or
+                                          not st.session_state.vps_ip):
+                        entry = f"{vps.ip} {vps.hostname}"
+
+                        # Command that appends the entry via tee
+                        cmd = f'echo "{entry}" | sudo -S tee -a /etc/hosts'
+
+                        try:
+                            # Feed only the password to sudo via stdin
+                            proc = subprocess.run(
+                                cmd,
+                                shell=True,
+                                input=st.session_state.master_user_pw + "\n",  # only the password!
+                                text=True,
+                                capture_output=True
+                            )
+
+                            if proc.returncode == 0:
+                                st.success(f"Added {vps.ip} {vps.hostname} to /etc/hosts (via sudo)")
+                            else:
+                                err = proc.stderr.strip() or proc.stdout.strip()
+                                error_popup(f"Failed to write to /etc/hosts: {err}")
+
+                        except Exception as e:
+                            error_popup(f"Error while trying sudo write to /etc/hosts: {e}")
+                    else:
+                        st.stop()
+                        break
+                else:
+                    st.text_input("VPS user name", value=vps.user, key="vps_user", help=pbgui_help.vps_user)
+                    if "vps_user_pw" in st.session_state:
+                        if st.session_state.vps_user_pw != vps.user_pw:
+                            vps.user_pw = st.session_state.vps_user_pw
+                    else:
+                        st.session_state.vps_user_pw = vps.user_pw
+                    st.text_input("VPS user password", type="password", key="vps_user_pw", help=pbgui_help.vps_user_pw)
+                    if st.button("Read VPS settings", disabled=not st.session_state.vps_user_pw):
+                        vps.user = st.session_state.vps_user
+                        vps.user_pw = st.session_state.vps_user_pw
+                        st.write("Trying to login via SSH...")
+                        if not vps.can_login_ssh():
+                            error_popup("Error: Cannot login via SSH. Please check username and password.")
+                            st.stop()
+                            break
+                        vps.bucket = pbremote.bucket
+                        info = vps.fetch_vps_info()
+                        vps.install_pb6 = info["pb6"]
+                        vps.coinmarketcap_api_key = info["coinmarketcap"]
+                        vps.swap = info["swap"]
+                        vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
+                        st.rerun()
+                    else:
+                        if vps.bucket:
+                            # Print settings
+                            st.write("Fetched VPS settings:")
+                            st.write(f"- IP: :blue[{vps.ip}]")
+                            st.write(f"- Bucket: :blue[{vps.bucket}]")
+                            st.write(f"- CoinMarketCap API Key: :blue[{vps.coinmarketcap_api_key}]")
+                            st.write(f"- PB6 installed: :blue[{vps.install_pb6}]")
+                            st.write(f"- Swap enabled: :blue[{vps.swap}]")
+                            st.write(f"- Firewall enabled: :blue[{vps.firewall}]")
+                            st.write(f"- Firewall SSH IPs: :blue[{vps.firewall_ssh_ips}]")
+                            if st.button("Add VPS with this settings"):
+                                # Add the VPS with the fetched settings
+                                st.write(vps.hostname + " added successfully.")
+                                vps.save()
+                                vpsmanager.vpss = []
+                                vpsmanager.find_vps()
+                                st.rerun()
+                        st.stop()
+                        break
+
         boot = datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S")
         if server.is_online():
             online = "✅"
@@ -618,7 +714,6 @@ def view_log(vps : VPS, logs : list):
                 st.code(logfile)
             else:
                 st.text(logfile)
-
 
 def init_vps():
     # Init vpsmanager

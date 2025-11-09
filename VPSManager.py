@@ -1,3 +1,4 @@
+import configparser
 import streamlit as st
 from time import sleep
 import platform
@@ -10,6 +11,10 @@ import re
 import getpass
 import shutil
 import socket
+import paramiko
+import subprocess
+import re
+import shlex
 from pbgui_purefunc import pbdir, pbvenv, pb7dir, pb7venv, load_ini
 
 PBGDIR = Path.cwd()
@@ -116,6 +121,314 @@ class VPS:
                         return True
         return False
     
+    def fetch_vps_ip_from_hosts(self):
+        """
+        Open /etc/hosts and get the IP for self.hostname,
+        ignoring commented lines.
+        """
+        hosts = Path('/etc/hosts')
+        if hosts.exists():
+            with open(hosts, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue  # skip comments and empty lines
+                    # Match IP and hostname
+                    found = re.search(rf'^(\S+)[ \t]+{re.escape(self.hostname)}$', line)
+                    if found:
+                        return found.group(1)
+        return None
+
+    def install_ssh_key(self):
+        """
+        Installs the local SSH public key on the remote server using ssh-copy-id.
+        Uses self.user, self.hostname, and self.user_pw (must be set).
+        """
+        if not self.user_pw:
+            print("❌ Password is required to install the SSH key.")
+            return
+
+        target = f"{self.user}@{self.hostname}"
+        print(f"🔌 Installing SSH key to {target}...")
+
+        try:
+            # Use sshpass to provide password non-interactively
+            cmd = ["sshpass", "-p", self.user_pw, "ssh-copy-id", target]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                print(f"✅ SSH key successfully installed to {target}")
+            else:
+                print(f"⚠️ Failed to install SSH key. Output:")
+                print(result.stdout)
+                print(result.stderr)
+
+        except FileNotFoundError:
+            print("❌ ssh-copy-id or sshpass is not installed on this machine.")
+        except Exception as e:
+            print(f"💥 Unexpected error: {e}")
+
+    def can_login_ssh(self, timeout: int = 5) -> bool:
+        """Attempt to log into the VPS via SSH using key authentication first,
+        then fallback to password authentication if key login fails.
+        Install SSH key only if key login failed and password login succeeds.
+
+        Returns:
+            bool: True if login succeeds, False otherwise.
+        """
+        if not all([self.ip, self.user]):
+            print("⚠️ Missing SSH credentials (IP or username).")
+            return False
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        key_login_success = False
+
+        try:
+            print(f"🔌 Trying SSH connection to {self.user}@{self.ip} with key authentication...")
+            ssh.connect(
+                hostname=self.ip,
+                username=self.user,
+                timeout=timeout,                # overall TCP timeout
+                banner_timeout=timeout,         # wait time for SSH banner
+                auth_timeout=timeout,           # authentication phase timeout
+                allow_agent=True,
+                look_for_keys=True,
+            )
+            key_login_success = True
+            print(f"✅ Successfully connected to {self.user}@{self.ip} using key authentication")
+
+        except paramiko.AuthenticationException:
+            print(f"⚠️ Key authentication failed for {self.user}@{self.ip}.")
+
+        except (paramiko.SSHException, socket.timeout) as e:
+            print(f"⚠️ SSH error while connecting to {self.ip}: {e}")
+            ssh.close()
+            return False
+        except Exception as e:
+            print(f"💥 Unexpected error while connecting to {self.ip}: {e}")
+            ssh.close()
+            return False
+
+        # If key login failed, try password login
+        if not key_login_success and getattr(self, "user_pw", None):
+            try:
+                print(f"🔌 Trying SSH connection to {self.user}@{self.ip} with password...")
+                ssh.connect(
+                    hostname=self.ip,
+                    username=self.user,
+                    password=self.user_pw,
+                    timeout=timeout,
+                    banner_timeout=timeout,
+                    auth_timeout=timeout,
+                    allow_agent=False,
+                    look_for_keys=False,
+                )
+                print(f"✅ Successfully connected to {self.user}@{self.ip} using password")
+
+                # Install SSH key since key login failed
+                try:
+                    print(f"🔑 Installing SSH key for {self.user}@{self.ip}...")
+                    self.install_ssh_key()
+                    print(f"✅ SSH key installed successfully")
+                except Exception as e:
+                    print(f"⚠️ Failed to install SSH key: {e}")
+
+            except paramiko.AuthenticationException:
+                print(f"❌ Password authentication failed for {self.user}@{self.ip}.")
+                ssh.close()
+                return False
+            except (paramiko.SSHException, socket.timeout) as e:
+                print(f"⚠️ SSH error while connecting to {self.ip} with password: {e}")
+                ssh.close()
+                return False
+            except Exception as e:
+                print(f"💥 Unexpected error while connecting to {self.ip} with password: {e}")
+                ssh.close()
+                return False
+
+        ssh.close()
+        print(f"🔒 SSH session to {self.ip} closed.\n")
+        return True
+
+    def fetch_vps_info(self):
+        """
+        Fetch information from the VPS, including:
+        - CoinMarketCap API key
+        - Whether PB6 is installed (pbdir exists in [main] section)
+        - Swap size in human-readable form (e.g., 512M, 2G)
+
+        Returns:
+            dict: {
+                "pb6": bool,
+                "coinmarketcap": str | None,
+                "swap": str
+            }
+        """
+        result = {"pb6": False, "coinmarketcap": None, "swap": "0"}
+
+        if not self.ip or not self.user:
+            print("⚠️ Missing VPS IP or username.")
+            return result
+
+        try:
+            print(f"🔹 Connecting to VPS {self.hostname} ({self.ip})...")
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
+
+            # Fetch swap size (human-readable)
+            try:
+                stdin, stdout, stderr = ssh.exec_command(
+                    "swapon --show --noheadings --raw | awk '{print $3}'"
+                )
+                swap_size = stdout.read().decode().strip()
+                result["swap"] = swap_size if swap_size else "0"
+                print(f"💾 Swap size on VPS {self.hostname}: {result['swap']}")
+            except Exception as e:
+                print(f"⚠️ Failed to get swap size on VPS {self.hostname}: {e}")
+
+            # Fetch and parse pbgui.ini
+            sftp = ssh.open_sftp()
+            remote_path = 'software/pbgui/pbgui.ini'
+
+            content = None
+            try:
+                with sftp.file(remote_path, mode='r') as config_file:
+                    content = config_file.read().decode()
+            except FileNotFoundError:
+                print(f"❌ File not found on VPS {self.hostname} ({self.ip}): {remote_path}")
+            except Exception as e:
+                print(f"❌ Error reading file from VPS {self.hostname} ({self.ip}): {e}")
+            finally:
+                sftp.close()
+                ssh.close()
+
+            if not content:
+                return result
+
+            # Parse the INI content
+            config_data = configparser.ConfigParser()
+            try:
+                config_data.read_string(content)
+            except Exception as e:
+                print(f"⚠️ Error parsing config file from VPS {self.hostname} ({self.ip}): {e}")
+                return result
+
+            # Check for CoinMarketCap API key
+            if config_data.has_section("coinmarketcap") and config_data.has_option("coinmarketcap", "api_key"):
+                result["coinmarketcap"] = config_data.get("coinmarketcap", "api_key")
+                print(f"✅ Successfully fetched API key from {self.hostname} {result['coinmarketcap']}")
+            else:
+                print(f"⚠️ 'api_key' not found in [coinmarketcap] section on VPS {self.hostname}")
+
+            # Check if PB6 is installed
+            if config_data.has_section("main") and config_data.has_option("main", "pbdir"):
+                pbdir = config_data.get("main", "pbdir").strip()
+                if pbdir:
+                    result["pb6"] = True
+                    print(f"✅ PB6 detected on VPS {self.hostname}")
+            else:
+                print(f"ℹ️ PB6 not detected on VPS {self.hostname}")
+
+        except Exception as e:
+            print(f"❌ Error connecting to VPS {self.hostname} ({self.ip}): {e}")
+
+        return result
+
+    def fetch_ufw_settings(self, timeout: int = 5) -> tuple:
+        """
+        Fetch UFW settings via SSH.
+
+        Returns:
+            tuple:
+                fw_enabled (bool): True if firewall is active, False if inactive.
+                allowed_ips (str): Comma-separated list of allowed SSH IPs.
+        """
+        allowed_ips = []
+        fw_enabled = False
+
+        if not all([self.ip, self.user, self.user_pw]):
+            print("⚠️ Missing SSH credentials (IP, username, or sudo password).")
+            return fw_enabled, ""
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        try:
+            print(f"🔌 Connecting to {self.user}@{self.ip} to fetch UFW settings...")
+
+            ssh.connect(
+                hostname=self.ip,
+                username=self.user,
+                password=self.user_pw,
+                timeout=timeout,          # TCP connection timeout
+                banner_timeout=timeout,   # SSH banner wait timeout
+                auth_timeout=timeout,     # authentication timeout
+                look_for_keys=False,      # skip local key lookup
+                allow_agent=False,        # skip SSH agent
+            )
+
+            # Non-interactive sudo (prevents hanging)
+            command = f"echo {shlex.quote(self.user_pw)} | sudo -S ufw status"
+            stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
+
+            output = stdout.read().decode(errors="ignore")
+            errors = stderr.read().decode(errors="ignore")
+            # Remove harmless sudo prompt
+            errors = re.sub(r"\[sudo\] password for .*?:\s*", "", errors).strip()
+
+            print("📝 Raw UFW output:")
+            print(output)
+            if errors:
+                print("⚠️ Raw errors from UFW command:")
+                print(errors)
+
+            # Detect wrong sudo password
+            if any(err in errors.lower() for err in [
+                "incorrect password",
+                "sorry, try again",
+                "no password was provided",
+                "a password is required",
+                "1 incorrect password attempt",
+            ]):
+                print("❌ Wrong sudo password provided.")
+                ssh.close()
+                return fw_enabled, ""
+
+            # Check if firewall is active
+            if re.search(r"Status:\s+active", output, re.IGNORECASE):
+                fw_enabled = True
+            else:
+                print("⚠️ Firewall is disabled!")
+
+            # Detect allowed SSH IPs (supports Anywhere and IPv6)
+            pattern = re.compile(r"^22/tcp\s+ALLOW\s+([0-9.:/A-Za-z]+)", re.IGNORECASE)
+            for line in output.splitlines():
+                line = line.strip()
+                match = pattern.search(line)
+                if match:
+                    ip = match.group(1)
+                    allowed_ips.append(ip)
+                    if ip.lower() in ("anywhere", "anywhere (v6)", "0.0.0.0/0"):
+                        print("⚠️ SSH is open to any IP!")
+
+            print(f"✅ Firewall enabled: {fw_enabled}")
+            print(f"✅ Allowed SSH IPs: {allowed_ips}")
+
+        except paramiko.AuthenticationException:
+            print(f"❌ SSH authentication failed for {self.user}@{self.ip}.")
+        except (paramiko.SSHException, socket.timeout) as e:
+            print(f"⚠️ SSH connection error: {e}")
+        except Exception as e:
+            print(f"💥 Unexpected error: {e}")
+        finally:
+            ssh.close()
+            print(f"🔒 SSH session to {self.ip} closed.\n")
+
+        return fw_enabled, ",".join(allowed_ips)
+
     def is_vps_ssh_open(self):
         if not self.ip:
             return False

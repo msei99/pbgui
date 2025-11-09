@@ -1377,6 +1377,11 @@ vps_firewall_ssh_ips = """
     Example: 10.20.10.11, 10.21.22.33
     ```"""
 
+master_user_pw = """
+    ```
+    The password of the local user on your master machine
+    ```"""
+
 role = """
     ```
     If master:
