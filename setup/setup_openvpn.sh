@@ -115,9 +115,6 @@ data-ciphers-fallback AES-256-GCM
 # VPN network
 server 10.8.0.0 255.255.255.0
 topology subnet
-push "route 10.8.0.0 255.255.255.0"
-push "redirect-gateway def1"
-
 
 # PAM + Google Authenticator MFA
 plugin /usr/lib/x86_64-linux-gnu/openvpn/plugins/openvpn-plugin-auth-pam.so openvpn
