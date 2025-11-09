@@ -57,6 +57,7 @@ class RemoteServer():
         self._upgrades = 0
         self._reboot = False
         self._cmc_credits = 0
+        self._role = None
         self._pbgui_version = "N/A"
         self._pbgui_commit = None
         self._pb6_version = "N/A"
@@ -109,6 +110,8 @@ class RemoteServer():
     def reboot(self): return self._reboot
     @property
     def cmc_credits(self): return self._cmc_credits
+    @property
+    def role(self): return self._role
     @property
     def pbgui_version(self): return self._pbgui_version
     @property
@@ -225,6 +228,8 @@ class RemoteServer():
                         self._reboot = cfg["reboot"]
                     if "cmc" in cfg:
                         self._cmc_credits = cfg["cmc"]
+                    if "role" in cfg:
+                        self._role = cfg["role"]
                     if "pbgv" in cfg:
                         self._pbgui_version = cfg["pbgv"]
                     if "pbgc" in cfg:
@@ -953,6 +958,7 @@ class PBRemote():
             "monitor": self.monitor,
             "upgrades": self.local_run.upgrades,
             "reboot": self.local_run.reboot,
+            "role": self.role,
             "cmc": self.local_run.coindata.credits_left,
             "pbgv": self.local_run.pbgui_version,
             "pbgc": self.local_run.pbgui_commit,
