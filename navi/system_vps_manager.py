@@ -9,6 +9,7 @@ from PBCoinData import CoinData
 import psutil
 import subprocess
 import shlex
+import getpass
 
 
 def list_vps():
@@ -29,6 +30,11 @@ def list_vps():
         with st.spinner("Loading local Server need reboot"):
             pbremote.local_run.has_reboot()
         pbremote.systemts = timestamp
+
+    # Determine if there are VPS to import (slaves missing from local list)
+    existing_hostnames = [v.hostname for v in vpsmanager.vpss if v.hostname]
+    vps_to_import = [s for s in pbremote.remote_servers if s.role == "slave" and s.name not in existing_hostnames]
+
     # Navigation
     with st.sidebar:
         if st.button(":material/refresh:"):
@@ -40,6 +46,12 @@ def list_vps():
         if st.button(":material/add_box:"):
             st.session_state.init_vps = vpsmanager.add_vps()
             st.rerun()
+
+        # Only show sudo password if there are VPS to import
+        if vps_to_import:
+            local_user = getpass.getuser()
+            st.text_input(f"sudo password for :blue[{local_user}]", type="password", key="sudo_pw", help=pbgui_help.sudo_pw)
+
         if pbremote.is_running() and pbremote.local_run.is_running():
             color = "green"
         else:
@@ -136,49 +148,31 @@ def list_vps():
                     else:
                         st.session_state.vps_ip = vps.ip
                     st.text_input("VPS IPv4", key="vps_ip", help=pbgui_help.vps_ip)
-                    st.text_input("Master user name", value=vps.user, key="master_user", disabled=True)
-                    st.text_input("Master user password", type="password", key="master_user_pw", help=pbgui_help.master_user_pw)
+                    # removed per-host password field; use global sudo_pw instead
+
                     if st.button(
                         "Add IP to /etc/hosts", 
-                        disabled=not st.session_state.master_user_pw or not st.session_state.vps_ip
+                        disabled=not st.session_state.get("sudo_pw") or not st.session_state.get("vps_ip")
                     ):
-                        # Prepare the entry
                         entry = f"{vps.ip} {vps.hostname}"
-
                         try:
-                            # Safely quote the password and entry
-                            pw_escaped = shlex.quote(st.session_state.master_user_pw)
+                            pw_escaped = shlex.quote(st.session_state.sudo_pw)
                             entry_escaped = shlex.quote(entry)
-
-                            # Build the command safely
                             cmd = f'echo {pw_escaped} | sudo -S bash -c "echo {entry_escaped} >> /etc/hosts"'
-
-                            # Run the command
-                            proc = subprocess.run(
-                                cmd,
-                                shell=True,
-                                text=True,
-                                capture_output=True
-                            )
-
-                            # Check the result
+                            proc = subprocess.run(cmd, shell=True, text=True, capture_output=True)
                             if proc.returncode == 0:
                                 info_popup(f"Added {entry} to /etc/hosts (via sudo)")
                                 st.stop()
-                                break
                             else:
                                 err = proc.stderr.strip() or proc.stdout.strip()
                                 error_popup(f"Failed to write to /etc/hosts: {err}")
                                 st.stop()
-                                break
-
                         except Exception as e:
                             error_popup(f"Error while trying sudo write to /etc/hosts: {e}")
                             st.stop()
-                            break
                     else:
+                        st.info(f"Please provide the IP for :green[{vps.hostname}] and your local sudo password to add the entry to /etc/hosts.")
                         st.stop()
-                        break
                 else:
                     st.text_input("VPS user name", value=vps.user, key="vps_user", help=pbgui_help.vps_user)
                     if "vps_user_pw" in st.session_state:
@@ -217,9 +211,13 @@ def list_vps():
                                 # Add the VPS with the fetched settings
                                 st.write(vps.hostname + " added successfully.")
                                 vps.save()
+                                if "vps_user_pw" in st.session_state:
+                                    del st.session_state.vps_user_pw
                                 vpsmanager.vpss = []
                                 vpsmanager.find_vps()
                                 st.rerun()
+                        else:
+                            st.info(f"Please provide the password for :green[{vps.user}] on :green[{vps.hostname}] to fetch settings via SSH.")
                         st.stop()
                         break
 
