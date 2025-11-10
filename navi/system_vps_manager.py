@@ -230,8 +230,10 @@ def list_vps():
             online = "❌"
         if server.role == "master":
             role = "🧠"
-        else:
+        elif server.role == "slave":
             role = "💻"
+        else:
+            role = "❓"
         if server.pbgui_version == pbremote.local_run.pbgui_version_origin and server.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
             pbgui = "✅"
         else:
