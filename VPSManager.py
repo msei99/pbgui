@@ -169,9 +169,9 @@ class VPS:
             print(f"💥 Unexpected error: {e}")
 
     def can_login_ssh(self, timeout: int = 5) -> bool:
-        """Attempt to log into the VPS via SSH using key authentication first,
-        then fallback to password authentication if key login fails.
-        Install SSH key only if key login failed and password login succeeds.
+        """
+        Attempt SSH login using key authentication first, then fallback to password authentication.
+        Installs SSH key if key login failed and password login succeeds.
 
         Returns:
             bool: True if login succeeds, False otherwise.
@@ -183,38 +183,43 @@ class VPS:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        key_login_success = False
-
         try:
+            # --- Attempt key authentication first ---
             print(f"🔌 Trying SSH connection to {self.user}@{self.ip} with key authentication...")
             ssh.connect(
                 hostname=self.ip,
                 username=self.user,
-                timeout=timeout,                # overall TCP timeout
-                banner_timeout=timeout,         # wait time for SSH banner
-                auth_timeout=timeout,           # authentication phase timeout
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
                 allow_agent=True,
                 look_for_keys=True,
             )
-            key_login_success = True
             print(f"✅ Successfully connected to {self.user}@{self.ip} using key authentication")
+            ssh.close()
+            return True
 
         except paramiko.AuthenticationException:
-            print(f"⚠️ Key authentication failed for {self.user}@{self.ip}.")
+            print(f"⚠️ Key authentication failed for {self.user}@{self.ip}. Trying password login...")
 
-        except (paramiko.SSHException, socket.timeout) as e:
-            print(f"⚠️ SSH error while connecting to {self.ip}: {e}")
-            ssh.close()
-            return False
+        except paramiko.SSHException as e:
+            # only skip/continue if key login not available
+            if "No authentication methods available" in str(e):
+                print("⚠️ Key login not available, will try password")
+            else:
+                print(f"⚠️ SSH error: {e}")
+                ssh.close()
+                return False
         except Exception as e:
-            print(f"💥 Unexpected error while connecting to {self.ip}: {e}")
+            print(f"💥 Unexpected error: {e}")
             ssh.close()
             return False
 
-        # If key login failed, try password login
-        if not key_login_success and getattr(self, "user_pw", None):
+        # --- Password login fallback ---
+        print(f"🔌 Trying SSH connection to {self.user}@{self.ip} with password authentication...")
+        if getattr(self, "user_pw", None):
+            print(f"🔑 Using password authentication for {self.user}@{self.ip}")
             try:
-                print(f"🔌 Trying SSH connection to {self.user}@{self.ip} with password...")
                 ssh.connect(
                     hostname=self.ip,
                     username=self.user,
@@ -227,7 +232,7 @@ class VPS:
                 )
                 print(f"✅ Successfully connected to {self.user}@{self.ip} using password")
 
-                # Install SSH key since key login failed
+                # Install SSH key if key login failed
                 try:
                     print(f"🔑 Installing SSH key for {self.user}@{self.ip}...")
                     self.install_ssh_key()
@@ -235,22 +240,22 @@ class VPS:
                 except Exception as e:
                     print(f"⚠️ Failed to install SSH key: {e}")
 
+                ssh.close()
+                return True
+
             except paramiko.AuthenticationException:
                 print(f"❌ Password authentication failed for {self.user}@{self.ip}.")
-                ssh.close()
-                return False
             except (paramiko.SSHException, socket.timeout) as e:
-                print(f"⚠️ SSH error while connecting to {self.ip} with password: {e}")
-                ssh.close()
-                return False
+                print(f"⚠️ SSH error while connecting with password: {e}")
             except Exception as e:
-                print(f"💥 Unexpected error while connecting to {self.ip} with password: {e}")
-                ssh.close()
-                return False
+                print(f"💥 Unexpected error during password login: {e}")
+
+        else:
+            print("⚠️ No password provided; cannot fallback to password login.")
 
         ssh.close()
         print(f"🔒 SSH session to {self.ip} closed.\n")
-        return True
+        return False
 
     def fetch_vps_info(self):
         """

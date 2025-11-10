@@ -8,6 +8,7 @@ from datetime import datetime
 from PBCoinData import CoinData
 import psutil
 import subprocess
+import shlex
 
 
 def list_vps():
@@ -136,32 +137,44 @@ def list_vps():
                     st.text_input("VPS IPv4", key="vps_ip", help=pbgui_help.vps_ip)
                     st.text_input("Master user name", value=vps.user, key="master_user", disabled=True)
                     st.text_input("Master user password", type="password", value="", key="master_user_pw", help=pbgui_help.master_user_pw)
-                    if st.button("Add IP to /etc/hosts", 
-                                 disabled=not st.session_state.master_user_pw or
-                                          not st.session_state.vps_ip):
+                    if st.button(
+                        "Add IP to /etc/hosts", 
+                        disabled=not st.session_state.master_user_pw or not st.session_state.vps_ip
+                    ):
+                        # Prepare the entry
                         entry = f"{vps.ip} {vps.hostname}"
 
-                        # Command that appends the entry via tee
-                        cmd = f'echo "{entry}" | sudo -S tee -a /etc/hosts'
-
                         try:
-                            # Feed only the password to sudo via stdin
+                            # Safely quote the password and entry
+                            pw_escaped = shlex.quote(st.session_state.master_user_pw)
+                            entry_escaped = shlex.quote(entry)
+
+                            # Build the command safely
+                            cmd = f'echo {pw_escaped} | sudo -S bash -c "echo {entry_escaped} >> /etc/hosts"'
+
+                            # Run the command
                             proc = subprocess.run(
                                 cmd,
                                 shell=True,
-                                input=st.session_state.master_user_pw + "\n",  # only the password!
                                 text=True,
                                 capture_output=True
                             )
 
+                            # Check the result
                             if proc.returncode == 0:
-                                st.success(f"Added {vps.ip} {vps.hostname} to /etc/hosts (via sudo)")
+                                info_popup(f"Added {entry} to /etc/hosts (via sudo)")
+                                st.stop()
+                                break
                             else:
                                 err = proc.stderr.strip() or proc.stdout.strip()
                                 error_popup(f"Failed to write to /etc/hosts: {err}")
+                                st.stop()
+                                break
 
                         except Exception as e:
                             error_popup(f"Error while trying sudo write to /etc/hosts: {e}")
+                            st.stop()
+                            break
                     else:
                         st.stop()
                         break
@@ -566,6 +579,13 @@ def manage_vps():
         if st.button("Resize Swap", disabled=not vps.has_user_pw()):
             vps.command = "vps-resize-swap"
             vps.command_text = "Resize Swap"
+            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
+        if st.button("Update Firewall Settings", disabled=not vps.has_user_pw()):
+            vps.command = "vps-update-firewall"
+            vps.command_text = "Update Firewall Settings"
             vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
             st.session_state.view_update = vps
             del st.session_state.manage_vps
