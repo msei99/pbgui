@@ -371,15 +371,15 @@ def manage_master():
     if pbremote.pbgui_version == pbremote.local_run.pbgui_version_origin and pbremote.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
         pbgui = "✅"
     else:
-        pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin})"
+        pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
     if pbremote.pb6_version == pbremote.local_run.pb6_version_origin and pbremote.pb6_commit == pbremote.local_run.pb6_commit_origin:
         pb6 = "✅"
     else:
-        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin})"
+        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
     if pbremote.pb7_version == pbremote.local_run.pb7_version_origin and pbremote.pb7_commit == pbremote.local_run.pb7_commit_origin:
         pb7 = "✅"
     else:
-        pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin})"
+        pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
     if pbremote.local_run.reboot:
         reboot = "❌"
     else:
@@ -533,15 +533,34 @@ def manage_vps():
                 del st.session_state.vpsmanager
                 del st.session_state.manage_vps
                 st.rerun()
+
+        # New: Read settings from VPS
+        if st.button("Read settings from VPS", disabled=not vps.has_user_pw()):
+            # ensure creds from UI are used
+            if "vps_user_pw" in st.session_state and st.session_state.vps_user_pw:
+                vps.user_pw = st.session_state.vps_user_pw
+            st.write("Trying to login via SSH...")
+            if not vps.can_login_ssh():
+                error_popup("Error: Cannot login via SSH. Please check username and password.")
+                st.stop()
+            vps.bucket = pbremote.bucket
+            info = vps.fetch_vps_info()
+            vps.install_pb6 = info["pb6"]
+            vps.coinmarketcap_api_key = info["coinmarketcap"]
+            vps.swap = info["swap"]
+            vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
+            # save
+            vps.save()
+            # sync back to controls
+            st.session_state.vps_swap = vps.swap
+            st.session_state.vps_coindata_api_key = vps.coinmarketcap_api_key
+            st.session_state.vps_install_pb6 = vps.install_pb6
+            st.session_state.vps_firewall = vps.firewall
+            st.session_state.vps_firewall_ssh_ips = vps.firewall_ssh_ips
+            info_popup("VPS settings refreshed.")
+
         if st.button("Initialize"):
             st.session_state.init_vps = vps
-            del st.session_state.manage_vps
-            st.rerun()
-        if st.button("Update Firewall", disabled=not vps.has_user_pw()):
-            vps.command = "ufw"
-            vps.command_text = "Update Firewall Settings"
-            vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
-            st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
         if st.button("Update PBGui"):
@@ -672,15 +691,15 @@ def manage_vps():
         if server.pbgui_version == pbremote.local_run.pbgui_version_origin and server.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
             pbgui = "✅"
         else:
-            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin})"
+            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
         if server.pb6_version == pbremote.local_run.pb6_version_origin and server.pb6_commit == pbremote.local_run.pb6_commit_origin:
             pb6 = "✅"
         else:
-            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin})"
+            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
         if server.pb7_version == pbremote.local_run.pb7_version_origin and server.pb7_commit == pbremote.local_run.pb7_commit_origin:
             pb7 = "✅"
         else:
-            pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin})"
+            pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
         if server.reboot:
             reboot = "❌"
         else:
