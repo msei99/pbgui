@@ -1393,9 +1393,10 @@ role = """
 sudo_pw = """
     ```
     The sudo password of your local user
-    This is needed to install:
-    - rclone
-    - rustup
+    This is needed for:
+    - install rclone
+    - install rustup
+    - add IP-Address to hosts file
     ```"""
    
 smart_filter = """
