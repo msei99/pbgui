@@ -67,3 +67,12 @@
         state: disabled
       become: yes
       when: not firewall
+
+    - name: ufw status verbose
+      command: ufw status verbose
+      become: yes
+      register: ufw_status
+  
+    - name: display ufw_status
+      debug:
+        var: ufw_status.stdout_lines
