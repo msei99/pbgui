@@ -1,0 +1,69 @@
+---
+# Update Firewall rules on VPS
+# Steps:
+# 1. Disable IPv6
+# 2. Reset ufw to default
+# 3. Allow ssh from any ipv4 or specific IPs
+# 4. Disable ufw if firewall is not needed
+
+- hosts: "{{ hostname }}"
+  gather_facts: yes
+
+  vars:
+    # ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    firewall: "{{ firewall }}"
+    firewall_ssh_port: "{{ firewall_ssh_port }}"
+    firewall_ssh_ips: "{{ firewall_ssh_ips }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: configure Firewall
+      block:
+        - name: Disable IPv6
+          lineinfile:
+            dest: /etc/default/ufw
+            regexp: '^IPV6='
+            line: "IPV6=no"
+            state: present
+
+        - name: reset ufw to default
+          ufw:
+            state: reset
+
+        - name: allow ssh from any ipv4
+          ufw:
+            rule: allow
+            port: "{{ firewall_ssh_port }}"
+            proto: tcp
+            direction: in
+            state: enabled
+            log: yes
+            from: "0.0.0.0/0"
+            to: "0.0.0.0/0"
+          when: firewall_ssh_ips == ""
+        
+        - name: allow ssh from specific IPs
+          ufw:
+            rule: allow
+            port: "{{ firewall_ssh_port }}"
+            proto: tcp
+            direction: in
+            state: enabled
+            log: yes
+            from_ip: "{{ item }}"
+          loop: "{{ firewall_ssh_ips }}"
+          when: firewall_ssh_ips != ""
+      become: yes
+      when: firewall
+
+    - name: disable ufw
+      ufw:
+        state: disabled
+      become: yes
+      when: not firewall
