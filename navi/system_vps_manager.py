@@ -88,18 +88,19 @@ def list_vps():
     if pbremote.local_run.pbgui_version == pbremote.local_run.pbgui_version_origin and pbremote.local_run.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
         pbgui = "✅"
     else:
-        pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin})"
+        pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
     if pbremote.local_run.pb6_version == pbremote.local_run.pb6_version_origin and pbremote.local_run.pb6_commit == pbremote.local_run.pb6_commit_origin:
         pb6 = "✅"
     else:
-        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin})"
+        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
     if pbremote.local_run.pb7_version == pbremote.local_run.pb7_version_origin and pbremote.local_run.pb7_commit == pbremote.local_run.pb7_commit_origin:
         pb7 = "✅"
     else:
-        pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin})"
+        pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
     d.append({
         "Name": pbremote.name + " (local)",
         "Online": online,
+        "Role": "🧠",
         "Start": datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S"),
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
@@ -136,7 +137,7 @@ def list_vps():
                         st.session_state.vps_ip = vps.ip
                     st.text_input("VPS IPv4", key="vps_ip", help=pbgui_help.vps_ip)
                     st.text_input("Master user name", value=vps.user, key="master_user", disabled=True)
-                    st.text_input("Master user password", type="password", value="", key="master_user_pw", help=pbgui_help.master_user_pw)
+                    st.text_input("Master user password", type="password", key="master_user_pw", help=pbgui_help.master_user_pw)
                     if st.button(
                         "Add IP to /etc/hosts", 
                         disabled=not st.session_state.master_user_pw or not st.session_state.vps_ip
@@ -227,18 +228,22 @@ def list_vps():
             online = "✅"
         else:
             online = "❌"
+        if server.role == "master":
+            role = "🧠"
+        else:
+            role = "💻"
         if server.pbgui_version == pbremote.local_run.pbgui_version_origin and server.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
             pbgui = "✅"
         else:
-            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin})"
+            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
         if server.pb6_version == pbremote.local_run.pb6_version_origin and server.pb6_commit == pbremote.local_run.pb6_commit_origin:
             pb6 = "✅"
         else:
-            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin})"
+            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
         if server.pb7_version == pbremote.local_run.pb7_version_origin and server.pb7_commit == pbremote.local_run.pb7_commit_origin:
             pb7 = "✅"
         else:
-            pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin})"
+            pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
         if server.reboot:
             reboot = "❌"
         else:
@@ -251,6 +256,7 @@ def list_vps():
         d.append({
             "Name": server.name,
             "Online": online,
+            "Role": role,
             "Start": boot,
             "Reboot": reboot,
             "Updates": server.upgrades,
