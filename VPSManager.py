@@ -142,8 +142,36 @@ class VPS:
     def install_ssh_key(self):
         """
         Installs the local SSH public key on the remote server using ssh-copy-id.
+        If no SSH key exists, automatically generates one (ed25519).
         Uses self.user, self.hostname, and self.user_pw (must be set).
         """
+
+        ssh_dir = Path.home() / ".ssh"
+        pubkey_path = ssh_dir / "id_ed25519.pub"
+        privkey_path = ssh_dir / "id_ed25519"
+
+        # Ensure ~/.ssh exists
+        ssh_dir.mkdir(mode=0o700, exist_ok=True)
+
+        # Generate SSH key if missing
+        if not pubkey_path.exists() or not privkey_path.exists():
+            print("🪪 No SSH key found — generating a new ed25519 key pair...")
+            try:
+                subprocess.run([
+                    "ssh-keygen",
+                    "-t", "ed25519",
+                    "-C", f"{self.user}@{self.hostname}",
+                    "-f", str(privkey_path),
+                    "-N", ""
+                ], check=True)
+                print(f"✅ SSH key generated: {pubkey_path}")
+            except Exception as e:
+                print(f"💥 Failed to generate SSH key: {e}")
+                return
+        else:
+            print(f"🔑 Found existing SSH key: {pubkey_path}")
+
+        # Ensure password provided
         if not self.user_pw:
             print("❌ Password is required to install the SSH key.")
             return
@@ -152,16 +180,13 @@ class VPS:
         print(f"🔌 Installing SSH key to {target}...")
 
         try:
-            # Use sshpass to provide password non-interactively
             cmd = ["sshpass", "-p", self.user_pw, "ssh-copy-id", target]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
                 print(f"✅ SSH key successfully installed to {target}")
             else:
-                print(f"⚠️ Failed to install SSH key. Output:")
-                print(result.stdout)
-                print(result.stderr)
+                print(f"⚠️ Failed to install SSH key. Output:\n{result.stdout}\n{result.stderr}")
 
         except FileNotFoundError:
             print("❌ ssh-copy-id or sshpass is not installed on this machine.")
