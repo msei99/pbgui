@@ -308,13 +308,22 @@ class VPS:
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
 
-            # Fetch swap size (human-readable)
+            # Fetch swap size (only consider /swapfile; otherwise "0")
             try:
-                stdin, stdout, stderr = ssh.exec_command(
-                    "swapon --show --noheadings --raw | awk '{print $3}'"
-                )
-                swap_size = stdout.read().decode().strip()
-                result["swap"] = swap_size if swap_size else "0"
+                cmd = "LC_ALL=C swapon --show --noheadings --output=NAME,TYPE,SIZE"
+                stdin, stdout, stderr = ssh.exec_command(cmd)
+                lines = stdout.read().decode().strip().splitlines()
+
+                swap_size = "0"
+                for line in lines:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        name, typ, size = parts[0], parts[1].lower(), parts[2]
+                        if name == "/swapfile" and typ == "file":
+                            swap_size = size
+                            break
+
+                result["swap"] = swap_size
                 print(f"💾 Swap size on VPS {self.hostname}: {result['swap']}")
             except Exception as e:
                 print(f"⚠️ Failed to get swap size on VPS {self.hostname}: {e}")
