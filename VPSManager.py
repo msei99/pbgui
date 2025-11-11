@@ -180,7 +180,7 @@ class VPS:
         print(f"🔌 Installing SSH key to {target}...")
 
         try:
-            cmd = ["sshpass", "-p", self.user_pw, "ssh-copy-id", target]
+            cmd = ["sshpass", "-p", self.user_pw, "ssh-copy-id", "-o", "StrictHostKeyChecking=no", target]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
