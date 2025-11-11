@@ -298,9 +298,17 @@ def manage_master():
                 del st.session_state.manage_master
                 st.rerun()
         st.checkbox("Debug", key="setup_debug")
-        if st.button("Update pbgui, pb6 and pb7"):
+        if st.button("Update PBGui, PB6 and PB7"):
             vpsmanager.command = "master-update-pb"
-            vpsmanager.command_text = "Update pbgui, pb6 and pb7"
+            vpsmanager.command_text = "Update PBGui, PB6 and PB7"
+            vpsmanager.update_master(debug = st.session_state.setup_debug)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
+        # Update only PBGui
+        if st.button("Update PBGui"):
+            vpsmanager.command = "master-update-pbgui"
+            vpsmanager.command_text = "Update PBGui"
             vpsmanager.update_master(debug = st.session_state.setup_debug)
             del st.session_state.manage_master
             st.session_state.view_update_master = True
@@ -569,9 +577,9 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
-        if st.button("Update pbgui, pb6 and pb7"):
+        if st.button("Update PBGui, PB6 and PB7"):
             vps.command = "vps-update-pb"
-            vps.command_text = "Update pbgui, pb6 and pb7"
+            vps.command_text = "Update PBGui, PB6 and PB7"
             vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
             st.session_state.view_update = vps
             del st.session_state.manage_vps

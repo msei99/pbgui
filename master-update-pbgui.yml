@@ -1,0 +1,49 @@
+---
+# Update pbgui on localhost
+# Steps:
+# 1. Clone/update pbgui repository
+# 2. If updated, install requirements and restart PBRun, PBRemote and PBCoinData
+
+- hosts: localhost
+  gather_facts: "{{ debug }}"
+
+  vars:
+    user: "{{ user }}"
+    pbgdir: "{{ pbgdir }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: clone pbgui repository
+      git:
+        repo: https://github.com/msei99/pbgui.git
+        dest: "{{ pbgdir }}"
+        version: main
+        update: yes
+        force: yes
+      when: pbgdir != ""
+      register: pbgui_repo
+      notify: restart pbgui
+
+    - name: print pbgui_repo
+      debug:
+        var: pbgui_repo
+      tags: debug,never
+
+  handlers:
+    - name: Install pbgui requirements
+      pip:
+        requirements: "{{ pbgdir }}/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pbgui"
+
+    - name: Restart PBRun, PBRemote and PBCoinData
+      shell: |
+        python "{{ pbgdir }}/starter.py" -r PBRun PBRemote PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ pbgdir }}"
+      listen: "restart pbgui"
