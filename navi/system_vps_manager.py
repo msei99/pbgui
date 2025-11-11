@@ -545,7 +545,8 @@ def manage_vps():
             info = vps.fetch_vps_info()
             vps.install_pb6 = info["pb6"]
             vps.coinmarketcap_api_key = info["coinmarketcap"]
-            vps.swap = info["swap"]
+            # make sure swap value is valid
+            vps.swap = info.get("swap", "0") if info.get("swap") in ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"] else "0"
             vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
             # save
             vps.save()
