@@ -127,7 +127,8 @@ keepalive 10 120
 explicit-exit-notify 1
 client-to-client
 duplicate-cn
-reneg-sec 31536000
+reneg-sec 3600
+auth-gen-token 84600
 
 # Logging
 status /var/log/openvpn-status.log
