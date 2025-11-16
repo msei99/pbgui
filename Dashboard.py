@@ -926,36 +926,32 @@ class Dashboard():
                     column_config=column_config
                 )
 
-                # Delete controls using confirmation dialogs
-                del_col1, del_col2, _ = st.columns([1,1,2])
-                with del_col1:
-                    if st.button('Delete selected…', key=f"income_delete_selected_{position}"):
-                        if table_key in st.session_state:
-                            selection = st.session_state[table_key].get("selection", {}).get("rows", [])
-                            if selection:
-                                ids = [int(st.session_state[f'dashboard_income_sdf_{position}'].iloc[i]['Id']) for i in selection]
-                                st.session_state[f'income_delete_selected_open_{position}'] = True
-                                st.session_state[f'income_delete_selected_ids_{position}'] = ids
+                # Determine current selection and only show delete controls when rows selected
+                selection = []
+                if table_key in st.session_state:
+                    selection = st.session_state[table_key].get("selection", {}).get("rows", []) or []
+
+                if selection:
+                    # Delete controls using confirmation dialogs (visible only when rows selected)
+                    del_col1, del_col2, _ = st.columns([1,1,2])
+                    with del_col1:
+                        if st.button('Delete selected…', key=f"income_delete_selected_{position}"):
+                            ids = [int(st.session_state[f'dashboard_income_sdf_{position}'].iloc[i]['Id']) for i in selection]
+                            st.session_state[f'income_delete_selected_open_{position}'] = True
+                            st.session_state[f'income_delete_selected_ids_{position}'] = ids
+                    with del_col2:
+                        if st.button('Delete older than selected…', key=f"income_delete_older_{position}"):
+                            df_sel = st.session_state[f'dashboard_income_sdf_{position}'].iloc[selection]
+                            cutoff_ms = int(df_sel['DateMs'].min())
+                            current_users_sel = st.session_state[f'dashboard_income_users_{position}']
+                            if 'ALL' in current_users_sel:
+                                target_users = ['ALL']
                             else:
-                                st.info('Select at least one row to delete.')
-                with del_col2:
-                    if st.button('Delete older than selected…', key=f"income_delete_older_{position}"):
-                        if table_key in st.session_state:
-                            selection = st.session_state[table_key].get("selection", {}).get("rows", [])
-                            if selection:
-                                df_sel = st.session_state[f'dashboard_income_sdf_{position}'].iloc[selection]
-                                cutoff_ms = int(df_sel['DateMs'].min())
-                                current_users_sel = st.session_state[f'dashboard_income_users_{position}']
-                                if 'ALL' in current_users_sel:
-                                    target_users = ['ALL']
-                                else:
-                                    selected_row_users = list(df_sel['User'].unique())
-                                    target_users = [u for u in selected_row_users if u in current_users_sel] or current_users_sel
-                                st.session_state[f'income_delete_older_open_{position}'] = True
-                                st.session_state[f'income_delete_older_users_{position}'] = target_users
-                                st.session_state[f'income_delete_older_cutoff_{position}'] = cutoff_ms
-                            else:
-                                st.info('Select at least one row to define the cutoff.')
+                                selected_row_users = list(df_sel['User'].unique())
+                                target_users = [u for u in selected_row_users if u in current_users_sel] or current_users_sel
+                            st.session_state[f'income_delete_older_open_{position}'] = True
+                            st.session_state[f'income_delete_older_users_{position}'] = target_users
+                            st.session_state[f'income_delete_older_cutoff_{position}'] = cutoff_ms
 
                 # Render dialogs if requested via state flags
                 if st.session_state.get(f'income_delete_selected_open_{position}', False):
