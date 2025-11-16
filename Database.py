@@ -12,14 +12,29 @@ class Database():
         self.db = Path(f'{PBGDIR}/data/pbgui.db')
         self.create_tables()
     
-    # Simple full DB backup: copies the SQLite file to data/backups with timestamp name
-    def backup_full_db(self):
+    # Simple full DB backup: copies the SQLite file to backup/db with timestamp name
+    def backup_full_db(self, keep_last: int = 10):
         try:
-            backups_dir = Path(f'{PBGDIR}/data/backups')
+            backups_dir = Path(f'{PBGDIR}/data/backup/db')
             backups_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime('%Y%m%d-%H%M%S')
             backup_path = backups_dir / f'pbgui-{ts}.db'
             shutil.copy2(self.db, backup_path)
+            # Rotate: keep only the last N backups by modified time
+            try:
+                backups = sorted(
+                    [p for p in backups_dir.glob('pbgui-*.db') if p.is_file()],
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True
+                )
+                if keep_last is not None and keep_last > 0 and len(backups) > keep_last:
+                    for old in backups[keep_last:]:
+                        try:
+                            old.unlink()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             return str(backup_path)
         except Exception as e:
             print(e)

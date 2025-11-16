@@ -93,6 +93,20 @@ class Dashboard():
         self.user = st.session_state.users.users[0]
         self.db = Database()
         self.view_orders_position = []
+        # Ensure last DB backup session state is available across dashboard switches
+        try:
+            # Initialize last backup strictly from the new path only
+            backups_dir = Path(f"{PBGDIR}/data/backup/db")
+            if backups_dir.exists():
+                backups = [p for p in backups_dir.glob("pbgui-*.db") if p.is_file()]
+                if backups:
+                    latest = max(backups, key=lambda p: p.stat().st_mtime)
+                    current = st.session_state.get('db_last_backup')
+                    # If missing, stale, or pointing to the legacy folder, set to latest known backup
+                    if (not current) or (not Path(current).exists()) or ("/data/backups" in str(current)):
+                        st.session_state['db_last_backup'] = str(latest)
+        except Exception:
+            pass
         if self.name:
             self.load(name)
         
@@ -961,31 +975,54 @@ class Dashboard():
                     users_to_del = st.session_state.get(f'income_delete_older_users_{position}', [])
                     cutoff_ms = st.session_state.get(f'income_delete_older_cutoff_{position}', 0)
                     self.dialog_confirm_delete_income_older(position, users_to_del, cutoff_ms)
-                # Offer simple Undo using last full DB backup (visible only when rows selected)
-                last_backup = st.session_state.get('db_last_backup')
-                if selection and last_backup:
-                    with st.container(border=True):
-                        st.info(f"A full DB backup exists. Undo is available: {last_backup}")
-                        if st.button('Undo (Restore last DB backup)', key=f'income_undo_db_{position}'):
-                            # Pause PBData before restore
-                            was_running = False
-                            try:
-                                pb = PBData()
-                                was_running = pb.is_running()
-                                if was_running:
-                                    pb.stop()
-                            except Exception:
-                                pass
-                            ok = self.db.restore_db_from(last_backup)
-                            if ok:
-                                st.success('Database restored from backup.')
-                                # Restart PBData if it was running
+                # Offer backup history + restore (only when rows selected)
+                if selection:
+                    try:
+                        backups_dir = Path(f"{PBGDIR}/data/backup/db")
+                        backups = []
+                        if backups_dir.exists():
+                            backups = sorted(
+                                [p for p in backups_dir.glob("pbgui-*.db") if p.is_file()],
+                                key=lambda p: p.stat().st_mtime,
+                                reverse=True
+                            )[:10]
+                    except Exception:
+                        backups = []
+
+                    if backups:
+                        with st.container(border=True):
+                            st.markdown("##### Restore from Backup")
+                            options = []
+                            for p in backups:
+                                ts = datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                                options.append(f"{p.name} — {ts}")
+                            # Default to the latest
+                            key_select = f"income_backup_select_{position}"
+                            selected_label = st.selectbox("Select backup", options, key=key_select, index=0)
+                            # Map selection back to path
+                            label_to_path = {options[i]: str(backups[i]) for i in range(len(options))}
+                            selected_path = label_to_path.get(selected_label)
+                            if st.button('Restore selected backup', key=f'income_restore_selected_{position}') and selected_path:
+                                # Pause PBData before restore
+                                was_running = False
                                 try:
+                                    pb = PBData()
+                                    was_running = pb.is_running()
                                     if was_running:
-                                        pb.run()
+                                        pb.stop()
                                 except Exception:
                                     pass
-                                st.rerun()
+                                ok = self.db.restore_db_from(selected_path)
+                                if ok:
+                                    st.session_state['db_last_backup'] = selected_path
+                                    st.success(f'Restored database from {selected_label}.')
+                                    # Restart PBData if it was running
+                                    try:
+                                        if was_running:
+                                            pb.run()
+                                    except Exception:
+                                        pass
+                                    st.rerun()
             else:
                 income = df[['Date', 'Symbol', 'Income', 'User']].copy()
                 income['Income'] = income['Income'].cumsum()
