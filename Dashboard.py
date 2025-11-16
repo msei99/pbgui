@@ -961,9 +961,9 @@ class Dashboard():
                     users_to_del = st.session_state.get(f'income_delete_older_users_{position}', [])
                     cutoff_ms = st.session_state.get(f'income_delete_older_cutoff_{position}', 0)
                     self.dialog_confirm_delete_income_older(position, users_to_del, cutoff_ms)
-                # Offer simple Undo using last full DB backup
+                # Offer simple Undo using last full DB backup (visible only when rows selected)
                 last_backup = st.session_state.get('db_last_backup')
-                if last_backup:
+                if selection and last_backup:
                     with st.container(border=True):
                         st.info(f"A full DB backup exists. Undo is available: {last_backup}")
                         if st.button('Undo (Restore last DB backup)', key=f'income_undo_db_{position}'):
