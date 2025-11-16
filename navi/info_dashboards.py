@@ -26,6 +26,9 @@ def dashboard():
              # Define the callback function
             def on_select_dashboard():
                 selected_dashboard = st.session_state['selected_dashboard']
+                # Ignore placeholder option
+                if not selected_dashboard or selected_dashboard == 'Select a dashboard':
+                    return
                 if "edit_dashboard" in st.session_state:
                     del st.session_state.edit_dashboard
                 st.session_state.dashboard = Dashboard(selected_dashboard)
