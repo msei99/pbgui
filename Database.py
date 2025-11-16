@@ -3,6 +3,7 @@ from datetime import datetime
 from User import Users, User
 from Exchange import Exchange
 from pbgui_func import PBGDIR
+import shutil
 import sqlite3
 import json
 
@@ -10,6 +11,34 @@ class Database():
     def __init__(self):
         self.db = Path(f'{PBGDIR}/data/pbgui.db')
         self.create_tables()
+    
+    # Simple full DB backup: copies the SQLite file to data/backups with timestamp name
+    def backup_full_db(self):
+        try:
+            backups_dir = Path(f'{PBGDIR}/data/backups')
+            backups_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime('%Y%m%d-%H%M%S')
+            backup_path = backups_dir / f'pbgui-{ts}.db'
+            shutil.copy2(self.db, backup_path)
+            return str(backup_path)
+        except Exception as e:
+            print(e)
+            return None
+
+    # Restore DB from a given backup file path
+    def restore_db_from(self, backup_path: str):
+        try:
+            src = Path(backup_path)
+            if not src.exists():
+                return False
+            # Replace current DB with backup
+            shutil.copy2(src, self.db)
+            return True
+        except Exception as e:
+            print(e)
+            return False
+
+    # --- Change-detection helpers removed: fragments auto-refresh panels ---
 
     def create_tables(self):
         sql_statements = [ 
@@ -587,6 +616,78 @@ class Database():
                 return rows
         except sqlite3.Error as e:
             print(e)
+
+    # Same as select_income_by_symbol but includes row id for deletion mapping
+    def select_income_by_symbol_with_id(self, user: list, start: str, end: str):
+        if 'ALL' in user:
+            sql = '''SELECT "id", "timestamp", "symbol", "income", "user" FROM "history"
+                    WHERE "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    ORDER BY "timestamp" ASC '''
+            sql_parameters = (start, end)
+        else:
+            sql = '''SELECT "id", "timestamp", "symbol", "income", "user" FROM "history"
+                    WHERE "history"."user" IN ({})
+                        AND "history"."timestamp" >= ?
+                        AND "history"."timestamp" <= ?
+                    ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
+            sql_parameters = tuple(user) + (start, end)
+        try:
+            with sqlite3.connect(self.db) as conn:
+                cur = conn.cursor()
+                cur.execute(sql, sql_parameters)
+                rows = cur.fetchall()
+                return rows
+        except sqlite3.Error as e:
+            print(e)
+
+    # Delete specific income rows by primary key ids
+    def delete_income_by_ids(self, ids: list):
+        if not ids:
+            return 0
+        placeholders = ','.join('?' * len(ids))
+        sql = f'''DELETE FROM history WHERE id IN ({placeholders})'''
+        try:
+            with sqlite3.connect(self.db) as conn:
+                cur = conn.cursor()
+                cur.execute(sql, ids)
+                conn.commit()
+                return cur.rowcount
+        except sqlite3.Error as e:
+            print(e)
+            return 0
+
+    # Delete all income rows for a user older than or equal to a timestamp (ms)
+    def delete_income_older_than_user(self, user: str, timestamp_ms: int):
+        sql = '''DELETE FROM history WHERE user = ? AND timestamp <= ?'''
+        try:
+            with sqlite3.connect(self.db) as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user, int(timestamp_ms)))
+                conn.commit()
+                return cur.rowcount
+        except sqlite3.Error as e:
+            print(e)
+            return 0
+
+    # Delete all income rows older than or equal to a timestamp for given users list.
+    # If users contains 'ALL', deletes across all users.
+    def delete_income_older_than(self, users: list, timestamp_ms: int):
+        try:
+            with sqlite3.connect(self.db) as conn:
+                cur = conn.cursor()
+                if not users or 'ALL' in users:
+                    sql = 'DELETE FROM history WHERE timestamp <= ?'
+                    cur.execute(sql, (int(timestamp_ms),))
+                else:
+                    placeholders = ','.join('?' * len(users))
+                    sql = f'DELETE FROM history WHERE user IN ({placeholders}) AND timestamp <= ?'
+                    cur.execute(sql, tuple(users) + (int(timestamp_ms),))
+                conn.commit()
+                return cur.rowcount
+        except sqlite3.Error as e:
+            print(e)
+            return 0
 
     def find_last_timestamp(self, user: User):
         sql = '''SELECT MAX("history"."timestamp") FROM "history"

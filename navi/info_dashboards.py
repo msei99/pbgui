@@ -1,5 +1,6 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_authenticted, get_navi_paths
+from pbgui_purefunc import load_ini, save_ini
 from Dashboard import Dashboard
 
 def dashboard():
@@ -41,6 +42,21 @@ def dashboard():
 
     
     with st.sidebar:
+        # Global Auto-Refresh Interval Control (moved from main dashboard view)
+        if 'dashboard_refresh_sec' not in st.session_state:
+            try:
+                ini_val = load_ini('dashboard', 'refresh_interval_sec')
+                st.session_state['dashboard_refresh_sec'] = max(1, int(ini_val)) if ini_val else 5
+            except Exception:
+                st.session_state['dashboard_refresh_sec'] = 5
+            st.session_state['dashboard_refresh_saved'] = st.session_state['dashboard_refresh_sec']
+        st.number_input('Auto refresh (s)', min_value=1, max_value=3600, step=1, key='dashboard_refresh_sec', help='Interval in seconds for auto refresh')
+        try:
+            if st.session_state['dashboard_refresh_sec'] != st.session_state.get('dashboard_refresh_saved'):
+                save_ini('dashboard', 'refresh_interval_sec', str(st.session_state['dashboard_refresh_sec']))
+                st.session_state['dashboard_refresh_saved'] = st.session_state['dashboard_refresh_sec']
+        except Exception:
+            pass
         if "edit_dashboard" in st.session_state:
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
