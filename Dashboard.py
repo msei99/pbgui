@@ -1,4 +1,5 @@
 import streamlit as st
+from PBData import PBData
 from pathlib import Path
 import json
 import pandas as pd
@@ -536,11 +537,26 @@ class Dashboard():
         dashboards.sort()
         return dashboards
 
+    @st.fragment(run_every=1)
+    def _refresh_scheduler(self):
+        try:
+            interval = max(1, int(st.session_state.get('dashboard_refresh_sec', 5)))
+            now = time.time()
+            last = st.session_state.get('dashboard_last_tick', 0.0)
+            if (now - last) >= interval:
+                st.session_state['dashboard_last_tick'] = now
+                st.rerun()
+        except Exception:
+            pass
+
+
     def view(self):
         # Init
         dashboard_config = self.dashboard_config
         self.rows = dashboard_config["rows"]
         self.cols = dashboard_config["cols"]
+        # Start scheduler fragment that triggers rerun based on configured interval
+        self._refresh_scheduler()
         # Titel
         st.subheader(f"Dashboard: {self.name}")
         for row in range(1, self.rows + 1):
@@ -660,7 +676,7 @@ class Dashboard():
                 fig = px.bar(df, x='Date', y='Income', text='Income', hover_data={'Income':':.2f'}, title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
                 fig.update_traces(texttemplate='%{text:.2f}', textposition='auto')
             fig.update_traces(marker_color=['red' if val < 0 else 'green' for val in df['Income']])
-            st.plotly_chart(fig, key=f"dashboard_pnl_plot_{position}")
+            st.plotly_chart(fig, key=f"dashboard_pnl_plot_{position}_{st.session_state.get('dashboard_reload_token', 0)}")
     
     @st.fragment
     def view_adg(self, position : str, user : str = None, period : str = None, mode : str = "bar"):
@@ -736,7 +752,7 @@ class Dashboard():
                 yaxis_title='ADG(%)')
             fig.update_traces(hovertemplate='Date=%{x}<br>ADG=%{y:.2f}%')
             st.markdown(f"**Calculated Starting Balance:** {starting_balance:.2f} | **Total PNL:** {total_pnl:.2f} | **Current Balance:** {balances[0][2]:.2f}")
-            st.plotly_chart(fig, key=f"dashboard_adg_plot_{position}")
+            st.plotly_chart(fig, key=f"dashboard_adg_plot_{position}_{st.session_state.get('dashboard_reload_token', 0)}")
 
 
     @st.fragment
@@ -769,7 +785,6 @@ class Dashboard():
                 if st.session_state[f'dashboard_ppl_sum_period_{position}'] in self.SUM_PERIOD:
                     period_index = self.PERIOD.index(st.session_state[f'dashboard_ppl_period_{position}'])
                     period_range = getattr(self, self.PERIOD[period_index])
-                    
                     ppl = self.db.select_ppl(st.session_state[f'dashboard_ppl_users_{position}'], period_range[0], period_range[1], st.session_state[f'dashboard_ppl_sum_period_{position}'])
             
             df = pd.DataFrame(ppl, columns =['Date', 'sum_positive', 'sum_negative'])
@@ -831,7 +846,7 @@ class Dashboard():
             )
 
             # Display the plot
-            st.plotly_chart(fig, key=f"dashboard_ppl_plot_{position}")
+            st.plotly_chart(fig, key=f"dashboard_ppl_plot_{position}_{st.session_state.get('dashboard_reload_token', 0)}")
 
     @st.fragment
     def view_income(self, position : str, user : str = None, period : str = None, last : int = 0, filter : float = 0.0):
@@ -865,8 +880,13 @@ class Dashboard():
             if st.session_state[f'dashboard_income_period_{position}'] in self.PERIOD:
                 period_index = self.PERIOD.index(st.session_state[f'dashboard_income_period_{position}'])
                 period_range = getattr(self, self.PERIOD[period_index])
-                income = self.db.select_income_by_symbol(st.session_state[f'dashboard_income_users_{position}'], period_range[0], period_range[1])
-            df = pd.DataFrame(income, columns=['Date', 'Symbol', 'Income', 'User'])
+                # include Id for delete operations
+                income = self.db.select_income_by_symbol_with_id(
+                    st.session_state[f'dashboard_income_users_{position}'], period_range[0], period_range[1]
+                )
+            df = pd.DataFrame(income, columns=['Id', 'Date', 'Symbol', 'Income', 'User'])
+            # Preserve original ms timestamp for accurate cutoff deletion
+            df['DateMs'] = df['Date']
             df['Date'] = pd.to_datetime(df['Date'], unit='ms')
             if st.session_state[f'dashboard_income_last_{position}'] > 0:
                 # filter out lower than
@@ -878,7 +898,7 @@ class Dashboard():
                 df = df.sort_values(by='Date', ascending=False)
                 # remove ms from Date
                 df['Date'] = df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                # Display as dataframe
+                # Display as dataframe with selection + delete controls
                 if len(df) > 25:
                     height = 36 + 25 * 35
                 else:
@@ -887,8 +907,89 @@ class Dashboard():
                 def color_income(val):
                     color = 'green' if val >= 0 else 'red'
                     return f'color: {color};'
-                styled_df = df[['Date', 'User', 'Symbol', 'Income']].style.map(color_income, subset=['Income']).format({'Income': '{:.2f}'})
-                st.dataframe(styled_df, height=height, hide_index=True)
+                styled_df = df[['Id', 'DateMs', 'Date', 'User', 'Symbol', 'Income']].style.map(color_income, subset=['Income']).format({'Income': '{:.2f}'})
+                # Keep raw df for selection mapping
+                st.session_state[f'dashboard_income_sdf_{position}'] = df
+                column_config = {
+                    'Id': None,
+                    'DateMs': None  # hide helper columns from display but keep in df
+                }
+                reload_token = st.session_state.get('dashboard_reload_token', 0)
+                table_key = f"dashboard_income_{position}_{reload_token}"
+                st.dataframe(
+                    styled_df,
+                    height=height,
+                    key=table_key,
+                    on_select="rerun",
+                    selection_mode='multi-row',
+                    hide_index=True,
+                    column_config=column_config
+                )
+
+                # Delete controls using confirmation dialogs
+                del_col1, del_col2, _ = st.columns([1,1,2])
+                with del_col1:
+                    if st.button('Delete selected…', key=f"income_delete_selected_{position}"):
+                        if table_key in st.session_state:
+                            selection = st.session_state[table_key].get("selection", {}).get("rows", [])
+                            if selection:
+                                ids = [int(st.session_state[f'dashboard_income_sdf_{position}'].iloc[i]['Id']) for i in selection]
+                                st.session_state[f'income_delete_selected_open_{position}'] = True
+                                st.session_state[f'income_delete_selected_ids_{position}'] = ids
+                            else:
+                                st.info('Select at least one row to delete.')
+                with del_col2:
+                    if st.button('Delete older than selected…', key=f"income_delete_older_{position}"):
+                        if table_key in st.session_state:
+                            selection = st.session_state[table_key].get("selection", {}).get("rows", [])
+                            if selection:
+                                df_sel = st.session_state[f'dashboard_income_sdf_{position}'].iloc[selection]
+                                cutoff_ms = int(df_sel['DateMs'].min())
+                                current_users_sel = st.session_state[f'dashboard_income_users_{position}']
+                                if 'ALL' in current_users_sel:
+                                    target_users = ['ALL']
+                                else:
+                                    selected_row_users = list(df_sel['User'].unique())
+                                    target_users = [u for u in selected_row_users if u in current_users_sel] or current_users_sel
+                                st.session_state[f'income_delete_older_open_{position}'] = True
+                                st.session_state[f'income_delete_older_users_{position}'] = target_users
+                                st.session_state[f'income_delete_older_cutoff_{position}'] = cutoff_ms
+                            else:
+                                st.info('Select at least one row to define the cutoff.')
+
+                # Render dialogs if requested via state flags
+                if st.session_state.get(f'income_delete_selected_open_{position}', False):
+                    ids = st.session_state.get(f'income_delete_selected_ids_{position}', [])
+                    self.dialog_confirm_delete_income_selected(position, ids)
+                if st.session_state.get(f'income_delete_older_open_{position}', False):
+                    users_to_del = st.session_state.get(f'income_delete_older_users_{position}', [])
+                    cutoff_ms = st.session_state.get(f'income_delete_older_cutoff_{position}', 0)
+                    self.dialog_confirm_delete_income_older(position, users_to_del, cutoff_ms)
+                # Offer simple Undo using last full DB backup
+                last_backup = st.session_state.get('db_last_backup')
+                if last_backup:
+                    with st.container(border=True):
+                        st.info(f"A full DB backup exists. Undo is available: {last_backup}")
+                        if st.button('Undo (Restore last DB backup)', key=f'income_undo_db_{position}'):
+                            # Pause PBData before restore
+                            was_running = False
+                            try:
+                                pb = PBData()
+                                was_running = pb.is_running()
+                                if was_running:
+                                    pb.stop()
+                            except Exception:
+                                pass
+                            ok = self.db.restore_db_from(last_backup)
+                            if ok:
+                                st.success('Database restored from backup.')
+                                # Restart PBData if it was running
+                                try:
+                                    if was_running:
+                                        pb.run()
+                                except Exception:
+                                    pass
+                                st.rerun()
             else:
                 income = df[['Date', 'Symbol', 'Income', 'User']].copy()
                 income['Income'] = income['Income'].cumsum()
@@ -901,7 +1002,90 @@ class Dashboard():
                     symbol_df = df[df['Symbol'] == symbol].copy()
                     symbol_df['Income'] = symbol_df['Income'].cumsum()
                     fig.add_trace(go.Scatter(x=symbol_df['Date'], y=symbol_df['Income'], name=symbol))
-                st.plotly_chart(fig, key=f"dashboard_income_plot_{position}")
+                reload_token = st.session_state.get('dashboard_reload_token', 0)
+                st.plotly_chart(fig, key=f"dashboard_income_plot_{position}_{reload_token}")
+
+    @st.dialog("Delete selected income?")
+    def dialog_confirm_delete_income_selected(self, position: str, ids: list):
+        count = len(ids)
+        st.warning(f"Delete {count} selected income row(s)?", icon="⚠️")
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button(":green[Yes]", key=f"income_yes_sel_{position}"):
+                # Pause PBData to avoid concurrent writes during backup/delete
+                was_running = False
+                try:
+                    pb = PBData()
+                    was_running = pb.is_running()
+                    if was_running:
+                        pb.stop()
+                except Exception:
+                    pass
+                # Full DB backup then delete
+                backup_path = self.db.backup_full_db()
+                if backup_path:
+                    st.session_state['db_last_backup'] = backup_path
+                deleted = self.db.delete_income_by_ids(ids)
+                st.success(f"Deleted {deleted} income row(s). Backup created.")
+                # Restart PBData if it was running
+                try:
+                    if was_running:
+                        pb.run()
+                except Exception:
+                    pass
+                # close dialog and refresh
+                st.session_state[f'income_delete_selected_open_{position}'] = False
+                st.session_state.pop(f'income_delete_selected_ids_{position}', None)
+                st.session_state['dashboard_reload_token'] = st.session_state.get('dashboard_reload_token', 0) + 1
+                st.rerun()
+        with col2:
+            if st.button(":red[No]", key=f"income_no_sel_{position}"):
+                st.session_state[f'income_delete_selected_open_{position}'] = False
+                st.session_state.pop(f'income_delete_selected_ids_{position}', None)
+                st.rerun()
+
+    @st.dialog("Delete income older than cutoff?")
+    def dialog_confirm_delete_income_older(self, position: str, users: list, cutoff_ms: int):
+        cutoff_str = pd.to_datetime(cutoff_ms, unit='ms').strftime('%Y-%m-%d %H:%M:%S')
+        if 'ALL' in users:
+            msg = f"Delete all income entries across ALL users with timestamp <= {cutoff_str}?"
+        else:
+            msg = f"Delete all income entries for {', '.join(users)} with timestamp <= {cutoff_str}?"
+        st.warning(msg, icon="⚠️")
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button(":green[Yes]", key=f"income_yes_older_{position}"):
+                # Pause PBData to avoid concurrent writes during backup/delete
+                was_running = False
+                try:
+                    pb = PBData()
+                    was_running = pb.is_running()
+                    if was_running:
+                        pb.stop()
+                except Exception:
+                    pass
+                backup_path = self.db.backup_full_db()
+                if backup_path:
+                    st.session_state['db_last_backup'] = backup_path
+                deleted = self.db.delete_income_older_than(users, cutoff_ms)
+                st.success(f"Deleted {deleted} income row(s). Backup created.")
+                # Restart PBData if it was running
+                try:
+                    if was_running:
+                        pb.run()
+                except Exception:
+                    pass
+                st.session_state[f'income_delete_older_open_{position}'] = False
+                st.session_state.pop(f'income_delete_older_users_{position}', None)
+                st.session_state.pop(f'income_delete_older_cutoff_{position}', None)
+                st.session_state['dashboard_reload_token'] = st.session_state.get('dashboard_reload_token', 0) + 1
+                st.rerun()
+        with col2:
+            if st.button(":red[No]", key=f"income_no_older_{position}"):
+                st.session_state[f'income_delete_older_open_{position}'] = False
+                st.session_state.pop(f'income_delete_older_users_{position}', None)
+                st.session_state.pop(f'income_delete_older_cutoff_{position}', None)
+                st.rerun()
 
     @st.fragment
     def view_top_symbols(self, position : str, user : str = None, period : str = None, top : int = None):
@@ -935,7 +1119,7 @@ class Dashboard():
             # st.write(df)
             fig = px.bar(df, x="Symbol", y="Income", title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
             fig.update_traces(marker_color=['red' if val < 0 else 'green' for val in df['Income']])
-            st.plotly_chart(fig, key=f"dashboard_top_symbols_plot_{position}")
+            st.plotly_chart(fig, key=f"dashboard_top_symbols_plot_{position}_{st.session_state.get('dashboard_reload_token', 0)}")
 
     def color_we(self, value):
         # bgcolor green < 10, orange 100-200, red > 200
@@ -1006,7 +1190,7 @@ class Dashboard():
             }
             df = df[['Id', 'User', 'Date', 'Balance', 'uPnl', 'WE']]
             sdf = df.style.map(self.color_we, subset=['WE']).map(self.color_upnl, subset=['uPnl']).format({'Balance': "{:.2f}"})
-            st.dataframe(sdf, height=36+(len(df))*35, key=f"dashboard_balance_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
+            st.dataframe(sdf, height=36+(len(df))*35, key=f"dashboard_balance_{position}_{st.session_state.get('dashboard_reload_token', 0)}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
 
     def bgcolor_positive_or_negative(self, value):
         bgcolor = "red" if value < 0 else "green"
@@ -1021,10 +1205,12 @@ class Dashboard():
                 for user in st.session_state[f'dashboard_positions_users_{position}']:
                     if user not in users.list() and user != 'ALL':
                         st.session_state[f'dashboard_positions_users_{position}'].remove(user)
-        # Init Orders View
-        if f"dashboard_positions_{position}" in st.session_state:
-            if st.session_state[f'dashboard_positions_{position}']["selection"]["rows"]:
-                row = st.session_state[f'dashboard_positions_{position}']["selection"]["rows"][0]
+        # Init Orders View (respect tokenized table key)
+        reload_token = st.session_state.get('dashboard_reload_token', 0)
+        table_key = f"dashboard_positions_{position}_{reload_token}"
+        if table_key in st.session_state:
+            if st.session_state[table_key]["selection"]["rows"]:
+                row = st.session_state[table_key]["selection"]["rows"][0]
                 st.session_state[f'view_orders_{position}'] = st.session_state[f'dashboard_positions_sdf_{position}'].iloc[row]
                 if not "edit_dashboard" in st.session_state:
                     st.rerun()
@@ -1045,6 +1231,7 @@ class Dashboard():
                 users_selected = users.list()
             else:
                 users_selected = st.session_state[f'dashboard_positions_users_{position}']
+            # regular refresh via run_every handles updates
             for user in users_selected:
                 positions = self.db.fetch_positions(users.find_user(user))
                 prices = self.db.fetch_prices(users.find_user(user))
@@ -1083,7 +1270,7 @@ class Dashboard():
                 "Id": None,
                 "PosId": None
             }
-            st.dataframe(sdf, height=36+(len(df))*35, key=f"dashboard_positions_{position}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
+            st.dataframe(sdf, height=36+(len(df))*35, key=f"dashboard_positions_{position}_{st.session_state.get('dashboard_reload_token', 0)}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
 
     @st.fragment
     def view_orders(self, pos : str, orders : str = None, tf : str = "4h", edit : bool = False):
@@ -1162,6 +1349,7 @@ class Dashboard():
         fig.update_xaxes(tickangle=-90, tickfont=dict(size=14), dtick='8')
         # fig.update_layout(xaxis_rangeslider_visible=False, width=1280, height=1024)
         # balance = exchange.fetch_balance(market_type)
+        # periodic fragment refresh ensures updates
         prices = self.db.fetch_prices(user)
         price = 0
         for p in prices:
@@ -1190,7 +1378,7 @@ class Dashboard():
                                     mode='lines',
                                     line=dict(color=color, width=2, dash = 'dot'), name=legend))
         fig.update_layout(legend = dict(font = dict(size = 14)))
-        st.plotly_chart(fig, key=f"dashboard_orders_plot_{pos}")
+        st.plotly_chart(fig, key=f"dashboard_orders_plot_{pos}_{st.session_state.get('dashboard_reload_token', 0)}")
 
 
 def main():
