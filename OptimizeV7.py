@@ -237,6 +237,9 @@ class OptimizeV7Queue:
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'view_opt_v7_queue_{ed_key}']
         for row in ed["edited_rows"]:
+            # Check if row index is still valid
+            if row >= len(self.d):
+                continue
             if "delete" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["delete"]:
                     self.d[row]["item"].remove()
@@ -354,6 +357,9 @@ class OptimizeV7Queue:
         if f'view_opt_v7_queue_{ed_key}' in st.session_state:
             ed = st.session_state[f'view_opt_v7_queue_{ed_key}']
             for row in ed["edited_rows"]:
+                # Check if row index is still valid after refresh
+                if row >= len(self.d):
+                    continue
                 if "run" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["run"]:
                         self.d[row]["item"].run()
@@ -2825,6 +2831,9 @@ class OptimizesV7:
             error_popup("Please select only one Optimize to view")
             return
         for row in ed["edited_rows"]:
+            # Check if row index is still valid
+            if row >= len(self.d):
+                continue
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.opt_v7 = self.d[row]["item"]
@@ -2853,6 +2862,9 @@ class OptimizesV7:
             self.remove_all()
             return
         for row in ed["edited_rows"]:
+            # Check if row index is still valid
+            if row >= len(self.d):
+                continue
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     self.d[row]["item"].remove()

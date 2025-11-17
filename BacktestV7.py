@@ -265,6 +265,9 @@ class BacktestV7Queue:
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'view_bt_v7_queue_{ed_key}']
         for row in ed["edited_rows"]:
+            # Check if row index is still valid
+            if row >= len(self.d):
+                continue
             if "delete" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["delete"]:
                     self.d[row]['item'].remove()
@@ -377,6 +380,9 @@ class BacktestV7Queue:
         if f'view_bt_v7_queue_{ed_key}' in st.session_state:
             ed = st.session_state[f'view_bt_v7_queue_{ed_key}']
             for row in ed["edited_rows"]:
+                # Check if row index is still valid after refresh
+                if row >= len(self.d):
+                    continue
                 if "run" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["run"]:
                         self.d[row]["item"].run()
@@ -2069,6 +2075,9 @@ class BacktestsV7:
             error_popup("Please select only one Backtest to view")
             return
         for row in ed["edited_rows"]:
+            # Check if row index is still valid
+            if row >= len(self.d):
+                continue
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.bt_v7_results = self.d[row]["item"].results
@@ -2086,6 +2095,9 @@ class BacktestsV7:
             error_popup("Please select only one Backtest to view")
             return
         for row in ed["edited_rows"]:
+            # Check if row index is still valid
+            if row >= len(self.d):
+                continue
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.bt_v7 = self.d[row]["item"]
@@ -2119,6 +2131,9 @@ class BacktestsV7:
             self.remove_all()
             return
         for row in ed["edited_rows"]:
+            # Check if row index is still valid
+            if row >= len(self.d):
+                continue
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     self.d[row]["item"].remove()
