@@ -26,7 +26,7 @@ streamlit run pbgui.py
 ```
 
 Default URL: http://localhost:8501
-Default password: `PBGui$Bot!` (change in `.streamlit/secrets.toml`)
+Default password: `a` (change in `.streamlit/secrets.toml`)
 
 ### Managing Background Services
 ```powershell

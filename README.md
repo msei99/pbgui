@@ -214,7 +214,7 @@ streamlit run pbgui.py
 
 ```
 Open http://localhost:8501 with Browser\
-Password = PBGui$Bot!\
+Password = a\
 Change Password in file: .streamlit/secrets.toml\
 On First Run, you have to select your passivbot and venv directories
 For the venv you have to enter the full path to python.
