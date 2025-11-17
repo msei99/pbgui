@@ -205,6 +205,56 @@ These steps describe how to run PBGui directly on Windows 11 using Python 3.10 f
    ```
    Then open `http://localhost:8501` in your browser. On first run, configure your `pb6/pb7` and virtualenv paths in the GUI. For most Windows users it is recommended to let PBGui manage **remote Linux** VPSs (as described in the Linux sections above) instead of running passivbot locally.
 
+5. **Configure pbgui.ini (Important!)**
+
+   After first run, you need to edit `pbgui.ini` to configure essential settings. Here's an example configuration:
+
+   ```ini
+   [main]
+   pbdir = C:\Users\YourUser\passivbot_v6
+   pbvenv = C:\Users\YourUser\passivbot_v6\venv_pb6\Scripts\python.exe
+   pb7dir = C:\Users\YourUser\passivbot_v7
+   pb7venv = C:\Users\YourUser\passivbot_v7\venv_pb7\Scripts\python.exe
+   pbname = my_windows_master
+
+   [pbremote]
+   bucket = your_bucket_name:
+
+   [coinmarketcap]
+   api_key = your_coinmarketcap_api_key_here
+   fetch_limit = 1000
+   fetch_interval = 4
+   metadata_interval = 1
+
+   [pbdata]
+   fetch_users = ['user1', 'user2']
+   ```
+
+   **Configuration Details:**
+   - `pbdir` / `pb7dir`: Full paths to your passivbot v6 and v7 directories (if you have them installed locally)
+   - `pbvenv` / `pb7venv`: Full paths to the Python executable in your passivbot virtual environments
+   - `pbname`: Unique identifier for this master node (used for VPS management)
+   - `bucket`: Your rclone bucket name (optional, needed only if managing remote VPS instances)
+   - `api_key`: Your CoinMarketCap API key (get free at https://coinmarketcap.com/api/)
+   - `fetch_limit`: Number of top coins to fetch from CoinMarketCap (1000 recommended, max 5000)
+   - `fetch_interval`: Hours between CoinMarketCap data refreshes (4 = every 4 hours)
+   - `metadata_interval`: Days between metadata refreshes (1 = daily)
+   - `fetch_users`: List of user accounts to fetch data for in PBData service
+
+   **Important Notes:**
+   - Use forward slashes `/` or double backslashes `\\` in Windows paths
+   - If you don't have passivbot installed locally (managing only remote VPS), you can skip `pbdir`, `pbvenv`, `pb7dir`, `pb7venv`
+   - CoinMarketCap API key is **required** for coin filtering features to work - get a free API key at https://coinmarketcap.com/api/
+   - After editing `pbgui.ini`, go to **Information → Coin Data** and click the sync button (⟳) to fetch exchange symbols
+
+   **First Time Setup Steps:**
+   1. Run `streamlit run pbgui.py`
+   2. Login with default password: `a`
+   3. Go to **System → Services** and configure paths
+   4. Edit `pbgui.ini` with your settings (especially CoinMarketCap API key)
+   5. Go to **Information → Coin Data** and click sync button (⟳) to fetch exchange symbols
+   6. Go to **System → API Keys** and add your exchange API credentials
+
 ### Docker (Any OS)
 Want to use **Docker** instead? Follow this [Quickstart guide](https://github.com/LeonSpors/passivbot-docker).
 
