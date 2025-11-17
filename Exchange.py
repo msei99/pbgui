@@ -956,6 +956,8 @@ class Exchange:
                             self.cpt.append(v["id"])
                         self.swap.append(v["id"])
                 elif self.id == "binance":
+                    # Only include USDT-margined futures (linear perpetuals)
+                    # USDC pairs are spot markets and excluded by swap filter
                     if v["id"].endswith('USDT'):
                         # print(v)
                         self.swap.append(v["id"])
