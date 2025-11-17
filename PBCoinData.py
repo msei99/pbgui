@@ -624,7 +624,7 @@ class CoinData:
                     exc.fetch_symbols()
                     print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange}')
                 except Exception as e:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Failed to fetch symbols for {exchange}')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Failed to fetch symbols for {exchange}: {type(e).__name__}: {str(e)}')
             self.update_symbols_ts = now_ts
             self._symbols = []
             self._symbols_cpt = []
