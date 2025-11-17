@@ -1012,6 +1012,12 @@ class Exchange:
         else:
             symbol = f'{symbol[0:-4]}/USDT:USDT'
         # print(symbol)
+        # Ensure markets are loaded (might be None if connect() failed)
+        if not self._markets:
+            try:
+                self._markets = self.instance.load_markets()
+            except:
+                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         if symbol not in self._markets:
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         symbol_info = self._markets[symbol]

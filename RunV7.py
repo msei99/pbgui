@@ -481,17 +481,23 @@ class V7Instance():
         col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,1])
         with col1:
             # Select User
+            # Check if there are any v7 users configured
+            v7_users = self._users.list_v7()
+            if not v7_users:
+                st.error("No v7 users configured. Please add API keys in System → API Keys.", icon="⚠️")
+                st.stop()
+
             if "edit_run_v7_user" in st.session_state:
                 if st.session_state.edit_run_v7_user != self.user:
                     self.user = st.session_state.edit_run_v7_user
                     st.session_state.pbcoindata.exchange = self._users.find_exchange(self.user)
             else:
-                if self.user in self._users.list_v7():
+                if self.user in v7_users:
                     st.session_state.edit_run_v7_user = self.user
                 else:
-                    st.session_state.edit_run_v7_user = self._users.list_v7()[0]
+                    st.session_state.edit_run_v7_user = v7_users[0]
                 st.session_state.pbcoindata.exchange = self._users.find_exchange(self.user)
-            st.selectbox('User',self._users.list_v7(), key="edit_run_v7_user")
+            st.selectbox('User', v7_users, key="edit_run_v7_user")
         with col2:
             self.fragment_enabled_on()
         with col3:

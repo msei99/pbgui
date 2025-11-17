@@ -374,11 +374,15 @@ class CoinData:
             return
 
     def fetch_data(self):
+        if not self.api_key:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No CoinMarketCap API key configured. Please add API key in Information → Coin Data.')
+            return False
         url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
         parameters = {
             'start':'1',
             'limit':self.fetch_limit
         }
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Fetching coin data - URL: {url}, Limit: {self.fetch_limit}')
         headers = {
             'Accepts': 'application/json',
             'X-CMC_PRO_API_KEY': self.api_key,
@@ -387,40 +391,94 @@ class CoinData:
         session.headers.update(headers)
         try:
             response = session.get(url, params=parameters)
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Response status: {response.status_code}')
             if response.status_code == 200:
                 self.data = json.loads(response.text)
                 self.fetch_api_status()
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap data. Credits left this month: {self.credits_left}')
-            else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data')
+                return True
+            elif response.status_code == 401:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: CoinMarketCap API key is invalid (401). Please check your API key in Information → Coin Data.')
                 self.data = None
+                return False
+            elif response.status_code == 429:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: CoinMarketCap rate limit exceeded (429). Will retry after fetch_interval. Increase interval in Coin Data settings.')
+                self.data = None
+                return False
+            else:
+                # Parse error response for more details
+                try:
+                    error_data = json.loads(response.text)
+                    error_msg = error_data.get('status', {}).get('error_message', 'Unknown error')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data (HTTP {response.status_code})')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: API Error: {error_msg}')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Full response: {response.text[:500]}')
+                except:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data (HTTP {response.status_code})')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Response body: {response.text[:500]}')
+                self.data = None
+                return False
         except (ConnectionError, Timeout, TooManyRedirects) as e:
-            return e
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: CoinMarketCap API exception: {e}')
+            return False
     
     def fetch_metadata(self):
         # make sure we have the latest coindata
         if self.has_new_data():
             self.load_data()
             self.load_symbols()
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: fetch_metadata - data exists: {self.data is not None}')
         if not self.data:
-            return
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: No coin data available, cannot fetch metadata')
+            return False
         if "data" not in self.data:
-            return
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: No "data" key in coin data, cannot fetch metadata')
+            return False
+        try:
+            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} DEBUG: fetch_metadata - coin listings count: {len(self.data.get('data', []))}")
+        except Exception as e:
+            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} DEBUG: fetch_metadata - failed to read coin listings count: {e}")
         # Create symbols_ids list
         symbols_ids = []
+        matched_symbol_examples = []
+        missing_symbol_examples = []
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: symbols_all count: {len(self.symbols_all)}')
         for symbol in self.symbols_all:
             sym = symbol[0:-4]
             if sym in SYMBOLMAP:
                 sym = SYMBOLMAP[sym]
+            found = False
             for coin in self.data["data"]:
                 if coin["symbol"] == sym:
                     symbols_ids.append(coin["id"])
+                    found = True
+                    if len(matched_symbol_examples) < 5:
+                        try:
+                            matched_symbol_examples.append(f'{symbol}->{sym}->{coin["id"]}')
+                        except Exception:
+                            matched_symbol_examples.append(f'{symbol}->{sym}->?')
+                    break
+            if not found and len(missing_symbol_examples) < 5:
+                missing_symbol_examples.append(f'{symbol}->{sym}')
         # filter out duplicate ids
         symbols_ids = list(set(symbols_ids))
+        print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} DEBUG: Found {len(symbols_ids)} coin IDs to fetch metadata for")
+        if matched_symbol_examples:
+            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} DEBUG: Example symbol to id mappings: {'; '.join(matched_symbol_examples)}")
+        if missing_symbol_examples:
+            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} DEBUG: Example symbols with no CoinMarketCap match: {'; '.join(missing_symbol_examples)}")
+
+        if not symbols_ids:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No symbol IDs found to fetch metadata. Check if symbols_all is populated.')
+            return False
+
         # Fetch notice from coinmarketcap
         url = 'https://pro-api.coinmarketcap.com//v2/cryptocurrency/info'
+        id_string = ','.join(map(str, symbols_ids))
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Fetching metadata for {len(symbols_ids)} coins')
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: ID string length: {len(id_string)} chars (first 100: {id_string[:100]}...)')
         parameters = {
-            'id': ','.join(map(str, symbols_ids))
+            'id': id_string
         }
         headers = {
             'Accepts': 'application/json',
@@ -430,15 +488,32 @@ class CoinData:
         session.headers.update(headers)
         try:
             response = session.get(url, params=parameters)
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Metadata response status: {response.status_code}')
             if response.status_code == 200:
                 self.metadata = json.loads(response.text)
                 self.fetch_api_status()
                 print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap metadata. Credits left this month: {self.credits_left}')
-            else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap metadata')
+                return True
+            elif response.status_code == 429:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: CoinMarketCap rate limit exceeded (429). Will retry after metadata_interval. Increase interval in Coin Data settings.')
                 self.metadata = None
+                return False
+            else:
+                # Parse error response for more details
+                try:
+                    error_data = json.loads(response.text)
+                    error_msg = error_data.get('status', {}).get('error_message', 'Unknown error')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap metadata (HTTP {response.status_code})')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: API Error: {error_msg}')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Full response: {response.text[:500]}')
+                except:
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap metadata (HTTP {response.status_code})')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: Response body: {response.text[:500]}')
+                self.metadata = None
+                return False
         except (ConnectionError, Timeout, TooManyRedirects) as e:
-            return e
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: CoinMarketCap API exception: {e}')
+            return False
 
     def save_metadata(self):
         if not self.metadata:
@@ -467,20 +542,29 @@ class CoinData:
         if Path(f'{coin_path}/coindata.json').exists():
             data_ts = Path(f'{coin_path}/coindata.json').stat().st_mtime
         now_ts = datetime.now().timestamp()
+        # Only fetch if data is stale (respecting fetch_interval)
         if data_ts < now_ts - 3600*self.fetch_interval:
-            self.fetch_data()
-            self.save_data()
-            loadfromfile = False
+            success = self.fetch_data()
+            if success:
+                self.save_data()
+                loadfromfile = False
+            else:
+                # Fetch failed, try to load from file
+                loadfromfile = True
         else:
             loadfromfile = True
+        # Load existing data from file if needed
         if not self.data or loadfromfile:
-            try:
-                with Path(f'{coin_path}/coindata.json').open() as f:
-                    self.data = json.load(f)
-                    self.data_ts = data_ts
-                    return
-            except Exception as e:
-                print(f'Error loading coindata: {e}.')
+            if Path(f'{coin_path}/coindata.json').exists():
+                try:
+                    with Path(f'{coin_path}/coindata.json').open() as f:
+                        self.data = json.load(f)
+                        self.data_ts = data_ts
+                        return
+                except Exception as e:
+                    print(f'Error loading coindata: {e}. Will retry on next interval.')
+            else:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No cached coindata found. Need successful API fetch first.')
     
     def load_metadata(self):
         pbgdir = Path.cwd()
@@ -489,9 +573,13 @@ class CoinData:
         if Path(f'{coin_path}/metadata.json').exists():
             metadata_ts = Path(f'{coin_path}/metadata.json').stat().st_mtime
         now_ts = datetime.now().timestamp()
+        # Only fetch if metadata is stale (respecting metadata_interval)
         if metadata_ts < now_ts - 3600*24*self.metadata_interval:
-            self.fetch_metadata()
-            self.save_metadata()
+            success = self.fetch_metadata()
+            if success:
+                self.save_metadata()
+            # Don't retry immediately even if fetch failed - respect the interval
+        # Load existing metadata from file if we don't have it in memory
         if not self.metadata and Path(f'{coin_path}/metadata.json').exists():
             try:
                 with Path(f'{coin_path}/metadata.json').open() as f:
@@ -499,7 +587,7 @@ class CoinData:
                     self.metadata_ts = metadata_ts
                     return
             except Exception as e:
-                print(f'Error loading metadata: {e}. Retrying in 5 seconds...')
+                print(f'Error loading metadata: {e}. Will retry on next interval.')
 
     def is_data_fresh(self):
         pbgdir = Path.cwd()
@@ -557,20 +645,27 @@ class CoinData:
                 # add symbol from symbols to symbols_all if not already in symbols_all
                 self._symbols_all += eval(pb_config.get("exchanges", f'{exchange}.swap'))
         self._symbols_all = sorted(list(set(self._symbols_all)))
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: load_symbols_all loaded {len(self._symbols_all)} symbols from pbgui.ini')
+        if not self._symbols_all:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: load_symbols_all found no exchange symbols in [exchanges] section of pbgui.ini')
 
     def list_symbols(self):
         if self.has_new_data():
             self.load_data()
             self.load_symbols()
         if not self.data:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but no coin data loaded.')
             return
         if "data" not in self.data:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but coin data has no \"data\" key.')
             return
         if self.has_new_metadata():
             self.load_metadata()
         if not self.metadata:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but no metadata loaded.')
             return
         if "data" not in self.metadata:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but metadata has no \"data\" key.')
             return
         self._symbols_data = []
         self._symbols_notice = []

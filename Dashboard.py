@@ -90,7 +90,11 @@ class Dashboard():
         self.cols = 1
         self.rows = 1
         self.dashboard_config = {}
-        self.user = st.session_state.users.users[0]
+        # Handle empty user list gracefully
+        if st.session_state.users.users:
+            self.user = st.session_state.users.users[0]
+        else:
+            self.user = None
         self.db = Database()
         self.view_orders_position = []
         # Ensure last DB backup session state is available across dashboard switches

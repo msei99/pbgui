@@ -58,10 +58,7 @@ def setup_coindata():
         if st.button(":material/home:"):
             del st.session_state.setup_coindata
             st.rerun()
-        if st.button(":material/save:"):
-            coindata.save_config()
-            info_popup("Config saved")
-    # Init session states for keys
+    # Init session states for keys - MUST happen BEFORE save button check
     if "edit_coindata_api_key" in st.session_state:
         if st.session_state.edit_coindata_api_key != coindata.api_key:
             coindata.api_key = st.session_state.edit_coindata_api_key
@@ -74,6 +71,13 @@ def setup_coindata():
     if "edit_coindata_metadata_interval" in st.session_state:
         if st.session_state.edit_coindata_metadata_interval != coindata.metadata_interval:
             coindata.metadata_interval = st.session_state.edit_coindata_metadata_interval
+    # Save button - check AFTER updating values from inputs
+    if 'setup_coindata' in st.session_state:
+        if st.button(":material/save:", use_container_width=True):
+            coindata.save_config()
+            del st.session_state.setup_coindata
+            info_popup("Config saved successfully! API key will persist across restarts.")
+            st.rerun()
     # Edit
     st.text_input("CoinMarketCap API_Key", value=coindata.api_key, type="password", key="edit_coindata_api_key", help=pbgui_help.coindata_api_key)
     st.number_input("Fetch Limit", min_value=200, max_value=5000, value=coindata.fetch_limit, step=200, format="%.d", key="edit_coindata_fetch_limit", help=pbgui_help.coindata_fetch_limit)

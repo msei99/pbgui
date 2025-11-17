@@ -138,10 +138,12 @@ class OptimizeMultiQueue:
         pb_config.read('pbgui.ini')
         if not pb_config.has_section("optimize_multi"):
             pb_config.add_section("optimize_multi")
+        # Ensure option exists with default
+        if not pb_config.has_option("optimize_multi", "autostart"):
             pb_config.set("optimize_multi", "autostart", "False")
             with open('pbgui.ini', 'w') as f:
                 pb_config.write(f)
-        self._autostart = eval(pb_config.get("optimize_multi", "autostart"))
+        self._autostart = eval(pb_config.get("optimize_multi", "autostart", fallback="False"))
         if self._autostart:
             self.run()
 
@@ -896,7 +898,7 @@ def main():
                 time.sleep(5)
             pb_config = configparser.ConfigParser()
             pb_config.read('pbgui.ini')
-            if not eval(pb_config.get("optimize_multi", "autostart")):
+            if not eval(pb_config.get("optimize_multi", "autostart", fallback="False")):
                 return
             if item.status() == "not started":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')

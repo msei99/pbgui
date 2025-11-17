@@ -191,12 +191,17 @@ class BacktestV7Queue:
         pb_config.read('pbgui.ini')
         if not pb_config.has_section("backtest_v7"):
             pb_config.add_section("backtest_v7")
+        # Ensure options exist with defaults
+        if not pb_config.has_option("backtest_v7", "autostart"):
             pb_config.set("backtest_v7", "autostart", "False")
+        if not pb_config.has_option("backtest_v7", "cpu"):
             pb_config.set("backtest_v7", "cpu", "1")
+        # Write back if we added any options
+        if not pb_config.has_option("backtest_v7", "autostart") or not pb_config.has_option("backtest_v7", "cpu"):
             with open('pbgui.ini', 'w') as f:
                 pb_config.write(f)
-        self._autostart = eval(pb_config.get("backtest_v7", "autostart"))
-        self._cpu = int(pb_config.get("backtest_v7", "cpu"))
+        self._autostart = eval(pb_config.get("backtest_v7", "autostart", fallback="False"))
+        self._cpu = int(pb_config.get("backtest_v7", "cpu", fallback="1"))
         if self._autostart:
             self.run()
 
@@ -204,7 +209,7 @@ class BacktestV7Queue:
     def cpu(self):
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
-        self._cpu = int(pb_config.get("backtest_v7", "cpu"))
+        self._cpu = int(pb_config.get("backtest_v7", "cpu", fallback="1"))
         if self._cpu > multiprocessing.cpu_count():
             self._cpu = multiprocessing.cpu_count()
         return self._cpu
@@ -2138,7 +2143,7 @@ def main():
                 time.sleep(5)
             pb_config = configparser.ConfigParser()
             pb_config.read('pbgui.ini')
-            if not eval(pb_config.get("backtest_v7", "autostart")):
+            if not eval(pb_config.get("backtest_v7", "autostart", fallback="False")):
                 return
             if item.status() == "not started":
                 print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.filename} started')

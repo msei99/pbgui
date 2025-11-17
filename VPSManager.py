@@ -6,7 +6,6 @@ import json
 from pathlib import Path, PurePath
 from datetime import datetime
 import glob
-import ansible_runner
 import re
 import getpass
 import shutil
@@ -16,6 +15,19 @@ import subprocess
 import re
 import shlex
 from pbgui_purefunc import pbdir, pbvenv, pb7dir, pb7venv, load_ini
+
+# Conditional import for ansible_runner (Unix-only)
+try:
+    import ansible_runner
+    ANSIBLE_AVAILABLE = True
+except (ImportError, ModuleNotFoundError) as e:
+    ANSIBLE_AVAILABLE = False
+    if platform.system() == 'Windows':
+        # Expected on Windows - ansible requires fcntl which is Unix-only
+        pass
+    else:
+        # Unexpected on Linux/Mac - log the error
+        print(f"Warning: ansible_runner could not be imported: {e}")
 
 PBGDIR = Path.cwd()
 PBDIR = pbdir()
@@ -717,6 +729,11 @@ class VPSManager:
         return VPS()
 
     def init_vps(self, vps : VPS, debug = False):
+        if not ANSIBLE_AVAILABLE:
+            vps.init_status = "failed"
+            vps.init_log = "Error: Ansible is not available on this platform (Windows). VPS management features require Linux/Mac.\n\nTo use VPS management:\n1. Run PBGui on a Linux/Mac system, OR\n2. Manage your VPS manually using SSH"
+            vps.save()
+            return
         vps.setup_status = None
         vps.save()
         vps.remove_init_log()
@@ -752,6 +769,11 @@ class VPSManager:
         )
     
     def setup_vps(self, vps : VPS, debug = False):
+        if not ANSIBLE_AVAILABLE:
+            vps.setup_status = "failed"
+            vps.setup_log = "Error: Ansible is not available on this platform (Windows). VPS management features require Linux/Mac.\n\nTo use VPS management:\n1. Run PBGui on a Linux/Mac system, OR\n2. Manage your VPS manually using SSH"
+            vps.save()
+            return
         vps.save()
         vps.remove_setup_log()
         vps.setup_log = ""
@@ -787,6 +809,11 @@ class VPSManager:
         )
 
     def update_vps(self, vps : VPS, debug = False):
+        if not ANSIBLE_AVAILABLE:
+            vps.update_status = "failed"
+            vps.update_log = "Error: Ansible is not available on this platform (Windows). VPS management features require Linux/Mac.\n\nTo use VPS management:\n1. Run PBGui on a Linux/Mac system, OR\n2. Manage your VPS manually using SSH"
+            vps.save()
+            return
         vps.update_status = None
         vps.save()
         vps.remove_update_log()
@@ -822,6 +849,9 @@ class VPSManager:
         )
 
     def fetch_log(self, vps : VPS, debug = False):
+        if not ANSIBLE_AVAILABLE:
+            # Silently fail or show error - this is a non-critical feature
+            return
         # vps.update_status = None
         vps.save()
         # vps.remove_update_log()
@@ -852,6 +882,10 @@ class VPSManager:
         )
 
     def update_master(self, debug = False, sudo_pw = None):
+        if not ANSIBLE_AVAILABLE:
+            self.update_status = "failed"
+            self.update_log = "Error: Ansible is not available on this platform (Windows). Update master feature requires Linux/Mac.\n\nTo update on Windows, manually run:\ngit pull\npip install -r requirements.txt"
+            return
         self.update_status = None
         self.privat_data_dir = Path(f'{PBGDIR}/data/vpsmanager/tmp')
         self.privat_data_dir.mkdir(parents=True, exist_ok=True)

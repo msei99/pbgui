@@ -378,7 +378,7 @@ class PBRemote():
         Initializes the PBRemote instance, sets up directories, loads configuration,
         and checks for rclone installation and configuration.
         """
-        self.error = None          
+        self.error = None
         self.remote_servers = []
         self.local_run = PBRun()
         self.index = 0
@@ -387,6 +387,13 @@ class PBRemote():
         self.systemts = 0
         self.rtd = 0
         pbgdir = Path.cwd()
+        # Initialize pidfile early to prevent AttributeError
+        self.piddir = Path(f'{pbgdir}/data/pid')
+        if not self.piddir.exists():
+            self.piddir.mkdir(parents=True)
+        self.pidfile = Path(f'{self.piddir}/pbremote.pid')
+        self.my_pid = None
+
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
         # Init pbname
@@ -423,12 +430,7 @@ class PBRemote():
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
-            Path(self.cmd_path).mkdir(parents=True)  
-        self.piddir = Path(f'{pbgdir}/data/pid')
-        if not self.piddir.exists():
-            self.piddir.mkdir(parents=True)
-        self.pidfile = Path(f'{self.piddir}/pbremote.pid')
-        self.my_pid = None
+            Path(self.cmd_path).mkdir(parents=True)
         self.bucket = None
         self.bucket_type = "s3"
         self.bucket_endpoint = None
