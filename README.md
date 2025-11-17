@@ -1,5 +1,7 @@
 # GUI for Passivbot
 
+> This repository is a **fork** of the original `msei99/pbgui` project, focused on running **PBGui Master on a Windows 11 desktop PC** as the masternode that manages remote Linux VPS instances running passivbot.
+
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk
@@ -26,11 +28,11 @@ It has the following functions:
 ### Requirements
 - Python 3.10
 - Streamlit 1.50.0
-- Linux
+- Linux (Ubuntu 24.04 recommended) or Windows 11
 
 ### Recommendation
 
-- Master Server: Linux with 32GB of memory and 8 CPUs.
+- Master Server: Windows 11 desktop PC (this fork’s primary target) or Linux server with sufficient resources (e.g. 32GB RAM, 8 CPUs).
 - VPS for Running Passivbot: Minimum specifications of 1 CPU, 1GB Memory, and 10GB SSD.
 
 ### Get your VPS for running passivbot
@@ -139,7 +141,7 @@ curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.s
 
 Clone pbgui and passivbot v6 and v7
 ```
-git clone https://github.com/msei99/pbgui.git
+git clone https://github.com/djienne/pbgui.git
 git clone https://github.com/enarjord/passivbot.git's
 ```
 python3.10 -m venv venv_pbgui
@@ -170,6 +172,39 @@ cd pbgui
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+### Windows 11 installation (no WSL)
+
+These steps describe how to run PBGui directly on Windows 11 using Python 3.10 from Chocolatey.
+
+1. **Install prerequisites (PowerShell as Administrator)**
+   ```powershell
+   choco install python --version=3.10.11 -y   # if Python 3.10 is not installed
+   choco install git -y                        # to clone the repo
+   choco install rclone -y                     # optional, needed for PBRemote/VPS buckets
+   ```
+
+2. **Clone the repository**
+   ```powershell
+   git clone https://github.com/djienne/pbgui.git
+   cd pbgui
+   ```
+
+3. **Create and activate a virtual environment**
+   ```powershell
+   py -3.10 -m venv venv_pbgui
+   .\venv_pbgui\Scripts\activate
+   python -m pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+   > Note: Some VPS‑manager features use Ansible to manage Linux VPSs. Ansible itself only targets Linux hosts; on Windows, use these features only to manage remote Linux servers, not the local machine.
+
+4. **Run PBGui on Windows**
+   ```powershell
+   streamlit run pbgui.py
+   ```
+   Then open `http://localhost:8501` in your browser. On first run, configure your `pb6/pb7` and virtualenv paths in the GUI. For most Windows users it is recommended to let PBGui manage **remote Linux** VPSs (as described in the Linux sections above) instead of running passivbot locally.
+
 ### Docker (Any OS)
 Want to use **Docker** instead? Follow this [Quickstart guide](https://github.com/LeonSpors/passivbot-docker).
 

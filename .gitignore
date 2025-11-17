@@ -1,0 +1,38 @@
+# Python virtual environments
+venv_pbgui/
+venv_pb6/
+venv_pb7/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Runtime data
+data/
+
+# Configuration files with secrets
+pbgui.ini
+api-keys.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
