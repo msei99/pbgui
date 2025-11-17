@@ -27,6 +27,14 @@ class Services():
         self.pbdata = st.session_state.pbdata
         self.pbcoindata = st.session_state.pbcoindata
 
+        # Auto-start PBData and PBCoinData on first initialization
+        if "services_autostarted" not in st.session_state:
+            if not self.pbdata.is_running():
+                self.pbdata.run()
+            if not self.pbcoindata.is_running():
+                self.pbcoindata.run()
+            st.session_state.services_autostarted = True
+
     def stop_all_started(self):
         self.pbrun_was_running = False
         self.pbremote_was_running = False
