@@ -9,6 +9,17 @@ def view_coindata():
         if st.button(":material/settings:"):
             st.session_state.setup_coindata = True
             st.rerun()
+        if st.button(":material/sync:", help="Update exchange symbols from all exchanges"):
+            with st.spinner("Fetching symbols from exchanges... This may take a minute."):
+                success = coindata.update_symbols(force=True)
+                if success:
+                    # Force reload symbols
+                    coindata._symbols_all = []
+                    coindata.load_symbols_all()
+                    st.success(f"Symbols updated successfully! Found {len(coindata.symbols_all)} total symbols across all exchanges.")
+                else:
+                    st.error("Failed to update symbols. Check the debug log for details.")
+            st.rerun()
     # Init session states for keys
     if "view_coindata_exchange" in st.session_state:
         if st.session_state.view_coindata_exchange != coindata.exchange:
@@ -42,11 +53,23 @@ def view_coindata():
     with col_3:
         st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="view_coindata_vol_mcap", help=pbgui_help.vol_mcap)
     st.multiselect("Tags", options=coindata.all_tags, default=[], key="edit_coindata_tags", help=pbgui_help.coindata_tags)
-    column_config = {
-        "price": st.column_config.NumberColumn(format="%.8f"),
-        "link": st.column_config.LinkColumn(display_text="CoinMarketCap")
-    }
-    if coindata.symbols_data:
+
+    # Check if symbols are available
+    if not coindata.symbols_all:
+        st.warning("No exchange symbols found. Please click the sync button (⟳) in the sidebar to fetch symbols from exchanges before using CoinMarketCap features.")
+        st.info("The sync process will fetch the latest trading symbols from all supported exchanges. This is required for CoinMarketCap integration to work.")
+    elif not coindata.symbols_data:
+        if not coindata.data:
+            st.info("CoinMarketCap data will be fetched automatically. Please wait...")
+        elif not coindata.metadata:
+            st.info("CoinMarketCap metadata is being fetched. This may take a moment...")
+        else:
+            st.info("No symbols match your current filter criteria. Try adjusting the market cap, vol/mcap, or tag filters.")
+    else:
+        column_config = {
+            "price": st.column_config.NumberColumn(format="%.8f"),
+            "link": st.column_config.LinkColumn(display_text="CoinMarketCap")
+        }
         st.dataframe(coindata.symbols_data, height=36+(len(coindata.symbols_data))*35, column_config=column_config)
 
 def setup_coindata():

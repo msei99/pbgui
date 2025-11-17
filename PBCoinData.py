@@ -609,20 +609,26 @@ class CoinData:
                 return True
         return
 
-    def update_symbols(self):
+    def update_symbols(self, force: bool = False):
         now_ts = datetime.now().timestamp()
-        if self.update_symbols_ts < now_ts - 3600*24:
+        if force or self.update_symbols_ts < now_ts - 3600*24:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Updating exchange symbols...')
+            success_count = 0
             for exchange in self.exchanges:
                 exc = Exchange(exchange)
                 try:
                     exc.fetch_symbols()
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange}')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange} - {len(exc.swap)} symbols fetched')
+                    success_count += 1
                 except Exception as e:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Failed to fetch symbols for {exchange}')
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Failed to fetch symbols for {exchange}: {e}')
             self.update_symbols_ts = now_ts
             self._symbols = []
             self._symbols_cpt = []
             self._symbols_all = []
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Symbol update complete - {success_count}/{len(self.exchanges)} exchanges updated')
+            return success_count > 0
+        return False
 
     def load_symbols(self):
         pb_config = configparser.ConfigParser()
@@ -647,7 +653,8 @@ class CoinData:
         self._symbols_all = sorted(list(set(self._symbols_all)))
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: load_symbols_all loaded {len(self._symbols_all)} symbols from pbgui.ini')
         if not self._symbols_all:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: load_symbols_all found no exchange symbols in [exchanges] section of pbgui.ini')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No exchange symbols found in pbgui.ini. CoinMarketCap features require exchange symbols to be fetched first.')
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Info: To fix this, click the "Update Symbols" button in the Coin Data page, or start the PBCoinData background service.')
 
     def list_symbols(self):
         if self.has_new_data():

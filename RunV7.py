@@ -386,6 +386,9 @@ class V7Instance():
         for coin in list(set(self.config.live.approved_coins.long + self.config.live.approved_coins.short)):
             if coin in st.session_state.pbcoindata.symbols_notices:
                 st.warning(f'{coin}: {st.session_state.pbcoindata.symbols_notices[coin]}')
+        # Check if exchange symbols are available
+        if not st.session_state.pbcoindata.symbols:
+            st.error(f"No exchange symbols available for {st.session_state.pbcoindata.exchange}. Please go to Information → Coin Data and click the sync button (⟳) to fetch symbols from exchanges.")
         # Select approved and ignored coins
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
