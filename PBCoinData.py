@@ -79,6 +79,9 @@ SYMBOLMAP = {
    }
 
 class CoinData:
+    # Class-level variables to track which warnings have been printed
+    _warnings_printed = set()
+
     def __init__(self):
         pbgdir = Path.cwd()
         self.piddir = Path(f'{pbgdir}/data/pid')
@@ -469,7 +472,10 @@ class CoinData:
             print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} DEBUG: Example symbols with no CoinMarketCap match: {'; '.join(missing_symbol_examples)}")
 
         if not symbols_ids:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No symbol IDs found to fetch metadata. Check if symbols_all is populated.')
+            warning_key = 'fetch_metadata_no_symbol_ids'
+            if warning_key not in CoinData._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No symbol IDs found to fetch metadata. Check if symbols_all is populated.')
+                CoinData._warnings_printed.add(warning_key)
             return False
 
         # Fetch notice from coinmarketcap
@@ -647,25 +653,40 @@ class CoinData:
         self._symbols_all = sorted(list(set(self._symbols_all)))
         print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} DEBUG: load_symbols_all loaded {len(self._symbols_all)} symbols from pbgui.ini')
         if not self._symbols_all:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: load_symbols_all found no exchange symbols in [exchanges] section of pbgui.ini')
+            warning_key = 'load_symbols_all_no_symbols'
+            if warning_key not in CoinData._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: load_symbols_all found no exchange symbols in [exchanges] section of pbgui.ini')
+                CoinData._warnings_printed.add(warning_key)
 
     def list_symbols(self):
         if self.has_new_data():
             self.load_data()
             self.load_symbols()
         if not self.data:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but no coin data loaded.')
+            warning_key = 'list_symbols_no_data'
+            if warning_key not in CoinData._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but no coin data loaded.')
+                CoinData._warnings_printed.add(warning_key)
             return
         if "data" not in self.data:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but coin data has no \"data\" key.')
+            warning_key = 'list_symbols_no_data_key'
+            if warning_key not in CoinData._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but coin data has no \"data\" key.')
+                CoinData._warnings_printed.add(warning_key)
             return
         if self.has_new_metadata():
             self.load_metadata()
         if not self.metadata:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but no metadata loaded.')
+            warning_key = 'list_symbols_no_metadata'
+            if warning_key not in CoinData._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but no metadata loaded.')
+                CoinData._warnings_printed.add(warning_key)
             return
         if "data" not in self.metadata:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but metadata has no \"data\" key.')
+            warning_key = 'list_symbols_metadata_no_data_key'
+            if warning_key not in CoinData._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: list_symbols called but metadata has no \"data\" key.')
+                CoinData._warnings_printed.add(warning_key)
             return
         self._symbols_data = []
         self._symbols_notice = []

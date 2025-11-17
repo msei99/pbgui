@@ -373,6 +373,9 @@ class PBRemote():
     """
     PBRemote class is used to manage the local server and synchronizing data from the remote storage.
     """
+    # Class-level variables to track which warnings have been printed
+    _warnings_printed = set()
+
     def __init__(self):
         """
         Initializes the PBRemote instance, sets up directories, loads configuration,
@@ -424,9 +427,15 @@ class PBRemote():
                 return
         # Print Warning if only pbdir or pb7dir configured
         if not self.pbdir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+            warning_key = 'pbremote_no_pbdir'
+            if warning_key not in PBRemote._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+                PBRemote._warnings_printed.add(warning_key)
         if not self.pb7dir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
+            warning_key = 'pbremote_no_pb7dir'
+            if warning_key not in PBRemote._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
+                PBRemote._warnings_printed.add(warning_key)
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():

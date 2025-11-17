@@ -793,6 +793,9 @@ class PBRun():
 
     It does so with update_status_*.cmd, and activate_*.cmd. These files are created while using PBGui, and when PBRun receives activate_*.cmd, it creates the single of multi instances for passivbot, when it receives update_status_*.cmd, it inform on the status of this instances, so the bot specified in the status can start instances of passivbot.
     """
+    # Class-level variables to track which warnings have been printed
+    _warnings_printed = set()
+
     def __init__(self):
         # self.run_instances = []
         self.coindata = CoinData()
@@ -861,9 +864,15 @@ class PBRun():
                 return
         # Print Warning if only pbdir or pb7dir configured
         if not self.pbdir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+            warning_key = 'pbrun_no_pbdir'
+            if warning_key not in PBRun._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+                PBRun._warnings_printed.add(warning_key)
         if not self.pb7dir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
+            warning_key = 'pbrun_no_pb7dir'
+            if warning_key not in PBRun._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
+                PBRun._warnings_printed.add(warning_key)
         # Init pbvenvs
         self.pbvenv = None
         self.pb7venv = None
@@ -882,9 +891,15 @@ class PBRun():
                 return
         # Print Warning if only pbvenv or pb7venv configured
         if not self.pbvenv:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot venv python interpreter configured in pbgui.ini')
+            warning_key = 'pbrun_no_pbvenv'
+            if warning_key not in PBRun._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot venv python interpreter configured in pbgui.ini')
+                PBRun._warnings_printed.add(warning_key)
         if not self.pb7venv:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 venv python interpreter configured in pbgui.ini')
+            warning_key = 'pbrun_no_pb7venv'
+            if warning_key not in PBRun._warnings_printed:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 venv python interpreter configured in pbgui.ini')
+                PBRun._warnings_printed.add(warning_key)
         # Init paths
         self.multi_path = f'{self.pbgdir}/data/multi'
         self.single_path = f'{self.pbgdir}/data/instances'
