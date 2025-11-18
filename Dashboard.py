@@ -19,14 +19,14 @@ import time
 # in `view()` to set each fragment's `run_every` interval.
 # Adjust these values to tune how often each dashboard view reruns.
 DASHBOARD_VIEW_REFRESH = {
-    'pnl': 5,
-    'adg': 5,
-    'ppl': 10,
+    'pnl': 60,
+    'adg': 60,
+    'ppl': 60,
     'income': 30,
-    'top_symbols': 30,
+    'top_symbols': 60,
     'balance': 10,
     'positions': 5,
-    'orders': 10,
+    'orders': 15,
 }
 class Dashboard():
 
