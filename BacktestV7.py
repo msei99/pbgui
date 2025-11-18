@@ -953,11 +953,33 @@ class BacktestV7Result:
         self.ed = self.config.backtest.end_date
         self.adg = self.result["adg"]
         self.drawdown_worst = self.result["drawdown_worst"]
+        self.equity_balance_diff_neg_max = self.result["equity_balance_diff_neg_max"]
         self.sharpe_ratio = self.result["sharpe_ratio"]
         self.starting_balance = self.config.backtest.starting_balance
         self.be = None
         self.final_balance, self.final_balance_btc = self.load_final_balance()
         self.fills = None
+        # If the analysis indicates liquidation, reflect that in the final balances
+        try:
+            if self.is_liquidated():
+                self.final_balance = 0
+                self.final_balance_btc = 0
+        except Exception:
+            pass
+
+    def is_liquidated(self) -> bool:
+        """Return True if the backtest ended in liquidation.
+
+        The analysis writes `equity_balance_diff_neg_max` as the maximum negative
+        relative difference between equity and balance. If this value is >= 1.0
+        the account reached zero (or worse) and can be considered liquidated.
+        """
+        try:
+            if self.equity_balance_diff_neg_max is None:
+                return False
+            return float(self.equity_balance_diff_neg_max) >= 1.0
+        except Exception:
+            return False
     
     def remove(self):
         rmtree(self.result_path)
@@ -1024,25 +1046,28 @@ class BacktestV7Result:
                 self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
 
     def view_plot(self):
+        # Note: liquidation banner is displayed once above `view_chart_be`
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
         balance_and_equity_btc = Path(f'{self.result_path}/balance_and_equity_btc.png')
         if balance_and_equity.exists():
-            st.image(str(balance_and_equity), use_column_width=True)
+            st.image(str(balance_and_equity), use_container_width=True)
         else:
             st.warning("No balance and equity plot found")
         if balance_and_equity_btc.exists():
-            st.image(str(balance_and_equity_btc), use_column_width=True)
+            st.image(str(balance_and_equity_btc), use_container_width=True)
 
     def view_fills(self):
+        # Fills are always shown; liquidation banner shown above charts
         p = str(Path(f'{self.result_path}/fills_plots/*.png'))
         fills = glob.glob(p)
         if fills:
             for fill in fills:
-                st.image(fill, use_column_width=True)
+                st.image(fill, use_container_width=True)
         else:
             st.warning("No fills plot found")
 
     def view(self):
+        # Overview: show result/config; liquidation banner is shown above charts
         col1, col2 = st.columns([1,1])
         with col1:
             st.code(json.dumps(self.result, indent=4))
@@ -1052,6 +1077,8 @@ class BacktestV7Result:
     # Create Chart with plotly
     def view_chart_be(self):
         if self.be is not None:
+            if self.is_liquidated():
+                st.error(f"Backtest ended in liquidation (equity_balance_diff_neg_max={self.equity_balance_diff_neg_max})")
             col1, col2 = st.columns([1,9], vertical_alignment="bottom")
             with col1:
                 st.checkbox("logarithmic", key=f"backtest_v7_{self.result_path}_be_log")
@@ -1074,6 +1101,7 @@ class BacktestV7Result:
     # Create be_btc Chart with plotly
     def view_chart_be_btc(self):
         if self.be is not None:
+            # liquidation banner displayed in `view_chart_be`
             col1, col2 = st.columns([1,9], vertical_alignment="bottom")
             with col1:
                 st.checkbox("logarithmic", key=f"backtest_v7_{self.result_path}_be_btc_log")
@@ -1097,6 +1125,7 @@ class BacktestV7Result:
     # Create Drawdown Chart with plotly
     def view_chart_drawdown(self):
         if self.be is not None:
+            # liquidation banner displayed in `view_chart_be`
             fig = go.Figure()
 
             equity = self.be['equity']
@@ -1126,6 +1155,7 @@ class BacktestV7Result:
     # Create Drawdown Chart with plotly
     def view_chart_drawdown_btc(self):
         if self.be is not None:
+            # liquidation banner displayed in `view_chart_be`
             fig = go.Figure()
 
             equity = self.be['equity_btc']
