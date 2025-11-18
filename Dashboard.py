@@ -156,11 +156,16 @@ class Dashboard():
         return DASHBOARD_VIEW_REFRESH.get(view_key, 5)
         
     def cleanup_dashboard_session_state(self):
-        dashboard_keys = {key: val for key, val in st.session_state.items()
-            if key.startswith("dashboard_") or key.startswith("view_orders_")}
-        for key in dashboard_keys.copy():
-            if key in st.session_state:
-                del st.session_state[key]
+        # Snapshot keys first to avoid Streamlit session_state KeyError when
+        # session state is mutated during iteration (concurrent access).
+        try:
+            keys = list(st.session_state.keys())
+        except Exception:
+            keys = []
+        dashboard_keys = [k for k in keys if k.startswith("dashboard_") or k.startswith("view_orders_")]
+        for key in dashboard_keys:
+            # Use pop with default to avoid KeyError if another part removed it
+            st.session_state.pop(key, None)
 
     def swap(self, from_row, to_row, from_col, to_col):
         dashboard_type_1 = st.session_state[f'dashboard_type_{from_row}_{from_col}']
