@@ -10,6 +10,7 @@ import psutil
 import subprocess
 import shlex
 import getpass
+import concurrent.futures
 
 
 def list_vps():
@@ -18,7 +19,14 @@ def list_vps():
     timestamp = round(datetime.now().timestamp())
     if timestamp - pbremote.systemts > 3600:
         with st.spinner("Loading git origins..."):
-            pbremote.local_run.load_git_origin()
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(pbremote.local_run.load_git_origin)
+                    future.result(timeout=5)
+            except concurrent.futures.TimeoutError:
+                error_popup("Timeout: 'Loading git origins...' exceeded 5s")
+            except Exception as e:
+                error_popup(f"Error loading git origins: {e}")
         with st.spinner("Loading versions origins..."):
             pbremote.local_run.load_versions_origin()
         with st.spinner("Loading local Versions..."):
