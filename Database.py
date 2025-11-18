@@ -6,11 +6,33 @@ from pbgui_func import PBGDIR
 import shutil
 import sqlite3
 import json
+import time
+import threading
 
 class Database():
     def __init__(self):
         self.db = Path(f'{PBGDIR}/data/pbgui.db')
+        # Global write lock to serialize all write operations
+        self._write_lock = threading.Lock()
         self.create_tables()
+
+    def _log(self, msg: str):
+        """Print a log line with timestamp and module tag."""
+        try:
+            ts = datetime.now().isoformat(sep=" ", timespec="seconds")
+        except TypeError:
+            # Fallback if timespec unsupported
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{ts} [Database] {msg}")
+    
+    def _connect(self):
+        """Create a SQLite connection with busy timeout to reduce locked errors."""
+        conn = sqlite3.connect(self.db, timeout=30)
+        try:
+            conn.execute('PRAGMA busy_timeout=30000')
+        except Exception:
+            pass
+        return conn
     
     # Simple full DB backup: copies the SQLite file to backup/db with timestamp name
     def backup_full_db(self, keep_last: int = 10):
@@ -100,7 +122,7 @@ class Database():
             ]
         # create a database connection
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cursor = conn.cursor()
                 for statement in sql_statements:
                     cursor.execute(statement)
@@ -116,77 +138,130 @@ class Database():
                     # Update existing records in the 'position' table to set 'side' to 'long'
                     cursor.execute("UPDATE position SET side = 'long';")
                     conn.commit()
+                # Improve concurrency across multiple writers
+                try:
+                    cursor.execute('PRAGMA journal_mode=WAL')
+                    cursor.execute('PRAGMA synchronous=NORMAL')
+                    conn.commit()
+                except Exception:
+                    pass
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB create_tables error: {e}")
 
     def update_history(self, user: User):
+        self._log(f"update_history called for user={getattr(user, 'name', user)}")
         history = self.fetch_history(user)
         try:
-            with sqlite3.connect(self.db) as conn:
-                for line in history:
-                    income = [
-                        line['symbol'],
-                        line['timestamp'],
-                        line['income'],
-                        line['uniqueid'],
-                        user.name
-                    ]
-                    self.add_history(conn, income)
+            if history is None:
+                self._log(f"fetch_history returned None for user={user.name}")
+            else:
+                self._log(f"fetch_history returned {len(history)} items for user={user.name}")
+                if len(history) > 0:
+                    try:
+                        self._log(f"fetch_history sample[0] for {user.name}: {history[0]}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Only hold the global write lock while actually writing rows to the
+        # DB so that long-running REST history fetches don't block price
+        # updates and other quick writes.
+        try:
+            if history:
+                with self._write_lock:
+                    with self._connect() as conn:
+                        for line in history:
+                            income = [
+                                line['symbol'],
+                                line['timestamp'],
+                                line['income'],
+                                line['uniqueid'],
+                                user.name
+                            ]
+                            self.add_history(conn, income)
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB update_history error for {user.name}: {e}")
     
     def update_positions(self, user: User):
         positions_db = self.fetch_positions(user)
         exchange = Exchange(user.exchange, user)
         positions = exchange.fetch_positions()
-        symbols = []
+
+        # Live positions as set of (symbol, side) for correct membership checks
+        symbols = set()
         for position in positions:
             if position['contracts'] == 0:
                 continue
-            symbols.append([position['symbol'][0:-5].replace("/", "").replace("-", ""), position['side']])
-        symbols_db = []
-        for position in positions_db:
-            symbols_db.append([position[1], position[7]])
-        try:
-            with sqlite3.connect(self.db) as conn:
-                # Remove positions that are not in the exchange
-                for position in positions_db:
-                    if (position[1], position[7]) not in symbols:
-                        print(f"Removing {position[1]}")
-                        self.remove_position(conn, position[0])
-                    # if position[1] not in symbols:
-                    #     print(f"Removing {position[1]}")
-                    #     self.remove_position(conn, position[0])
-                # Update positions
-                for position in positions:
-                    pos = [
-                        position['timestamp'],
-                        position['contracts'] * position['contractSize'],
-                        position['unrealizedPnl'],
-                        position['entryPrice'],
-                        position['symbol'][0:-5].replace("/", "").replace("-", ""),
-                        user.name,
-                        position['side']
-                    ]
-                    if pos[1] == 0:
-                        continue
-                    # Use current timestamp if timestamp is None
-                    if not pos[0]:
-                        pos[0] = int(datetime.now().timestamp() * 1000)
-                    if (pos[4], pos[6]) in symbols_db:
-                        print(f"Updating {pos[4]}")
-                        self.update_position(conn, pos)
-                    else:
-                        print(f"Adding {pos[4]}")
-                        self.add_position(conn, pos)
-                    # if pos[4] in symbols_db:
-                    #     print(f"Updating {pos[4]}")
-                    #     self.update_position(conn, pos)
-                    # else:
-                    #     print(f"Adding {pos[4]}")
-                    #     self.add_position(conn, pos)
-        except sqlite3.Error as e:
-            print(e)
+            sym = position['symbol'][0:-5].replace("/", "").replace("-", "")
+            side = position['side']
+            symbols.add((sym, side))
+
+        # DB positions: ensure at most one row per (symbol, side) by
+        # detecting duplicates and marking them for removal. We also
+        # build the symbols_db set from the deduplicated view.
+        symbols_db = set()
+        latest_by_key = {}
+        duplicate_ids = []
+        for row in positions_db:
+            key = (row[1], row[7])  # (symbol, side)
+            if key in latest_by_key:
+                # Older duplicate; mark for deletion
+                duplicate_ids.append(row[0])  # id column
+            else:
+                latest_by_key[key] = row
+                symbols_db.add(key)
+
+        # Build quick lookup of live sides by symbol for debugging
+        live_sides_by_symbol = {}
+        for sym, side in symbols:
+            live_sides_by_symbol.setdefault(sym, set()).add(side)
+
+        with self._write_lock:
+            try:
+                with self._connect() as conn:
+                    # First remove any duplicate DB rows for the same
+                    # (symbol, side); keep only the latest row per key.
+                    for dup_id in duplicate_ids:
+                        self._log(f"Removing duplicate position id={dup_id} for {user.name}")
+                        self.remove_position(conn, dup_id)
+
+                    # Remove positions that are not in the exchange
+                    for position in latest_by_key.values():
+                        if (position[1], position[7]) not in symbols:
+                            self._log(f"[positions] Removing position for user={user.name} symbol={position[1]} side={position[7]}")
+                            self.remove_position(conn, position[0])
+
+                    # Update positions
+                    for position in positions:
+                        upnl = position['unrealizedPnl']
+                        if upnl is None:
+                            upnl = 0.0
+                        pos = [
+                            position['timestamp'],
+                            position['contracts'] * position['contractSize'],
+                            upnl,
+                            position['entryPrice'],
+                            position['symbol'][0:-5].replace("/", "").replace("-", ""),
+                            user.name,
+                            position['side']
+                        ]
+                        if pos[1] == 0:
+                            continue
+                        # Use current timestamp if timestamp is None
+                        if not pos[0]:
+                            pos[0] = int(datetime.now().timestamp() * 1000)
+                        key = (pos[4], pos[6])
+                        if key in symbols_db:
+                            self._log(f"[positions] Updating position for user={user.name} symbol={pos[4]} side={pos[6]}")
+                            self.update_position(conn, pos)
+                        else:
+                            self._log(f"[positions] Adding position for user={user.name} symbol={pos[4]} side={pos[6]}")
+                            self.add_position(conn, pos)
+                            # Ensure we do not create multiple rows for the
+                            # same (symbol, side) within one update run.
+                            symbols_db.add(key)
+            except sqlite3.Error as e:
+                self._log(f"DB update_positions error for {user.name}: {e}")
     
     def update_orders(self, user: User):
         positions_db = self.fetch_positions(user)
@@ -197,38 +272,43 @@ class Database():
             stable_coin = position[1][-4:]
             orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
             all_orders.extend(orders)
-        ids_db = []
-        for order in orders_db:
-            ids_db.append(order[6])
-        ids = []
-        for order in all_orders:
-            ids.append(order['id'])
-        try:
-            with sqlite3.connect(self.db) as conn:
-                # Remove orders that are not in the exchange
-                for order in orders_db:
-                    if order[6] not in ids:
-                        print(f"Removing {order[6]}")
-                        self.remove_order(conn, order[0])
-                # Update orders
-                for order in all_orders:
-                    ord = [
-                        order['timestamp'],
-                        order['amount'],
-                        order['price'],
-                        order['side'],
-                        order['id'],
-                        order['symbol'][0:-5].replace("/", "").replace("-", ""),
-                        user.name
-                    ]
-                    if ord[4] in ids_db:
-                        print(f"Updating {ord[4]}")
-                        self.update_order(conn, ord)
-                    else:
-                        print(f"Adding {ord[4]}")
-                        self.add_order(conn, ord)
-        except sqlite3.Error as e:
-            print(e)
+        # Existing order IDs in DB (uniqueid column); use a set to avoid
+        # inserting duplicates even if the DB uniqueness constraint is
+        # missing or was added after the table was first created.
+        ids_db = {order[6] for order in orders_db}
+        ids = [order['id'] for order in all_orders]
+        with self._write_lock:
+            try:
+                with self._connect() as conn:
+                    # Remove orders that are not in the exchange
+                    for order in orders_db:
+                        if order[6] not in ids:
+                            self._log(f"Removing order {order[6]} for user {user.name}")
+                            self.remove_order(conn, order[0])
+                    # Update orders
+                    for order in all_orders:
+                        uniqueid = order['id']
+                        ord = [
+                            order['timestamp'],
+                            order['amount'],
+                            order['price'],
+                            order['side'],
+                            uniqueid,
+                            order['symbol'][0:-5].replace("/", "").replace("-", ""),
+                            user.name
+                        ]
+                        if uniqueid in ids_db:
+                            self._log(f"Updating order {uniqueid} for user {user.name}")
+                            self.update_order(conn, ord)
+                        else:
+                            self._log(f"Adding order {uniqueid} for user {user.name}")
+                            self.add_order(conn, ord)
+                            # Ensure we don't insert the same order twice in
+                            # a single update run if the exchange returns
+                            # duplicates.
+                            ids_db.add(uniqueid)
+            except sqlite3.Error as e:
+                self._log(f"DB update_orders error for {user.name}: {e}")
 
     def update_prices(self, user: User):
         positions_db = self.fetch_positions(user)
@@ -253,52 +333,54 @@ class Database():
         for symbol_ccxt in prices:
             symbol = symbol_ccxt[0:-5].replace("/", "").replace("-", "")
             symbols.append(symbol)
-        try:
-            with sqlite3.connect(self.db) as conn:
-                # Remove symbols that are not in the exchange
-                for symbol in symbols_db:
-                    if symbol not in symbols:
-                        print(f"Removing {symbol}")
-                        self.remove_price(conn, symbol, user.name)
-                # Update prices
-                for symbol in symbols:
-                    if symbol[-4:] == "USDT":
-                        symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
-                    elif symbol[-4:] == "USDC":
-                        symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
-                    timestamp = prices[symbol_ccxt]['timestamp']
-                    if not timestamp:
-                        timestamp = exchange.fetch_timestamp()
-                    price = [
-                        timestamp,
-                        prices[symbol_ccxt]['last'],
-                        symbol,
-                        user.name
-                    ]
-                    if symbol in symbols_db:
-                        print(f"Updating {symbol}")
-                        self.update_price(conn, price)
-                    else:
-                        print(f"Adding {symbol}")
-                        self.add_price(conn, price)
-        except sqlite3.Error as e:
-            print(e)
+        with self._write_lock:
+            try:
+                with self._connect() as conn:
+                    # Remove symbols that are not in the exchange
+                    for symbol in symbols_db:
+                        if symbol not in symbols:
+                            self._log(f"Removing price {symbol} for {user.name}")
+                            self.remove_price(conn, symbol, user.name)
+                    # Update prices
+                    for symbol in symbols:
+                        if symbol[-4:] == "USDT":
+                            symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+                        elif symbol[-4:] == "USDC":
+                            symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
+                        timestamp = prices[symbol_ccxt]['timestamp']
+                        if not timestamp:
+                            timestamp = exchange.fetch_timestamp()
+                        price = [
+                            timestamp,
+                            prices[symbol_ccxt]['last'],
+                            symbol,
+                            user.name
+                        ]
+                        if symbol in symbols_db:
+                            self._log(f"Updating price {symbol} for {user.name}")
+                            self.update_price(conn, price)
+                        else:
+                            self._log(f"Adding price {symbol} for {user.name}")
+                            self.add_price(conn, price)
+            except sqlite3.Error as e:
+                self._log(f"DB update_prices error for {user.name}: {e}")
 
     def update_balances(self, user: User):
         exchange = Exchange(user.exchange, user)
         market_type = "swap"
         balance = exchange.fetch_balance(market_type)
-        try:
-            with sqlite3.connect(self.db) as conn:
-                balance_list = [
-                    int(datetime.now().timestamp() * 1000),
-                    balance,
-                    user.name
-                ]
-                print(f"Updating balance {user.name}")
-                self.update_balance(conn, balance_list)
-        except sqlite3.Error as e:
-            print(e)
+        with self._write_lock:
+            try:
+                with self._connect() as conn:
+                    balance_list = [
+                        int(datetime.now().timestamp() * 1000),
+                        balance,
+                        user.name
+                    ]
+                    self._log(f"Updating balance {user.name}")
+                    self.update_balance(conn, balance_list)
+            except sqlite3.Error as e:
+                self._log(f"DB update_balances error for {user.name}: {e}")
 
     def add_history(self, conn: sqlite3.Connection, history: list):
         sql = '''INSERT INTO history(symbol,timestamp,income,uniqueid,user)
@@ -308,7 +390,11 @@ class Database():
             cur.execute(sql, history)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, history)
+            # Ignore duplicate uniqueid (already stored), log others
+            msg = str(e).lower()
+            if 'unique constraint failed' in msg and 'history.uniqueid' in msg:
+                return
+            self._log(f"DB add_history error {e} data={history}")
     
     def add_position(self, conn: sqlite3.Connection, position: list):
         sql = '''INSERT INTO position(timestamp,psize,upnl,entry,symbol,user,side)
@@ -318,7 +404,7 @@ class Database():
             cur.execute(sql, position)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, position)
+            self._log(f"DB add_position error {e} data={position}")
         return cur.lastrowid
 
     def add_order(self, conn: sqlite3.Connection, order: list):
@@ -329,7 +415,7 @@ class Database():
             cur.execute(sql, order)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, order)
+            self._log(f"DB add_order error {e} data={order}")
 
     def add_price(self, conn: sqlite3.Connection, price: list):
         sql = '''INSERT INTO prices(timestamp,price,symbol,user)
@@ -339,7 +425,7 @@ class Database():
             cur.execute(sql, price)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, price)
+            self._log(f"DB add_price error {e} data={price}")
 
     def remove_position(self, conn: sqlite3.Connection, id: int):
         sql = '''DELETE FROM position WHERE id = ? '''
@@ -348,7 +434,7 @@ class Database():
             cur.execute(sql, [id])
             conn.commit()
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB remove_position error {e} id={id}")
     
     def remove_order(self, conn: sqlite3.Connection, id: int):
         sql = '''DELETE FROM orders WHERE id = ? '''
@@ -357,7 +443,7 @@ class Database():
             cur.execute(sql, [id])
             conn.commit()
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB remove_order error {e} id={id}")
 
     def remove_price(self, conn: sqlite3.Connection, symbol: str, user: str):
         sql = '''DELETE FROM prices WHERE symbol = ? AND user = ? '''
@@ -366,7 +452,7 @@ class Database():
             cur.execute(sql, [symbol, user])
             conn.commit()
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB remove_price error {e} symbol={symbol} user={user}")
 
     def update_position(self, conn: sqlite3.Connection, position: list):
         sql = '''UPDATE position
@@ -374,13 +460,13 @@ class Database():
                     psize = ?,
                     upnl = ?,
                     entry = ?
-                WHERE symbol = ? AND user = ? '''
+                WHERE symbol = ? AND user = ? AND side = ? '''
         try:
             cur = conn.cursor()
             cur.execute(sql, position)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, position)
+            self._log(f"DB update_position error {e} data={position}")
 
     def update_order(self, conn: sqlite3.Connection, order: list):
         sql = '''UPDATE orders
@@ -394,7 +480,7 @@ class Database():
             cur.execute(sql, order)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, order)
+            self._log(f"DB update_order error {e} data={order}")
 
     def update_price(self, conn: sqlite3.Connection, price: list):
         sql = '''UPDATE prices
@@ -406,7 +492,35 @@ class Database():
             cur.execute(sql, price)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, price)
+            self._log(f"DB update_price error {e} data={price}")
+
+    def upsert_price(self, user: User, symbol: str, timestamp: int, price_value: float):
+        """Insert or update a single price tick for (user, symbol)."""
+        start_ts = datetime.now().timestamp()
+        with self._write_lock:
+            attempts = 0
+            while True:
+                try:
+                    with self._connect() as conn:
+                        cur = conn.cursor()
+                        cur.execute('SELECT id FROM prices WHERE symbol = ? AND user = ?', (symbol, user.name))
+                        exists = cur.fetchone() is not None
+                        price_row = [timestamp, price_value, symbol, user.name]
+                        if exists:
+                            self.update_price(conn, price_row)
+                        else:
+                            self.add_price(conn, price_row)
+                    break
+                except sqlite3.OperationalError as e:
+                    if 'database is locked' in str(e).lower() and attempts < 5:
+                        attempts += 1
+                        time.sleep(0.05 * attempts)
+                        continue
+                    self._log(f"DB upsert_price error {e} user={user.name} symbol={symbol} price={price_value} attempts={attempts}")
+                    break
+                except sqlite3.Error as e:
+                    self._log(f"DB upsert_price error {e} user={user.name} symbol={symbol} price={price_value} attempts={attempts}")
+                    break
 
     def update_balance(self, conn: sqlite3.Connection, balance: list):
         sql = '''INSERT OR REPLACE INTO balances(timestamp,balance,user)
@@ -416,72 +530,78 @@ class Database():
             cur.execute(sql, balance)
             conn.commit()
         except sqlite3.Error as e:
-            print(e, balance)
+            self._log(f"DB update_balance error {e} data={balance}")
 
     def fetch_history(self, user: User):
+        """Fetch history from the exchange starting at the DB's last timestamp."""
         exchange = Exchange(user.exchange, user)
-        return exchange.fetch_history(self.find_last_timestamp(user))
+        try:
+            since = self.find_last_timestamp(user) or 0
+        except Exception:
+            since = 0
+        self._log(f"fetch_history: user={user.name} exchange={user.exchange} since={since} (type={type(since)})")
+        return exchange.fetch_history(int(since))
 
     def fetch_positions(self, user: User):
         sql = '''SELECT * FROM "position"
                 WHERE "position"."user" = ? '''
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, [user.name])
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB fetch_positions error {e} user={user.name}")
 
     def fetch_orders(self, user: User):
         sql = '''SELECT * FROM "orders"
                 WHERE "orders"."user" = ? '''
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, [user.name])
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB fetch_orders error {e} user={user.name}")
     
     def fetch_orders_by_symbol(self, user: str, symbol: str):
         sql = '''SELECT * FROM "orders"
                 WHERE "orders"."user" = ?
                     AND "orders"."symbol" = ? '''
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, [user, symbol])
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB fetch_orders_by_symbol error {e} user={user} symbol={symbol}")
 
     def fetch_prices(self, user: User):
         sql = '''SELECT * FROM "prices"
                 WHERE "prices"."user" = ? '''
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, [user.name])
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB fetch_prices error {e} user={user.name}")
 
     def fetch_balances(self, user: list):
         sql = '''SELECT * FROM "balances"
                 WHERE "balances"."user" IN ({}) '''.format(','.join('?'*len(user)))
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, user)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB fetch_balances error {e} users={user}")
 
     def select_top(self, user: list, start: str, end: str, top: int):
         if 'ALL' in user:
@@ -502,13 +622,13 @@ class Database():
                     LIMIT ? '''.format(','.join('?'*len(user)))
             sql_parameters = tuple(user) + (start, end, top)
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB select_top error {e}")
         
     def select_pnl(self, user: list, start: str, end: str):
         if 'ALL' in user:
@@ -525,13 +645,13 @@ class Database():
                     GROUP BY date'''.format(','.join('?'*len(user)))
             sql_parameters = tuple(user) + (start, end)
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB select_pnl error {e}")
     
     def select_ppl(self, user: list, start: str, end: str, sum_period: str):
     # Define date formats for different sum_period values
@@ -577,13 +697,13 @@ class Database():
             '''
             sql_parameters = tuple(user) + (start, end)
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB select_ppl error {e}")
 
     def select_income(self, user: list, start: str, end: str):
         if 'ALL' in user:
@@ -600,13 +720,13 @@ class Database():
                     ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
             sql_parameters = tuple(user) + (start, end)
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB select_income error {e}")
     
     # select income grouped by symbol not sum
     def select_income_by_symbol(self, user: list, start: str, end: str):
@@ -624,13 +744,13 @@ class Database():
                     ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
             sql_parameters = tuple(user) + (start, end)
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB select_income_by_symbol error {e}")
 
     # Same as select_income_by_symbol but includes row id for deletion mapping
     def select_income_by_symbol_with_id(self, user: list, start: str, end: str):
@@ -648,13 +768,13 @@ class Database():
                     ORDER BY "timestamp" ASC'''.format(','.join('?'*len(user)))
             sql_parameters = tuple(user) + (start, end)
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, sql_parameters)
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB select_income_by_symbol_with_id error {e}")
 
     # Delete specific income rows by primary key ids
     def delete_income_by_ids(self, ids: list):
@@ -663,33 +783,33 @@ class Database():
         placeholders = ','.join('?' * len(ids))
         sql = f'''DELETE FROM history WHERE id IN ({placeholders})'''
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, ids)
                 conn.commit()
                 return cur.rowcount
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB delete_income_by_ids error {e}")
             return 0
 
     # Delete all income rows for a user older than or equal to a timestamp (ms)
     def delete_income_older_than_user(self, user: str, timestamp_ms: int):
         sql = '''DELETE FROM history WHERE user = ? AND timestamp <= ?'''
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, (user, int(timestamp_ms)))
                 conn.commit()
                 return cur.rowcount
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB delete_income_older_than_user error {e}")
             return 0
 
     # Delete all income rows older than or equal to a timestamp for given users list.
     # If users contains 'ALL', deletes across all users.
     def delete_income_older_than(self, users: list, timestamp_ms: int):
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 if not users or 'ALL' in users:
                     sql = 'DELETE FROM history WHERE timestamp <= ?'
@@ -701,14 +821,14 @@ class Database():
                 conn.commit()
                 return cur.rowcount
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB delete_income_older_than error {e}")
             return 0
 
     def find_last_timestamp(self, user: User):
         sql = '''SELECT MAX("history"."timestamp") FROM "history"
                 WHERE "history"."user" = ? '''
         try:
-            with sqlite3.connect(self.db) as conn:
+            with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(sql, [user.name])
                 rows = cur.fetchall()
@@ -716,7 +836,7 @@ class Database():
                     return 0
                 return rows[0][0]
         except sqlite3.Error as e:
-            print(e)
+            self._log(f"DB find_last_timestamp error {e} user={user.name}")
 
     def fetch_history2(self, user: User):
         exchange = Exchange(user.exchange, user)
@@ -736,7 +856,7 @@ class Database():
             for item in json.loads(data):
                 if item['incomeType'] in ['COMMISSION', 'FUNDING_FEE']:
                     try:
-                        with sqlite3.connect(self.db) as conn:
+                        with self._connect() as conn:
                             income = [
                                 item['symbol'],
                                 item['time'],
@@ -746,7 +866,7 @@ class Database():
                             ]
                             self.add_history(conn, income)
                     except sqlite3.Error as e:
-                        print(e)
+                        self._log(f"DB import_from_save_income_other error {e}")
                 else:
                     print("not import")
                     print(item)
