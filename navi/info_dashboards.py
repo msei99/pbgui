@@ -1,6 +1,5 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_authenticted, get_navi_paths
-from pbgui_purefunc import load_ini, save_ini
 from Dashboard import Dashboard
 
 def dashboard():
@@ -42,24 +41,8 @@ def dashboard():
                 on_change=on_select_dashboard,
                 label_visibility="hidden"
             )
-
     
     with st.sidebar:
-        # Global Auto-Refresh Interval Control (moved from main dashboard view)
-        if 'dashboard_refresh_sec' not in st.session_state:
-            try:
-                ini_val = load_ini('dashboard', 'refresh_interval_sec')
-                st.session_state['dashboard_refresh_sec'] = max(1, int(ini_val)) if ini_val else 5
-            except Exception:
-                st.session_state['dashboard_refresh_sec'] = 5
-            st.session_state['dashboard_refresh_saved'] = st.session_state['dashboard_refresh_sec']
-        st.number_input('Auto refresh (s)', min_value=1, max_value=3600, step=1, key='dashboard_refresh_sec', help='Interval in seconds for auto refresh')
-        try:
-            if st.session_state['dashboard_refresh_sec'] != st.session_state.get('dashboard_refresh_saved'):
-                save_ini('dashboard', 'refresh_interval_sec', str(st.session_state['dashboard_refresh_sec']))
-                st.session_state['dashboard_refresh_saved'] = st.session_state['dashboard_refresh_sec']
-        except Exception:
-            pass
         if "edit_dashboard" in st.session_state:
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
@@ -67,15 +50,39 @@ def dashboard():
                     if st.session_state.dashboard.name:
                         st.session_state.dashboard.save()
                         st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
+                        # Clear edit mode and reload the saved dashboard
                         del st.session_state.edit_dashboard
                         st.session_state.dashboard.load(st.session_state.dashboard.name)
+                        # remove stored original name
+                        if '_dashboard_edit_original_name' in st.session_state:
+                            del st.session_state['_dashboard_edit_original_name']
                         st.rerun()
                     else:
                         error_popup("Name is empty")
             with col2:
                 if st.button(":material/cancel:"):
-                    del st.session_state.edit_dashboard
-                    del st.session_state.dashboard
+                    # If we were editing an existing saved dashboard, restore it.
+                    orig = st.session_state.get('_dashboard_edit_original_name')
+                    # Clean up edit flag first
+                    if 'edit_dashboard' in st.session_state:
+                        del st.session_state.edit_dashboard
+                    # If original name exists and is a known dashboard, restore it
+                    if orig:
+                        try:
+                            available = Dashboard().list_dashboards()
+                            if orig in available:
+                                st.session_state.dashboard = Dashboard(orig)
+                                # remove stored original name
+                                if '_dashboard_edit_original_name' in st.session_state:
+                                    del st.session_state['_dashboard_edit_original_name']
+                                st.rerun()
+                        except Exception:
+                            pass
+                    # Otherwise (new unsaved dashboard) remove dashboard object and show selection
+                    if 'dashboard' in st.session_state:
+                        del st.session_state.dashboard
+                    if '_dashboard_edit_original_name' in st.session_state:
+                        del st.session_state['_dashboard_edit_original_name']
                     st.rerun()
             with col3:
                 if st.button(":material/delete:"):
@@ -93,19 +100,28 @@ def dashboard():
                 if st.button(":material/add_box:"):
                     if "dashboard" in st.session_state:
                         del st.session_state.dashboard
+                    # Create a new unsaved dashboard; remember original (none)
                     st.session_state.dashboard = Dashboard()
+                    st.session_state['_dashboard_edit_original_name'] = None
                     st.session_state.edit_dashboard = True
                     st.rerun()
             if "dashboard" in st.session_state:
                 with col3:
                     if st.button(":material/edit:"):
                         if "edit_dashboard" not in st.session_state:
+                            # Remember original dashboard name so cancel can restore it
+                            try:
+                                st.session_state['_dashboard_edit_original_name'] = st.session_state.dashboard.name
+                            except Exception:
+                                st.session_state['_dashboard_edit_original_name'] = None
                             st.session_state.edit_dashboard = True
                             st.rerun()
         for db in dashboards:
             if st.button(db):
                 if "edit_dashboard" in st.session_state:
                     del st.session_state.edit_dashboard
+                if '_dashboard_edit_original_name' in st.session_state:
+                    del st.session_state['_dashboard_edit_original_name']
                 st.session_state.dashboard = Dashboard(db)
                 st.rerun()
                 
