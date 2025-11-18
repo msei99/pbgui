@@ -90,26 +90,16 @@ class Exchange:
     def _log(self, msg: str):
         """Log a message tagged with module name.
 
-        Uses the shared rotating debug logger if available to avoid
-        mixed stdout/stderr formatting (glued lines, extra blanks).
-        Falls back to a simple timestamped print if Streamlit's
-        `debuglog` is not initialized (e.g. CLI runs).
+        Write a timestamped message to stdout. The centralized GUI
+        debuglog was removed; this function intentionally avoids
+        importing GUI helpers so it is safe to call from background
+        threads and async tasks.
         """
-        # Try to log via the central debug logger used by the GUI.
         try:
-            from pbgui_func import get_debuglog  # type: ignore
-
-            debuglog = get_debuglog()
-            logger = debuglog.get_logger()
-            logger.info(f"[Exchange] {msg}")
-            return
-        except Exception:
-            # Fall back to deterministic stdout logging.
-            try:
-                ts = datetime.now().isoformat(sep=" ", timespec="seconds")
-            except TypeError:
-                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"{ts} [Exchange] {msg}")
+            ts = datetime.now().isoformat(sep=" ", timespec="seconds")
+        except TypeError:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{ts} [Exchange] {msg}")
 
     @property
     def user(self): return self._user

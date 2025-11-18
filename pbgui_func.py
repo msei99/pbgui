@@ -9,9 +9,10 @@ import os
 from time import sleep
 from pathlib import Path
 from pbgui_purefunc import load_ini, save_ini
-from Log import LogHandler
+# LogHandler removed: centralized debuglog removed per user request
 from PBRemote import PBRemote
 from MonitorConfig import MonitorConfig
+from typing import Optional
 
 @st.dialog("Select file")
 def change_ini(section, parameter):
@@ -59,6 +60,7 @@ def is_pb7_installed():
     return False
 
 PBGDIR = Path.cwd()
+
 
 def is_authenticted():
     if 'password_correct' in st.session_state:
@@ -165,7 +167,7 @@ def build_navigation():
     pM2 = st.Page(paths["SYSTEM_API_KEYS"], title="API-Keys", icon=":material/key:")
     pM3 = st.Page(paths["SYSTEM_SERVICES"], title="PBGUI Services", icon=":material/build:")
     pM4 = st.Page(paths["SYSTEM_VPS_MANAGER"], title="VPS Manager", icon=":material/computer:")
-    pM5 = st.Page(paths["SYSTEM_DEBUGLOG"], title="DEBUGLOG", icon=":material/terminal:")
+    # Debuglog page removed
 
     pSe1 = st.Page(paths["INFO_DASHBOARDS"], title="Dashboards", icon=":material/dashboard:")
     pSe2 = st.Page(paths["INFO_COIN_DATA"], title="Coin Data", icon=":material/monetization_on:")
@@ -189,8 +191,7 @@ def build_navigation():
     # Page Groups
     SystemPages = [pM1, pM2, pM3, pM4]
     
-    if get_debuglog().logfile_exists():
-        SystemPages.append(pM5)
+    # Do not include DEBUGLOG page; centralized debuglog removed
                 
     InfotmationPages = [pSe1, pSe2]
     v7Pages = [p71, p72, p73, p74, p75]
@@ -211,21 +212,8 @@ def build_navigation():
     navi.run()
     
     
-def init_debuglog():
-    if "debuglog" not in st.session_state:
-        st.session_state.debuglog = LogHandler(
-            logger_name="debug_logger",
-            log_filename="debug.log",
-            backup_filename="debug.log.old",
-            base_dir=Path(f'{PBGDIR}/data/logs'),
-            max_bytes=100_000,
-            backup_count=1,
-        )
-        
-def get_debuglog() -> LogHandler:
-    if "debuglog" not in st.session_state:
-        init_debuglog()
-    return st.session_state.debuglog
+# Centralized debuglog removed per user request. Background tasks should use
+# independent logging (or rely on stdout) if they need to write logs.
     
 def is_session_state_not_initialized():
     # Init Services
