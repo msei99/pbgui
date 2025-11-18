@@ -9,6 +9,9 @@ from time import sleep
 from datetime import datetime
 from pbgui_purefunc import PBGDIR
 
+# Default network timeout for ccxt / ccxt.pro clients (milliseconds)
+DEFAULT_CCXT_TIMEOUT_MS = 20000
+
 class Exchanges(Enum):
     BINANCE = 'binance'
     BYBIT = 'bybit'
@@ -87,6 +90,7 @@ class Exchange:
         self._user = user
         self.error = None
 
+
     def _log(self, msg: str):
         """Log a message tagged with module name.
 
@@ -139,7 +143,7 @@ class Exchange:
         ex_id = self.id
         if not hasattr(ccxt_pro, ex_id):
             return None
-        kwargs = {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}
+        kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
         if self.user:
             if getattr(self.user, 'key', None):
                 kwargs['apiKey'] = getattr(self.user, 'key')
@@ -184,7 +188,7 @@ class Exchange:
             ex_id = "kucoinfutures" if id == "kucoin" else id
             if not hasattr(ccxt_pro, ex_id):
                 return None
-            kwargs = {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}
+            kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
             if user:
                 if getattr(user, 'key', None):
                     kwargs['apiKey'] = getattr(user, 'key')
@@ -227,6 +231,9 @@ class Exchange:
                     msg = str(e)
                     lower = msg.lower()
                     is_rate_limit = ('too many visits' in lower or 'rate limit' in lower or 'too many requests' in lower)
+                    # Treat network timeouts as transient and retry with backoff
+                    if 'timed out' in lower or 'timeout' in lower or 'requesttimeout' in lower:
+                        is_rate_limit = True
                     # Bybit-specific invalid timestamp / recv_window errors can also happen if hammered; treat like rate-limit for backoff
                     if 'invalid request, please check your server timestamp or recv_window' in lower:
                         is_rate_limit = True
@@ -282,7 +289,7 @@ class Exchange:
             ex_id = "kucoinfutures" if id == "kucoin" else id
             if not hasattr(ccxt_pro, ex_id):
                 return None
-            kwargs = {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}
+            kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
             # attach user creds
             if getattr(user, 'key', None):
                 kwargs['apiKey'] = getattr(user, 'key')
