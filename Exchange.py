@@ -1,4 +1,5 @@
 import ccxt
+import ccxt.pro as ccxt_pro
 import configparser
 from User import User, Users
 from enum import Enum
@@ -64,6 +65,17 @@ class Passphrase(Enum):
         return list(map(lambda c: c.value, Passphrase))
 
 class Exchange:
+    # Shared ccxt.pro websocket clients per exchange id
+    _shared_ws_clients = {}
+    # Per-user private websocket clients keyed by "<exchange>:<user.name>"
+    _private_ws_clients = {}
+    # Track which exchanges have successfully loaded markets for shared ws clients
+    _shared_ws_markets_loaded = set()
+    # Per-exchange async locks to serialize shared ws client initialization
+    _shared_ws_locks = {}
+    # Locks for private ws client initialization
+    _private_ws_locks = {}
+
     def __init__(self, id: str, user: User = None):
         self.name = id
         self.id = "kucoinfutures" if id == "kucoin" else id
@@ -74,6 +86,30 @@ class Exchange:
         self.swap = []
         self._user = user
         self.error = None
+
+    def _log(self, msg: str):
+        """Log a message tagged with module name.
+
+        Uses the shared rotating debug logger if available to avoid
+        mixed stdout/stderr formatting (glued lines, extra blanks).
+        Falls back to a simple timestamped print if Streamlit's
+        `debuglog` is not initialized (e.g. CLI runs).
+        """
+        # Try to log via the central debug logger used by the GUI.
+        try:
+            from pbgui_func import get_debuglog  # type: ignore
+
+            debuglog = get_debuglog()
+            logger = debuglog.get_logger()
+            logger.info(f"[Exchange] {msg}")
+            return
+        except Exception:
+            # Fall back to deterministic stdout logging.
+            try:
+                ts = datetime.now().isoformat(sep=" ", timespec="seconds")
+            except TypeError:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"{ts} [Exchange] {msg}")
 
     @property
     def user(self): return self._user
@@ -105,6 +141,199 @@ class Exchange:
         except Exception as e:
             self.error = (str(e))
             return
+
+    def create_ws_client(self):
+        """Create and return a ccxt.pro client configured for this exchange and user.
+        Returns None if ccxtpro is not installed or the exchange is unsupported.
+        """
+        ex_id = self.id
+        if not hasattr(ccxt_pro, ex_id):
+            return None
+        kwargs = {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}
+        if self.user:
+            if getattr(self.user, 'key', None):
+                kwargs['apiKey'] = getattr(self.user, 'key')
+            if getattr(self.user, 'secret', None):
+                kwargs['secret'] = getattr(self.user, 'secret')
+            if getattr(self.user, 'passphrase', None):
+                kwargs['password'] = getattr(self.user, 'passphrase')
+            if getattr(self.user, 'wallet_address', None):
+                kwargs['walletAddress'] = getattr(self.user, 'wallet_address')
+            if getattr(self.user, 'private_key', None):
+                kwargs['privateKey'] = getattr(self.user, 'private_key')
+        ex = getattr(ccxt_pro, ex_id)(kwargs)
+        return ex
+
+    @classmethod
+    async def get_shared_ws_client(cls, id: str, user: User = None):
+        """Return a shared ccxt.pro client per (exchange id, api key).
+
+        Markets are loaded once per shared client to avoid excessive load_markets
+        calls (important for strict rate-limited exchanges like Bybit).
+        """
+        # Build key using normalized exchange id only so all users of the same exchange share a single websocket client.
+        import asyncio as _asyncio
+        key = "kucoinfutures" if id == "kucoin" else id
+        uname = getattr(user, 'name', None)
+
+        # Fast path: client already initialized and markets loaded
+        client = cls._shared_ws_clients.get(key)
+        if client is not None and key in cls._shared_ws_markets_loaded:
+            return client
+
+        # Ensure one async lock per exchange key
+        if key not in cls._shared_ws_locks:
+            cls._shared_ws_locks[key] = _asyncio.Lock()
+        lock = cls._shared_ws_locks[key]
+
+        async with lock:
+            # Re-check inside lock in case another task finished while we were waiting
+            client = cls._shared_ws_clients.get(key)
+            if client is not None and key in cls._shared_ws_markets_loaded:
+                return client
+            ex_id = "kucoinfutures" if id == "kucoin" else id
+            if not hasattr(ccxt_pro, ex_id):
+                return None
+            kwargs = {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}
+            if user:
+                if getattr(user, 'key', None):
+                    kwargs['apiKey'] = getattr(user, 'key')
+                if getattr(user, 'secret', None):
+                    kwargs['secret'] = getattr(user, 'secret')
+                if getattr(user, 'passphrase', None):
+                    kwargs['password'] = getattr(user, 'passphrase')
+                if getattr(user, 'wallet_address', None):
+                    kwargs['walletAddress'] = getattr(user, 'wallet_address')
+                if getattr(user, 'private_key', None):
+                    kwargs['privateKey'] = getattr(user, 'private_key')
+            ex = getattr(ccxt_pro, ex_id)(kwargs)
+
+            # Ensure markets are loaded once for this shared client with stronger backoff
+            retries = 0
+            max_retries = 5
+            while True:
+                try:
+                    try:
+                        tmp = cls(id, user)
+                        tmp._log(f"get_shared_ws_client calling load_markets for {id} user={uname} retry={retries}")
+                    except Exception:
+                        pass
+
+                    lm = ex.load_markets()
+                    if _asyncio.iscoroutine(lm):
+                        await lm
+                    else:
+                        import asyncio
+                        await asyncio.to_thread(ex.load_markets)
+                    cls._shared_ws_clients[key] = ex
+                    cls._shared_ws_markets_loaded.add(key)
+                    try:
+                        tmp = cls(id, user)
+                        tmp._log(f"get_shared_ws_client load_markets succeeded for {id} key={key} user={uname}")
+                    except Exception:
+                        pass
+                    return ex
+                except Exception as e:
+                    msg = str(e)
+                    lower = msg.lower()
+                    is_rate_limit = ('too many visits' in lower or 'rate limit' in lower or 'too many requests' in lower)
+                    # Bybit-specific invalid timestamp / recv_window errors can also happen if hammered; treat like rate-limit for backoff
+                    if 'invalid request, please check your server timestamp or recv_window' in lower:
+                        is_rate_limit = True
+                    if is_rate_limit and retries < max_retries:
+                        retries += 1
+                        delay = min(5 * retries, 30)
+                        try:
+                            tmp = cls(id, user)
+                            tmp._log(f"get_shared_ws_client load_markets rate-limited for {id} user={uname}; retry {retries} in {delay}s: {msg}")
+                        except Exception:
+                            pass
+                        await _asyncio.sleep(delay)
+                        continue
+                    # If load_markets ultimately fails we don't cache the client; log reason
+                    try:
+                        tmp = cls(id, user)
+                        tmp._log(f"get_shared_ws_client load_markets failed for {id} user={uname} after {retries} retries: {msg}")
+                    except Exception:
+                        pass
+                    try:
+                        await ex.close()
+                    except Exception:
+                        pass
+                    return None
+
+    @classmethod
+    async def get_private_ws_client(cls, id: str, user: User):
+        """Return a per-user authenticated ccxt.pro client for private streams.
+
+        Keyed by `<exchange_id>:<user.name>` so each user gets their own client.
+        """
+        import asyncio as _asyncio
+        if not user:
+            return None
+        base_key = "kucoinfutures" if id == "kucoin" else id
+        key = f"{base_key}:{user.name}"
+
+        # Fast path
+        client = cls._private_ws_clients.get(key)
+        if client is not None:
+            return client
+
+        # Ensure one async lock per private key
+        if key not in cls._private_ws_locks:
+            cls._private_ws_locks[key] = _asyncio.Lock()
+        lock = cls._private_ws_locks[key]
+
+        async with lock:
+            client = cls._private_ws_clients.get(key)
+            if client is not None:
+                return client
+
+            ex_id = "kucoinfutures" if id == "kucoin" else id
+            if not hasattr(ccxt_pro, ex_id):
+                return None
+            kwargs = {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}
+            # attach user creds
+            if getattr(user, 'key', None):
+                kwargs['apiKey'] = getattr(user, 'key')
+            if getattr(user, 'secret', None):
+                kwargs['secret'] = getattr(user, 'secret')
+            if getattr(user, 'passphrase', None):
+                kwargs['password'] = getattr(user, 'passphrase')
+            if getattr(user, 'wallet_address', None):
+                kwargs['walletAddress'] = getattr(user, 'wallet_address')
+            if getattr(user, 'private_key', None):
+                kwargs['privateKey'] = getattr(user, 'private_key')
+
+            ex = getattr(ccxt_pro, ex_id)(kwargs)
+
+            # Attempt to load markets once for this client; treat failures as non-fatal
+            try:
+                lm = ex.load_markets()
+                if _asyncio.iscoroutine(lm):
+                    await lm
+                else:
+                    await _asyncio.to_thread(ex.load_markets)
+            except Exception:
+                # If load_markets fails, still keep the client but do not cache markets flag
+                pass
+
+            cls._private_ws_clients[key] = ex
+            return ex
+
+    @classmethod
+    async def close_private_ws_client(cls, id: str, user: User):
+        """Close and remove a private ws client for the given exchange id and user."""
+        if not user:
+            return
+        base_key = "kucoinfutures" if id == "kucoin" else id
+        key = f"{base_key}:{user.name}"
+        client = cls._private_ws_clients.pop(key, None)
+        if client:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
     def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int, since : int = None):
         if not self.instance: self.connect()
@@ -318,8 +547,8 @@ class Exchange:
                         else:
                             transactions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
                     except Exception as e:
-                        print(e)
-                        print(f'User:{self.user.name} Fetching transactions failed. Retry in 5 seconds')
+                        self._log(f"{e}")
+                        self._log(f'User:{self.user.name} Fetching transactions failed. Retry in 5 seconds')
                         sleep(5)
                         continue
                 cursor = transactions["result"]["nextPageCursor"]
@@ -330,13 +559,20 @@ class Exchange:
                     last_position = positions[-1]
                     all_histories = positions + all_histories
                 if cursor:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'transactions from', self.instance.iso8601(int(first_position['transactionTime'])), 'till', self.instance.iso8601(int(last_position['transactionTime'])))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(positions)} transactions from "
+                        f"{self.instance.iso8601(int(first_position['transactionTime']))} till "
+                        f"{self.instance.iso8601(int(last_position['transactionTime']))}"
+                    )
                 else:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'transactions from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(positions)} transactions from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}"
+                    )
                     since = since + week
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
             # print(all_histories)
             for history in all_histories:
@@ -376,14 +612,21 @@ class Exchange:
                     last_funding = fundings[-1]
                     all_histories = fundings + all_histories
                 if len(fundings) == limit:
-                    print(f'User:{self.user.name} Fetched', len(fundings), 'fundings from', self.instance.iso8601(int(first_funding['time'])), 'till', self.instance.iso8601(int(last_funding['time'])))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(fundings)} fundings from "
+                        f"{self.instance.iso8601(int(first_funding['time']))} till "
+                        f"{self.instance.iso8601(int(last_funding['time']))}"
+                    )
                     since = int(fundings[-1]['time'])
                 else:
-                    print(f'User:{self.user.name} Fetched', len(fundings), 'fundings from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(fundings)} fundings from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}"
+                    )
                     since = end
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
                 sleep(1)
             for history in all_histories:
@@ -404,14 +647,21 @@ class Exchange:
                     last_trade = trades[-1]
                     all_histories = trades + all_histories
                 if len(trades) == limit:
-                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(first_trade['timestamp']), 'till', self.instance.iso8601(last_trade['timestamp']))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(trades)} trades from "
+                        f"{self.instance.iso8601(first_trade['timestamp'])} till "
+                        f"{self.instance.iso8601(last_trade['timestamp'])}"
+                    )
                     since = trades[-1]['timestamp']
                 else:
-                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(trades)} trades from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}"
+                    )
                     since = end
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
                 sleep(1)
             # print(all_histories)
@@ -440,14 +690,21 @@ class Exchange:
                     last_position = positions[-1]
                     all_histories = positions + all_histories
                 if len(positions) == limit:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'income from', self.instance.iso8601(first_position['time']), 'till', self.instance.iso8601(last_position['time']))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(positions)} income from "
+                        f"{self.instance.iso8601(first_position['time'])} till "
+                        f"{self.instance.iso8601(last_position['time'])}"
+                    )
                     end = positions[-1]['time']
                 else:
-                    print(f'User:{self.user.name} Fetched', len(positions), 'income from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(positions)} income from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}"
+                    )
                     since = since + day
                     end = since + day
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
             for history in all_histories:
                 if history["type"] == "RealisedPNL":
@@ -475,14 +732,21 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(ledgers)} ledgers from "
+                        f"{self.instance.iso8601(first_ledger['timestamp'])} till "
+                        f"{self.instance.iso8601(last_ledger['timestamp'])}"
+                    )
                     end = ledgers[0]['timestamp']
                 else:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(ledgers)} ledgers from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}"
+                    )
                     since = since + week
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
                 sleep(0.5)
             for history in all_histories:
@@ -513,14 +777,21 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(ledgers)} ledgers from "
+                        f"{self.instance.iso8601(first_ledger['timestamp'])} till "
+                        f"{self.instance.iso8601(last_ledger['timestamp'])}"
+                    )
                     end = ledgers[0]['timestamp']
                 else:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(ledgers)} ledgers from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}"
+                    )
                     since = since + week
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
             for history in all_histories:
                 # if history["info"]["symbol"] and history["info"]["amount"] != "0":
@@ -552,14 +823,21 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(first_ledger['timestamp']), 'till', self.instance.iso8601(last_ledger['timestamp']))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(ledgers)} ledgers from "
+                        f"{self.instance.iso8601(first_ledger['timestamp'])} till "
+                        f"{self.instance.iso8601(last_ledger['timestamp'])}"
+                    )
                     end = int(ledgers[0]['timestamp']/1000)
                 else:
-                    print(f'User:{self.user.name} Fetched', len(ledgers), 'ledgers from', self.instance.iso8601(since*1000), 'till', self.instance.iso8601(end*1000))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(ledgers)} ledgers from "
+                        f"{self.instance.iso8601(since*1000)} till {self.instance.iso8601(end*1000)}"
+                    )
                     since = since + week
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
             for history in all_histories:
                 if history["info"]["contract"] and history["amount"] != "0":
@@ -594,14 +872,21 @@ class Exchange:
                     last_imcome = imcomes[-1]
                     all_histories = imcomes + all_histories
                 if len(imcomes) == limit:
-                    print(f'User:{self.user.name} Fetched', len(imcomes), 'incomes from', self.instance.iso8601(int(first_imcome['time'])), 'till', self.instance.iso8601(int(last_imcome['time'])))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(imcomes)} incomes from "
+                        f"{self.instance.iso8601(int(first_imcome['time']))} till "
+                        f"{self.instance.iso8601(int(last_imcome['time']))}"
+                    )
                     since = int(imcomes[-1]['time'])
                 else:
-                    print(f'User:{self.user.name} Fetched', len(imcomes), 'incomes from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    self._log(
+                        f"User:{self.user.name} Fetched {len(imcomes)} incomes from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}"
+                    )
                     since = end
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    self._log(f'User:{self.user.name} Done')
                     break
             for history in all_histories:
                 if history["incomeType"] in ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"]:
@@ -638,7 +923,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    print(f'User:{self.user.name} Symbol:{symbol} Fetching trades from', self.instance.iso8601(since))
+                    self._log(f'User:{self.user.name} Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}')
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -664,7 +949,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    print(f'User:{self.user.name} Symbol:{symbol} Fetching trades from', self.instance.iso8601(since))
+                    self._log(f'User:{self.user.name} Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}')
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -674,7 +959,7 @@ class Exchange:
                         if "nextPageCursor" in last_trade["info"]:
                             cursor = last_trade["info"]["nextPageCursor"]
                             while True:
-                                print(f'User:{self.user.name} Symbol:{symbol} Fetching trades from', cursor)
+                                self._log(f'User:{self.user.name} Symbol:{symbol} Fetching trades from {cursor}')
                                 all_trades = all_trades + trades
                                 trades = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, 'cursor': cursor, 'endTime': end_time })
                                 if len(trades):
@@ -700,15 +985,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['timestamp'], 'till', last_trade['timestamp'])
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}')
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}')
                         since += week
                         end = since + week
                     if since > now:
-                        print(f'User:{self.user.name} Symbol:{symbol} Done')
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Done')
                         break
             elif self.id == "okx":
                 week = 7 * 24 * 60 * 60 * 1000
@@ -724,15 +1009,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['timestamp'], 'till', last_trade['timestamp'])
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}')
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}')
                         since += week
                         end = since + week
                     if since > now:
-                        print(f'User:{self.user.name} Symbol:{symbol} Done')
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Done')
                         break
             elif self.id == "bingx":
                 week = 7 * 24 * 60 * 60 * 1000
@@ -751,15 +1036,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['time'], 'till', last_trade['time'])
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["time"]} till {last_trade["time"]}')
                     if len(trades) == limit:
                         since = int(trades[-1]['time'])
                     else:
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}')
                         since += week
                         end = since + week
                     if since > now:
-                        print(f'User:{self.user.name} Symbol:{symbol} Done')
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Done')
                         break
                 bingx_trades = []
                 for trade in all_trades:
@@ -783,15 +1068,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', first_trade['timestamp'], 'till', last_trade['timestamp'])
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}')
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        print(f'User:{self.user.name} Symbol:{symbol} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}')
                         since += max
                         end = since + max
                     if since > now:
-                        print(f'User:{self.user.name} Symbol:{symbol} Done')
+                        self._log(f'User:{self.user.name} Symbol:{symbol} Done')
                         break
         if all_trades:
             sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])
@@ -901,7 +1186,7 @@ class Exchange:
                 try:
                     symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
                 except Exception as e:
-                    print(f'User:{self.user.name} Error:', e)
+                    self._log(f'User:{self.user.name} Error: {e}')
                     return
                 for symbol in symbols["data"]:
                     cpSymbols.append(symbol["symbol"])
