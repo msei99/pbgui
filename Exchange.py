@@ -10,7 +10,22 @@ from datetime import datetime
 from pbgui_purefunc import PBGDIR
 
 # Default network timeout for ccxt / ccxt.pro clients (milliseconds)
-DEFAULT_CCXT_TIMEOUT_MS = 20000
+# Increased from 20s to 60s to reduce websocket ping/pong keepalive
+# timeouts on resource-constrained VPS instances. Can be made
+# configurable via `pbgui.ini` later.
+DEFAULT_CCXT_TIMEOUT_MS = 60000
+
+# Per-exchange limits for how many private (per-user) websocket clients
+# the process will create. When the limit is reached `get_private_ws_client`
+# will return None so callers can fallback to REST polling. Tunable later
+# via `pbgui.ini`.
+MAX_PRIVATE_WS_PER_EXCHANGE = {
+    'hyperliquid': 10,
+    'bitget': 10,
+    'bybit': 12,
+    'binance': 20,
+    'okx': 10,
+}
 
 class Exchanges(Enum):
     BINANCE = 'binance'
@@ -305,6 +320,25 @@ class Exchange:
                 return client
 
             ex_id = "kucoinfutures" if id == "kucoin" else id
+            # Enforce per-exchange private-ws client caps to avoid resource
+            # exhaustion on constrained VPS. If the cap is reached return None
+            # so callers can fall back to REST polling.
+            try:
+                cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(base_key)
+            except Exception:
+                cap = None
+            if cap is not None:
+                current = 0
+                for k in cls._private_ws_clients.keys():
+                    if k.startswith(f"{base_key}:"):
+                        current += 1
+                if current >= cap:
+                    try:
+                        tmp = cls(id, user)
+                        tmp._log(f"get_private_ws_client: reached cap for {base_key} ({current}/{cap}); returning None to allow REST fallback for user={user.name}")
+                    except Exception:
+                        pass
+                    return None
             if not hasattr(ccxt_pro, ex_id):
                 return None
             kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
