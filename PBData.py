@@ -1,4 +1,3 @@
-
 import psutil
 import subprocess
 import sys
@@ -47,6 +46,9 @@ class PBData():
         self._loop_log_every_secs = 60.0
         self._last_mapping_log_ts_by_exchange = {}
         self._price_ticks_count = {}
+        # network error log throttle map: (exchange,user) -> ts
+        self._last_network_error_log_ts = {}
+        self._network_error_log_throttle = 30.0
         # Max number of symbols to subscribe in one watch_tickers call
         self._price_subscribe_chunk_size = 20
         # Per-exchange overrides for subscribe chunk sizes (symbols per watch_tickers call)
@@ -137,12 +139,26 @@ class PBData():
         except Exception:
             pass
 
-    def _is_exchange_in_backoff(self, exchange: str) -> bool:
-        try:
-            until = self._exchange_backoff_until.get(exchange, 0)
-            return datetime.now().timestamp() < until
-        except Exception:
+    # Small helper: treat some close messages as "normal" (don't immediately demote)
+    def _is_normal_ws_close(self, msg: str) -> bool:
+        if not msg:
             return False
+        lower = msg.lower()
+        # Common benign closure patterns (code 1000 = normal closure)
+        if "code 1000" in lower or "closing code 1000" in lower or "normal closure" in lower:
+            return True
+        return False
+
+    # Throttled logging for repeated network errors (reduce log spam)
+    def _throttled_log_network(self, key, msg: str, throttle: float = 30.0):
+        now = datetime.now().timestamp()
+        last = self._last_network_error_log_ts.get(key, 0.0)
+        if now - last >= throttle:
+            try:
+                self._log(msg)
+            except Exception:
+                pass
+            self._last_network_error_log_ts[key] = now
 
     async def _metrics_loop(self):
         """Periodic metrics logger: logs counts of shared/private clients and backoff states."""
@@ -382,16 +398,26 @@ class PBData():
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
-                    # Hyperliquid (and possibly others) may enforce a limit on
-                    # the number of user-specific websockets: detect that and
-                    # fall back to the shared serial REST poller for this user.
-                    if 'cannot track more than' in lower or ('cannot track' in lower and 'user' in lower):
-                        self._log(f"[ws] watch_balance user-limit reached for {user.name}: {e}; closing private ws client and falling back to REST")
+                    # If this was a benign/normal close (e.g. code 1000) try a reconnect
+                    if self._is_normal_ws_close(raw):
+                        self._throttled_log_network((user.exchange, user.name), f"[ws] normal websocket close for {user.name}: {e}; attempting reconnect", self._network_error_log_throttle)
                         try:
-                            await Exchange.close_private_ws_client(user.exchange, user)
+                            ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                            if not ex2:
+                                self._log(f"[ws] Could not re-acquire private client for {user.name}; falling back to REST")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                return
+                            await asyncio.sleep(1)
+                            continue
                         except Exception:
-                            pass
-                        return
+                            try:
+                                await Exchange.close_private_ws_client(user.exchange, user)
+                            except Exception:
+                                pass
+                            return
                     # Detect network-level errors (connection closed/reset, remote abort)
                     network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
                     if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
@@ -463,9 +489,6 @@ class PBData():
                                     except Exception:
                                         pass
                                     return
-                    self._log(f"[ws] watch_balance error for {user.name}: {e}")
-                    # Add jittered backoff to avoid synchronized reconnect storms
-                    await asyncio.sleep(1 + random.random() * 4)
         finally:
             # Intentionally not closing `ex` here. Shared websocket clients are
             # kept open to avoid disrupting other watchers that may be using
@@ -558,6 +581,26 @@ class PBData():
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
+                    # treat normal websocket close (1000) as a reconnect opportunity
+                    if self._is_normal_ws_close(raw):
+                        self._throttled_log_network((user.exchange, user.name), f"[ws] normal websocket close (positions) for {user.name}: {e}; attempting reconnect", self._network_error_log_throttle)
+                        try:
+                            ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                            if not ex2:
+                                self._log(f"[ws] Could not re-acquire private client for {user.name} (positions); falling back to REST")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                return
+                            await asyncio.sleep(1)
+                            continue
+                        except Exception:
+                            try:
+                                await Exchange.close_private_ws_client(user.exchange, user)
+                            except Exception:
+                                pass
+                            return
                     if 'cannot track more than' in lower or ('cannot track' in lower and 'user' in lower):
                         self._log(f"[ws] watch_positions user-limit reached for {user.name}: {e}; closing private ws client and falling back to REST")
                         try:
@@ -681,6 +724,27 @@ class PBData():
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
+                    # treat normal websocket close (1000) as a reconnect opportunity
+                    if self._is_normal_ws_close(raw):
+                        self._throttled_log_network((user.exchange, user.name), f"[ws] normal websocket close (orders) for {user.name}: {e}; attempting reconnect", self._network_error_log_throttle)
+                        try:
+                            ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                            if not ex2:
+                                self._log(f"[ws] Could not re-acquire private client for {user.name} (orders); falling back to REST")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                return
+                            await asyncio.sleep(1)
+                            continue
+                        except Exception:
+                            try:
+                                await Exchange.close_private_ws_client(user.exchange, user)
+                            except Exception:
+                                pass
+                            return
+                    # existing network error handling follows
                     if 'cannot track more than' in lower or ('cannot track' in lower and 'user' in lower):
                         self._log(f"[ws] watch_orders user-limit reached for {user.name}: {e}; closing private ws client and falling back to REST")
                         try:
@@ -988,7 +1052,8 @@ class PBData():
                                 for i in range(0, len(added), chunk_size):
                                     chunk = added[i:i+chunk_size]
                                     try:
-                                        await asyncio.wait_for(ex.watch_tickers(chunk), timeout=65)
+                                        # give a bit more timeout headroom for some exchanges
+                                        await asyncio.wait_for(ex.watch_tickers(chunk), timeout=90)
                                         # Merge successful chunk into subscribed set
                                         subscribed = subscribed.union(set(chunk))
                                         self._price_subscribed_symbols[exchange] = subscribed
@@ -1046,7 +1111,7 @@ class PBData():
                         # requested_set (not 'added') to receive updates for all
                         # symbols of interest.
                         try:
-                            tickers = await asyncio.wait_for(ex.watch_tickers(list(requested_set)), timeout=65)
+                            tickers = await asyncio.wait_for(ex.watch_tickers(list(requested_set)), timeout=90)
                         except asyncio.TimeoutError:
                             self._log(f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client")
                             ex = await Exchange.get_shared_ws_client(exchange)
@@ -1060,6 +1125,15 @@ class PBData():
                         except Exception as e:
                             raw = str(e)
                             lower = raw.lower()
+                            # If this was a benign/normal close (e.g. code 1000) attempt lightweight reconnect
+                            if self._is_normal_ws_close(raw):
+                                self._log(f"[ws] watch_tickers normal websocket close for exchange {exchange}: {e}; attempting reconnect")
+                                ex = await Exchange.get_shared_ws_client(exchange)
+                                if not ex:
+                                    self._log(f"[ws] ccxtpro unavailable (price) after normal close reconnect for exchange {exchange}")
+                                    return
+                                await asyncio.sleep(1)
+                                continue
                             # If the exchange enforces a hard subscribe limit, close client and backoff
                             if 'cannot track more than' in lower or 'cannot track more than' in raw:
                                 try:
@@ -1145,7 +1219,7 @@ class PBData():
                         for ccxt_symbol in symbols:
                             try:
                                 try:
-                                    ticker = await asyncio.wait_for(ex.watch_ticker(ccxt_symbol), timeout=65)
+                                    ticker = await asyncio.wait_for(ex.watch_ticker(ccxt_symbol), timeout=90)
                                 except asyncio.TimeoutError:
                                     self._log(f"[ws] watch_ticker TIMEOUT exchange {exchange} {ccxt_symbol}; reconnecting price client")
                                     # Re-acquire shared client instead of creating ephemeral client
@@ -1157,6 +1231,14 @@ class PBData():
                                 except Exception as e:
                                     raw = str(e)
                                     lower = raw.lower()
++                                    if self._is_normal_ws_close(raw):
++                                        self._log(f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect")
++                                        ex = await Exchange.get_shared_ws_client(exchange)
++                                        if not ex:
++                                            self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
++                                            raise RuntimeError("price client unavailable after watch_ticker error")
++                                        await asyncio.sleep(1)
++                                        continue
                                     if 'already subscribed' in lower or 'already subscribed' in raw:
                                         self._log(f"[ws] watch_ticker: already subscribed exchange {exchange} {ccxt_symbol}: {e}; ignoring and continuing")
                                         await asyncio.sleep(0.5)
@@ -1189,6 +1271,12 @@ class PBData():
                                 self._log(f"[ws] watch_ticker error exchange {exchange} {ccxt_symbol}: {e}")
                                 await asyncio.sleep(0.5)
             except Exception as e:
+                raw = str(e)
+                # treat normal closes as less severe and attempt graceful reconnect
+                if self._is_normal_ws_close(raw):
+                    self._log(f"[ws] price loop normal websocket close exchange {exchange}: {e}; restarting price watcher after short pause")
+                    await asyncio.sleep(2)
+                    continue
                 self._log(f"[ws] price loop error exchange {exchange}: {e}; restarting price watcher")
             finally:
                 # Do not close the websocket client here. Closing a shared
