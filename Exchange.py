@@ -383,6 +383,27 @@ class Exchange:
                 except Exception:
                     pass
 
+    @classmethod
+    def get_client_metrics(cls):
+        """Return simple metrics about shared and private ws clients grouped by exchange.
+
+        Returns a dict mapping exchange -> {'shared': bool, 'private_count': int}.
+        """
+        metrics = {}
+        try:
+            # Shared clients: keys are exchange ids
+            for k in cls._shared_ws_clients.keys():
+                metrics.setdefault(k, {'shared': 0, 'private_count': 0})
+                metrics[k]['shared'] = 1
+            # Private clients: keys are like '<exchange>:<user>'
+            for k in cls._private_ws_clients.keys():
+                exch = k.split(':', 1)[0]
+                metrics.setdefault(exch, {'shared': 0, 'private_count': 0})
+                metrics[exch]['private_count'] += 1
+        except Exception:
+            pass
+        return metrics
+
     def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int, since : int = None):
         if not self.instance: self.connect()
         if since:
