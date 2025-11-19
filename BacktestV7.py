@@ -953,7 +953,16 @@ class BacktestV7Result:
         self.ed = self.config.backtest.end_date
         self.adg = self.result["adg"]
         self.drawdown_worst = self.result["drawdown_worst"]
-        self.equity_balance_diff_neg_max = self.result["equity_balance_diff_neg_max"]
+        # safe read: prefer numeric value, fallback to None if missing/invalid
+        self.equity_balance_diff_neg_max = None
+        if isinstance(self.result, dict):
+            val = self.result.get("equity_balance_diff_neg_max")
+            if val not in (None, ""):
+                try:
+                    self.equity_balance_diff_neg_max = float(val)
+                except (TypeError, ValueError):
+                    # keep None on conversion failure
+                    self.equity_balance_diff_neg_max = None
         self.sharpe_ratio = self.result["sharpe_ratio"]
         self.starting_balance = self.config.backtest.starting_balance
         self.be = None
