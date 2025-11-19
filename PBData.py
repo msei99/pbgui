@@ -1089,12 +1089,12 @@ class PBData():
                                                 await asyncio.sleep(min(5 * subscribe_backoff, 30))
                                             # abort subscription iteration to allow outer loop to re-evaluate
                                             raise RuntimeError("subscribe_chunk_failed")
-                                         # Treat 'already subscribed' as non-fatal and merge
-                                         if 'already subscribed' in lower or 'already subscribed' in raw:
-                                             subscribed = subscribed.union(set(chunk))
-                                             self._price_subscribed_symbols[exchange] = subscribed
-                                             self._log(f"[ws] watch_tickers subscribe: already subscribed for exchange {exchange}: {e}; continuing")
-                                             continue
+                                        # Treat 'already subscribed' as non-fatal and merge
+                                        if 'already subscribed' in lower or 'already subscribed' in raw:
+                                            subscribed = subscribed.union(set(chunk))
+                                            self._price_subscribed_symbols[exchange] = subscribed
+                                            self._log(f"[ws] watch_tickers subscribe: already subscribed for exchange {exchange}: {e}; continuing")
+                                            continue
                                         # Detect exchange-enforced subscribe limits (e.g. hyperliquid)
                                         if 'cannot track more than' in lower or 'cannot track more than' in raw:
                                             try:
