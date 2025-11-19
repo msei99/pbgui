@@ -139,6 +139,16 @@ class PBData():
         except Exception:
             pass
 
+    def _is_exchange_in_backoff(self, exchange: str) -> bool:
+        """Return True if we are currently backing off for this exchange."""
+        try:
+            if not exchange:
+                return False
+            until = self._exchange_backoff_until.get(exchange, 0)
+            return datetime.now().timestamp() < until
+        except Exception:
+            return False
+
     # Small helper: treat some close messages as "normal" (don't immediately demote)
     def _is_normal_ws_close(self, msg: str) -> bool:
         if not msg:
