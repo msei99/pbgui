@@ -913,6 +913,16 @@ class PBData():
                     cfg = self._price_exchange_config.get(exchange, {})
                     symbols = list(cfg.get('symbols', set()))
                     mapping = cfg.get('mapping', {})
+                    # Build a full list of unique users for this mapping so
+                    # we can log and react deterministically to subscribe
+                    # rejection errors (some exchanges impose a hard limit).
+                    unique_users_all = []
+                    seen_all = set()
+                    for ccxt_sym, lst in mapping.items():
+                        for user_name, _ in lst:
+                            if user_name not in seen_all:
+                                seen_all.add(user_name)
+                                unique_users_all.append(user_name)
                     # Apply per-exchange user tracking limits if configured.
                     user_limit = self._price_subscribe_user_limit_by_exchange.get(exchange)
                     if user_limit is not None:
@@ -993,6 +1003,25 @@ class PBData():
                                             self._price_subscribed_symbols[exchange] = subscribed
                                             self._log(f"[ws] watch_tickers subscribe: already subscribed for exchange {exchange}: {e}; continuing")
                                             continue
+                                        # Detect exchange-enforced subscribe limits (e.g. hyperliquid)
+                                        if 'cannot track more than' in lower or 'cannot track more than' in raw:
+                                            try:
+                                                self._log(f"[ws] watch_tickers subscribe REJECTED by exchange {exchange}: {e}; users={len(unique_users_all)}; closing shared client and entering backoff")
+                                            except Exception:
+                                                pass
+                                            try:
+                                                await Exchange.close_shared_ws_client(exchange)
+                                            except Exception:
+                                                pass
+                                            # Put the exchange into backoff to avoid rapid retry
+                                            try:
+                                                self._set_exchange_backoff(exchange, reason='subscribe_limit')
+                                            except Exception:
+                                                pass
+                                            # Allow time for exchange/client to settle
+                                            await asyncio.sleep(30 + random.uniform(0, 5))
+                                            # Abort current subscription loop and continue outer loop
+                                            raise RuntimeError("subscribe_chunk_failed")
                                         # For other errors, log full traceback to aid debugging
                                         tb = traceback.format_exc()
                                         self._log(f"[ws] watch_tickers subscribe ERROR for exchange {exchange} (chunk {i}-{i+chunk_size}): {e}\n{tb}")
@@ -1031,6 +1060,22 @@ class PBData():
                         except Exception as e:
                             raw = str(e)
                             lower = raw.lower()
+                            # If the exchange enforces a hard subscribe limit, close client and backoff
+                            if 'cannot track more than' in lower or 'cannot track more than' in raw:
+                                try:
+                                    self._log(f"[ws] watch_tickers subscribe REJECTED by exchange {exchange}: {e}; users={len(unique_users_all)}; closing shared client and entering backoff")
+                                except Exception:
+                                    pass
+                                try:
+                                    await Exchange.close_shared_ws_client(exchange)
+                                except Exception:
+                                    pass
+                                try:
+                                    self._set_exchange_backoff(exchange, reason='subscribe_limit')
+                                except Exception:
+                                    pass
+                                await asyncio.sleep(30 + random.uniform(0, 5))
+                                continue
                             if 'already subscribed' in lower or 'already subscribed' in raw:
                                 self._log(f"[ws] watch_tickers: already subscribed for exchange {exchange}: {e}; ignoring and continuing")
                                 await asyncio.sleep(1)
