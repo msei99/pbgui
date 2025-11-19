@@ -145,6 +145,56 @@ class Database():
                     conn.commit()
                 except Exception:
                     pass
+                # Migration: if the balances table does not have a UNIQUE
+                # constraint on `user`, copy the most recent row per user
+                # (by MAX(timestamp)) into a new table with UNIQUE(user),
+                # then replace the old table. This safely deduplicates
+                # existing rows created by older schema versions.
+                try:
+                    cursor.execute("PRAGMA index_list('balances');")
+                    indexes = cursor.fetchall()
+                    has_unique_user = False
+                    for idx in indexes:
+                        # index tuple format may vary; index[2] is `unique` flag in SQLite
+                        try:
+                            unique_flag = idx[2]
+                        except Exception:
+                            unique_flag = 0
+                        if unique_flag:
+                            name = idx[1]
+                            try:
+                                cursor.execute(f"PRAGMA index_info('{name}');")
+                                info = cursor.fetchall()
+                                # info rows format: (seqno, cid, name)
+                                if info and len(info) > 0 and info[0][2] == 'user':
+                                    has_unique_user = True
+                                    break
+                            except Exception:
+                                continue
+                    if not has_unique_user:
+                        # Create deduplicated table and copy newest per user
+                        cursor.execute('''CREATE TABLE IF NOT EXISTS balances_new (
+                                id INTEGER PRIMARY KEY,
+                                timestamp INTEGER NOT NULL,
+                                balance REAL NOT NULL,
+                                user TEXT NOT NULL UNIQUE
+                            );''')
+                        cursor.execute('''INSERT OR REPLACE INTO balances_new(timestamp,balance,user)
+                                          SELECT b.timestamp, b.balance, b.user
+                                          FROM balances b
+                                          JOIN (
+                                              SELECT user, MAX(timestamp) AS maxts FROM balances GROUP BY user
+                                          ) m ON b.user = m.user AND b.timestamp = m.maxts;''')
+                        cursor.execute('DROP TABLE IF EXISTS balances;')
+                        cursor.execute("ALTER TABLE balances_new RENAME TO balances;")
+                        conn.commit()
+                        try:
+                            self._log('Migrated balances table to deduplicate users and enforce UNIQUE(user)')
+                        except Exception:
+                            pass
+                except Exception:
+                    # Do not fail table creation on migration errors
+                    pass
         except sqlite3.Error as e:
             self._log(f"DB create_tables error: {e}")
 
