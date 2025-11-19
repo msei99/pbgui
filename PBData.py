@@ -75,6 +75,16 @@ class PBData():
         self._network_error_locks = {}
         # Time window (seconds) during which only one demotion is allowed per exchange
         self._network_demotion_window = 60
+        # Per-exchange backoff state and error tracking
+        self._exchange_backoff_until = {}  # exchange -> timestamp until which we should backoff
+        self._exchange_error_timestamps = defaultdict(list)  # exchange -> [ts1, ts2, ...]
+        self._error_window_seconds = 30
+        self._error_threshold = 6
+        self._backoff_duration_seconds = 60
+        # If a shared history poll takes longer than this (s) consider exchange overloaded
+        self._long_poll_threshold_seconds = 30
+        # Metrics task handle
+        self._metrics_task = None
         # Load initial debug setting
         try:
             self._load_debug_setting()
@@ -117,6 +127,47 @@ class PBData():
         except Exception:
             return
 
+    def _set_exchange_backoff(self, exchange: str, reason: str = None, duration: int = None):
+        try:
+            now = datetime.now().timestamp()
+            dur = duration if duration is not None else self._backoff_duration_seconds
+            until = now + dur
+            self._exchange_backoff_until[exchange] = until
+            self._log(f"[BACKOFF] Entering backoff for exchange {exchange} for {dur}s (reason={reason})")
+        except Exception:
+            pass
+
+    def _is_exchange_in_backoff(self, exchange: str) -> bool:
+        try:
+            until = self._exchange_backoff_until.get(exchange, 0)
+            return datetime.now().timestamp() < until
+        except Exception:
+            return False
+
+    async def _metrics_loop(self):
+        """Periodic metrics logger: logs counts of shared/private clients and backoff states."""
+        while True:
+            try:
+                from Exchange import Exchange
+                metrics = Exchange.get_client_metrics()
+                lines = []
+                for exch, vals in metrics.items():
+                    lines.append(f"{exch}: shared={vals.get('shared',0)} private={vals.get('private_count',0)}")
+                # Also include exchanges in backoff
+                backoffs = []
+                now = datetime.now().timestamp()
+                for exch, until in list(self._exchange_backoff_until.items()):
+                    if until > now:
+                        backoffs.append(f"{exch}:until={int(until-now)}s")
+                if lines or backoffs:
+                    self._log(f"[METRICS] Clients: {', '.join(lines)}; Backoffs: {', '.join(backoffs) if backoffs else '(none)'}")
+            except Exception:
+                try:
+                    self._log(f"[METRICS] failed to collect metrics")
+                except Exception:
+                    pass
+            await asyncio.sleep(60)
+
     # fetch_users
     @property
     def fetch_users(self):
@@ -143,6 +194,7 @@ class PBData():
                 if self.is_running():
                     break
                 count += 1
+    
 
     def stop(self):
         if self.is_running():
@@ -344,6 +396,27 @@ class PBData():
                     network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
                     if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
                         self._log(f"[ws] watch_balance network error for {user.name}: {e}; considering demotion to REST")
+                        # Track recent network errors for this exchange and trigger backoff if threshold exceeded
+                        try:
+                            now_ts = datetime.now().timestamp()
+                            l = self._exchange_error_timestamps.get(user.exchange, [])
+                            l.append(now_ts)
+                            # prune
+                            l = [ts for ts in l if now_ts - ts <= self._error_window_seconds]
+                            self._exchange_error_timestamps[user.exchange] = l
+                            if len(l) >= self._error_threshold:
+                                try:
+                                    self._set_exchange_backoff(user.exchange, reason='network_errors')
+                                    # also close shared client to force reconnect
+                                    from Exchange import Exchange as _ExchCls
+                                    try:
+                                        await _ExchCls.close_shared_ws_client(user.exchange)
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                         # Coordinate demotion per-exchange so only one user is demoted
                         exch_key = user.exchange
                         # Ensure a lock exists for this exchange
@@ -710,6 +783,10 @@ class PBData():
                 batches = [(None, users)]
             had_rate_limit = False
             for exch, batch_users in batches:
+                # Skip this exchange while in backoff
+                if exch and self._is_exchange_in_backoff(exch):
+                    self._log(f"[poll] Skipping shared {kind} poll for {exch} due to backoff")
+                    continue
                 for user in batch_users:
                     try:
                         if kind == 'positions':
@@ -744,8 +821,18 @@ class PBData():
                             key = (user.name, user.exchange)
                             start_ts = datetime.now().timestamp()
                             self._log(f"[poll] Shared history poll START for {user.name} ({user.exchange})")
-                            await asyncio.to_thread(self.db.update_history, user)
+                            # Time the history update; if it is very long, mark exchange backoff
+                            try:
+                                await asyncio.to_thread(self.db.update_history, user)
+                            except Exception as e:
+                                raise
                             dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+                            if dur_ms / 1000.0 > self._long_poll_threshold_seconds:
+                                # mark exchange as overloaded and backoff longer
+                                try:
+                                    self._set_exchange_backoff(user.exchange, reason='long_history_poll', duration=self._backoff_duration_seconds * 2)
+                                except Exception:
+                                    pass
                             # record last successful REST history poll time per user/exchange
                             try:
                                 self._history_rest_last[key] = start_ts
@@ -1336,6 +1423,13 @@ def main():
     pbdata.save_pid()
 
     async def run_loop():
+        # Start metrics loop so periodic client/backoff metrics appear in logs
+        try:
+            if not hasattr(pbdata, '_metrics_task') or pbdata._metrics_task is None or pbdata._metrics_task.done():
+                pbdata._metrics_task = asyncio.create_task(pbdata._metrics_loop())
+        except Exception:
+            pass
+
         while True:
             try:
                 if logfile.exists() and logfile.stat().st_size >= 10485760:
@@ -1352,7 +1446,60 @@ def main():
                 print(f'Something went wrong, but continue {e}')
                 traceback.print_exc()
 
-    asyncio.run(run_loop())
+    async def _shutdown():
+        try:
+            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] Shutdown requested: closing ws clients")
+            from Exchange import Exchange
+            try:
+                await Exchange.close_all_ws_clients()
+            except Exception:
+                pass
+            # Cancel remaining tasks (except current)
+            try:
+                cur = asyncio.current_task()
+                for t in list(asyncio.all_tasks()):
+                    if t is not cur:
+                        try:
+                            t.cancel()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        finally:
+            try:
+                sys.stdout = sys.__stdout__
+                sys.stderr = sys.__stderr__
+            except Exception:
+                pass
+            try:
+                print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] Exiting")
+            except Exception:
+                pass
+            try:
+                os._exit(0)
+            except Exception:
+                pass
+
+    async def _runner_with_signals():
+        try:
+            loop = asyncio.get_running_loop()
+            import signal as _signal
+            for s in (_signal.SIGINT, _signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(s, lambda sig=s: asyncio.create_task(_shutdown()))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        await run_loop()
+
+    try:
+        asyncio.run(_runner_with_signals())
+    except Exception:
+        try:
+            asyncio.run(run_loop())
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()
