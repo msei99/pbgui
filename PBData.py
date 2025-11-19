@@ -1231,14 +1231,14 @@ class PBData():
                                 except Exception as e:
                                     raw = str(e)
                                     lower = raw.lower()
-+                                    if self._is_normal_ws_close(raw):
-+                                        self._log(f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect")
-+                                        ex = await Exchange.get_shared_ws_client(exchange)
-+                                        if not ex:
-+                                            self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
-+                                            raise RuntimeError("price client unavailable after watch_ticker error")
-+                                        await asyncio.sleep(1)
-+                                        continue
+                                    if self._is_normal_ws_close(raw):
+                                        self._log(f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect")
+                                        ex = await Exchange.get_shared_ws_client(exchange)
+                                        if not ex:
+                                            self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                            raise RuntimeError("price client unavailable after watch_ticker error")
+                                        await asyncio.sleep(1)
+                                        continue
                                     if 'already subscribed' in lower or 'already subscribed' in raw:
                                         self._log(f"[ws] watch_ticker: already subscribed exchange {exchange} {ccxt_symbol}: {e}; ignoring and continuing")
                                         await asyncio.sleep(0.5)
