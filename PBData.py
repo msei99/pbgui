@@ -49,6 +49,12 @@ class PBData():
         self._price_ticks_count = {}
         # Max number of symbols to subscribe in one watch_tickers call
         self._price_subscribe_chunk_size = 20
+        # Per-exchange overrides for subscribe chunk sizes (symbols per watch_tickers call)
+        self._price_subscribe_chunk_size_by_exchange = {
+            'hyperliquid': 5,
+            'bitget': 5,
+            'binance': 5,
+        }
         # Stagger (ms) between starting private ws watchers to avoid bursts
         self._private_ws_stagger_ms = 200
         # Per-exchange limit for how many distinct users the price watcher may track
@@ -875,8 +881,12 @@ class PBData():
                         if added:
                             # Subscribe in chunks to avoid sending very large batch
                             # subscriptions which some exchanges (e.g. hyperliquid)
-                            # may reject or rate-limit.
-                            chunk_size = getattr(self, '_price_subscribe_chunk_size', 20)
+                            # may reject or rate-limit. Allow per-exchange overrides.
+                            per_ex_chunk = getattr(self, '_price_subscribe_chunk_size_by_exchange', None)
+                            if per_ex_chunk and exchange in per_ex_chunk:
+                                chunk_size = per_ex_chunk[exchange]
+                            else:
+                                chunk_size = getattr(self, '_price_subscribe_chunk_size', 20)
                             try:
                                 for i in range(0, len(added), chunk_size):
                                     chunk = added[i:i+chunk_size]
@@ -899,15 +909,18 @@ class PBData():
                                         # For other errors, log full traceback to aid debugging
                                         tb = traceback.format_exc()
                                         self._log(f"[ws] watch_tickers subscribe ERROR for exchange {exchange} (chunk {i}-{i+chunk_size}): {e}\n{tb}")
-                                        # Attempt to recreate / re-acquire shared client
-                                        ex = await Exchange.get_shared_ws_client(exchange)
-                                        if not ex:
-                                            self._log(f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
-                                            return
-                                        # exponential/linear backoff to avoid hammering REST endpoints
+                                        # If we repeatedly fail, close shared client to force a fresh reconnect
                                         subscribe_backoff = min(subscribe_backoff + 1, 6)
-                                        delay = min(5 * subscribe_backoff, 30)
-                                        await asyncio.sleep(delay)
+                                        if subscribe_backoff >= 3:
+                                            try:
+                                                await Exchange.close_shared_ws_client(exchange)
+                                            except Exception:
+                                                pass
+                                            # longer sleep to allow network/exchange to recover
+                                            await asyncio.sleep(30)
+                                        else:
+                                            delay = min(5 * subscribe_backoff, 30)
+                                            await asyncio.sleep(delay)
                                         # Abort current subscription loop and continue outer loop
                                         raise RuntimeError("subscribe_chunk_failed")
                             except RuntimeError:
