@@ -46,6 +46,13 @@ class PBData():
         self._loop_log_every_secs = 60.0
         self._last_mapping_log_ts_by_exchange = {}
         self._price_ticks_count = {}
+        # Max number of symbols to subscribe in one watch_tickers call
+        self._price_subscribe_chunk_size = 20
+        # Per-exchange limit for how many distinct users the price watcher may track
+        # Some exchanges (hyperliquid) enforce a hard cap on tracked users for websocket topics.
+        self._price_subscribe_user_limit_by_exchange = {
+            'hyperliquid': 10,
+        }
         self._mapping_rebuild_min_interval = 300.0  # seconds per exchange
         self._pollers_delay_seconds = 60.0
         self._pollers_enabled_after_ts = datetime.now().timestamp() + self._pollers_delay_seconds
@@ -54,6 +61,11 @@ class PBData():
         # Debug flag for websocket payload logging (can be toggled via pbgui.ini)
         self._debug_ws = False
         self._pbgui_ini_mtime = None
+        # Track recent network-demoted users per exchange to avoid mass demotion
+        self._exchange_network_error_users = defaultdict(dict)  # exchange -> {user_name: timestamp}
+        self._network_error_locks = {}
+        # Time window (seconds) during which only one demotion is allowed per exchange
+        self._network_demotion_window = 60
         # Load initial debug setting
         try:
             self._load_debug_setting()
@@ -286,6 +298,56 @@ class PBData():
                         except Exception:
                             pass
                         return
+                    # Detect network-level errors (connection closed/reset, remote abort)
+                    network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
+                    if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+                        self._log(f"[ws] watch_balance network error for {user.name}: {e}; considering demotion to REST")
+                        # Coordinate demotion per-exchange so only one user is demoted
+                        exch_key = user.exchange
+                        # Ensure a lock exists for this exchange
+                        lock = self._network_error_locks.get(exch_key)
+                        if lock is None:
+                            lock = asyncio.Lock()
+                            self._network_error_locks[exch_key] = lock
+                        async with lock:
+                            now_ts = datetime.now().timestamp()
+                            # Prune stale demotion entries
+                            existing = self._exchange_network_error_users.get(exch_key, {})
+                            stale = [uname for uname, ts in existing.items() if now_ts - ts > self._network_demotion_window]
+                            for s in stale:
+                                existing.pop(s, None)
+                            # If no recent demotions, demote this user
+                            if not existing:
+                                existing[user.name] = now_ts
+                                self._exchange_network_error_users[exch_key] = existing
+                                self._log(f"[ws] Demoting {user.name} to REST for exchange {exch_key} (first in window)")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                return
+                            else:
+                                # Another user was recently demoted; attempt to keep this user's WS alive
+                                self._log(f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket")
+                                try:
+                                    # Try to re-acquire or recreate a private client for this user
+                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    if not ex2:
+                                        self._log(f"[ws] Could not re-acquire private client for {user.name}; falling back to REST")
+                                        try:
+                                            await Exchange.close_private_ws_client(user.exchange, user)
+                                        except Exception:
+                                            pass
+                                        return
+                                    # Short backoff before continuing loop to avoid tight error loops
+                                    await asyncio.sleep(1)
+                                    continue
+                                except Exception:
+                                    try:
+                                        await Exchange.close_private_ws_client(user.exchange, user)
+                                    except Exception:
+                                        pass
+                                    return
                     self._log(f"[ws] watch_balance error for {user.name}: {e}")
                     await asyncio.sleep(2)
         finally:
@@ -387,6 +449,49 @@ class PBData():
                         except Exception:
                             pass
                         return
+                    # Network-level failures should cause this user to fall back to REST
+                    network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
+                    if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+                        self._log(f"[ws] watch_positions network error for {user.name}: {e}; considering demotion to REST")
+                        exch_key = user.exchange
+                        lock = self._network_error_locks.get(exch_key)
+                        if lock is None:
+                            lock = asyncio.Lock()
+                            self._network_error_locks[exch_key] = lock
+                        async with lock:
+                            now_ts = datetime.now().timestamp()
+                            existing = self._exchange_network_error_users.get(exch_key, {})
+                            stale = [uname for uname, ts in existing.items() if now_ts - ts > self._network_demotion_window]
+                            for s in stale:
+                                existing.pop(s, None)
+                            if not existing:
+                                existing[user.name] = now_ts
+                                self._exchange_network_error_users[exch_key] = existing
+                                self._log(f"[ws] Demoting {user.name} to REST for exchange {exch_key} (first in window)")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                return
+                            else:
+                                self._log(f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket")
+                                try:
+                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    if not ex2:
+                                        self._log(f"[ws] Could not re-acquire private client for {user.name}; falling back to REST")
+                                        try:
+                                            await Exchange.close_private_ws_client(user.exchange, user)
+                                        except Exception:
+                                            pass
+                                        return
+                                    await asyncio.sleep(1)
+                                    continue
+                                except Exception:
+                                    try:
+                                        await Exchange.close_private_ws_client(user.exchange, user)
+                                    except Exception:
+                                        pass
+                                    return
                     self._log(f"[ws] watch_positions error for {user.name}: {e}")
                     await asyncio.sleep(2)
         finally:
@@ -466,6 +571,49 @@ class PBData():
                         except Exception:
                             pass
                         return
+                    # Network-level failures should cause this user to fall back to REST
+                    network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
+                    if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+                        self._log(f"[ws] watch_orders network error for {user.name}: {e}; considering demotion to REST")
+                        exch_key = user.exchange
+                        lock = self._network_error_locks.get(exch_key)
+                        if lock is None:
+                            lock = asyncio.Lock()
+                            self._network_error_locks[exch_key] = lock
+                        async with lock:
+                            now_ts = datetime.now().timestamp()
+                            existing = self._exchange_network_error_users.get(exch_key, {})
+                            stale = [uname for uname, ts in existing.items() if now_ts - ts > self._network_demotion_window]
+                            for s in stale:
+                                existing.pop(s, None)
+                            if not existing:
+                                existing[user.name] = now_ts
+                                self._exchange_network_error_users[exch_key] = existing
+                                self._log(f"[ws] Demoting {user.name} to REST for exchange {exch_key} (first in window)")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                return
+                            else:
+                                self._log(f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket")
+                                try:
+                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    if not ex2:
+                                        self._log(f"[ws] Could not re-acquire private client for {user.name}; falling back to REST")
+                                        try:
+                                            await Exchange.close_private_ws_client(user.exchange, user)
+                                        except Exception:
+                                            pass
+                                        return
+                                    await asyncio.sleep(1)
+                                    continue
+                                except Exception:
+                                    try:
+                                        await Exchange.close_private_ws_client(user.exchange, user)
+                                    except Exception:
+                                        pass
+                                    return
                     raw_msg = str(e)
                     exc_type = type(e).__name__
                     self._log(f"[ws] watch_orders error for {user.name}: {raw_msg} (type={exc_type})")
@@ -633,6 +781,27 @@ class PBData():
                     cfg = self._price_exchange_config.get(exchange, {})
                     symbols = list(cfg.get('symbols', set()))
                     mapping = cfg.get('mapping', {})
+                    # Apply per-exchange user tracking limits if configured.
+                    user_limit = self._price_subscribe_user_limit_by_exchange.get(exchange)
+                    if user_limit is not None:
+                        # Build ordered list of unique users from mapping and trim if necessary
+                        unique_users = []
+                        seen = set()
+                        for ccxt_sym, lst in mapping.items():
+                            for user_name, _ in lst:
+                                if user_name not in seen:
+                                    seen.add(user_name)
+                                    unique_users.append(user_name)
+                        if len(unique_users) > user_limit:
+                            allowed = set(unique_users[:user_limit])
+                            # Build reduced mapping that only includes allowed users
+                            reduced = {}
+                            for ccxt_sym, lst in mapping.items():
+                                filtered = [t for t in lst if t[0] in allowed]
+                                if filtered:
+                                    reduced[ccxt_sym] = filtered
+                            self._log(f"[ws] Exchange {exchange} has {len(unique_users)} users but limit is {user_limit}; subscribing only for {len(allowed)} users and falling back to REST for others")
+                            mapping = reduced
                     if not symbols:
                         await asyncio.sleep(1)
                         continue
@@ -665,33 +834,46 @@ class PBData():
                         subscribed = self._price_subscribed_symbols.get(exchange, set())
                         added = list(requested_set - subscribed)
                         if added:
+                            # Subscribe in chunks to avoid sending very large batch
+                            # subscriptions which some exchanges (e.g. hyperliquid)
+                            # may reject or rate-limit.
+                            chunk_size = getattr(self, '_price_subscribe_chunk_size', 20)
                             try:
-                                # Subscribe only to newly added symbols
-                                await asyncio.wait_for(ex.watch_tickers(added), timeout=65)
-                                # Update locally tracked subscribed set
-                                subscribed = subscribed.union(set(added))
-                                self._price_subscribed_symbols[exchange] = subscribed
-                                # reset backoff on success
-                                subscribe_backoff = 0
-                            except Exception as e:
-                                raw = str(e)
-                                if 'already subscribed' in raw.lower() or 'already subscribed' in raw:
-                                    # Non-fatal: someone else already subscribed; merge sets
-                                    subscribed = subscribed.union(set(added))
-                                    self._price_subscribed_symbols[exchange] = subscribed
-                                    self._log(f"[ws] watch_tickers subscribe: already subscribed for exchange {exchange}: {e}; continuing")
-                                else:
-                                    self._log(f"[ws] watch_tickers subscribe ERROR for exchange {exchange}: {e}")
-                                    # Attempt to recreate / re-acquire shared client
-                                    ex = await Exchange.get_shared_ws_client(exchange)
-                                    if not ex:
-                                        self._log(f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
-                                        return
-                                    # exponential/linear backoff to avoid hammering REST endpoints
-                                    subscribe_backoff = min(subscribe_backoff + 1, 6)
-                                    delay = min(5 * subscribe_backoff, 30)
-                                    await asyncio.sleep(delay)
-                                    continue
+                                for i in range(0, len(added), chunk_size):
+                                    chunk = added[i:i+chunk_size]
+                                    try:
+                                        await asyncio.wait_for(ex.watch_tickers(chunk), timeout=65)
+                                        # Merge successful chunk into subscribed set
+                                        subscribed = subscribed.union(set(chunk))
+                                        self._price_subscribed_symbols[exchange] = subscribed
+                                        # reset backoff on success of any chunk
+                                        subscribe_backoff = 0
+                                    except Exception as e:
+                                        raw = str(e)
+                                        lower = raw.lower()
+                                        # Treat 'already subscribed' as non-fatal and merge
+                                        if 'already subscribed' in lower or 'already subscribed' in raw:
+                                            subscribed = subscribed.union(set(chunk))
+                                            self._price_subscribed_symbols[exchange] = subscribed
+                                            self._log(f"[ws] watch_tickers subscribe: already subscribed for exchange {exchange}: {e}; continuing")
+                                            continue
+                                        # For other errors, log full traceback to aid debugging
+                                        tb = traceback.format_exc()
+                                        self._log(f"[ws] watch_tickers subscribe ERROR for exchange {exchange} (chunk {i}-{i+chunk_size}): {e}\n{tb}")
+                                        # Attempt to recreate / re-acquire shared client
+                                        ex = await Exchange.get_shared_ws_client(exchange)
+                                        if not ex:
+                                            self._log(f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
+                                            return
+                                        # exponential/linear backoff to avoid hammering REST endpoints
+                                        subscribe_backoff = min(subscribe_backoff + 1, 6)
+                                        delay = min(5 * subscribe_backoff, 30)
+                                        await asyncio.sleep(delay)
+                                        # Abort current subscription loop and continue outer loop
+                                        raise RuntimeError("subscribe_chunk_failed")
+                            except RuntimeError:
+                                # Subscription chunk failed; go to next outer iteration
+                                continue
                         # Now wait for tickers for the currently requested set. Use the
                         # requested_set (not 'added') to receive updates for all
                         # symbols of interest.
