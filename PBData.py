@@ -17,6 +17,7 @@ from User import Users
 import configparser
 from collections import defaultdict
 import asyncio
+import random
 
 class PBData():
     def __init__(self):
@@ -48,6 +49,8 @@ class PBData():
         self._price_ticks_count = {}
         # Max number of symbols to subscribe in one watch_tickers call
         self._price_subscribe_chunk_size = 20
+        # Stagger (ms) between starting private ws watchers to avoid bursts
+        self._private_ws_stagger_ms = 200
         # Per-exchange limit for how many distinct users the price watcher may track
         # Some exchanges (hyperliquid) enforce a hard cap on tracked users for websocket topics.
         self._price_subscribe_user_limit_by_exchange = {
@@ -382,7 +385,8 @@ class PBData():
                                         pass
                                     return
                     self._log(f"[ws] watch_balance error for {user.name}: {e}")
-                    await asyncio.sleep(2)
+                    # Add jittered backoff to avoid synchronized reconnect storms
+                    await asyncio.sleep(1 + random.random() * 4)
         finally:
             # Intentionally not closing `ex` here. Shared websocket clients are
             # kept open to avoid disrupting other watchers that may be using
@@ -526,7 +530,8 @@ class PBData():
                                         pass
                                     return
                     self._log(f"[ws] watch_positions error for {user.name}: {e}")
-                    await asyncio.sleep(2)
+                    # Add jittered backoff to avoid synchronized reconnect storms
+                    await asyncio.sleep(1 + random.random() * 4)
         finally:
             # Intentionally not closing `ex` here. Keep shared websocket clients
             # open so other watchers are not interrupted.
@@ -650,7 +655,8 @@ class PBData():
                     raw_msg = str(e)
                     exc_type = type(e).__name__
                     self._log(f"[ws] watch_orders error for {user.name}: {raw_msg} (type={exc_type})")
-                    await asyncio.sleep(2)
+                    # Add jittered backoff to avoid synchronized reconnect storms
+                    await asyncio.sleep(1 + random.random() * 4)
         finally:
             # Intentionally not closing `ex` here. Keep shared websocket clients
             # open so other watchers are not interrupted.
@@ -1178,13 +1184,13 @@ class PBData():
             await self._ensure_balance_watcher(u)
             await self._ensure_position_watcher(u)
             # Small stagger to avoid starting many watchers at once
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(self._private_ws_stagger_ms / 1000.0)
 
         # Phase 2: start orders watchers
         for u in phase2_users:
             await self._ensure_order_watcher(u)
             # Small stagger to avoid bursts of order watchers
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(self._private_ws_stagger_ms / 1000.0)
 
         # Start shared serial pollers only after a grace period so that
         # websocket startup and initial subscriptions don't coincide with
