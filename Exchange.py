@@ -10,10 +10,10 @@ from datetime import datetime
 from pbgui_purefunc import PBGDIR
 
 # Default network timeout for ccxt / ccxt.pro clients (milliseconds)
-# Increased from 20s to 60s to reduce websocket ping/pong keepalive
+# Increased from 60s to 120s to reduce websocket ping/pong keepalive
 # timeouts on resource-constrained VPS instances. Can be made
 # configurable via `pbgui.ini` later.
-DEFAULT_CCXT_TIMEOUT_MS = 60000
+DEFAULT_CCXT_TIMEOUT_MS = 120000
 
 # Per-exchange limits for how many private (per-user) websocket clients
 # the process will create. When the limit is reached `get_private_ws_client`
