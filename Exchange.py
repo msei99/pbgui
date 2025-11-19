@@ -123,7 +123,25 @@ class Exchange:
             self._user = new_user
 
     def connect(self):
+        # Create a ccxt sync instance and apply sensible defaults for timeouts
         self.instance = getattr(ccxt, self.id) ()
+        try:
+            # Apply default network timeout and rate limit behavior
+            self.instance.timeout = DEFAULT_CCXT_TIMEOUT_MS
+            self.instance.enableRateLimit = True
+            # Default type for futures/swap operations
+            if not hasattr(self.instance, 'options') or not isinstance(self.instance.options, dict):
+                try:
+                    self.instance.options = {'defaultType': 'swap'}
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.instance.options.setdefault('defaultType', 'swap')
+                except Exception:
+                    pass
+        except Exception:
+            pass
         if self._user and self.user.key != 'key':
             self.instance.apiKey = self.user.key
             self.instance.secret = self.user.secret
@@ -412,9 +430,35 @@ class Exchange:
             return position
 
     def fetch_positions(self):
-        if not self.instance: self.connect()
-        positions = self.instance.fetch_positions()
-        return positions
+        if not self.instance:
+            self.connect()
+
+        # Wrap fetch_positions with a small retry/backoff loop to handle
+        # transient network timeouts on resource-constrained VPS instances.
+        retries = 0
+        max_retries = 3
+        while True:
+            try:
+                positions = self.instance.fetch_positions()
+                return positions
+            except Exception as e:
+                # Convert common ccxt RequestTimeouts and socket timeouts into retries
+                msg = str(e).lower()
+                is_timeout = ('timed out' in msg or 'timeout' in msg or 'requesttimeout' in msg)
+                retries += 1
+                if not is_timeout or retries > max_retries:
+                    # If non-timeout or we exhausted retries, raise the exception
+                    raise
+                # Otherwise wait with exponential backoff and retry
+                delay = min(2 ** retries, 10)
+                try:
+                    self._log(f"fetch_positions timed out for {self.id}; retry {retries}/{max_retries} in {delay}s: {e}")
+                except Exception:
+                    pass
+                try:
+                    sleep(delay)
+                except Exception:
+                    pass
 
     def fetch_balance(self, market_type: str, symbol : str = None):
         if not self.instance: self.connect()
