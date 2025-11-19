@@ -85,6 +85,9 @@ class PBData():
         self._error_window_seconds = 30
         self._error_threshold = 6
         self._backoff_duration_seconds = 60
+        # Timeout (seconds) used for asyncio.wait_for around ccxt.pro watch_* calls
+        # Increase on slow VPS if you see ping-pong RequestTimeouts.
+        self._price_watch_timeout = 120
         # If a shared history poll takes longer than this (s) consider exchange overloaded
         self._long_poll_threshold_seconds = 30
         # Metrics task handle
@@ -1065,7 +1068,7 @@ class PBData():
                                     chunk = added[i:i+chunk_size]
                                     try:
                                         # give a bit more timeout headroom for some exchanges
-                                        await asyncio.wait_for(ex.watch_tickers(chunk), timeout=90)
+                                        await asyncio.wait_for(ex.watch_tickers(chunk), timeout=getattr(self, '_price_watch_timeout', 120))
                                         # Merge successful chunk into subscribed set
                                         subscribed = subscribed.union(set(chunk))
                                         self._price_subscribed_symbols[exchange] = subscribed
@@ -1138,7 +1141,7 @@ class PBData():
                         # requested_set (not 'added') to receive updates for all
                         # symbols of interest.
                         try:
-                            tickers = await asyncio.wait_for(ex.watch_tickers(list(requested_set)), timeout=90)
+                            tickers = await asyncio.wait_for(ex.watch_tickers(list(requested_set)), timeout=getattr(self, '_price_watch_timeout', 120))
                         except asyncio.TimeoutError:
                             self._log(f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client")
                             ex = await Exchange.get_shared_ws_client(exchange)
@@ -1253,7 +1256,7 @@ class PBData():
                         for ccxt_symbol in symbols:
                             try:
                                 try:
-                                    ticker = await asyncio.wait_for(ex.watch_ticker(ccxt_symbol), timeout=90)
+                                    ticker = await asyncio.wait_for(ex.watch_ticker(ccxt_symbol), timeout=getattr(self, '_price_watch_timeout', 120))
                                 except asyncio.TimeoutError:
                                     self._log(f"[ws] watch_ticker TIMEOUT exchange {exchange} {ccxt_symbol}; reconnecting price client")
                                     # Re-acquire shared client instead of creating ephemeral client
