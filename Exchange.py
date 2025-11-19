@@ -350,6 +350,39 @@ class Exchange:
             except Exception:
                 pass
 
+    @classmethod
+    async def close_shared_ws_client(cls, id: str):
+        """Close and remove the shared ws client for an exchange id."""
+        base_key = "kucoinfutures" if id == "kucoin" else id
+        client = cls._shared_ws_clients.pop(base_key, None)
+        if client:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+    @classmethod
+    async def close_all_ws_clients(cls):
+        """Close all cached shared and private ws clients."""
+        # Close private clients
+        keys = list(cls._private_ws_clients.keys())
+        for k in keys:
+            client = cls._private_ws_clients.pop(k, None)
+            if client:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+        # Close shared clients
+        keys = list(cls._shared_ws_clients.keys())
+        for k in keys:
+            client = cls._shared_ws_clients.pop(k, None)
+            if client:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+
     def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int, since : int = None):
         if not self.instance: self.connect()
         if since:

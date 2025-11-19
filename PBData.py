@@ -209,6 +209,17 @@ class PBData():
                 except Exception:
                     pass
                 self._balance_ws_tasks.pop(uname, None)
+                # Close any private ws client for this user to release resources
+                try:
+                    u = self.users.find_user(uname)
+                    if u:
+                        from Exchange import Exchange
+                        try:
+                            await Exchange.close_private_ws_client(u.exchange, u)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
     async def _reconcile_position_watchers(self, desired_user_names: set):
         for uname, task in list(self._position_ws_tasks.items()):
@@ -219,6 +230,17 @@ class PBData():
                 except Exception:
                     pass
                 self._position_ws_tasks.pop(uname, None)
+                # Close any private ws client for this user to release resources
+                try:
+                    u = self.users.find_user(uname)
+                    if u:
+                        from Exchange import Exchange
+                        try:
+                            await Exchange.close_private_ws_client(u.exchange, u)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
     async def _reconcile_order_watchers(self, desired_user_names: set):
         for uname, task in list(self._order_ws_tasks.items()):
@@ -229,6 +251,17 @@ class PBData():
                 except Exception:
                     pass
                 self._order_ws_tasks.pop(uname, None)
+                # Close any private ws client for this user to release resources
+                try:
+                    u = self.users.find_user(uname)
+                    if u:
+                        from Exchange import Exchange
+                        try:
+                            await Exchange.close_private_ws_client(u.exchange, u)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
     async def _balance_ws_loop(self, user):
         from Exchange import Exchange
