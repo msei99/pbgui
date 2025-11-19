@@ -56,6 +56,8 @@ class PBData():
             'hyperliquid': 5,
             'bitget': 5,
             'binance': 5,
+            # bybit can be sensitive to large batch subscribes — use smaller chunks
+            'bybit': 10,
         }
         # Stagger (ms) between starting private ws watchers to avoid bursts
         self._private_ws_stagger_ms = 200
@@ -1072,12 +1074,27 @@ class PBData():
                                     except Exception as e:
                                         raw = str(e)
                                         lower = raw.lower()
-                                        # Treat 'already subscribed' as non-fatal and merge
-                                        if 'already subscribed' in lower or 'already subscribed' in raw:
-                                            subscribed = subscribed.union(set(chunk))
-                                            self._price_subscribed_symbols[exchange] = subscribed
-                                            self._log(f"[ws] watch_tickers subscribe: already subscribed for exchange {exchange}: {e}; continuing")
-                                            continue
+                                        # Treat transient/connect timeouts specially (ccxt RequestTimeout / "connection timeout")
+                                        if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
+                                            self._log(f"[ws] watch_tickers subscribe TIMEOUT for exchange {exchange} (chunk {i}-{i+chunk_size}): {e}; backing off")
+                                            subscribe_backoff = min(subscribe_backoff + 1, 6)
+                                            # if repeated timeouts, nudge a reconnect of shared client
+                                            if subscribe_backoff >= 3:
+                                                try:
+                                                    await Exchange.close_shared_ws_client(exchange)
+                                                except Exception:
+                                                    pass
+                                                await asyncio.sleep(30)
+                                            else:
+                                                await asyncio.sleep(min(5 * subscribe_backoff, 30))
+                                            # abort subscription iteration to allow outer loop to re-evaluate
+                                            raise RuntimeError("subscribe_chunk_failed")
+                                         # Treat 'already subscribed' as non-fatal and merge
+                                         if 'already subscribed' in lower or 'already subscribed' in raw:
+                                             subscribed = subscribed.union(set(chunk))
+                                             self._price_subscribed_symbols[exchange] = subscribed
+                                             self._log(f"[ws] watch_tickers subscribe: already subscribed for exchange {exchange}: {e}; continuing")
+                                             continue
                                         # Detect exchange-enforced subscribe limits (e.g. hyperliquid)
                                         if 'cannot track more than' in lower or 'cannot track more than' in raw:
                                             try:
@@ -1160,9 +1177,16 @@ class PBData():
                                     pass
                                 await asyncio.sleep(30 + random.uniform(0, 5))
                                 continue
-                            if 'already subscribed' in lower or 'already subscribed' in raw:
-                                self._log(f"[ws] watch_tickers: already subscribed for exchange {exchange}: {e}; ignoring and continuing")
-                                await asyncio.sleep(1)
+                            # Treat ccxt RequestTimeout / connection timeouts as transient here too
+                            if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
+                                self._log(f"[ws] watch_tickers REQUESTTIMEOUT for exchange {exchange}: {e}; reconnecting price client (transient)")
+                                ex = await Exchange.get_shared_ws_client(exchange)
+                                if not ex:
+                                    self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                    return
+                                subscribe_backoff = min(subscribe_backoff + 1, 6)
+                                delay = min(5 * subscribe_backoff, 30)
+                                await asyncio.sleep(delay)
                                 continue
                             self._log(f"[ws] watch_tickers ERROR for exchange {exchange}: {e}")
                             ex = await Exchange.get_shared_ws_client(exchange)
@@ -1241,6 +1265,15 @@ class PBData():
                                 except Exception as e:
                                     raw = str(e)
                                     lower = raw.lower()
+                                    # If this is a ccxt RequestTimeout/connection timeout, treat like a transient error
+                                    if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
+                                        self._log(f"[ws] watch_ticker REQUESTTIMEOUT exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client (transient)")
+                                        ex = await Exchange.get_shared_ws_client(exchange)
+                                        if not ex:
+                                            self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                            raise RuntimeError("price client unavailable after watch_ticker error")
+                                        await asyncio.sleep(1)
+                                        continue
                                     if self._is_normal_ws_close(raw):
                                         self._log(f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect")
                                         ex = await Exchange.get_shared_ws_client(exchange)
@@ -1248,10 +1281,6 @@ class PBData():
                                             self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
                                             raise RuntimeError("price client unavailable after watch_ticker error")
                                         await asyncio.sleep(1)
-                                        continue
-                                    if 'already subscribed' in lower or 'already subscribed' in raw:
-                                        self._log(f"[ws] watch_ticker: already subscribed exchange {exchange} {ccxt_symbol}: {e}; ignoring and continuing")
-                                        await asyncio.sleep(0.5)
                                         continue
                                     self._log(f"[ws] watch_ticker ERROR exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client")
                                     # Re-acquire shared client instead of creating ephemeral client
