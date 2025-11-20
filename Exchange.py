@@ -8,12 +8,7 @@ from pathlib import Path
 from time import sleep
 from datetime import datetime
 from pbgui_purefunc import PBGDIR
-
-# Follow PBData pattern: guarded import of canonical human_log as `_human_log`.
-try:
-    from pbgui.logging_helpers import human_log as _human_log
-except Exception:
-    _human_log = None
+from logging_helpers import human_log as _human_log
 
 # Default network timeout for ccxt / ccxt.pro clients (milliseconds)
 # Increased from 60s to 120s to reduce websocket ping/pong keepalive
