@@ -26,8 +26,7 @@ def view_log_filtered(log_filename: str):
     # Read logfile (newest first) using a cached reader. The cached reader
     # is keyed on the logfile path and a refresh counter so we only re-read
     # the file when the user requests it.
-    @st.cache_data
-    def _read_log_cached(path_str: str, refresh_count: int):
+    def _read_log(path_str: str):
         p = Path(path_str)
         if not p.exists():
             return []
@@ -43,13 +42,9 @@ def view_log_filtered(log_filename: str):
         st.info(f'{log_filename} logfile not found yet.')
         lines = []
     else:
-        # Use a 7-element tuple signature so the cached reader also keys on
-        # the refresh and truncate counters. This ensures truncation or a
-        # manual refresh immediately invalidates cached results.
-        lines = _read_log_cached(
-            str(logfile),
-            ((), (), (), (), '', st.session_state.get(refresh_key, 0), st.session_state.get(trunc_key, 0)),
-        )
+        # Read logfile directly (no caching). This avoids stale GUI cache
+        # behavior and ensures the view always reflects current disk contents.
+        lines = _read_log(str(logfile))
 
     # Logfile expander (collapsed by default). Track open state in session_state
     expander_key = f'lv_{log_filename}_expander'
@@ -347,8 +342,7 @@ def view_log_filtered(log_filename: str):
                 # Reuse the filtered-path but do not add severity markers.
                 filter_sig = (tuple(sel_users), tuple(sel_services), tuple(sel_tags), tuple(sel_levels), free_text)
                 try:
-                    filter_sig_ext = tuple(list(filter_sig) + [st.session_state.get(refresh_key, 0), st.session_state.get(trunc_key, 0)])
-                    all_lines = _read_log_cached(str(logfile), filter_sig_ext)
+                    all_lines = _read_log(str(logfile))
                 except Exception:
                     all_lines = lines
                 sel_users = st.session_state.get(f'lv_{log_filename}_sel_users', [])
@@ -404,10 +398,8 @@ def view_log_filtered(log_filename: str):
             # allowing an automatic cache-bust when filters change.
             filter_sig = (tuple(sel_users), tuple(sel_services), tuple(sel_tags), tuple(sel_levels), free_text)
             try:
-                # Append refresh/truncate counters so cache is invalidated
-                # when those counters change (e.g. truncation or manual refresh).
-                filter_sig_ext = tuple(list(filter_sig) + [st.session_state.get(refresh_key, 0), st.session_state.get(trunc_key, 0)])
-                all_lines = _read_log_cached(str(logfile), filter_sig_ext)
+                # Always re-read the logfile on filter change to avoid stale results.
+                all_lines = _read_log(str(logfile))
             except Exception:
                 all_lines = lines
             sel_users = st.session_state.get(f'lv_{log_filename}_sel_users', [])

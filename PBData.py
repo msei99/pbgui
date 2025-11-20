@@ -17,11 +17,7 @@ import configparser
 from collections import defaultdict
 import asyncio
 import random
-
-try:
-    from logging_helpers import human_log as _human_log
-except Exception:
-    _human_log = None
+from logging_helpers import human_log as _human_log
 
 class PBData():
     def __init__(self):
@@ -1662,6 +1658,12 @@ class PBData():
                     self._shared_balances_task = asyncio.create_task(self._shared_poll_serial('balances', 30, per_exchange=True))
             except Exception as e:
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
+        else:
+            try:
+                remaining = int(self._pollers_enabled_after_ts - now_ts)
+                _human_log('PBData', f"[poll] Shared pollers delayed: starting in {remaining}s (now={int(now_ts)} enable_after={int(self._pollers_enabled_after_ts)})", level='DEBUG')
+            except Exception:
+                pass
 
         # Ensure one price watcher per exchange with combined symbols across its users.
         # Run mapping building in background tasks so update_db_async returns quickly.
@@ -1748,11 +1750,28 @@ class PBData():
                     lf = {}
                     try:
                         for u in all_users:
+                            # Prefer the unified _last_fetch_ts mapping, but history
+                            # timestamps may also be tracked in _history_rest_last
+                            # under keys (user, exchange). Use a fallback to fill
+                            # history if the primary mapping is missing.
+                            hist_ts = self._last_fetch_ts.get((u, 'history'))
+                            if not hist_ts:
+                                # search _history_rest_last for any matching user
+                                try:
+                                    found = None
+                                    for (uname, exch), ts in list(self._history_rest_last.items()):
+                                        if uname == u and ts:
+                                            if not found or (ts and ts > found):
+                                                found = ts
+                                    if found:
+                                        hist_ts = found
+                                except Exception:
+                                    pass
                             lf[u] = {
                                 'balances': self._last_fetch_ts.get((u, 'balances')),
                                 'positions': self._last_fetch_ts.get((u, 'positions')),
                                 'orders': self._last_fetch_ts.get((u, 'orders')),
-                                'history': self._last_fetch_ts.get((u, 'history')),
+                                'history': hist_ts,
                             }
                     except Exception:
                         pass
