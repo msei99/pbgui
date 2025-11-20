@@ -1068,7 +1068,11 @@ class PBData():
                                     chunk = added[i:i+chunk_size]
                                     try:
                                         # give a bit more timeout headroom for some exchanges
-                                        await asyncio.wait_for(ex.watch_tickers(chunk), timeout=getattr(self, '_price_watch_timeout', 120))
+                                        timeout_val = getattr(self, '_price_watch_timeout', None)
+                                        if timeout_val:
+                                            await asyncio.wait_for(ex.watch_tickers(chunk), timeout=timeout_val)
+                                        else:
+                                            await ex.watch_tickers(chunk)
                                         # Merge successful chunk into subscribed set
                                         subscribed = subscribed.union(set(chunk))
                                         self._price_subscribed_symbols[exchange] = subscribed
@@ -1141,7 +1145,11 @@ class PBData():
                         # requested_set (not 'added') to receive updates for all
                         # symbols of interest.
                         try:
-                            tickers = await asyncio.wait_for(ex.watch_tickers(list(requested_set)), timeout=getattr(self, '_price_watch_timeout', 120))
+                            timeout_val = getattr(self, '_price_watch_timeout', None)
+                            if timeout_val:
+                                tickers = await asyncio.wait_for(ex.watch_tickers(list(requested_set)), timeout=timeout_val)
+                            else:
+                                tickers = await ex.watch_tickers(list(requested_set))
                         except asyncio.TimeoutError:
                             self._log(f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client")
                             ex = await Exchange.get_shared_ws_client(exchange)
@@ -1255,44 +1263,47 @@ class PBData():
                         ts_now = int(datetime.now().timestamp() * 1000)
                         for ccxt_symbol in symbols:
                             try:
-                                try:
-                                    ticker = await asyncio.wait_for(ex.watch_ticker(ccxt_symbol), timeout=getattr(self, '_price_watch_timeout', 120))
-                                except asyncio.TimeoutError:
-                                    self._log(f"[ws] watch_ticker TIMEOUT exchange {exchange} {ccxt_symbol}; reconnecting price client")
-                                    # Re-acquire shared client instead of creating ephemeral client
-                                    ex = await Exchange.get_shared_ws_client(exchange)
-                                    if not ex:
-                                        self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
-                                        raise RuntimeError("price client unavailable after watch_ticker timeout")
-                                    continue
-                                except Exception as e:
-                                    raw = str(e)
-                                    lower = raw.lower()
-                                    # If this is a ccxt RequestTimeout/connection timeout, treat like a transient error
-                                    if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
-                                        self._log(f"[ws] watch_ticker REQUESTTIMEOUT exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client (transient)")
+                                timeout_val = getattr(self, '_price_watch_timeout', None)
+                                if timeout_val:
+                                    try:
+                                        ticker = await asyncio.wait_for(ex.watch_ticker(ccxt_symbol), timeout=timeout_val)
+                                    except asyncio.TimeoutError:
+                                        self._log(f"[ws] watch_ticker TIMEOUT exchange {exchange} {ccxt_symbol}; reconnecting price client")
                                         ex = await Exchange.get_shared_ws_client(exchange)
                                         if not ex:
                                             self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
-                                            raise RuntimeError("price client unavailable after watch_ticker error")
-                                        await asyncio.sleep(1)
+                                            raise RuntimeError("price client unavailable after watch_ticker timeout")
                                         continue
-                                    if self._is_normal_ws_close(raw):
-                                        self._log(f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect")
+                                else:
+                                    try:
+                                        ticker = await ex.watch_ticker(ccxt_symbol)
+                                    except Exception as e:
+                                        raw = str(e)
+                                        lower = raw.lower()
+                                        if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
+                                            self._log(f"[ws] watch_ticker REQUESTTIMEOUT exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client (transient)")
+                                            ex = await Exchange.get_shared_ws_client(exchange)
+                                            if not ex:
+                                                self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                                raise RuntimeError("price client unavailable after watch_ticker error")
+                                            await asyncio.sleep(1)
+                                            continue
+                                        if self._is_normal_ws_close(raw):
+                                            self._log(f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect")
+                                            ex = await Exchange.get_shared_ws_client(exchange)
+                                            if not ex:
+                                                self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                                raise RuntimeError("price client unavailable after watch_ticker error")
+                                            await asyncio.sleep(1)
+                                            continue
+                                        self._log(f"[ws] watch_ticker ERROR exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client")
                                         ex = await Exchange.get_shared_ws_client(exchange)
                                         if not ex:
-                                            self._log(f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                            self._log(f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
                                             raise RuntimeError("price client unavailable after watch_ticker error")
                                         await asyncio.sleep(1)
                                         continue
-                                    self._log(f"[ws] watch_ticker ERROR exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client")
-                                    # Re-acquire shared client instead of creating ephemeral client
-                                    ex = await Exchange.get_shared_ws_client(exchange)
-                                    if not ex:
-                                        self._log(f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
-                                        raise RuntimeError("price client unavailable after watch_ticker error")
-                                    await asyncio.sleep(1)
-                                    continue
+
                                 last = ticker.get('last')
                                 ts = ticker.get('timestamp') or ts_now
                                 if last is None:
