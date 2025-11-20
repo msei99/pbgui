@@ -526,21 +526,33 @@ class Database():
         sql = '''INSERT OR REPLACE INTO balances(timestamp,balance,user)
                 VALUES(?,?,?) '''
         try:
+            if not balance or len(balance) < 3:
+                self._log(f"DB update_balance called with invalid balance data: {balance}")
+                return
             cur = conn.cursor()
             cur.execute(sql, balance)
-            # After inserting/updating the newest balance row for this user,
-            # delete any older rows for the same user (by timestamp).
+
+            # Robust cleanup: keep only the newest row (by timestamp, then by id)
+            # for this user and delete any other rows. This handles cases where
+            # the DB schema did not previously enforce UNIQUE(user) or when
+            # older duplicate rows exist from imports/migrations.
             try:
-                ts = int(balance[0])
-            except Exception:
-                ts = balance[0]
-            user = balance[2]
-            del_sql = 'DELETE FROM balances WHERE user = ? AND timestamp < ?'
-            try:
-                cur.execute(del_sql, (user, ts))
-            except sqlite3.Error:
-                # If delete fails for any reason, continue but log later via outer except
-                pass
+                user = str(balance[2])
+                cleanup_sql = '''
+                DELETE FROM balances
+                WHERE user = ?
+                  AND id NOT IN (
+                    SELECT id FROM balances WHERE user = ? ORDER BY timestamp DESC, id DESC LIMIT 1
+                  )
+                '''
+                cur.execute(cleanup_sql, (user, user))
+                removed = cur.rowcount
+                if removed and removed > 0:
+                    self._log(f"DB update_balance removed {removed} older balances for user={user}")
+            except sqlite3.Error as e:
+                # Log but don't raise; allow normal flow to continue
+                self._log(f"DB update_balance cleanup error {e} user={balance[2]}")
+
             conn.commit()
         except sqlite3.Error as e:
             self._log(f"DB update_balance error {e} data={balance}")
