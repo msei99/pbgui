@@ -94,6 +94,9 @@ class PBData():
         self._ws_success_counts = defaultdict(int)  # (exchange, user_name) -> consecutive successes
         self._ws_success_required = 3  # successes required to clear restart marker
         self._ws_restart_sleep = 0.5  # base sleep (s) before re-creating client
+        # Per-user last fetch timestamps (key: (user_name, kind) -> epoch seconds)
+        # kind in {'balances','positions','orders','history'}
+        self._last_fetch_ts = defaultdict(dict)
         # If a shared history poll takes longer than this (s) consider exchange overloaded
         self._long_poll_threshold_seconds = 30
         # Metrics task handle
@@ -414,6 +417,11 @@ class PBData():
                     # On any balance update, persist balances (REST fallback)
                     try:
                         await asyncio.to_thread(self.db.update_balances, user)
+                        # record last fetch timestamp for balances
+                        try:
+                            self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                        except Exception:
+                            pass
                     except Exception as e:
                         self._log(f"[ws] DB balance update failed for {user.name}: {e}")
                     else:
@@ -637,6 +645,10 @@ class PBData():
                         last_positions_refresh = now_sec
                         try:
                             await asyncio.to_thread(self.db.update_positions, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
                         except Exception as e:
                             self._log(f"[ws] DB positions update failed for {user.name}: {e}")
                     # Debug: optionally log the positions payload
@@ -831,6 +843,10 @@ class PBData():
                         last_orders_refresh = now_sec
                         try:
                             await asyncio.to_thread(self.db.update_orders, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
                         except Exception as e:
                             self._log(f"[ws] DB orders update failed for {user.name}: {e}")
                 except Exception as e:
@@ -953,6 +969,10 @@ class PBData():
         while True:
             try:
                 await asyncio.to_thread(self.db.update_orders, user)
+                try:
+                    self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                except Exception:
+                    pass
             except Exception as e:
                 self._log(f"[poll] Orders poll failed for {user.name}: {e}")
             await asyncio.sleep(interval_seconds)
@@ -1009,6 +1029,10 @@ class PBData():
                                     self._last_skipped_position_log = now_ts
                                 continue
                             await asyncio.to_thread(self.db.update_positions, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
                         elif kind == 'orders':
                             # Skip shared orders poll if user has active WS orders watcher
                             ws_task = self._order_ws_tasks.get(user.name)
@@ -1020,6 +1044,10 @@ class PBData():
                                     self._last_skipped_order_log = now_ts
                                 continue
                             await asyncio.to_thread(self.db.update_orders, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
                         elif kind == 'history':
                             # Instrument shared history polling for debugging/tracing
                             key = (user.name, user.exchange)
@@ -1040,6 +1068,10 @@ class PBData():
                             # record last successful REST history poll time per user/exchange
                             try:
                                 self._history_rest_last[key] = start_ts
+                                try:
+                                    self._last_fetch_ts[(user.name, 'history')] = start_ts
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
                             self._log(f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms")
@@ -1054,6 +1086,10 @@ class PBData():
                                     self._last_skipped_balance_log = now_ts
                                 continue
                             await asyncio.to_thread(self.db.update_balances, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
                         # (duplicate branches removed)
                     except Exception as e:
                         msg = str(e)
@@ -1073,6 +1109,10 @@ class PBData():
         while True:
             try:
                 await asyncio.to_thread(self.db.update_balances, user)
+                try:
+                    self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                except Exception:
+                    pass
             except Exception as e:
                 self._log(f"[poll] Balance poll failed for {user.name}: {e}")
             await asyncio.sleep(interval_seconds)
@@ -1663,6 +1703,20 @@ class PBData():
                 else:
                     orders_rest.append(u.name)
 
+            # Include last-fetch (minutes ago) per user/kind where available
+            now_ts = datetime.now().timestamp()
+            def last_minutes(user_name, kind):
+                try:
+                    ts = self._last_fetch_ts.get((user_name, kind))
+                    if not ts:
+                        return '(never)'
+                    mins = int((now_ts - ts) // 60)
+                    if mins <= 0:
+                        return '0m'
+                    return f'{mins}m'
+                except Exception:
+                    return '(unknown)'
+
             # Build a single multi-line, human-friendly summary block
             def join_csv(lst):
                 return ', '.join(lst) if lst else '(none)'
@@ -1671,23 +1725,41 @@ class PBData():
             summary_lines.append("[summary] Fetch method summary:")
             summary_lines.append(f"[summary] Balances: ws={len(balances_ws)} rest={len(balances_rest)}")
             summary_lines.append(f"[summary]   ws: {join_csv(balances_ws)}")
+            # append last-fetch per user for balances
+            summary_lines.append(f"[summary]   last_fetch_balances: " + ", ".join([f"{u}={last_minutes(u,'balances')}" for u in all_users]))
             summary_lines.append(f"[summary]   rest: {join_csv(balances_rest)}")
             summary_lines.append(f"[summary] Positions: ws={len(positions_ws)} rest={len(positions_rest)}")
             summary_lines.append(f"[summary]   ws: {join_csv(positions_ws)}")
+            summary_lines.append(f"[summary]   last_fetch_positions: " + ", ".join([f"{u}={last_minutes(u,'positions')}" for u in all_users]))
             summary_lines.append(f"[summary]   rest: {join_csv(positions_rest)}")
             summary_lines.append(f"[summary] Orders: ws={len(orders_ws)} rest={len(orders_rest)}")
             summary_lines.append(f"[summary]   ws: {join_csv(orders_ws)}")
+            summary_lines.append(f"[summary]   last_fetch_orders: " + ", ".join([f"{u}={last_minutes(u,'orders')}" for u in all_users]))
             summary_lines.append(f"[summary]   rest: {join_csv(orders_rest)}")
+            summary_lines.append(f"[summary] History last_fetch: " + ", ".join([f"{u}={last_minutes(u,'history')}" for u in all_users]))
             summary_lines.append(f"[summary] History (rest): {join_csv(all_users)}")
             try:
                 # Also write machine-readable JSON summary for GUI/monitoring
                 try:
+                    # Build machine-readable summary including last-fetch timestamps
+                    lf = {}
+                    try:
+                        for u in all_users:
+                            lf[u] = {
+                                'balances': self._last_fetch_ts.get((u, 'balances')),
+                                'positions': self._last_fetch_ts.get((u, 'positions')),
+                                'orders': self._last_fetch_ts.get((u, 'orders')),
+                                'history': self._last_fetch_ts.get((u, 'history')),
+                            }
+                    except Exception:
+                        pass
                     summary_obj = {
                         'timestamp': datetime.now().isoformat(sep=' ', timespec='seconds'),
                         'balances': {'ws': balances_ws, 'rest': balances_rest},
                         'positions': {'ws': positions_ws, 'rest': positions_rest},
                         'orders': {'ws': orders_ws, 'rest': orders_rest},
                         'history': all_users,
+                        'last_fetch_ts': lf,
                     }
                     logs_dir = _Path(f"{PBGDIR}/data/logs")
                     if not logs_dir.exists():
