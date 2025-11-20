@@ -88,6 +88,12 @@ class PBData():
         # Timeout (seconds) used for asyncio.wait_for around ccxt.pro watch_* calls
         # Increase on slow VPS if you see ping-pong RequestTimeouts.
         self._price_watch_timeout = 120
+        # Websocket restart-once state: track one restart per (exchange,user)
+        # and consecutive successful watch messages to clear the restart marker.
+        self._ws_restarted_once = set()  # set of (exchange, user_name)
+        self._ws_success_counts = defaultdict(int)  # (exchange, user_name) -> consecutive successes
+        self._ws_success_required = 3  # successes required to clear restart marker
+        self._ws_restart_sleep = 0.5  # base sleep (s) before re-creating client
         # If a shared history poll takes longer than this (s) consider exchange overloaded
         self._long_poll_threshold_seconds = 30
         # Metrics task handle
@@ -410,6 +416,18 @@ class PBData():
                         await asyncio.to_thread(self.db.update_balances, user)
                     except Exception as e:
                         self._log(f"[ws] DB balance update failed for {user.name}: {e}")
+                    else:
+                        # Successful watch_balance event: increment success counter
+                        try:
+                            key = (user.exchange, user.name)
+                            self._ws_success_counts[key] = self._ws_success_counts.get(key, 0) + 1
+                            if self._ws_success_counts.get(key, 0) >= self._ws_success_required:
+                                if key in self._ws_restarted_once:
+                                    self._ws_restarted_once.discard(key)
+                                    self._log(f"[ws] Restart state cleared for {user.name} ({user.exchange}) after {self._ws_success_required} successful watch events")
+                                self._ws_success_counts[key] = 0
+                        except Exception:
+                            pass
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
@@ -433,6 +451,35 @@ class PBData():
                             except Exception:
                                 pass
                             return
+                    # Detect keepalive/ping-pong style timeouts and attempt one restart
+                    try:
+                        key = (user.exchange, user.name)
+                        # reset consecutive success counter on any exception
+                        try:
+                            self._ws_success_counts[key] = 0
+                        except Exception:
+                            pass
+                        keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
+                        if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
+                            if key not in self._ws_restarted_once:
+                                self._log(f"[ws] Keepalive timeout detected; restarting private ws client for {user.name} ({user.exchange})")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
+                                try:
+                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    if ex2:
+                                        self._ws_restarted_once.add(key)
+                                        ex = ex2
+                                        self._log(f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages")
+                                        continue
+                                except Exception:
+                                    pass
+                            # If restart already used or recreate failed, fall through to normal handling
+                    except Exception:
+                        pass
                     # Detect network-level errors (connection closed/reset, remote abort)
                     network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
                     if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
@@ -574,6 +621,17 @@ class PBData():
                     pass
                 try:
                     _ = await ex.watch_positions()
+                    # Successful watch_positions: increment success counter and clear restart marker after threshold
+                    try:
+                        key = (user.exchange, user.name)
+                        self._ws_success_counts[key] = self._ws_success_counts.get(key, 0) + 1
+                        if self._ws_success_counts.get(key, 0) >= self._ws_success_required:
+                            if key in self._ws_restarted_once:
+                                self._ws_restarted_once.discard(key)
+                                self._log(f"[ws] Restart state cleared for {user.name} ({user.exchange}) after {self._ws_success_required} successful watch events")
+                            self._ws_success_counts[key] = 0
+                    except Exception:
+                        pass
                     now_sec = int(datetime.now().timestamp())
                     if now_sec - last_positions_refresh >= min_positions_refresh_interval:
                         last_positions_refresh = now_sec
@@ -623,6 +681,34 @@ class PBData():
                         except Exception:
                             pass
                         return
+                    # Detect keepalive/ping-pong style timeouts and attempt single restart before demotion
+                    try:
+                        key = (user.exchange, user.name)
+                        try:
+                            self._ws_success_counts[key] = 0
+                        except Exception:
+                            pass
+                        keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
+                        if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
+                            if key not in self._ws_restarted_once:
+                                self._log(f"[ws] Keepalive timeout detected (positions); restarting private ws client for {user.name} ({user.exchange})")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
+                                try:
+                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    if ex2:
+                                        self._ws_restarted_once.add(key)
+                                        ex = ex2
+                                        self._log(f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages")
+                                        continue
+                                except Exception:
+                                    pass
+                            # else: fall through to normal handling
+                    except Exception:
+                        pass
                     # Network-level failures should cause this user to fall back to REST
                     network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
                     if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
@@ -714,6 +800,17 @@ class PBData():
                     pass
                 try:
                     orders = await ex.watch_orders()
+                    # Successful watch_orders: increment success counter and clear restart marker after threshold
+                    try:
+                        key = (user.exchange, user.name)
+                        self._ws_success_counts[key] = self._ws_success_counts.get(key, 0) + 1
+                        if self._ws_success_counts.get(key, 0) >= self._ws_success_required:
+                            if key in self._ws_restarted_once:
+                                self._ws_restarted_once.discard(key)
+                                self._log(f"[ws] Restart state cleared for {user.name} ({user.exchange}) after {self._ws_success_required} successful watch events")
+                            self._ws_success_counts[key] = 0
+                    except Exception:
+                        pass
                     # On orders updates, persist orders but no more often than
                     # min_orders_refresh_interval seconds to avoid excessive
                     # REST calls when many users or frequent WS updates.
@@ -767,6 +864,34 @@ class PBData():
                         except Exception:
                             pass
                         return
+                    # Detect keepalive/ping-pong style timeouts and attempt a single restart before demotion
+                    try:
+                        key = (user.exchange, user.name)
+                        try:
+                            self._ws_success_counts[key] = 0
+                        except Exception:
+                            pass
+                        keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
+                        if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
+                            if key not in self._ws_restarted_once:
+                                self._log(f"[ws] Keepalive timeout detected (orders); restarting private ws client for {user.name} ({user.exchange})")
+                                try:
+                                    await Exchange.close_private_ws_client(user.exchange, user)
+                                except Exception:
+                                    pass
+                                await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
+                                try:
+                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    if ex2:
+                                        self._ws_restarted_once.add(key)
+                                        ex = ex2
+                                        self._log(f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages")
+                                        continue
+                                except Exception:
+                                    pass
+                            # else: fall through to normal handling
+                    except Exception:
+                        pass
                     # Network-level failures should cause this user to fall back to REST
                     network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
                     if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
