@@ -153,6 +153,14 @@ class Exchange:
             else:
                 try:
                     self.instance.options.setdefault('defaultType', 'swap')
+                    # Set a larger recvWindow and enable automatic time adjustment
+                    # for all exchanges where ccxt supports it to reduce
+                    # timestamp/recv_window related signature errors.
+                    try:
+                        self.instance.options.setdefault('recvWindow', 10000)
+                        self.instance.options.setdefault('adjustForTimeDifference', True)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
         except Exception:
@@ -188,6 +196,13 @@ class Exchange:
                 kwargs['walletAddress'] = getattr(self.user, 'wallet_address')
             if getattr(self.user, 'private_key', None):
                 kwargs['privateKey'] = getattr(self.user, 'private_key')
+        # Add recvWindow and time-difference adjustment for all exchanges
+        try:
+            kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
+            kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
+        except Exception:
+            pass
+
         ex = getattr(ccxt_pro, ex_id)(kwargs)
         return ex
 
@@ -233,6 +248,13 @@ class Exchange:
                     kwargs['walletAddress'] = getattr(user, 'wallet_address')
                 if getattr(user, 'private_key', None):
                     kwargs['privateKey'] = getattr(user, 'private_key')
+            # Enforce recvWindow and time-difference adjustment for all private clients
+            try:
+                kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
+                kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
+            except Exception:
+                pass
+
             ex = getattr(ccxt_pro, ex_id)(kwargs)
 
             # Ensure markets are loaded once for this shared client with stronger backoff
@@ -353,6 +375,13 @@ class Exchange:
                 kwargs['walletAddress'] = getattr(user, 'wallet_address')
             if getattr(user, 'private_key', None):
                 kwargs['privateKey'] = getattr(user, 'private_key')
+
+            # Apply recvWindow and time-difference adjustment for all clients
+            try:
+                kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
+                kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
+            except Exception:
+                pass
 
             ex = getattr(ccxt_pro, ex_id)(kwargs)
 

@@ -110,6 +110,14 @@ class PBData():
     def _log(self, msg: str):
         """Print a log line with timestamp and module tag."""
         try:
+            # Use the centralized human-readable logging helper so leading
+            # bracketed tokens in `msg` become canonical leading tags.
+            try:
+                from logging_helpers import human_log
+                human_log('PBData', msg)
+                return
+            except Exception:
+                pass
             ts = datetime.now().isoformat(sep=' ', timespec='seconds')
         except TypeError:
             ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1775,13 +1783,16 @@ class PBData():
                         pass
                 except Exception:
                     pass
-                self._log("\n".join(summary_lines))
+                # Note: remove multi-line human-readable summary log to avoid
+                # making a single log entry out of many lines (which breaks
+                # leading-tag parsing). The machine-readable `fetch_summary.json`
+                # remains as the canonical summary.
             except Exception:
-                for sl in summary_lines:
-                    try:
-                        self._log(sl)
-                    except Exception:
-                        pass
+                # If writing JSON fails, fall back to logging a minimal error
+                try:
+                    self._log(f"[summary] Failed to write fetch_summary.json")
+                except Exception:
+                    pass
         except Exception as e:
             try:
                 self._log(f"[summary] Failed to build fetch method summary: {e}")
