@@ -42,7 +42,7 @@ def _sanitize_tag(t: str) -> str:
     return t2
 
 
-def human_log(service: str, msg: str, user: str = None, tags=None, code: str = None, meta: dict = None, logfile: str = None):
+def human_log(service: str, msg: str, user: str = None, tags=None, level: str = None, code: str = None, meta: dict = None, logfile: str = None):
     """Write a canonical human-readable log line.
 
     Format:
@@ -57,8 +57,15 @@ def human_log(service: str, msg: str, user: str = None, tags=None, code: str = N
             tags = []
         # Extract leading brackets from msg (if any)
         leading, rest = _extract_leading_brackets(msg or '')
+        # Recognize explicit level tokens among leading brackets
+        recognized_levels = {'DEBUG', 'INFO', 'WARN', 'WARNING', 'ERROR', 'CRITICAL'}
+        level_from_msg = None
         for lt in leading:
-            if lt.lower().startswith('user:') and not user:
+            up = lt.upper()
+            if up in recognized_levels and level_from_msg is None and not level:
+                level_from_msg = up
+                # do not add this token to tags
+            elif lt.lower().startswith('user:') and not user:
                 user = lt.split(':', 1)[1].strip()
             else:
                 tags.append(lt)
@@ -69,6 +76,14 @@ def human_log(service: str, msg: str, user: str = None, tags=None, code: str = N
         parts = []
         parts.append(_now_isoz())
         parts.append(f'[{service}]')
+        # Determine final level (explicit param > message token > default INFO)
+        if level:
+            lev = str(level).upper()
+        elif level_from_msg:
+            lev = level_from_msg
+        else:
+            lev = 'INFO'
+        parts.append(f'[{lev}]')
         for t in tags:
             parts.append(f'[{t}]')
         if user:

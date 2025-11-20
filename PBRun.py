@@ -647,7 +647,7 @@ class RunV7():
             except psutil.AccessDenied:
                 pass
             if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
-                if cmdline[-1].endswith(f'/{self.user}/config_run.json') or cmdline[-1].endswith(f'\{self.user}\config_run.json'):
+                if cmdline[-1].endswith(f'/{self.user}/config_run.json') or cmdline[-1].endswith(f'\\{self.user}\\config_run.json'):
                     self.monitor.start_time = process.create_time()
                     self.monitor.memory = process.memory_full_info()
                     self.monitor.cpu = process.cpu_percent()
