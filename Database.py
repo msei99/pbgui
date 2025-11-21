@@ -522,6 +522,42 @@ class Database():
                     self._log(f"DB upsert_price error {e} user={user.name} symbol={symbol} price={price_value} attempts={attempts}")
                     break
 
+    def batch_upsert_prices(self, rows: list):
+        """Batch upsert a list of price rows.
+
+        rows: iterable of (user, symbol, timestamp, price)
+        This uses a single connection and transaction to reduce locking and
+        improve throughput compared to many per-row connections.
+        """
+        if not rows:
+            return
+        with self._write_lock:
+            attempts = 0
+            while True:
+                try:
+                    with self._connect() as conn:
+                        cur = conn.cursor()
+                        for user, symbol, timestamp, price in rows:
+                            try:
+                                cur.execute('UPDATE prices SET timestamp = ?, price = ? WHERE symbol = ? AND user = ?', (timestamp, price, symbol, user))
+                                if cur.rowcount == 0:
+                                    cur.execute('INSERT INTO prices(timestamp,price,symbol,user) VALUES(?,?,?,?)', (timestamp, price, symbol, user))
+                            except sqlite3.Error as e:
+                                # Log and continue with other rows
+                                self._log(f"DB batch_upsert_prices row error {e} user={user} symbol={symbol} price={price}")
+                        conn.commit()
+                    break
+                except sqlite3.OperationalError as e:
+                    if 'database is locked' in str(e).lower() and attempts < 5:
+                        attempts += 1
+                        time.sleep(0.05 * attempts)
+                        continue
+                    self._log(f"DB batch_upsert_prices error {e} attempts={attempts}")
+                    break
+                except sqlite3.Error as e:
+                    self._log(f"DB batch_upsert_prices error {e} attempts={attempts}")
+                    break
+
     def update_balance(self, conn: sqlite3.Connection, balance: list):
         sql = '''INSERT OR REPLACE INTO balances(timestamp,balance,user)
                 VALUES(?,?,?) '''
