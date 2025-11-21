@@ -417,6 +417,10 @@ class PBData():
                             self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
                         except Exception:
                             pass
+                            try:
+                                self._write_fetch_summary()
+                            except Exception:
+                                pass
                     except Exception as e:
                         _human_log('PBData', f"[ws] DB balance update failed for {user.name}: {e}", level='ERROR')
                     else:
@@ -646,6 +650,14 @@ class PBData():
                                 self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
                             except Exception:
                                 pass
+                            try:
+                                self._write_fetch_summary()
+                            except Exception:
+                                pass
+                            try:
+                                self._write_fetch_summary()
+                            except Exception:
+                                pass
                         except Exception as e:
                             _human_log('PBData', f"[ws] DB positions update failed for {user.name}: {e}", level='ERROR')
                     # Debug: optionally log the positions payload
@@ -846,6 +858,14 @@ class PBData():
                                 self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
                             except Exception:
                                 pass
+                            try:
+                                self._write_fetch_summary()
+                            except Exception:
+                                pass
+                                try:
+                                    self._write_fetch_summary()
+                                except Exception:
+                                    pass
                         except Exception as e:
                             _human_log('PBData', f"[ws] DB orders update failed for {user.name}: {e}")
                 except Exception as e:
@@ -972,6 +992,10 @@ class PBData():
                     self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
                 except Exception:
                     pass
+                try:
+                    self._write_fetch_summary()
+                except Exception:
+                    pass
             except Exception as e:
                 _human_log('PBData', f"[poll] Orders poll failed for {user.name}: {e}")
             await asyncio.sleep(interval_seconds)
@@ -981,6 +1005,14 @@ class PBData():
         while True:
             try:
                 await asyncio.to_thread(self.db.update_positions, user)
+                try:
+                    self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                except Exception:
+                    pass
+                try:
+                    self._write_fetch_summary()
+                except Exception:
+                    pass
             except Exception as e:
                 _human_log('PBData', f"[poll] Positions poll failed for {user.name}: {e}")
             await asyncio.sleep(interval_seconds)
@@ -1073,6 +1105,10 @@ class PBData():
                                     pass
                             except Exception:
                                 pass
+                            try:
+                                self._write_fetch_summary()
+                            except Exception:
+                                pass
                             _human_log('PBData', f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms")
                         elif kind == 'balances':
                             # Skip shared balances poll if user has active WS balances watcher
@@ -1087,6 +1123,10 @@ class PBData():
                             await asyncio.to_thread(self.db.update_balances, user)
                             try:
                                 self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
+                            try:
+                                self._write_fetch_summary()
                             except Exception:
                                 pass
                         # (duplicate branches removed)
@@ -1812,6 +1852,87 @@ class PBData():
                 _human_log('PBData', f"[summary] Failed to build fetch method summary: {e}")
             except Exception:
                 pass
+
+    def _write_fetch_summary(self):
+        """Write machine-readable `fetch_summary.json` from current in-memory state.
+
+        Safe to call from websocket/poller loops; exceptions are swallowed.
+        """
+        try:
+            try:
+                self.users.load()
+            except Exception:
+                pass
+            self.load_fetch_users()
+            balances_ws = []
+            balances_rest = []
+            positions_ws = []
+            positions_rest = []
+            orders_ws = []
+            orders_rest = []
+            all_users = []
+            for u in self.users:
+                if u.name not in self.fetch_users:
+                    continue
+                all_users.append(u.name)
+                if self._balance_ws_tasks.get(u.name) and not self._balance_ws_tasks.get(u.name).done():
+                    balances_ws.append(u.name)
+                else:
+                    balances_rest.append(u.name)
+                if self._position_ws_tasks.get(u.name) and not self._position_ws_tasks.get(u.name).done():
+                    positions_ws.append(u.name)
+                else:
+                    positions_rest.append(u.name)
+                if self._order_ws_tasks.get(u.name) and not self._order_ws_tasks.get(u.name).done():
+                    orders_ws.append(u.name)
+                else:
+                    orders_rest.append(u.name)
+
+            # Compose last-fetch mapping with history fallback to _history_rest_last
+            lf = {}
+            for u in all_users:
+                hist_ts = self._last_fetch_ts.get((u, 'history'))
+                if not hist_ts:
+                    try:
+                        found = None
+                        for (uname, exch), ts in list(self._history_rest_last.items()):
+                            if uname == u and ts:
+                                if not found or (ts and ts > found):
+                                    found = ts
+                        if found:
+                            hist_ts = found
+                    except Exception:
+                        pass
+                lf[u] = {
+                    'balances': self._last_fetch_ts.get((u, 'balances')),
+                    'positions': self._last_fetch_ts.get((u, 'positions')),
+                    'orders': self._last_fetch_ts.get((u, 'orders')),
+                    'history': hist_ts,
+                }
+
+            summary_obj = {
+                'timestamp': datetime.now().isoformat(sep=' ', timespec='seconds'),
+                'balances': {'ws': balances_ws, 'rest': balances_rest},
+                'positions': {'ws': positions_ws, 'rest': positions_rest},
+                'orders': {'ws': orders_ws, 'rest': orders_rest},
+                'history': all_users,
+                'last_fetch_ts': lf,
+            }
+            logs_dir = _Path(f"{PBGDIR}/data/logs")
+            if not logs_dir.exists():
+                try:
+                    logs_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+            summary_path = logs_dir / 'fetch_summary.json'
+            try:
+                with open(summary_path, 'w') as _f:
+                    json.dump(summary_obj, _f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+        except Exception:
+            # never raise from this helper
+            pass
 
 def main():
     """Entry point kept synchronous; spins up an async loop internally."""
