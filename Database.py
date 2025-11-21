@@ -673,7 +673,22 @@ class Database():
         except Exception:
             since = 0
         self._log(f"fetch_history: user={user.name} exchange={user.exchange} since={since} (type={type(since)})")
-        return exchange.fetch_history(int(since))
+        # Time the exchange.fetch_history call to help diagnose slow history polls.
+        try:
+            start_ts = time.time()
+            history = exchange.fetch_history(int(since))
+            dur = time.time() - start_ts
+            try:
+                length = len(history) if history is not None else 0
+            except Exception:
+                length = 0
+            self._log(f"fetch_history DONE: user={user.name} exchange={user.exchange} duration_s={dur:.3f} items={length}")
+            return history
+        except Exception as e:
+            # Do not swallow exceptions here — re-raise so callers (and tests)
+            # can inspect the full traceback and we can debug exchange.fetch_history.
+            self._log(f"fetch_history ERROR for user={user.name} exchange={user.exchange}: {e}")
+            raise
 
     def fetch_positions(self, user: User):
         sql = '''SELECT * FROM "position"
@@ -1007,8 +1022,9 @@ class Database():
 def main():
     print("Don't Run this Class from CLI")
     # users = Users()
-    # user = users.find_user("HYPErQuantum")
+    # user = users.find_user("hl_mani_crash_hunter")
     # db = Database()
+    # db.fetch_history(user)
     # db.import_from_save_income_other(user)
     # exchange = Exchange("gateio", user)
     # history = exchange.fetch_history()

@@ -5,6 +5,7 @@ from User import User, Users
 from enum import Enum
 import json
 from pathlib import Path
+import time
 from time import sleep
 from datetime import datetime
 from pbgui_purefunc import PBGDIR
@@ -836,17 +837,35 @@ class Exchange:
             else:
                 # For make sure not to miss any funding or trading history
                 since -= hour
-            limit = 500
-            end = since + week
+            limit = 200
+            # start with 1 week pages; on empty results double the page span up to 4 weeks
+            initial_span = week
+            max_span = week * 4
+            page_span = initial_span
+            end = since + page_span
             since_trades = since
             end_trades = end
             while True:
-                fundings = self.instance.fetch(
-                    "https://api.hyperliquid.xyz/info",
-                    method="POST",
-                    headers={"Content-Type": "application/json"},
-                    body=json.dumps({"type": "userFunding", "user": self.user.wallet_address, "startTime": since, "endTime": end}),
+                try:
+                    start_page_ts = time.time()
+                    fundings = self.instance.fetch(
+                        "https://api.hyperliquid.xyz/info",
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                        body=json.dumps({"type": "userFunding", "user": self.user.wallet_address, "startTime": since, "endTime": end}),
                     )
+                    page_dur = time.time() - start_page_ts
+                    try:
+                        num = len(fundings) if fundings is not None else 0
+                    except Exception:
+                        num = 0
+                    _human_log('Exchange', f"hyperliquid fundings page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={num}", level='DEBUG', user=self.user)
+                except Exception as e:
+                    import traceback as _tb
+                    tb = _tb.format_exc()
+                    _human_log('Exchange', f"fetch fundings ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}", level='ERROR', user=self.user)
+                    _human_log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
+                    raise
                 if fundings:
                     first_funding = fundings[0]
                     last_funding = fundings[-1]
@@ -869,12 +888,21 @@ class Exchange:
                         level='INFO',
                         user=self.user,
                     )
+                    # If the page is empty, increase the page span (double) up to max_span
+                    if not fundings:
+                        old_span = page_span
+                        page_span = min(page_span * 2, max_span)
+                        if page_span != old_span:
+                            _human_log('Exchange', f"Empty fundings page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
+                    else:
+                        # reset to initial span after receiving results
+                        page_span = initial_span
                     since = end
-                    end = since + week
+                    end = since + page_span
                 if since > now:
                     _human_log('Exchange', 'Done', level='INFO', user=self.user)
                     break
-                sleep(1)
+                sleep(0.5)
             for history in all_histories:
                 income = {}
                 income["symbol"] = history["delta"]["coin"] + "USDC"
@@ -885,8 +913,41 @@ class Exchange:
             since = since_trades
             end = end_trades
             all_histories = []
+            # start trades with the initial page span (don't carry over fundings' growth)
+            page_span = initial_span
             while True:
-                trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {"endTime": end})
+                try:
+                    start_page_ts = time.time()
+                    trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {"endTime": end})
+                    page_dur = time.time() - start_page_ts
+                    try:
+                        num = len(trades) if trades is not None else 0
+                    except Exception:
+                        num = 0
+                    _human_log('Exchange', f"hyperliquid trades page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={num}", level='DEBUG', user=self.user)
+                except Exception as e:
+                    import traceback as _tb
+                    tb = _tb.format_exc()
+                    _human_log(
+                        'Exchange',
+                        f"fetch_my_trades ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end} limit={limit}: {e}",
+                        level='ERROR',
+                        user=self.user,
+                    )
+                    # Log traceback and any ccxt last-response attributes available for debugging
+                    _human_log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
+                    for attr in ('last_http_response', 'last_response', 'last_response_text', 'last_json_response', 'last_response_headers'):
+                        try:
+                            val = getattr(self.instance, attr, None)
+                            if val is not None:
+                                summary = str(val)
+                                if len(summary) > 1000:
+                                    summary = summary[:1000] + '...'
+                                _human_log('Exchange', f"{attr}: {summary}", level='DEBUG', user=self.user)
+                        except Exception:
+                            pass
+                    # Re-raise so caller can handle/log as before
+                    raise
                 # print(trades)
                 if trades:
                     first_trade = trades[0]
@@ -910,12 +971,21 @@ class Exchange:
                         level='INFO',
                         user=self.user,
                     )
+                    # If the page is empty, increase the page span (double) up to max_span
+                    if not trades:
+                        old_span = page_span
+                        page_span = min(page_span * 2, max_span)
+                        if page_span != old_span:
+                            _human_log('Exchange', f"Empty trades page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
+                    else:
+                        # reset to initial span after receiving results
+                        page_span = initial_span
                     since = end
-                    end = since + week
+                    end = since + page_span
                     if since > now:
                         _human_log('Exchange', 'Done', level='INFO', user=self.user)
                         break
-                sleep(1)
+                sleep(0.5)
             # print(all_histories)
             for history in all_histories:
                 # if history["side"] == "sell":
