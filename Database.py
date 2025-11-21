@@ -14,6 +14,9 @@ class Database():
         self.db = Path(f'{PBGDIR}/data/pbgui.db')
         # Global write lock to serialize all write operations
         self._write_lock = threading.Lock()
+        # Thread-local storage for per-thread SQLite connections to avoid
+        # repeated open/close syscalls (reduces openat/read activity).
+        self._local = threading.local()
         self.create_tables()
 
     def _log(self, msg: str):
@@ -26,12 +29,48 @@ class Database():
         print(f"{ts} [Database] {msg}")
     
     def _connect(self):
-        """Create a SQLite connection with busy timeout to reduce locked errors."""
+        """Return a per-thread cached SQLite connection.
+
+        New connections get PRAGMA tuning applied. Connections are cached on
+        `self._local.conn` so each worker thread reuses its own connection and
+        we avoid repeated open/close syscalls that were visible in strace.
+        """
+        local = getattr(self, '_local', None)
+        if local is None:
+            # Fallback: create thread-local container
+            self._local = threading.local()
+            local = self._local
+
+        conn = getattr(local, 'conn', None)
+        try:
+            # Quick health-check: if connection exists and is open, reuse it
+            if conn is not None:
+                try:
+                    # lightweight check
+                    conn.execute('SELECT 1')
+                    return conn
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+        except Exception:
+            conn = None
+
+        # Create a fresh connection for this thread
         conn = sqlite3.connect(self.db, timeout=30)
         try:
             conn.execute('PRAGMA busy_timeout=30000')
         except Exception:
             pass
+        # Apply journaling PRAGMAs on new connections for consistency
+        try:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA synchronous=NORMAL')
+        except Exception:
+            pass
+        local.conn = conn
         return conn
     
     # Simple full DB backup: copies the SQLite file to backup/db with timestamp name
@@ -145,8 +184,41 @@ class Database():
                     conn.commit()
                 except Exception:
                     pass
+                # Create indexes to speed up frequent WHERE queries and avoid full-table scans
+                try:
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_position_user ON position(user)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_prices_user ON prices(user)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_prices_symbol_user ON prices(symbol, user)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_user_ts ON history(user, timestamp)")
+                    conn.commit()
+                except Exception:
+                    pass
         except sqlite3.Error as e:
             self._log(f"DB create_tables error: {e}")
+
+    def close_thread_connections(self):
+        """Close any cached per-thread SQLite connection(s).
+
+        This is safe to call from shutdown code to release file descriptors
+        and ensure rotated/deleted files are freed promptly.
+        """
+        try:
+            local = getattr(self, '_local', None)
+            if local is None:
+                return
+            conn = getattr(local, 'conn', None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                try:
+                    delattr(local, 'conn')
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def update_history(self, user: User):
         self._log(f"update_history called for user={getattr(user, 'name', user)}")
