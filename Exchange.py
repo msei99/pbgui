@@ -23,10 +23,17 @@ DEFAULT_CCXT_TIMEOUT_MS = 120000
 MAX_PRIVATE_WS_PER_EXCHANGE = {
     'hyperliquid': 10,
     'bitget': 10,
-    'bybit': 12,
-    'binance': 20,
+    'bybit': 10,
+    'binance': 10,
     'okx': 10,
 }
+
+# Global cap for total number of private websocket clients across all exchanges.
+# This is an independent, process-wide limit (not derived from per-exchange caps).
+# Tune this value to limit overall memory/socket usage on low-memory hosts.
+# Consider exposing this via `pbgui.ini` or an environment variable later.
+# Default is set conservatively to 20.
+MAX_PRIVATE_WS_GLOBAL = 20
 
 class Exchanges(Enum):
     BINANCE = 'binance'
@@ -381,6 +388,24 @@ class Exchange:
                     cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(base_key)
                 except Exception:
                     cap = None
+                # Enforce a global cap across all exchanges if configured.
+                try:
+                    global_cap = MAX_PRIVATE_WS_GLOBAL
+                except Exception:
+                    global_cap = None
+                if global_cap is not None:
+                    total_private = len(cls._private_ws_clients.keys())
+                    if total_private >= global_cap:
+                        try:
+                            _human_log(
+                                'Exchange',
+                                f"get_private_ws_client: reached GLOBAL cap ({total_private}/{global_cap}); returning None to allow REST fallback for user={user.name}",
+                                level='WARNING',
+                                user=user,
+                            )
+                        except Exception:
+                            pass
+                        return None
                 if cap is not None:
                     current = 0
                     for k in cls._private_ws_clients.keys():
