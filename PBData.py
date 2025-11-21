@@ -1275,6 +1275,77 @@ class PBData():
                     _human_log('PBData', f"[poll] Shared {kind} poll recovered; resetting backoff")
                 backoff = 0
 
+    async def _shared_combined_poll_serial(self, interval_seconds: int = 60, per_exchange: bool = True):
+        """Shared poller that sequentially runs balances, positions and orders per user.
+
+        This ensures only one REST "connection" worth of work is performed at a time
+        for these combined kinds (per exchange), reducing parallel HTTP load.
+        History polling remains separate because it can be long-running.
+        """
+        backoff = 0
+        max_backoff = 600
+        base_interval = max(10, interval_seconds)
+        _human_log('PBData', f"[poll] Starting shared COMBINED poller interval={base_interval}s")
+        while True:
+            delay = base_interval + backoff
+            await asyncio.sleep(delay)
+            users = [u for u in self.users if u.name in self.fetch_users]
+            if not users:
+                continue
+            if per_exchange:
+                groups = {}
+                for u in users:
+                    groups.setdefault(u.exchange, []).append(u)
+                batches = groups.items()
+            else:
+                batches = [(None, users)]
+            had_rate_limit = False
+            for exch, batch_users in batches:
+                if exch and self._is_exchange_in_backoff(exch):
+                    _human_log('PBData', f"[poll] Skipping shared COMBINED poll for {exch} due to backoff")
+                    continue
+                for user in batch_users:
+                    try:
+                        # balances -> positions -> orders (sequential)
+                        # Skip each part if a WS watcher exists for that kind
+                        ws_bal = self._balance_ws_tasks.get(user.name)
+                        if not (ws_bal and not ws_bal.done()):
+                            await asyncio.to_thread(self.db.update_balances, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
+                        ws_pos = self._position_ws_tasks.get(user.name)
+                        if not (ws_pos and not ws_pos.done()):
+                            await asyncio.to_thread(self.db.update_positions, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
+                        ws_ord = self._order_ws_tasks.get(user.name)
+                        if not (ws_ord and not ws_ord.done()):
+                            await asyncio.to_thread(self.db.update_orders, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
+                        try:
+                            self._write_fetch_summary()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        msg = str(e)
+                        _human_log('PBData', f"[poll] Shared COMBINED poll failed for {user.name}: {e}")
+                        lower = msg.lower()
+                        if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
+                            had_rate_limit = True
+            if had_rate_limit:
+                backoff = min(max_backoff, backoff + 30)
+            else:
+                if backoff:
+                    _human_log('PBData', f"[poll] Shared COMBINED poll recovered; resetting backoff")
+                backoff = 0
+
     async def _balance_poll_loop(self, user, interval_seconds: int = 30):
         _human_log('PBData', f"[poll] Starting balance poller for {user.name}")
         while True:
@@ -1820,14 +1891,13 @@ class PBData():
         now_ts = datetime.now().timestamp()
         if now_ts >= self._pollers_enabled_after_ts:
             try:
-                if not hasattr(self, "_shared_positions_task") or self._shared_positions_task is None or self._shared_positions_task.done():
-                    self._shared_positions_task = asyncio.create_task(self._shared_poll_serial('positions', 60, per_exchange=True))
+                # Start a combined poller that sequentially runs balances, positions
+                # and orders to avoid parallel REST connections, plus a separate
+                # history poller (history can be long-running and is kept separate).
+                if not hasattr(self, "_shared_combined_task") or self._shared_combined_task is None or self._shared_combined_task.done():
+                    self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(60, per_exchange=True))
                 if not hasattr(self, "_shared_history_task") or self._shared_history_task is None or self._shared_history_task.done():
                     self._shared_history_task = asyncio.create_task(self._shared_poll_serial('history', 90, per_exchange=True))
-                if not hasattr(self, "_shared_orders_task") or self._shared_orders_task is None or self._shared_orders_task.done():
-                    self._shared_orders_task = asyncio.create_task(self._shared_poll_serial('orders', 60, per_exchange=True))
-                if not hasattr(self, "_shared_balances_task") or self._shared_balances_task is None or self._shared_balances_task.done():
-                    self._shared_balances_task = asyncio.create_task(self._shared_poll_serial('balances', 30, per_exchange=True))
             except Exception as e:
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
         else:
