@@ -38,6 +38,21 @@ class PBData():
         # Track which symbols we have already subscribed to per exchange
         self._price_subscribed_symbols = {}
 
+        # In-memory buffer for latest prices per (user, symbol).
+        # Key: (user_name, symbol) -> (timestamp, price)
+        self._price_buffer = {}
+        # Async lock protecting _price_buffer
+        try:
+            self._price_buffer_lock = asyncio.Lock()
+        except Exception:
+            # Fallback to a dummy lock if asyncio not fully available
+            import threading as _th
+            self._price_buffer_lock = _th.Lock()
+        # Flush interval in seconds for buffered price writes
+        self._price_flush_interval = 5.0
+        # Background writer task handle
+        self._price_writer_task = None
+
         self._history_rest_last = {}
         self._last_fetch_users_snapshot = set()
         self._last_exchange_queue_counts = {}
@@ -204,6 +219,114 @@ class PBData():
             await asyncio.sleep(60)
 
     # fetch_users
+
+    # --- Price buffering and background writer ---
+    async def buffer_price(self, user, symbol: str, timestamp: int, price_value: float):
+        """Buffer the latest price for (user.name, symbol).
+
+        This stores only the most recent tick per (user,symbol).
+        """
+        try:
+            lock = getattr(self, '_price_buffer_lock', None)
+            if lock is None:
+                # lazily create if missing
+                self._price_buffer_lock = asyncio.Lock()
+                lock = self._price_buffer_lock
+            if hasattr(lock, '__aenter__'):
+                async with lock:
+                    self._price_buffer[(user.name, symbol)] = (timestamp, price_value)
+            else:
+                # synchronous lock (fallback)
+                with lock:
+                    self._price_buffer[(user.name, symbol)] = (timestamp, price_value)
+        except Exception:
+            try:
+                _human_log('PBData', f"[price_buffer] buffer_price error for {getattr(user,'name',user)} {symbol}", level='DEBUG')
+            except Exception:
+                pass
+
+    async def _price_writer_loop(self):
+        """Background task: periodically flush buffered prices to DB."""
+        while True:
+            try:
+                await asyncio.sleep(self._price_flush_interval)
+                try:
+                    await self._flush_price_buffer()
+                except Exception as e:
+                    try:
+                        _human_log('PBData', f"[price_writer] flush failed: {e}", level='WARNING')
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                # On cancellation, attempt a final flush then exit
+                try:
+                    await self._flush_price_buffer()
+                except Exception:
+                    pass
+                raise
+            except Exception:
+                # swallow and continue
+                try:
+                    _human_log('PBData', "[price_writer] loop encountered error; continuing", level='DEBUG')
+                except Exception:
+                    pass
+
+    async def _flush_price_buffer(self):
+        """Snapshot buffer and flush via blocking batch DB call."""
+        try:
+            lock = getattr(self, '_price_buffer_lock', None)
+            if lock is None:
+                self._price_buffer_lock = asyncio.Lock()
+                lock = self._price_buffer_lock
+            if hasattr(lock, '__aenter__'):
+                async with lock:
+                    if not self._price_buffer:
+                        return
+                    snapshot = [(uname, sym, ts, pr) for (uname, sym), (ts, pr) in self._price_buffer.items()]
+                    self._price_buffer = {}
+            else:
+                with lock:
+                    if not self._price_buffer:
+                        return
+                    snapshot = [(uname, sym, ts, pr) for (uname, sym), (ts, pr) in self._price_buffer.items()]
+                    self._price_buffer = {}
+            # Perform blocking DB batch write in thread
+            await asyncio.to_thread(self._write_prices_batch_sync, snapshot)
+        except Exception as e:
+            try:
+                _human_log('PBData', f"[price_writer] _flush_price_buffer error: {e}", level='ERROR')
+            except Exception:
+                pass
+
+    def _write_prices_batch_sync(self, rows: list):
+        """Blocking function run in thread to write batch rows to DB.
+
+        rows: list of (user_name, symbol, timestamp, price)
+        """
+        try:
+            # Database.batch_upsert_prices expects rows as (user, symbol, timestamp, price)
+            formatted = [(r[0], r[1], r[2], r[3]) for r in rows]
+            try:
+                # Use batch method if available
+                if hasattr(self.db, 'batch_upsert_prices'):
+                    self.db.batch_upsert_prices(formatted)
+                else:
+                    # Fallback: call upsert_price per row
+                    for user, symbol, ts, pr in formatted:
+                        try:
+                            u = self.users.find_user(user)
+                            if u:
+                                self.db.upsert_price(u, symbol, ts, pr)
+                        except Exception:
+                            pass
+            except Exception as e:
+                try:
+                    _human_log('PBData', f"[price_writer] DB batch write failed: {e}", level='ERROR')
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     @property
     def fetch_users(self):
         return self._fetch_users
@@ -1459,7 +1582,7 @@ class PBData():
                                         now_sec = datetime.now().timestamp()
                                         if now_sec - last_price_write_ts.get(key, 0.0) >= throttle_interval_sec:
                                             last_price_write_ts[key] = now_sec
-                                            await asyncio.to_thread(self.db.upsert_price, user, internal_symbol, ts, last)
+                                            await self.buffer_price(user, internal_symbol, ts, last)
                                 except Exception as e:
                                     _human_log('PBData', f"[ws] upsert_price failed {user_name} {internal_symbol}: {e}")
                     else:
@@ -1520,7 +1643,7 @@ class PBData():
                                             now_sec = datetime.now().timestamp()
                                             if now_sec - last_price_write_ts.get(key, 0.0) >= throttle_interval_sec:
                                                 last_price_write_ts[key] = now_sec
-                                                await asyncio.to_thread(self.db.upsert_price, user, internal_symbol, ts, last)
+                                                await self.buffer_price(user, internal_symbol, ts, last)
                                                 # _human_log('PBData', f"[ws] upsert_price wrote {user.name} {internal_symbol} price={last} ts={ts}")
                                     except Exception as e:
                                         _human_log('PBData', f"[ws] upsert_price failed {user_name} {internal_symbol}: {e}")
@@ -1959,6 +2082,13 @@ def main():
         except Exception:
             pass
 
+        # Start price writer background task if not already running
+        try:
+            if not hasattr(pbdata, '_price_writer_task') or pbdata._price_writer_task is None or getattr(pbdata, '_price_writer_task').done():
+                pbdata._price_writer_task = asyncio.create_task(pbdata._price_writer_loop())
+        except Exception:
+            pass
+
         while True:
             try:
                 if logfile.exists() and logfile.stat().st_size >= 10485760:
@@ -1981,6 +2111,16 @@ def main():
             from Exchange import Exchange
             try:
                 await Exchange.close_all_ws_clients()
+            except Exception:
+                pass
+            # Attempt to flush any buffered prices before cancelling tasks
+            try:
+                if hasattr(pbdata, '_price_writer_task') and pbdata._price_writer_task is not None:
+                    # Ask PBData to flush buffer synchronously
+                    try:
+                        await pbdata._flush_price_buffer()
+                    except Exception:
+                        pass
             except Exception:
                 pass
             # Cancel remaining tasks (except current)
