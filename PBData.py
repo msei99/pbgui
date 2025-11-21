@@ -161,13 +161,14 @@ class PBData():
         except Exception:
             return
 
-    def _set_exchange_backoff(self, exchange: str, reason: str = None, duration: int = None):
+    def _set_exchange_backoff(self, exchange: str, reason: str = None, duration: int = None, user=None):
         try:
             now = datetime.now().timestamp()
             dur = duration if duration is not None else self._backoff_duration_seconds
             until = now + dur
             self._exchange_backoff_until[exchange] = until
-            _human_log('PBData', f"[BACKOFF] Entering backoff for exchange {exchange} for {dur}s (reason={reason})", level='WARNING')
+            # Pass username as `user` kwarg to human_log (human_log supports `user`)
+            _human_log('PBData', f"[BACKOFF] Entering backoff for exchange {exchange} for {dur}s (reason={reason})", level='WARNING', user=getattr(user, 'name', None))
         except Exception:
             pass
 
@@ -633,7 +634,8 @@ class PBData():
                             self._exchange_error_timestamps[user.exchange] = l
                             if len(l) >= self._error_threshold:
                                 try:
-                                    self._set_exchange_backoff(user.exchange, reason='network_errors')
+                                    # include user so backoff log shows which user triggered it
+                                    self._set_exchange_backoff(user.exchange, reason='network_errors', user=user)
                                     # also close shared client to force reconnect
                                     from Exchange import Exchange as _ExchCls
                                     try:
@@ -1223,9 +1225,9 @@ class PBData():
                                 raise
                             dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
                             if dur_ms / 1000.0 > self._long_poll_threshold_seconds:
-                                # mark exchange as overloaded and backoff longer
+                                # mark exchange as overloaded and backoff longer (include user for logging)
                                 try:
-                                    self._set_exchange_backoff(user.exchange, reason='long_history_poll', duration=self._backoff_duration_seconds * 2)
+                                    self._set_exchange_backoff(user.exchange, reason='long_history_poll', duration=self._backoff_duration_seconds * 2, user=user)
                                 except Exception:
                                     pass
                             # record last successful REST history poll time per user/exchange
