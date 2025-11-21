@@ -49,9 +49,25 @@ class PBData():
             import threading as _th
             self._price_buffer_lock = _th.Lock()
         # Flush interval in seconds for buffered price writes
-        self._price_flush_interval = 5.0
+        self._price_flush_interval = 10.0
         # Background writer task handle
         self._price_writer_task = None
+
+        # Enable/disable price buffering via env var `PB_PRICE_BUFFER` (default: enabled)
+        self._price_buffer_enabled = True
+
+        # IO tracking for debug: last observed process io counters (read/write)
+        try:
+            self._last_proc_io = None
+        except Exception:
+            self._last_proc_io = None
+        # DB file size tracking (bytes) for pbgui.db and its -wal file
+        try:
+            self._last_db_bytes = 0
+            self._last_db_wal_bytes = 0
+        except Exception:
+            self._last_db_bytes = 0
+            self._last_db_wal_bytes = 0
 
         self._history_rest_last = {}
         self._last_fetch_users_snapshot = set()
@@ -117,6 +133,11 @@ class PBData():
         self._long_poll_threshold_seconds = 30
         # Metrics task handle
         self._metrics_task = None
+        # Metrics sampling interval (seconds), configurable via env PB_METRICS_INTERVAL
+        self._metrics_interval = 15.0
+        # Toggle IO debugging (db/process IO) via instance variable
+        # Set to True to enable the per-metrics-cycle DB/process IO debug lines
+        self._io_debug_enabled = True
         # Load initial debug setting
         try:
             self._load_debug_setting()
@@ -211,12 +232,76 @@ class PBData():
                         backoffs.append(f"{exch}:until={int(until-now)}s")
                 if lines or backoffs:
                     _human_log('PBData', f"[METRICS] Clients: {', '.join(lines)}; Backoffs: {', '.join(backoffs) if backoffs else '(none)'}", level='INFO')
+                # IO debugging: compute process IO deltas and DB/WAL file size deltas
+                if getattr(self, '_io_debug_enabled', True):
+                    try:
+                        proc = psutil.Process()
+                        try:
+                            io = proc.io_counters()
+                        except Exception:
+                            io = None
+                        read_delta = write_delta = 0
+                        if io is not None:
+                            last = getattr(self, '_last_proc_io', None)
+                            if last is not None:
+                                try:
+                                    read_delta = max(0, io.read_bytes - last.read_bytes)
+                                    write_delta = max(0, io.write_bytes - last.write_bytes)
+                                except Exception:
+                                    read_delta = write_delta = 0
+                            self._last_proc_io = io
+
+                        def _hr(n):
+                            try:
+                                if n >= 1024*1024:
+                                    return f"{n/1024/1024:.2f} MiB"
+                                if n >= 1024:
+                                    return f"{n/1024:.1f} KiB"
+                                return f"{n} B"
+                            except Exception:
+                                return str(n)
+
+                        db_path = None
+                        try:
+                            db_path = getattr(self.db, 'db', None)
+                        except Exception:
+                            db_path = None
+                        db_delta = wal_delta = 0
+                        db_sz = wal_sz = 0
+                        if db_path:
+                            try:
+                                db_sz = int(db_path.stat().st_size)
+                            except Exception:
+                                db_sz = 0
+                            try:
+                                wal_path = Path(str(db_path) + '-wal')
+                                wal_sz = int(wal_path.stat().st_size) if wal_path.exists() else 0
+                            except Exception:
+                                wal_sz = 0
+                            try:
+                                db_delta = max(0, db_sz - int(getattr(self, '_last_db_bytes', 0)))
+                            except Exception:
+                                db_delta = 0
+                            try:
+                                wal_delta = max(0, wal_sz - int(getattr(self, '_last_db_wal_bytes', 0)))
+                            except Exception:
+                                wal_delta = 0
+                            self._last_db_bytes = db_sz
+                            self._last_db_wal_bytes = wal_sz
+
+                        # Log a compact IO summary
+                        try:
+                            _human_log('PBData', f"[IO] proc: +{_hr(read_delta)}/-{_hr(write_delta)}; db: +{_hr(db_delta)} ({_hr(db_sz)}); wal: +{_hr(wal_delta)} ({_hr(wal_sz)})", level='DEBUG')
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
             except Exception:
                 try:
                     _human_log('PBData', f"[METRICS] failed to collect metrics", level='WARNING')
                 except Exception:
                     pass
-            await asyncio.sleep(60)
+            await asyncio.sleep(self._metrics_interval)
 
     # fetch_users
 
@@ -2113,12 +2198,29 @@ def main():
                 await Exchange.close_all_ws_clients()
             except Exception:
                 pass
-            # Attempt to flush any buffered prices before cancelling tasks
+            # Disable further buffering and attempt a final flush before cancelling tasks
             try:
+                try:
+                    pbdata._price_buffer_enabled = False
+                except Exception:
+                    pass
                 if hasattr(pbdata, '_price_writer_task') and pbdata._price_writer_task is not None:
-                    # Ask PBData to flush buffer synchronously
+                    # Ask PBData to flush buffer synchronously with a timeout
                     try:
-                        await pbdata._flush_price_buffer()
+                        await asyncio.wait_for(pbdata._flush_price_buffer(), timeout=10)
+                    except Exception as e:
+                        try:
+                            _human_log('PBData', f"[shutdown] final price buffer flush failed/timeout: {e}", level='WARNING')
+                        except Exception:
+                            pass
+                    # Cancel the writer task if it's still running and wait briefly
+                    try:
+                        if not pbdata._price_writer_task.done():
+                            pbdata._price_writer_task.cancel()
+                            try:
+                                await asyncio.wait_for(pbdata._price_writer_task, timeout=5)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
             except Exception:
@@ -2132,6 +2234,15 @@ def main():
                             t.cancel()
                         except Exception:
                             pass
+            except Exception:
+                pass
+            # Close any per-thread cached DB connections to release fds
+            try:
+                if hasattr(pbdata, 'db') and hasattr(pbdata.db, 'close_thread_connections'):
+                    try:
+                        pbdata.db.close_thread_connections()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         finally:
