@@ -94,6 +94,8 @@ class Exchange:
     _shared_ws_locks = {}
     # Locks for private ws client initialization
     _private_ws_locks = {}
+    # Per-exchange creation locks to serialize private-client creation and enforce caps
+    _private_creation_locks = {}
 
     def __init__(self, id: str, user: User = None):
         self.name = id
@@ -350,77 +352,88 @@ class Exchange:
         if client is not None:
             return client
 
-        # Ensure one async lock per private key
-        if key not in cls._private_ws_locks:
-            cls._private_ws_locks[key] = _asyncio.Lock()
-        lock = cls._private_ws_locks[key]
+        # Ensure one async lock per exchange to serialize creation and enforce caps.
+        if base_key not in cls._private_creation_locks:
+            cls._private_creation_locks[base_key] = _asyncio.Lock()
+        creation_lock = cls._private_creation_locks[base_key]
 
-        async with lock:
+        async with creation_lock:
+            # Re-check fast path inside creation lock
             client = cls._private_ws_clients.get(key)
             if client is not None:
                 return client
 
-            ex_id = "kucoinfutures" if id == "kucoin" else id
-            # Enforce per-exchange private-ws client caps to avoid resource
-            # exhaustion on constrained VPS. If the cap is reached return None
-            # so callers can fall back to REST polling.
-            try:
-                cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(base_key)
-            except Exception:
-                cap = None
-            if cap is not None:
-                current = 0
-                for k in cls._private_ws_clients.keys():
-                    if k.startswith(f"{base_key}:"):
-                        current += 1
-                if current >= cap:
-                    try:
-                        _human_log(
-                            'Exchange',
-                            f"get_private_ws_client: reached cap for {base_key} ({current}/{cap}); returning None to allow REST fallback for user={user.name}",
-                            level='WARNING',
-                            user=user,
-                        )
-                    except Exception:
-                        pass
+            # Ensure one async lock per private key
+            if key not in cls._private_ws_locks:
+                cls._private_ws_locks[key] = _asyncio.Lock()
+            lock = cls._private_ws_locks[key]
+
+            async with lock:
+                client = cls._private_ws_clients.get(key)
+                if client is not None:
+                    return client
+
+                ex_id = "kucoinfutures" if id == "kucoin" else id
+                # Enforce per-exchange private-ws client caps to avoid resource
+                # exhaustion on constrained VPS. If the cap is reached return None
+                # so callers can fall back to REST polling.
+                try:
+                    cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(base_key)
+                except Exception:
+                    cap = None
+                if cap is not None:
+                    current = 0
+                    for k in cls._private_ws_clients.keys():
+                        if k.startswith(f"{base_key}:"):
+                            current += 1
+                    if current >= cap:
+                        try:
+                            _human_log(
+                                'Exchange',
+                                f"get_private_ws_client: reached cap for {base_key} ({current}/{cap}); returning None to allow REST fallback for user={user.name}",
+                                level='WARNING',
+                                user=user,
+                            )
+                        except Exception:
+                            pass
+                        return None
+                if not hasattr(ccxt_pro, ex_id):
                     return None
-            if not hasattr(ccxt_pro, ex_id):
-                return None
-            kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
-            # attach user creds
-            if getattr(user, 'key', None):
-                kwargs['apiKey'] = getattr(user, 'key')
-            if getattr(user, 'secret', None):
-                kwargs['secret'] = getattr(user, 'secret')
-            if getattr(user, 'passphrase', None):
-                kwargs['password'] = getattr(user, 'passphrase')
-            if getattr(user, 'wallet_address', None):
-                kwargs['walletAddress'] = getattr(user, 'wallet_address')
-            if getattr(user, 'private_key', None):
-                kwargs['privateKey'] = getattr(user, 'private_key')
+                kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
+                # attach user creds
+                if getattr(user, 'key', None):
+                    kwargs['apiKey'] = getattr(user, 'key')
+                if getattr(user, 'secret', None):
+                    kwargs['secret'] = getattr(user, 'secret')
+                if getattr(user, 'passphrase', None):
+                    kwargs['password'] = getattr(user, 'passphrase')
+                if getattr(user, 'wallet_address', None):
+                    kwargs['walletAddress'] = getattr(user, 'wallet_address')
+                if getattr(user, 'private_key', None):
+                    kwargs['privateKey'] = getattr(user, 'private_key')
 
-            # Apply recvWindow and time-difference adjustment for all clients
-            try:
-                kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
-                kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
-            except Exception:
-                pass
+                # Apply recvWindow and time-difference adjustment for all clients
+                try:
+                    kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
+                    kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
+                except Exception:
+                    pass
 
-            ex = getattr(ccxt_pro, ex_id)(kwargs)
+                ex = getattr(ccxt_pro, ex_id)(kwargs)
 
-            # Attempt to load markets once for this client; treat failures as non-fatal
-            try:
-                lm = ex.load_markets()
-                if _asyncio.iscoroutine(lm):
-                    await lm
-                else:
-                    await _asyncio.to_thread(ex.load_markets)
-            except Exception:
-                # If load_markets fails, still keep the client but do not cache markets flag
-                pass
+                # Attempt to load markets once for this client; treat failures as non-fatal
+                try:
+                    lm = ex.load_markets()
+                    if _asyncio.iscoroutine(lm):
+                        await lm
+                    else:
+                        await _asyncio.to_thread(ex.load_markets)
+                except Exception:
+                    # If load_markets fails, still keep the client but do not cache markets flag
+                    pass
 
-            cls._private_ws_clients[key] = ex
-            return ex
+                cls._private_ws_clients[key] = ex
+                return ex
 
     @classmethod
     async def close_private_ws_client(cls, id: str, user: User):
