@@ -123,7 +123,7 @@ class PBData():
         # Metrics task handle
         self._metrics_task = None
         # Metrics sampling interval (seconds), configurable via env PB_METRICS_INTERVAL
-        self._metrics_interval = .0
+        self._metrics_interval = 60
         # (IO debugging disabled) -- per-metrics-cycle DB/process IO logging removed
         # Load initial debug setting
         try:
