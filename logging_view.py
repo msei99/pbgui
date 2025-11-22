@@ -156,7 +156,7 @@ def view_log_filtered(log_filename: str):
             # 'info' when missing to keep display consistent.
             # Recognize bracketed level token (e.g. [INFO]) and keep it
             # in its original case; comparisons below will use uppercasing.
-            recognized_levels = {'DEBUG', 'INFO', 'WARN', 'WARNING', 'ERROR', 'CRITICAL'}
+            recognized_levels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
             level = 'INFO'
             if tags:
                 first = tags[0]
@@ -446,7 +446,7 @@ def view_log_filtered(log_filename: str):
                     level_val = level if level else ''
                     if level_val in ('ERROR', 'CRITICAL'):
                         marker = '⛔ '
-                    elif level_val in ('WARN', 'WARNING'):
+                    elif level_val in ('WARNING',):
                         marker = '⚠️ '
                     elif level_val == 'INFO':
                         marker = 'ℹ️ '
@@ -468,7 +468,7 @@ def view_log_filtered(log_filename: str):
                 marker = ''
                 if level in ('ERROR', 'CRITICAL'):
                     marker = '⛔ '
-                elif level in ('WARN', 'WARNING'):
+                elif level in ('WARNING',):
                     marker = '⚠️ '
                 elif level == 'INFO':
                     marker = 'ℹ️ '

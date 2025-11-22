@@ -19,14 +19,18 @@ class Database():
         self._local = threading.local()
         self.create_tables()
 
-    def _log(self, msg: str):
-        """Print a log line with timestamp and module tag."""
+    def _log(self, msg: str, level: str = 'INFO'):
+        """Print a log line with timestamp, module tag and level."""
         try:
             ts = datetime.now().isoformat(sep=" ", timespec="seconds")
         except TypeError:
             # Fallback if timespec unsupported
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{ts} [Database] {msg}")
+        try:
+            print(f"{ts} [Database] [{level}] {msg}")
+        except Exception:
+            # best-effort fallback
+            print(f"{ts} [Database] {msg}")
     
     def _connect(self):
         """Return a per-thread cached SQLite connection.
@@ -341,9 +345,17 @@ class Database():
         exchange = Exchange(user.exchange, user)
         all_orders = []
         for position in positions_db:
-            stable_coin = position[1][-4:]
-            orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
-            all_orders.extend(orders)
+            try:
+                stable_coin = position[1][-4:]
+                orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
+                # If fetch returns None or an exception-like value, skip
+                if orders is None:
+                    continue
+                all_orders.extend(orders)
+            except Exception as e:
+                # Fetch failed (possibly rate limit) — log and skip this position
+                self._log(f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING')
+                continue
         # Existing order IDs in DB (uniqueid column); use a set to avoid
         # inserting duplicates even if the DB uniqueness constraint is
         # missing or was added after the table was first created.
@@ -440,7 +452,12 @@ class Database():
     def update_balances(self, user: User):
         exchange = Exchange(user.exchange, user)
         market_type = "swap"
-        balance = exchange.fetch_balance(market_type)
+        try:
+            balance = exchange.fetch_balance(market_type)
+        except Exception as e:
+            # Exchange fetch failed (rate limit or other). Log and skip writing.
+            self._log(f"DB update_balances fetch_balance failed for {user.name}: {e}", level='WARNING')
+            return
         with self._write_lock:
             try:
                 with self._connect() as conn:
@@ -637,6 +654,27 @@ class Database():
             if not balance or len(balance) < 3:
                 self._log(f"DB update_balance called with invalid balance data: {balance}")
                 return
+            # Defensive checks: avoid writing Exception objects or other
+            # unserializable types into the DB which cause SQLite bind errors.
+            # If the balance payload contains an Exception, skip and warn.
+            try:
+                payload = balance[1]
+            except Exception:
+                payload = None
+            if isinstance(payload, Exception):
+                self._log(f"DB update_balance aborting: balance fetch returned exception object for user={balance[2]}: {payload}", level='WARNING')
+                return
+            # Try to coerce numeric-like payloads to float; otherwise stringify
+            try:
+                if not isinstance(payload, (int, float)):
+                    balance[1] = float(payload)
+            except Exception:
+                try:
+                    balance[1] = str(payload)
+                    self._log(f"DB update_balance coerced non-numeric balance to string for user={balance[2]}", level='WARNING')
+                except Exception:
+                    self._log(f"DB update_balance aborting: cannot coerce balance for user={balance[2]}: {payload}", level='WARNING')
+                    return
             cur = conn.cursor()
             cur.execute(sql, balance)
 
@@ -663,7 +701,11 @@ class Database():
 
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB update_balance error {e} data={balance}")
+            msg = str(e).lower()
+            if 'binding parameter' in msg or 'unsupported type' in msg:
+                self._log(f"DB update_balance error {e} data={balance}", level='WARNING')
+            else:
+                self._log(f"DB update_balance error {e} data={balance}")
 
     def fetch_history(self, user: User):
         """Fetch history from the exchange starting at the DB's last timestamp."""

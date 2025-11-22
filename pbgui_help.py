@@ -286,6 +286,10 @@ pbdata = """
     Run "chmod 755 start.sh" and change the path to your needs
     Run "crontab -e" and add the @reboot with your path
     ```"""
+pbdata_ws_max = """
+    ```
+    Global cap for private websocket clients across all exchanges
+    ```"""
 
 pbcoindata = """
     ```
