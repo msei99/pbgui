@@ -89,7 +89,9 @@ class PBData():
         self._shared_rest_user_pause = 0.75
         self._shared_rest_pause_by_exchange = {
             'hyperliquid': 1.5,
-            'bybit': 1.0,
+            # Increased to reduce REST fallback bursts that triggered 429s
+            # (mitigation A): raised from 1.0 -> 3.0 seconds
+            'bybit': 3.0,
         }
         # Per-exchange limit for how many distinct users the price watcher may track
         # Some exchanges (hyperliquid) enforce a hard cap on tracked users for websocket topics.
@@ -142,6 +144,33 @@ class PBData():
         # Load initial settings (ws_max, log_level, ...)
         try:
             self._load_settings()
+        except Exception:
+            pass
+
+        # Caller-side private-client manager (Queue + background manager task)
+        # This manager serializes private-client creation requests from PBData
+        # so that check+reserve logic can be performed atomically on the caller
+        # side and duplicate cap-warning log spam is avoided.
+        self._private_client_queue = None
+        self._private_client_manager_task = None
+        # manager_state contains transient reservation set and warned flags
+        self._private_client_manager_state = {
+            'inflight': set(),                # set of keys currently reserved by manager
+            'warned_global': False,           # whether a global-cap warning was emitted
+            'warned_per_exch': {},            # exchange -> bool
+        }
+
+        # Register with Exchange to be notified when private clients are closed
+        try:
+            from Exchange import register_private_client_close_listener
+            # register a small synchronous callback that schedules the async clear
+            def _on_closed_cb(exchange_id, user_name):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._private_manager_maybe_clear_flags_for_exchange(exchange_id))
+                except Exception:
+                    pass
+            register_private_client_close_listener(_on_closed_cb)
         except Exception:
             pass
 
@@ -220,6 +249,238 @@ class PBData():
                         pass
         except Exception:
             return
+
+    # -----------------------------
+    # Private client manager (caller-side)
+    # -----------------------------
+    def _start_private_client_manager(self):
+        """Lazily start the private client manager background task."""
+        try:
+            if self._private_client_queue is None:
+                self._private_client_queue = asyncio.Queue()
+            if self._private_client_manager_task is None or self._private_client_manager_task.done():
+                self._private_client_manager_task = asyncio.create_task(self._private_client_manager_loop())
+        except Exception:
+            pass
+
+    async def request_private_client(self, exchange_id: str, user, caller: str = None):
+        """Public API for callers to request a private client.
+
+        Returns a client instance or None. Internally queues request to
+        manager which performs serialized check+reserve and calls
+        Exchange.get_private_ws_client.
+        """
+        try:
+            # Ensure manager task running
+            self._start_private_client_manager()
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            await self._private_client_queue.put((exchange_id, user, caller, fut))
+            return await fut
+        except Exception:
+            return None
+
+    async def _private_client_manager_loop(self):
+        """Background manager: serially process creation requests.
+
+        For each request we compute current counts (via Exchange.get_client_metrics()),
+        decide whether to reserve a slot or return None, and call
+        Exchange.get_private_ws_client while the reservation is held.
+        """
+        from Exchange import Exchange as _ExchCls
+        import Exchange as _ExMod
+        while True:
+            try:
+                exchange_id, user, caller, fut = await self._private_client_queue.get()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                # Shouldn't happen, but protect the loop
+                try:
+                    fut.set_result(None)
+                except Exception:
+                    pass
+                continue
+
+            key = f"{('kucoinfutures' if exchange_id == 'kucoin' else exchange_id)}:{getattr(user,'name',None)}"
+            try:
+                # Fast path: if Exchange already has a private client, return it
+                try:
+                    client = _ExchCls._private_ws_clients.get(key)
+                    if client is not None:
+                        fut.set_result(client)
+                        continue
+                except Exception:
+                    pass
+
+                # Compute effective caps
+                try:
+                    global_cap = int(getattr(_ExMod, '_RUNTIME_MAX_PRIVATE_WS_GLOBAL')) if getattr(_ExMod, '_RUNTIME_MAX_PRIVATE_WS_GLOBAL', None) is not None else getattr(_ExMod, 'MAX_PRIVATE_WS_GLOBAL')
+                except Exception:
+                    global_cap = getattr(_ExMod, 'MAX_PRIVATE_WS_GLOBAL')
+
+                try:
+                    runtime_per = getattr(_ExMod, '_RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE') or {}
+                except Exception:
+                    runtime_per = {}
+
+                # Count existing private clients
+                try:
+                    metrics = _ExchCls.get_client_metrics()
+                    total_now = sum(v.get('private_count', 0) for v in metrics.values())
+                except Exception:
+                    total_now = len(_ExchCls._private_ws_clients.keys())
+
+                inflight_count = len(self._private_client_manager_state['inflight'])
+
+                # Global cap check
+                if global_cap is not None and (total_now + inflight_count) >= global_cap:
+                    # emit warning once
+                    if not self._private_client_manager_state.get('warned_global'):
+                        try:
+                            _human_log('PBData', f"[ws-manager] reached GLOBAL cap ({total_now + inflight_count}/{global_cap}); returning None for user={getattr(user,'name',None)}", level='WARNING', user=user)
+                        except Exception:
+                            pass
+                        self._private_client_manager_state['warned_global'] = True
+                    try:
+                        fut.set_result(None)
+                    except Exception:
+                        pass
+                    continue
+
+                # Per-exchange cap
+                base_key = 'kucoinfutures' if exchange_id == 'kucoin' else exchange_id
+                try:
+                    if runtime_per and base_key in runtime_per:
+                        cap = int(runtime_per.get(base_key))
+                    else:
+                        cap = getattr(_ExMod, 'MAX_PRIVATE_WS_PER_EXCHANGE').get(base_key)
+                except Exception:
+                    cap = None
+
+                if cap is not None:
+                    try:
+                        # current per-exchange existing
+                        current = 0
+                        for k in _ExchCls._private_ws_clients.keys():
+                            if k.startswith(f"{base_key}:"):
+                                current += 1
+                    except Exception:
+                        current = 0
+                    inflight_for_exch = sum(1 for c in self._private_client_manager_state['inflight'] if c.startswith(f"{base_key}:"))
+                    if (current + inflight_for_exch) >= cap:
+                        warned = self._private_client_manager_state['warned_per_exch'].get(base_key, False)
+                        if not warned:
+                            try:
+                                _human_log('PBData', f"[ws-manager] reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None for user={getattr(user,'name',None)}", level='WARNING', user=user)
+                            except Exception:
+                                pass
+                            self._private_client_manager_state['warned_per_exch'][base_key] = True
+                        try:
+                            fut.set_result(None)
+                        except Exception:
+                            pass
+                        continue
+
+                # Reserve an in-flight slot and perform creation
+                try:
+                    self._private_client_manager_state['inflight'].add(key)
+                except Exception:
+                    pass
+
+                try:
+                    # Call into Exchange to create/get client. Exchange itself may
+                    # perform its own protections; manager ensures callers are
+                    # serialized enough to avoid duplicate logs and overshoot.
+                    client = await _ExchCls.get_private_ws_client(exchange_id, user, caller=caller)
+                    try:
+                        fut.set_result(client)
+                    except Exception:
+                        pass
+                except Exception:
+                    try:
+                        fut.set_result(None)
+                    except Exception:
+                        pass
+                finally:
+                    try:
+                        self._private_client_manager_state['inflight'].discard(key)
+                    except Exception:
+                        pass
+                    # Maybe clear warning flags if capacity freed
+                    try:
+                        # Recompute counts and clear flags if below caps
+                        metrics = _ExchCls.get_client_metrics()
+                        total_now = sum(v.get('private_count', 0) for v in metrics.values())
+                        if global_cap is not None and total_now + len(self._private_client_manager_state['inflight']) < global_cap:
+                            self._private_client_manager_state['warned_global'] = False
+                        # per-exchange
+                        try:
+                            curr_ex = 0
+                            for k in _ExchCls._private_ws_clients.keys():
+                                if k.startswith(f"{base_key}:"):
+                                    curr_ex += 1
+                        except Exception:
+                            curr_ex = 0
+                        if cap is not None and (curr_ex + sum(1 for c in self._private_client_manager_state['inflight'] if c.startswith(f"{base_key}:"))) < cap:
+                            self._private_client_manager_state['warned_per_exch'][base_key] = False
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    fut.set_result(None)
+                except Exception:
+                    pass
+
+    async def _private_manager_maybe_clear_flags_for_exchange(self, exchange_id: str):
+        """Recompute client counts and clear manager warning flags if capacity freed.
+
+        This is called when Exchange notifies PBData that a private client was
+        closed (or by internal manager after finishing a creation) so that
+        the manager's 'warned' flags don't stay stuck.
+        """
+        try:
+            from Exchange import Exchange as _ExchCls
+            import Exchange as _ExMod
+            base_key = 'kucoinfutures' if exchange_id == 'kucoin' else exchange_id
+            try:
+                metrics = _ExchCls.get_client_metrics()
+                total_now = sum(v.get('private_count', 0) for v in metrics.values())
+            except Exception:
+                total_now = len(_ExchCls._private_ws_clients.keys())
+
+            # global cap
+            try:
+                global_cap = int(getattr(_ExMod, '_RUNTIME_MAX_PRIVATE_WS_GLOBAL')) if getattr(_ExMod, '_RUNTIME_MAX_PRIVATE_WS_GLOBAL', None) is not None else getattr(_ExMod, 'MAX_PRIVATE_WS_GLOBAL')
+            except Exception:
+                global_cap = getattr(_ExMod, 'MAX_PRIVATE_WS_GLOBAL')
+            if global_cap is not None and total_now + len(self._private_client_manager_state['inflight']) < global_cap:
+                self._private_client_manager_state['warned_global'] = False
+
+            # per-exchange cap
+            try:
+                runtime_per = getattr(_ExMod, '_RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE') or {}
+            except Exception:
+                runtime_per = {}
+            try:
+                if runtime_per and base_key in runtime_per:
+                    cap = int(runtime_per.get(base_key))
+                else:
+                    cap = getattr(_ExMod, 'MAX_PRIVATE_WS_PER_EXCHANGE').get(base_key)
+            except Exception:
+                cap = None
+            try:
+                curr_ex = metrics.get(base_key, {}).get('private_count', 0)
+            except Exception:
+                curr_ex = 0
+            if cap is not None and (curr_ex + sum(1 for c in self._private_client_manager_state['inflight'] if c.startswith(f"{base_key}:"))) < cap:
+                try:
+                    self._private_client_manager_state['warned_per_exch'][base_key] = False
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
 
     def _set_exchange_backoff(self, exchange: str, reason: str = None, duration: int = None, user=None):
         try:
@@ -556,7 +817,7 @@ class PBData():
         from Exchange import Exchange
         await asyncio.sleep((hash(user.name) % 5000) / 1000.0)
         exch = Exchange(user.exchange, user)
-        ex = await Exchange.get_private_ws_client(user.exchange, user)
+        ex = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
         if not ex:
             _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported for {user.name} ({user.exchange}); relying on shared balances poller", level='DEBUG')
             return
@@ -616,19 +877,19 @@ class PBData():
                             except Exception:
                                 pass
                     except Exception as e:
-                        _human_log('PBData', f"[ws] DB balance update failed for {user.name}: {e}", level='ERROR')
-                    else:
-                        # Successful watch_balance event: increment success counter
+                        _human_log('PBData', f"[ws->REST] DB balance update failed (REST fallback) for {user.name}: {e}", level='ERROR')
                         try:
-                            key = (user.exchange, user.name)
-                            self._ws_success_counts[key] = self._ws_success_counts.get(key, 0) + 1
-                            if self._ws_success_counts.get(key, 0) >= self._ws_success_required:
-                                if key in self._ws_restarted_once:
-                                    self._ws_restarted_once.discard(key)
-                                    _human_log('PBData', f"[ws] Restart state cleared for {user.name} ({user.exchange}) after {self._ws_success_required} successful watch events", level='INFO')
-                                self._ws_success_counts[key] = 0
-                        except Exception:
-                            pass
+                            await asyncio.to_thread(self.db.update_positions, user)
+                            try:
+                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
+                            try:
+                                self._write_fetch_summary()
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            _human_log('PBData', f"[ws->REST] DB positions update failed (REST fallback) for {user.name}: {e}", level='ERROR')
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
@@ -636,7 +897,7 @@ class PBData():
                     if self._is_normal_ws_close(raw):
                         self._throttled_log_network((user.exchange, user.name), f"[ws] normal websocket close for {user.name}: {e}; attempting reconnect", self._network_error_log_throttle)
                         try:
-                            ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                            ex2 = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
                             if not ex2:
                                 _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST", level='WARNING')
                                 try:
@@ -670,7 +931,7 @@ class PBData():
                                     pass
                                 await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
                                 try:
-                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
                                     if ex2:
                                         self._ws_restarted_once.add(key)
                                         ex = ex2
@@ -736,7 +997,7 @@ class PBData():
                                 _human_log('PBData', f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket", level='INFO')
                                 try:
                                     # Try to re-acquire or recreate a private client for this user
-                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user, caller='PBData._balance_ws_loop')
                                     if not ex2:
                                         _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST", level='WARNING')
                                         try:
@@ -789,7 +1050,7 @@ class PBData():
         from Exchange import Exchange
         await asyncio.sleep((hash(user.name) % 5000) / 1000.0)
         exch = Exchange(user.exchange, user)
-        ex = await Exchange.get_private_ws_client(user.exchange, user)
+        ex = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
         if not ex:
             _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported (positions) for {user.name} ({user.exchange})", level='DEBUG')
             return
@@ -875,9 +1136,9 @@ class PBData():
                     if self._is_normal_ws_close(raw):
                         self._throttled_log_network((user.exchange, user.name), f"[ws] normal websocket close (positions) for {user.name}: {e}; attempting reconnect", self._network_error_log_throttle)
                         try:
-                            ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                            ex2 = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
                             if not ex2:
-                                _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name} (positions); falling back to REST")
+                                _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name} (positions); falling back to REST", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
@@ -892,7 +1153,7 @@ class PBData():
                                 pass
                             return
                     if 'cannot track more than' in lower or ('cannot track' in lower and 'user' in lower):
-                        _human_log('PBData', f"[ws] watch_positions user-limit reached for {user.name}: {e}; closing private ws client and falling back to REST")
+                        _human_log('PBData', f"[ws] watch_positions user-limit reached for {user.name}: {e}; closing private ws client and falling back to REST", level='WARNING')
                         try:
                             await Exchange.close_private_ws_client(user.exchange, user)
                         except Exception:
@@ -908,14 +1169,14 @@ class PBData():
                         keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
                         if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
                             if key not in self._ws_restarted_once:
-                                _human_log('PBData', f"[ws] Keepalive timeout detected (positions); restarting private ws client for {user.name} ({user.exchange})")
+                                _human_log('PBData', f"[ws] Keepalive timeout detected (positions); restarting private ws client for {user.name} ({user.exchange})", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
                                     pass
                                 await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
                                 try:
-                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
                                     if ex2:
                                         self._ws_restarted_once.add(key)
                                         ex = ex2
@@ -929,7 +1190,7 @@ class PBData():
                     # Network-level failures should cause this user to fall back to REST
                     network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
                     if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
-                        _human_log('PBData', f"[ws] watch_positions network error for {user.name}: {e}; considering demotion to REST")
+                        _human_log('PBData', f"[ws] watch_positions network error for {user.name}: {e}; considering demotion to REST", level='WARNING')
                         exch_key = user.exchange
                         lock = self._network_error_locks.get(exch_key)
                         if lock is None:
@@ -944,16 +1205,16 @@ class PBData():
                             if not existing:
                                 existing[user.name] = now_ts
                                 self._exchange_network_error_users[exch_key] = existing
-                                _human_log('PBData', f"[ws] Demoting {user.name} to REST for exchange {exch_key} (first in window)")
+                                _human_log('PBData', f"[ws] Demoting {user.name} to REST for exchange {exch_key} (first in window)", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
                                     pass
                                 return
                             else:
-                                _human_log('PBData', f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket")
+                                _human_log('PBData', f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket", level='INFO')
                                 try:
-                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
                                     if not ex2:
                                         _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST")
                                         try:
@@ -984,7 +1245,7 @@ class PBData():
         from Exchange import Exchange
         await asyncio.sleep((hash(user.name) % 5000) / 1000.0)
         exch = Exchange(user.exchange, user)
-        ex = await Exchange.get_private_ws_client(user.exchange, user)
+        ex = await self.request_private_client(user.exchange, user, caller='PBData._order_ws_loop')
         if not ex:
             _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported (orders) for {user.name} ({user.exchange}); relying on shared orders poller", level='DEBUG')
             return
@@ -1000,10 +1261,10 @@ class PBData():
         if not supports_orders:
             key = (user.name, exch.id)
             if key not in self._watch_positions_not_supported_logged:
-                _human_log('PBData', f"[ws] watch_orders not supported for {user.name} ({exch.id}); relying on shared orders poller")
+                _human_log('PBData', f"[ws] watch_orders not supported for {user.name} ({exch.id}); relying on shared orders poller", level='INFO')
                 self._watch_positions_not_supported_logged.add(key)
             return
-        _human_log('PBData', f"[ws] Starting orders watcher for {user.name} ({exch.id})")
+        _human_log('PBData', f"[ws] Starting orders watcher for {user.name} ({exch.id})", level='INFO')
         # Throttle REST order updates so we don't hammer the exchange when
         # websockets produce many events in a short time.
         min_orders_refresh_interval = 20
@@ -1062,7 +1323,7 @@ class PBData():
                                 except Exception:
                                     pass
                         except Exception as e:
-                            _human_log('PBData', f"[ws] DB orders update failed for {user.name}: {e}")
+                            _human_log('PBData', f"[ws->REST] DB orders update failed (REST fallback) for {user.name}: {e}")
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
@@ -1070,9 +1331,9 @@ class PBData():
                     if self._is_normal_ws_close(raw):
                         self._throttled_log_network((user.exchange, user.name), f"[ws] normal websocket close (orders) for {user.name}: {e}; attempting reconnect", self._network_error_log_throttle)
                         try:
-                            ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                            ex2 = await self.request_private_client(user.exchange, user, caller='PBData._order_ws_loop')
                             if not ex2:
-                                _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name} (orders); falling back to REST")
+                                _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name} (orders); falling back to REST", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
@@ -1088,7 +1349,7 @@ class PBData():
                             return
                     # existing network error handling follows
                     if 'cannot track more than' in lower or ('cannot track' in lower and 'user' in lower):
-                        _human_log('PBData', f"[ws] watch_orders user-limit reached for {user.name}: {e}; closing private ws client and falling back to REST")
+                        _human_log('PBData', f"[ws] watch_orders user-limit reached for {user.name}: {e}; closing private ws client and falling back to REST", level='WARNING')
                         try:
                             await Exchange.close_private_ws_client(user.exchange, user)
                         except Exception:
@@ -1104,18 +1365,18 @@ class PBData():
                         keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
                         if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
                             if key not in self._ws_restarted_once:
-                                _human_log('PBData', f"[ws] Keepalive timeout detected (orders); restarting private ws client for {user.name} ({user.exchange})")
+                                _human_log('PBData', f"[ws] Keepalive timeout detected (orders); restarting private ws client for {user.name} ({user.exchange})", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
                                     pass
                                 await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
                                 try:
-                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._order_ws_loop')
                                     if ex2:
                                         self._ws_restarted_once.add(key)
                                         ex = ex2
-                                        _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages")
+                                        _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
                                         continue
                                 except Exception:
                                     pass
@@ -1125,7 +1386,7 @@ class PBData():
                     # Network-level failures should cause this user to fall back to REST
                     network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
                     if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
-                        _human_log('PBData', f"[ws] watch_orders network error for {user.name}: {e}; considering demotion to REST")
+                        _human_log('PBData', f"[ws] watch_orders network error for {user.name}: {e}; considering demotion to REST", level='WARNING')
                         exch_key = user.exchange
                         lock = self._network_error_locks.get(exch_key)
                         if lock is None:
@@ -1149,7 +1410,7 @@ class PBData():
                             else:
                                 _human_log('PBData', f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket")
                                 try:
-                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user)
+                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._order_ws_loop')
                                     if not ex2:
                                         _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST")
                                         try:

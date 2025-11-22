@@ -133,16 +133,45 @@ def human_log(service: str, msg: str, user: str = None, tags=None, level: str = 
         # sanitize tags
         tags = [_sanitize_tag(t) for t in tags if t]
 
+        # Simple normalization: prefer `user.name` for User objects, otherwise
+        # accept a string user or fall back to str(user).
+        try:
+            if isinstance(user, str):
+                user_name = user
+            elif user is None:
+                user_name = None
+            else:
+                user_name = getattr(user, 'name', None)
+                if user_name is None:
+                    user_name = str(user)
+        except Exception:
+            try:
+                user_name = str(user)
+            except Exception:
+                user_name = None
+
         parts = []
         parts.append(_now_isoz())
         parts.append(f'[{service}]')
-        # Determine final level (explicit param > message token > default INFO)
+        # Determine final level (explicit param > message token > heuristic > default INFO)
         if level:
             lev = str(level).upper()
         elif level_from_msg:
             lev = level_from_msg
         else:
-            lev = 'INFO'
+            # Heuristic: if caller didn't pass a level, infer from message content
+            try:
+                low = (rest or '').lower()
+                if any(k in low for k in ('error', 'failed', 'exception', 'traceback')):
+                    lev = 'ERROR'
+                elif any(k in low for k in ('warn', 'demot', 'backoff', 'timeout', 'could not', "couldn't", 'cannot', 'requesttimeout', 'rate limit', '429')):
+                    lev = 'WARNING'
+                elif any(k in low for k in ('debug', 'payload', 'preview')):
+                    lev = 'DEBUG'
+                else:
+                    lev = 'INFO'
+            except Exception:
+                lev = 'INFO'
         parts.append(f'[{lev}]')
 
         # Respect per-service/global minimum levels: if the message level is lower
@@ -156,8 +185,13 @@ def human_log(service: str, msg: str, user: str = None, tags=None, level: str = 
             pass
         for t in tags:
             parts.append(f'[{t}]')
-        if user:
-            parts.append(f'[User:{user}]')
+        if user_name:
+            # sanitize user_name for safety and length
+            try:
+                u = _sanitize_tag(str(user_name))
+            except Exception:
+                u = str(user_name)
+            parts.append(f'[User:{u}]')
         # main message
         line = ' '.join(parts) + ' ' + (rest or '')
         if code:
