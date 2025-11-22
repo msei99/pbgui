@@ -46,6 +46,28 @@ _RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE = None
 # so concurrent creation attempts are counted toward caps and avoid races.
 _CREATION_INFLIGHT = set()
 
+# Optional observers: allow external modules (PBData) to register a callback
+# that is invoked whenever a private ws client is closed/removed. This lets
+# callers react (e.g. clear manager warn flags) even if the close was initiated
+# outside PBData.
+_private_client_close_listeners = []
+
+def register_private_client_close_listener(cb):
+    try:
+        _private_client_close_listeners.append(cb)
+    except Exception:
+        pass
+
+def _notify_private_client_closed(exchange_id: str, user_name: str):
+    try:
+        for cb in list(_private_client_close_listeners):
+            try:
+                cb(exchange_id, user_name)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 
 def set_ws_limits(global_max=None, per_exchange=None):
     """Set runtime websocket limits.
@@ -384,7 +406,7 @@ class Exchange:
                     return None
 
     @classmethod
-    async def get_private_ws_client(cls, id: str, user: User):
+    async def get_private_ws_client(cls, id: str, user: User, caller: str = None):
         """Return a per-user authenticated ccxt.pro client for private streams.
 
         Keyed by `<exchange_id>:<user.name>` so each user gets their own client.
@@ -447,12 +469,10 @@ class Exchange:
                     total_private = len(cls._private_ws_clients.keys()) + len(_CREATION_INFLIGHT)
                     if total_private >= global_cap:
                         try:
-                            _human_log(
-                                'Exchange',
-                                f"get_private_ws_client: reached GLOBAL cap ({total_private}/{global_cap}); returning None to allow REST fallback for user={user.name}",
-                                level='WARNING',
-                                user=user,
-                            )
+                            msg = f"get_private_ws_client: reached GLOBAL cap ({total_private}/{global_cap}); returning None to allow REST fallback for user={user.name}"
+                            if caller:
+                                msg = msg + f" caller={caller}"
+                            _human_log('Exchange', msg, level='WARNING', user=user)
                         except Exception:
                             pass
                         return None
@@ -466,12 +486,10 @@ class Exchange:
                     inflight_for_exch = sum(1 for c in _CREATION_INFLIGHT if c.startswith(f"{base_key}:"))
                     if (current + inflight_for_exch) >= cap:
                         try:
-                            _human_log(
-                                'Exchange',
-                                f"get_private_ws_client: reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None to allow REST fallback for user={user.name}",
-                                level='WARNING',
-                                user=user,
-                            )
+                            msg = f"get_private_ws_client: reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None to allow REST fallback for user={user.name}"
+                            if caller:
+                                msg = msg + f" caller={caller}"
+                            _human_log('Exchange', msg, level='WARNING', user=user)
                         except Exception:
                             pass
                         return None
@@ -535,6 +553,11 @@ class Exchange:
                 await client.close()
             except Exception:
                 pass
+            # Notify listeners that a private client for this exchange/user was closed
+            try:
+                _notify_private_client_closed(base_key, user.name)
+            except Exception:
+                pass
 
     @classmethod
     async def _prune_private_ws_clients(cls, global_max=None, per_exchange=None):
@@ -592,6 +615,15 @@ class Exchange:
                             await client.close()
                         except Exception:
                             pass
+                        # Notify listeners for this closed key
+                        try:
+                            parts = k.split(':', 1)
+                            if parts:
+                                exch = parts[0]
+                                uname = parts[1] if len(parts) > 1 else None
+                                _notify_private_client_closed(exch, uname)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
         except Exception:
@@ -618,6 +650,13 @@ class Exchange:
             if client:
                 try:
                     await client.close()
+                except Exception:
+                    pass
+                try:
+                    parts = k.split(':', 1)
+                    exch = parts[0]
+                    uname = parts[1] if len(parts) > 1 else None
+                    _notify_private_client_closed(exch, uname)
                 except Exception:
                     pass
         # Close shared clients
