@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+from typing import Optional
 
 # Per-service minimum levels. If a service has an entry here, messages
 # whose severity is lower than the configured value are suppressed.
@@ -17,7 +18,7 @@ _service_min_levels = {}
 _global_min_level = 0
 
 
-def set_service_min_level(service: str, level: str | None):
+def set_service_min_level(service: str, level: Optional[str]):
     """Set a minimum level for `service`.
 
     `level` may be a string like 'DEBUG'/'INFO'/... or None to remove the override.
@@ -36,7 +37,7 @@ def set_service_min_level(service: str, level: str | None):
         pass
 
 
-def set_global_min_level(level: str | None):
+def set_global_min_level(level: Optional[str]):
     """Set global minimum level applied when no per-service override exists."""
     global _global_min_level
     try:
