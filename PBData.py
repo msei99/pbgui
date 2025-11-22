@@ -17,7 +17,8 @@ import configparser
 from collections import defaultdict
 import asyncio
 import random
-from logging_helpers import human_log as _human_log
+from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
+from Exchange import set_ws_limits
 
 class PBData():
     def __init__(self):
@@ -82,6 +83,14 @@ class PBData():
         }
         # Stagger (ms) between starting private ws watchers to avoid bursts
         self._private_ws_stagger_ms = 200
+        # Pause (s) between per-user REST calls in shared pollers to avoid bursts
+        # Default small pause to reduce rate-limit triggers; can be overridden per-exchange
+        # Tuned defaults to reduce observed 429s; adjust via pbgui.ini later if needed
+        self._shared_rest_user_pause = 0.75
+        self._shared_rest_pause_by_exchange = {
+            'hyperliquid': 1.5,
+            'bybit': 1.0,
+        }
         # Per-exchange limit for how many distinct users the price watcher may track
         # Some exchanges (hyperliquid) enforce a hard cap on tracked users for websocket topics.
         self._price_subscribe_user_limit_by_exchange = {
@@ -92,9 +101,13 @@ class PBData():
         self._pollers_enabled_after_ts = datetime.now().timestamp() + self._pollers_delay_seconds
         # Track which user/exchange pairs have already logged 'watch_positions not supported'
         self._watch_positions_not_supported_logged = set()
-        # Debug flag for websocket payload logging (can be toggled via pbgui.ini)
-        self._debug_ws = False
         self._pbgui_ini_mtime = None
+        # Last loaded ws_max value from pbgui.ini (so we only reapply when changed)
+        self._ws_max_loaded = None
+        # Last loaded log_level for PBData (string like 'DEBUG'/'INFO')
+        self._log_level_loaded = None
+        # Snapshot of last trimmed allowed users per exchange to avoid repeated logs
+        self._price_subscribe_trim_snapshot = {}
         # Track recent network-demoted users per exchange to avoid mass demotion
         self._exchange_network_error_users = defaultdict(dict)  # exchange -> {user_name: timestamp}
         self._network_error_locks = {}
@@ -119,24 +132,33 @@ class PBData():
         # kind in {'balances','positions','orders','history'}
         self._last_fetch_ts = defaultdict(dict)
         # If a shared history poll takes longer than this (s) consider exchange overloaded
-        self._long_poll_threshold_seconds = 30
+        # Increase threshold to avoid overly-aggressive backoffs for slower history endpoints
+        self._long_poll_threshold_seconds = 60
         # Metrics task handle
         self._metrics_task = None
         # Metrics sampling interval (seconds), configurable via env PB_METRICS_INTERVAL
         self._metrics_interval = 60
         # (IO debugging disabled) -- per-metrics-cycle DB/process IO logging removed
-        # Load initial debug setting
+        # Load initial settings (ws_max, log_level, ...)
         try:
-            self._load_debug_setting()
+            self._load_settings()
         except Exception:
             pass
 
+
+
+
+
     # Logging is centralized via the module-level `_log_central` function.
 
-    def _load_debug_setting(self):
-        """Read pbgui.ini and update websocket debug flag when file changes.
+    def _load_settings(self):
+        """Read `pbgui.ini` and update runtime settings when file changes.
 
-        Use section `pbdata` and option `debug_ws` (true/false).
+                Currently loads:
+                    - pbdata.ws_max (int) -> passed to Exchange.set_ws_limits(global_max=...)
+                    - pbdata.log_level (str) -> sets minimum log level for PBData
+
+        The function uses the file mtime to avoid re-reading the INI too often.
         """
         try:
             p = Path('pbgui.ini')
@@ -148,16 +170,54 @@ class PBData():
             self._pbgui_ini_mtime = mtime
             cfg = configparser.ConfigParser()
             cfg.read('pbgui.ini')
-            debug = False
-            if cfg.has_option('pbdata', 'debug_ws'):
+
+            # Note: payload debug flag removed — use log_level to control DEBUG logging.
+
+            # ws_max (integer) - global cap for private websocket clients
+            ws_max = None
+            if cfg.has_option('pbdata', 'ws_max'):
                 try:
-                    debug = cfg.getboolean('pbdata', 'debug_ws')
+                    raw = cfg.get('pbdata', 'ws_max')
+                    sval = str(raw).strip() if raw is not None else ''
+                    if sval != '':
+                        try:
+                            ws_max = int(sval)
+                        except Exception:
+                            ws_max = None
                 except Exception:
-                    debug = False
-            # Log changes
-            if debug != getattr(self, '_debug_ws', False):
-                _human_log('PBData', f"websocket payload logging set to {debug} via pbgui.ini", level='DEBUG')
-            self._debug_ws = debug
+                    ws_max = None
+
+            if ws_max is not None and ws_max != getattr(self, '_ws_max_loaded', None):
+                try:
+                    set_ws_limits(global_max=ws_max)
+                    self._ws_max_loaded = ws_max
+                    _human_log('PBData', f"Set Exchange.ws global cap via pbgui.ini [pbdata] ws_max={ws_max}", level='DEBUG')
+                except Exception:
+                    try:
+                        _human_log('PBData', f"Failed to call Exchange.set_ws_limits with ws_max={ws_max}", level='WARNING')
+                    except Exception:
+                        pass
+            # log_level (string) - minimum log level for PBData
+            log_level = None
+            if cfg.has_option('pbdata', 'log_level'):
+                try:
+                    raw = cfg.get('pbdata', 'log_level')
+                    s = str(raw).strip() if raw is not None else ''
+                    if s != '':
+                        log_level = s.upper()
+                except Exception:
+                    log_level = None
+
+            if log_level is not None and log_level != getattr(self, '_log_level_loaded', None):
+                try:
+                    set_service_min_level('PBData', log_level)
+                    self._log_level_loaded = log_level
+                    _human_log('PBData', f"PBData log level set via pbgui.ini [pbdata] log_level={log_level}", level='DEBUG')
+                except Exception:
+                    try:
+                        _human_log('PBData', f"Failed to set PBData log level to {log_level}", level='WARNING')
+                    except Exception:
+                        pass
         except Exception:
             return
 
@@ -498,7 +558,7 @@ class PBData():
         exch = Exchange(user.exchange, user)
         ex = await Exchange.get_private_ws_client(user.exchange, user)
         if not ex:
-            _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported for {user.name} ({user.exchange}); relying on shared balances poller", level='INFO')
+            _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported for {user.name} ({user.exchange}); relying on shared balances poller", level='DEBUG')
             return
         supports_balance = False
         try:
@@ -512,16 +572,16 @@ class PBData():
         if not supports_balance:
             key = (user.name, exch.id)
             if key not in self._watch_positions_not_supported_logged:
-                _human_log('PBData', f"[ws] watch_balance not supported for {user.name} ({exch.id}); relying on shared balances poller", level='INFO')
+                _human_log('PBData', f"[ws] watch_balance not supported for {user.name} ({exch.id}); relying on shared balances poller", level='DEBUG')
                 self._watch_positions_not_supported_logged.add(key)
             return
         _human_log('PBData', f"[ws] Starting balance watcher for {user.name} ({exch.id})", level='INFO')
         try:
             while True:
-                # Reload debug_ws from pbgui.ini each loop so GUI toggles
-                # take effect quickly for payload logging.
+                # Reload settings from pbgui.ini each loop so GUI toggles
+                # (e.g. ws_max or log_level) take effect quickly.
                 try:
-                    self._load_debug_setting()
+                    self._load_settings()
                 except Exception:
                     pass
                 try:
@@ -529,14 +589,15 @@ class PBData():
                     bal = await ex.watch_balance()
                     # Debug: optionally log payload type and a short preview so we can
                     # see whether the WS watcher actually returns balance data.
-                    if getattr(self, '_debug_ws', False):
-                        try:
+                    try:
+                        if is_debug_enabled('PBData'):
                             btype = type(bal)
                             preview = repr(bal)
                             if len(preview) > 300:
                                 preview = preview[:300] + '...'
                             _human_log('PBData', f"[ws] watch_balance payload for {user.name}: type={btype} preview={preview}", level='DEBUG')
-                        except Exception:
+                    except Exception:
+                        if is_debug_enabled('PBData'):
                             try:
                                 _human_log('PBData', f"[ws] watch_balance payload for {user.name}: (unrepresentable)", level='DEBUG')
                             except Exception:
@@ -730,7 +791,7 @@ class PBData():
         exch = Exchange(user.exchange, user)
         ex = await Exchange.get_private_ws_client(user.exchange, user)
         if not ex:
-            _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported (positions) for {user.name} ({user.exchange})", level='INFO')
+            _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported (positions) for {user.name} ({user.exchange})", level='DEBUG')
             return
         supports_positions = False
         try:
@@ -752,14 +813,13 @@ class PBData():
                 self._watch_positions_not_supported_logged.add(key)
             return
         _human_log('PBData', f"[ws] Starting positions watcher for {user.name} ({exch.id})", level='INFO')
-        _human_log('PBData', f"[ws] Starting positions watcher for {user.name} ({exch.id})", level='INFO')
         min_positions_refresh_interval = 10
         last_positions_refresh = 0
         try:
             while True:
-                # Reload debug_ws setting so payload logging respects latest ini
+                # Reload settings so runtime changes (ws_max, log_level) take effect
                 try:
-                    self._load_debug_setting()
+                    self._load_settings()
                 except Exception:
                     pass
                 try:
@@ -796,13 +856,14 @@ class PBData():
                             _human_log('PBData', f"[ws] DB positions update failed for {user.name}: {e}", level='ERROR')
                     # Debug: optionally log the positions payload
                     # Debug: optionally log the positions payload
-                    if getattr(self, '_debug_ws', False):
-                        try:
+                    try:
+                        if is_debug_enabled('PBData'):
                             preview = repr(_)
                             if len(preview) > 300:
                                 preview = preview[:300] + '...'
                             _human_log('PBData', f"[ws] watch_positions payload for {user.name}: type={type(_)} preview={preview}", level='DEBUG')
-                        except Exception:
+                    except Exception:
+                        if is_debug_enabled('PBData'):
                             try:
                                 _human_log('PBData', f"[ws] watch_positions payload for {user.name}: (unrepresentable)", level='DEBUG')
                             except Exception:
@@ -925,7 +986,7 @@ class PBData():
         exch = Exchange(user.exchange, user)
         ex = await Exchange.get_private_ws_client(user.exchange, user)
         if not ex:
-            _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported (orders) for {user.name} ({user.exchange}); relying on shared orders poller", level='INFO')
+            _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported (orders) for {user.name} ({user.exchange}); relying on shared orders poller", level='DEBUG')
             return
         supports_orders = False
         try:
@@ -943,16 +1004,15 @@ class PBData():
                 self._watch_positions_not_supported_logged.add(key)
             return
         _human_log('PBData', f"[ws] Starting orders watcher for {user.name} ({exch.id})")
-        _human_log('PBData', f"[ws] Starting orders watcher for {user.name} ({exch.id})")
         # Throttle REST order updates so we don't hammer the exchange when
         # websockets produce many events in a short time.
         min_orders_refresh_interval = 20
         last_orders_refresh = 0
         try:
             while True:
-                # Reload debug_ws setting so payload logging respects latest ini
+                # Reload settings so runtime changes (ws_max, log_level) take effect
                 try:
-                    self._load_debug_setting()
+                    self._load_settings()
                 except Exception:
                     pass
                 try:
@@ -972,15 +1032,16 @@ class PBData():
                     # min_orders_refresh_interval seconds to avoid excessive
                     # REST calls when many users or frequent WS updates.
                     # Debug: optionally log the orders payload
-                    if getattr(self, '_debug_ws', False):
-                        try:
+                    try:
+                        if is_debug_enabled('PBData'):
                             preview = repr(orders)
                             if len(preview) > 300:
                                 preview = preview[:300] + '...'
-                            _human_log('PBData', f"[ws] watch_orders payload for {user.name}: type={type(orders)} preview={preview}")
-                        except Exception:
+                            _human_log('PBData', f"[ws] watch_orders payload for {user.name}: type={type(orders)} preview={preview}", level='DEBUG')
+                    except Exception:
+                        if is_debug_enabled('PBData'):
                             try:
-                                _human_log('PBData', f"[ws] watch_orders payload for {user.name}: (unrepresentable)")
+                                _human_log('PBData', f"[ws] watch_orders payload for {user.name}: (unrepresentable)", level='DEBUG')
                             except Exception:
                                 pass
                     now_sec = int(datetime.now().timestamp())
@@ -1270,6 +1331,14 @@ class PBData():
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
+                    # Small stagger between per-user REST requests to avoid bursts
+                    try:
+                        pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
+                        if pause_val and pause_val > 0:
+                            jitter = random.uniform(0, pause_val * 0.2)
+                            await asyncio.sleep(pause_val + jitter)
+                    except Exception:
+                        pass
             if had_rate_limit:
                 backoff = min(max_backoff, backoff + 30)
             else:
@@ -1341,6 +1410,14 @@ class PBData():
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
+                    # Small stagger between per-user REST requests to avoid bursts
+                    try:
+                        pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
+                        if pause_val and pause_val > 0:
+                            jitter = random.uniform(0, pause_val * 0.2)
+                            await asyncio.sleep(pause_val + jitter)
+                    except Exception:
+                        pass
             if had_rate_limit:
                 backoff = min(max_backoff, backoff + 30)
             else:
@@ -1423,14 +1500,34 @@ class PBData():
                                     seen.add(user_name)
                                     unique_users.append(user_name)
                         if len(unique_users) > user_limit:
-                            allowed = set(unique_users[:user_limit])
+                            allowed_list = unique_users[:user_limit]
+                            blocked_list = unique_users[user_limit:]
+                            allowed = set(allowed_list)
                             # Build reduced mapping that only includes allowed users
                             reduced = {}
                             for ccxt_sym, lst in mapping.items():
                                 filtered = [t for t in lst if t[0] in allowed]
                                 if filtered:
                                     reduced[ccxt_sym] = filtered
-                            _human_log('PBData', f"[ws] Exchange {exchange} has {len(unique_users)} users but limit is {user_limit}; subscribing only for {len(allowed)} users and falling back to REST for others")
+                            # Persist reduced mapping back into the exchange config so
+                            # subsequent iterations don't re-evaluate the full mapping
+                            try:
+                                cfg['mapping'] = reduced
+                                cfg['symbols'] = set(reduced.keys())
+                                self._price_exchange_config[exchange] = cfg
+                            except Exception:
+                                pass
+                            # Log the trimming only when the allowed set changed
+                            prev = self._price_subscribe_trim_snapshot.get(exchange)
+                            curr_snapshot = tuple(allowed_list)
+                            if prev != curr_snapshot:
+                                _human_log('PBData', f"[ws] Exchange {exchange} has {len(unique_users)} users but limit is {user_limit}; subscribing only for {len(allowed_list)} users and falling back to REST for others")
+                                try:
+                                    _human_log('PBData', f"[ws] Allowed users for {exchange}: {', '.join(allowed_list)}")
+                                    _human_log('PBData', f"[ws] Blocked users for {exchange}: {', '.join(blocked_list)}")
+                                except Exception:
+                                    pass
+                                self._price_subscribe_trim_snapshot[exchange] = curr_snapshot
                             mapping = reduced
                     if not symbols:
                         await asyncio.sleep(1)
@@ -1824,7 +1921,7 @@ class PBData():
         self.load_fetch_users()
         # Reload debug setting if pbgui.ini changed
         try:
-            self._load_debug_setting()
+            self._load_settings()
         except Exception:
             pass
         now_ts = datetime.now().timestamp()
@@ -1897,7 +1994,8 @@ class PBData():
                 # and orders to avoid parallel REST connections, plus a separate
                 # history poller (history can be long-running and is kept separate).
                 if not hasattr(self, "_shared_combined_task") or self._shared_combined_task is None or self._shared_combined_task.done():
-                    self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(60, per_exchange=True))
+                    # Use a slightly longer interval for the combined poller to reduce REST load
+                    self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(90, per_exchange=True))
                 if not hasattr(self, "_shared_history_task") or self._shared_history_task is None or self._shared_history_task.done():
                     self._shared_history_task = asyncio.create_task(self._shared_poll_serial('history', 90, per_exchange=True))
             except Exception as e:

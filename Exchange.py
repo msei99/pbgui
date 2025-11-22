@@ -36,6 +36,46 @@ MAX_PRIVATE_WS_PER_EXCHANGE = {
 # Default is set conservatively to 20.
 MAX_PRIVATE_WS_GLOBAL = 20
 
+# Runtime overrides (set by PBData). PBData will load `ws_max` from
+# `pbgui.ini` and call `set_ws_limits` to pass values into this module.
+# When set, these take precedence over the hardcoded defaults above.
+_RUNTIME_MAX_PRIVATE_WS_GLOBAL = None
+_RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE = None
+
+# Track in-flight private client creations (keys like '<exchange>:<user>')
+# so concurrent creation attempts are counted toward caps and avoid races.
+_CREATION_INFLIGHT = set()
+
+
+def set_ws_limits(global_max=None, per_exchange=None):
+    """Set runtime websocket limits.
+
+    - `global_max` (int|None): global cap for private WS clients.
+    - `per_exchange` (dict|None): mapping exchange_id -> int cap.
+
+    PBData should call this after reading `pbgui.ini` so Exchange
+    does not read the INI file itself.
+    """
+    global _RUNTIME_MAX_PRIVATE_WS_GLOBAL, _RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE
+    try:
+        _RUNTIME_MAX_PRIVATE_WS_GLOBAL = int(global_max) if global_max is not None else None
+    except Exception:
+        _RUNTIME_MAX_PRIVATE_WS_GLOBAL = None
+    try:
+        _RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE = dict(per_exchange) if per_exchange else None
+    except Exception:
+        _RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE = None
+    # Schedule pruning of excess private clients if limits decreased.
+    try:
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        # Launch pruning in background; don't await here.
+        loop.create_task(Exchange._prune_private_ws_clients(_RUNTIME_MAX_PRIVATE_WS_GLOBAL, _RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE))
+    except Exception:
+        # If no running loop is available, pruning will occur lazily
+        # next time clients are acquired.
+        pass
+
 class Exchanges(Enum):
     BINANCE = 'binance'
     BYBIT = 'bybit'
@@ -360,7 +400,11 @@ class Exchange:
         if client is not None:
             return client
 
-        # Ensure one async lock per exchange to serialize creation and enforce caps.
+        # Ensure one async lock per exchange to serialize creation attempts
+        # for that exchange. This prevents many concurrent creators for the
+        # same exchange but does not by itself prevent global races across
+        # different exchanges; for that we also account for in-flight
+        # creations below.
         if base_key not in cls._private_creation_locks:
             cls._private_creation_locks[base_key] = _asyncio.Lock()
         creation_lock = cls._private_creation_locks[base_key]
@@ -380,22 +424,27 @@ class Exchange:
                 client = cls._private_ws_clients.get(key)
                 if client is not None:
                     return client
-
                 ex_id = "kucoinfutures" if id == "kucoin" else id
                 # Enforce per-exchange private-ws client caps to avoid resource
                 # exhaustion on constrained VPS. If the cap is reached return None
                 # so callers can fall back to REST polling.
                 try:
-                    cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(base_key)
+                    # Per-exchange cap: prefer runtime override if provided
+                    if _RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE and base_key in _RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE:
+                        cap = int(_RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE.get(base_key))
+                    else:
+                        cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(base_key)
                 except Exception:
                     cap = None
-                # Enforce a global cap across all exchanges if configured.
+                # Global cap: prefer runtime override if provided
                 try:
-                    global_cap = MAX_PRIVATE_WS_GLOBAL
+                    global_cap = int(_RUNTIME_MAX_PRIVATE_WS_GLOBAL) if _RUNTIME_MAX_PRIVATE_WS_GLOBAL is not None else MAX_PRIVATE_WS_GLOBAL
                 except Exception:
-                    global_cap = None
+                    global_cap = MAX_PRIVATE_WS_GLOBAL
                 if global_cap is not None:
-                    total_private = len(cls._private_ws_clients.keys())
+                    # Count both existing and in-flight creations so concurrent
+                    # creators don't overshoot the global cap.
+                    total_private = len(cls._private_ws_clients.keys()) + len(_CREATION_INFLIGHT)
                     if total_private >= global_cap:
                         try:
                             _human_log(
@@ -408,15 +457,18 @@ class Exchange:
                             pass
                         return None
                 if cap is not None:
+                    # Count existing + in-flight for this exchange
                     current = 0
                     for k in cls._private_ws_clients.keys():
                         if k.startswith(f"{base_key}:"):
                             current += 1
-                    if current >= cap:
+                    # include in-flight creations for this exchange
+                    inflight_for_exch = sum(1 for c in _CREATION_INFLIGHT if c.startswith(f"{base_key}:"))
+                    if (current + inflight_for_exch) >= cap:
                         try:
                             _human_log(
                                 'Exchange',
-                                f"get_private_ws_client: reached cap for {base_key} ({current}/{cap}); returning None to allow REST fallback for user={user.name}",
+                                f"get_private_ws_client: reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None to allow REST fallback for user={user.name}",
                                 level='WARNING',
                                 user=user,
                             )
@@ -445,21 +497,30 @@ class Exchange:
                 except Exception:
                     pass
 
-                ex = getattr(ccxt_pro, ex_id)(kwargs)
-
-                # Attempt to load markets once for this client; treat failures as non-fatal
+                # Reserve an in-flight slot so other concurrent creators count it
+                _CREATION_INFLIGHT.add(key)
                 try:
-                    lm = ex.load_markets()
-                    if _asyncio.iscoroutine(lm):
-                        await lm
-                    else:
-                        await _asyncio.to_thread(ex.load_markets)
-                except Exception:
-                    # If load_markets fails, still keep the client but do not cache markets flag
-                    pass
+                    ex = getattr(ccxt_pro, ex_id)(kwargs)
 
-                cls._private_ws_clients[key] = ex
-                return ex
+                    # Attempt to load markets once for this client; treat failures as non-fatal
+                    try:
+                        lm = ex.load_markets()
+                        if _asyncio.iscoroutine(lm):
+                            await lm
+                        else:
+                            await _asyncio.to_thread(ex.load_markets)
+                    except Exception:
+                        # If load_markets fails, still keep the client but do not cache markets flag
+                        pass
+
+                    cls._private_ws_clients[key] = ex
+                    return ex
+                finally:
+                    # Always remove in-flight marker so counts remain correct
+                    try:
+                        _CREATION_INFLIGHT.discard(key)
+                    except Exception:
+                        pass
 
     @classmethod
     async def close_private_ws_client(cls, id: str, user: User):
@@ -474,6 +535,67 @@ class Exchange:
                 await client.close()
             except Exception:
                 pass
+
+    @classmethod
+    async def _prune_private_ws_clients(cls, global_max=None, per_exchange=None):
+        """Close excess private ws clients to satisfy new caps.
+
+        This prefers to trim clients from exchanges that exceed their per-exchange
+        caps first, then trims arbitrarily to satisfy a reduced global cap.
+        """
+        try:
+            # determine effective caps
+            try:
+                gcap = int(global_max) if global_max is not None else (_RUNTIME_MAX_PRIVATE_WS_GLOBAL if _RUNTIME_MAX_PRIVATE_WS_GLOBAL is not None else MAX_PRIVATE_WS_GLOBAL)
+            except Exception:
+                gcap = MAX_PRIVATE_WS_GLOBAL
+            pec = per_exchange if per_exchange is not None else (_RUNTIME_MAX_PRIVATE_WS_PER_EXCHANGE or {})
+
+            # build per-exchange lists
+            by_exch = {}
+            for k in list(cls._private_ws_clients.keys()):
+                exch = k.split(':', 1)[0]
+                by_exch.setdefault(exch, []).append(k)
+
+            # First trim per-exchange overages
+            to_close = []
+            for exch, keys in by_exch.items():
+                try:
+                    cap = None
+                    if pec and exch in pec:
+                        cap = int(pec.get(exch))
+                    else:
+                        cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(exch)
+                except Exception:
+                    cap = MAX_PRIVATE_WS_PER_EXCHANGE.get(exch)
+                if cap is None:
+                    continue
+                if len(keys) > cap:
+                    # close oldest/any until at or below cap
+                    excess = len(keys) - cap
+                    to_close.extend(keys[:excess])
+
+            # Then ensure global cap
+            total_now = len(cls._private_ws_clients.keys())
+            if gcap is not None and total_now - len(to_close) > gcap:
+                need = (total_now - len(to_close)) - gcap
+                # pick arbitrary remaining keys to close
+                remaining_keys = [k for k in cls._private_ws_clients.keys() if k not in to_close]
+                to_close.extend(remaining_keys[:need])
+
+            # Close selected clients
+            for k in to_close:
+                try:
+                    client = cls._private_ws_clients.pop(k, None)
+                    if client:
+                        try:
+                            await client.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     @classmethod
     async def close_shared_ws_client(cls, id: str):
