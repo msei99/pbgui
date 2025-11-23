@@ -88,10 +88,17 @@ class PBData():
         # Tuned defaults to reduce observed 429s; adjust via pbgui.ini later if needed
         self._shared_rest_user_pause = 0.75
         self._shared_rest_pause_by_exchange = {
-            'hyperliquid': 1.5,
+            # Increase hyperliquid pause to reduce 429s observed under load
+            'hyperliquid': 3.0,
             # Increased to reduce REST fallback bursts that triggered 429s
             # (mitigation A): raised from 1.0 -> 3.0 seconds
             'bybit': 3.0,
+        }
+        # Per-exchange semaphore limits for REST slot gating. Lower values
+        # (e.g. 1) serialize shared poll REST requests for sensitive APIs.
+        self._default_rest_semaphore_limit = 3
+        self._rest_semaphore_limits_by_exchange = {
+            'hyperliquid': 1,
         }
         # Per-exchange limit for how many distinct users the price watcher may track
         # Some exchanges (hyperliquid) enforce a hard cap on tracked users for websocket topics.
@@ -624,9 +631,19 @@ class PBData():
                 except Exception as e:
                     tried = True
                     try:
-                        _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
+                        tb = traceback.format_exc()
                     except Exception:
-                        pass
+                        tb = None
+                    try:
+                        if tb:
+                            _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING', meta={'traceback': tb})
+                        else:
+                            _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
+                    except Exception:
+                        try:
+                            _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
+                        except Exception:
+                            pass
 
                 # Decide whether to retry or give up based on elapsed time since first event
                 now_ts = datetime.now().timestamp()
@@ -1677,11 +1694,22 @@ class PBData():
                                     _human_log('PBData', f"[poll] Skipping shared positions update for {user.name} because WS watcher active")
                                     self._last_skipped_position_log = now_ts
                                 continue
-                            await asyncio.to_thread(self.db.update_positions, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
+                            # Gate shared REST calls using per-exchange REST slot
+                            exchange_for_slot = exch or user.exchange
+                            async with self._rest_slot(exchange_for_slot) as got:
+                                if got:
+                                    await asyncio.to_thread(self.db.update_positions, user)
+                                    try:
+                                        self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                                    except Exception:
+                                        pass
+                                else:
+                                    # Could not acquire REST slot; skip this update
+                                    try:
+                                        _human_log('PBData', f"[poll] Skipped positions update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
+                                    except Exception:
+                                        pass
+                                    had_rate_limit = True
                         elif kind == 'orders':
                             # Skip shared orders poll if user has active WS orders watcher
                             ws_task = self._order_ws_tasks.get(user.name)
@@ -1692,19 +1720,52 @@ class PBData():
                                     _human_log('PBData', f"[poll] Skipping shared orders update for {user.name} because WS watcher active")
                                     self._last_skipped_order_log = now_ts
                                 continue
-                            await asyncio.to_thread(self.db.update_orders, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
+                            exchange_for_slot = exch or user.exchange
+                            async with self._rest_slot(exchange_for_slot) as got:
+                                if got:
+                                    await asyncio.to_thread(self.db.update_orders, user)
+                                    try:
+                                        self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        _human_log('PBData', f"[poll] Skipped orders update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
+                                    except Exception:
+                                        pass
+                                    had_rate_limit = True
                         elif kind == 'history':
                             # Instrument shared history polling for debugging/tracing
                             key = (user.name, user.exchange)
                             start_ts = datetime.now().timestamp()
                             _human_log('PBData', f"[poll] Shared history poll START for {user.name} ({user.exchange})")
                             # Time the history update; if it is very long, mark exchange backoff
+                            exchange_for_slot = exch or user.exchange
                             try:
-                                await asyncio.to_thread(self.db.update_history, user)
+                                async with self._rest_slot(exchange_for_slot) as got:
+                                    if not got:
+                                        try:
+                                            _human_log('PBData', f"[poll] Skipped history update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                                    else:
+                                        try:
+                                            await asyncio.to_thread(self.db.update_history, user)
+                                        except Exception as e:
+                                            # Some runtime errors seen under heavy load look like
+                                            # "generator didn't stop after athrow()". Treat these
+                                            # as transient and escalate to backoff while logging.
+                                            msg = str(e)
+                                            if 'generator didn\'t stop after athrow' in msg or 'athrow' in msg.lower():
+                                                try:
+                                                    _human_log('PBData', f"[poll] history update failed for {user.name}: {msg}", level='ERROR')
+                                                except Exception:
+                                                    pass
+                                                had_rate_limit = True
+                                            else:
+                                                # Re-raise unexpected exceptions to be handled by outer handler
+                                                raise
                             except Exception as e:
                                 raise
                             dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
@@ -1738,19 +1799,35 @@ class PBData():
                                     _human_log('PBData', f"[poll] Skipping shared balances update for {user.name} because WS watcher active")
                                     self._last_skipped_balance_log = now_ts
                                 continue
-                            await asyncio.to_thread(self.db.update_balances, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
+                            exchange_for_slot = exch or user.exchange
+                            async with self._rest_slot(exchange_for_slot) as got:
+                                if got:
+                                    await asyncio.to_thread(self.db.update_balances, user)
+                                    try:
+                                        self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self._write_fetch_summary()
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        _human_log('PBData', f"[poll] Skipped balances update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
+                                    except Exception:
+                                        pass
+                                    had_rate_limit = True
                         # (duplicate branches removed)
                     except Exception as e:
                         msg = str(e)
-                        _human_log('PBData', f"[poll] Shared {kind} poll failed for {user.name}: {e}")
+                        tb = traceback.format_exc()
+                        try:
+                            _human_log('PBData', f"[poll] Shared {kind} poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
+                        except Exception:
+                            try:
+                                print(f"[PBData] [poll] Shared {kind} poll failed for {user.name}: {e}\n{tb}")
+                            except Exception:
+                                pass
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
@@ -1829,7 +1906,14 @@ class PBData():
                             pass
                     except Exception as e:
                         msg = str(e)
-                        _human_log('PBData', f"[poll] Shared COMBINED poll failed for {user.name}: {e}")
+                        tb = traceback.format_exc()
+                        try:
+                            _human_log('PBData', f"[poll] Shared COMBINED poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
+                        except Exception:
+                            try:
+                                print(f"[PBData] [poll] Shared COMBINED poll failed for {user.name}: {e}\n{tb}")
+                            except Exception:
+                                pass
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
@@ -2664,15 +2748,27 @@ def main():
     dest = Path(f'{PBGDIR}/data/logs')
     if not dest.exists():
         dest.mkdir(parents=True)
-    logfile = Path(f'{str(dest)}/PBData.log')
-    sys.stdout = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBData')
+    # Use centralized human_log for PBData startup instead of redirecting stdout/stderr
+    msg = 'Start: PBData'
+    try:
+        _human_log('PBData', msg, level='INFO')
+    except Exception:
+        pass
+    try:
+        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {msg}')
+    except Exception:
+        pass
     pbdata = PBData()
     if pbdata.is_running():
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBData already started')
+        msg = 'Error: PBData already started'
+        try:
+            _human_log('PBData', msg, level='ERROR')
+        except Exception:
+            pass
+        try:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {msg}')
+        except Exception:
+            pass
         exit(1)
     pbdata.save_pid()
 
@@ -2693,23 +2789,35 @@ def main():
 
         while True:
             try:
-                if logfile.exists() and logfile.stat().st_size >= 10485760:
-                    logfile.replace(f'{str(logfile)}.old')
-                    sys.stdout = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
-                    sys.stderr = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
                 try:
                     await pbdata.update_db_async()
                 except Exception as e:
-                    print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] [loop] update_db_async ERROR: {e}")
-                    traceback.print_exc()
+                    try:
+                        tb = traceback.format_exc()
+                        _human_log('PBData', f"[loop] update_db_async ERROR: {e}", level='ERROR', meta={'traceback': tb})
+                    except Exception:
+                        try:
+                            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] [loop] update_db_async ERROR: {e}")
+                        except Exception:
+                            pass
                 await asyncio.sleep(1)
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
+                try:
+                    tb = traceback.format_exc()
+                    _human_log('PBData', f"[loop] Unexpected error: {e}", level='ERROR', meta={'traceback': tb})
+                except Exception:
+                    try:
+                        print(f'Something went wrong, but continue {e}')
+                        traceback.print_exc()
+                    except Exception:
+                        pass
 
     async def _shutdown():
         try:
-            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] Shutdown requested: closing ws clients")
+            try:
+                _human_log('PBData', '[shutdown] Shutdown requested: closing ws clients', level='INFO')
+            except Exception:
+                pass
             from Exchange import Exchange
             try:
                 await Exchange.close_all_ws_clients()
@@ -2762,20 +2870,21 @@ def main():
                         pass
             except Exception:
                 pass
-        finally:
-            try:
-                sys.stdout = sys.__stdout__
-                sys.stderr = sys.__stderr__
-            except Exception:
-                pass
-            try:
-                print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] Exiting")
-            except Exception:
-                pass
-            try:
-                os._exit(0)
-            except Exception:
-                pass
+        except Exception:
+            pass
+        msg = '[shutdown] Exiting'
+        try:
+            _human_log('PBData', msg, level='INFO')
+        except Exception:
+            pass
+        try:
+            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] {msg}")
+        except Exception:
+            pass
+        try:
+            os._exit(0)
+        except Exception:
+            pass
 
     async def _runner_with_signals():
         try:

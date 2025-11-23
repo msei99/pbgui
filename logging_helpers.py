@@ -102,6 +102,119 @@ def _sanitize_tag(t: str) -> str:
     return t2
 
 
+def rotate_logfile_if_oversize(path: str, max_bytes: int = 10 * 1024 * 1024):
+    """Rotate `path` when it exceeds `max_bytes`.
+
+    Keep only two generations: the current file and a single rotated
+    backup named `<path>.1`. If `<path>.1` exists it will be overwritten.
+    This function is intentionally simple and safe to call before writes.
+    """
+    try:
+        p = Path(path)
+        if not p.exists():
+            return
+        try:
+            size = p.stat().st_size
+        except Exception:
+            return
+        if size <= int(max_bytes):
+            return
+        # Remove existing .1 if present
+        backup = Path(str(path) + '.1')
+        try:
+            if backup.exists():
+                backup.unlink()
+        except Exception:
+            pass
+        # Rename current to .1 (atomic on same filesystem)
+        try:
+            p.rename(backup)
+        except Exception:
+            # Best-effort: try copy-then-truncate
+            try:
+                data = p.read_bytes()
+                backup.write_bytes(data)
+                p.unlink()
+            except Exception:
+                pass
+    except Exception:
+        # Never raise from logging helpers
+        pass
+
+
+def purge_log_to_rotated(path: str, max_bytes: int = 10 * 1024 * 1024):
+    """Purge `path` but keep the file. If `<path>.1` exists and has room,
+    append the content of `path` to it up to `max_bytes`. Otherwise, move
+    the current file to `<path>.1` (if none exists) or truncate `path`.
+
+    Returns (success: bool, message: str).
+    """
+    try:
+        p = Path(path)
+        if not p.exists():
+            return False, 'Logfile does not exist'
+        rotated = Path(str(p) + '.1')
+        orig_size = p.stat().st_size
+
+        # If no rotated file exists, move current to .1 and recreate empty logfile
+        if not rotated.exists():
+            try:
+                p.replace(rotated)
+                p.open('w').close()
+                return True, f'Moved logfile to {rotated.name} and recreated {p.name}'
+            except Exception as e:
+                return False, f'Failed to move logfile to rotated: {e}'
+
+        rot_size = rotated.stat().st_size
+        # If rotated has room for the whole original, append it
+        if rot_size < max_bytes and (rot_size + orig_size) <= max_bytes:
+            try:
+                with rotated.open('ab') as rf, p.open('rb') as of:
+                    rf.write(of.read())
+                with p.open('r+') as of:
+                    of.truncate(0)
+                return True, f'Appended logfile to {rotated.name} and truncated {p.name}'
+            except Exception as e:
+                return False, f'Failed to append to rotated logfile: {e}'
+
+        # If appending would overflow the rotated file, prefer replacing the
+        # rotated file with the full current logfile so we don't lose the
+        # current content. If the current logfile itself is larger than
+        # max_bytes, write the tail of the current logfile (last max_bytes)
+        # into the rotated file instead.
+        try:
+            if orig_size <= max_bytes:
+                # Remove existing rotated and move current to rotated
+                try:
+                    try:
+                        rotated.unlink()
+                    except Exception:
+                        pass
+                    p.replace(rotated)
+                    # recreate empty original file
+                    p.open('w').close()
+                    return True, f'Replaced {rotated.name} with full logfile and recreated {p.name}'
+                except Exception as e:
+                    return False, f'Failed to replace rotated logfile: {e}'
+            else:
+                # Current logfile larger than max_bytes: write only the tail
+                try:
+                    with p.open('rb') as of:
+                        of.seek(max(0, orig_size - max_bytes))
+                        chunk = of.read()
+                    with rotated.open('wb') as rf:
+                        rf.write(chunk)
+                    with p.open('r+') as of:
+                        of.truncate(0)
+                    return True, f'Wrote last {max_bytes} bytes of logfile to {rotated.name} and truncated {p.name}'
+                except Exception as e:
+                    return False, f'Failed to write tail to rotated logfile: {e}'
+        except Exception as e:
+            return False, f'Failed to manage rotated logfile: {e}'
+    except Exception as e:
+        return False, f'Failed to purge logfile: {e}'
+
+
 def human_log(service: str, msg: str, user: str = None, tags=None, level: str = None, code: str = None, meta: dict = None, logfile: str = None):
     """Write a canonical human-readable log line.
 
@@ -210,6 +323,12 @@ def human_log(service: str, msg: str, user: str = None, tags=None, level: str = 
             p = Path.cwd() / 'data' / 'logs'
             p.mkdir(parents=True, exist_ok=True)
             logfile = str(p / f'{service}.log')
+
+        # Rotate if oversize (keep only current + one rotated generation)
+        try:
+            rotate_logfile_if_oversize(logfile, 10 * 1024 * 1024)
+        except Exception:
+            pass
 
         # Append line atomically (no fsync)
         with open(logfile, 'a', encoding='utf-8') as f:
