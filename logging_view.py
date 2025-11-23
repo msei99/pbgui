@@ -2,19 +2,44 @@ import streamlit as st
 from pathlib import Path
 import re
 import json
+from datetime import datetime
 import streamlit_scrollable_textbox as stx
 import pbgui_help
+import logging_helpers
 
 def view_log_filtered(log_filename: str):
-    """A minimal, standalone filtered log viewer for a single logfile.
-    Designed to be used initially only for PBData.
+    """A minimal, standalone filtered log viewer.
+
+    Supports selecting one or more logfiles (multi-select) and shows a
+    merged view sorted by timestamp. The caller may pass a default
+    `log_filename` (single name) which will be preselected.
     """
     pbgdir = Path.cwd()
-    logfile = Path(f'{pbgdir}/data/logs/{log_filename}.log')
+    logs_dir = Path(f'{pbgdir}/data/logs')
+    # discover available .log files (names without suffix)
+    candidates = []
+    try:
+        if logs_dir.exists():
+            for p in logs_dir.glob('*.log'):
+                if p.is_file():
+                    candidates.append(p.stem)
+    except Exception:
+        candidates = []
+
+    # default selection: the provided filename if present, otherwise first
+    default_sel = [log_filename] if log_filename in candidates else ([candidates[0]] if candidates else [])
+    sel_logs = st.multiselect('Logfiles', sorted(candidates), default=default_sel, key=f'lv_selected_logs_{log_filename}')
+    if not sel_logs:
+        # nothing selected: show helper and return
+        st.info('No logfile selected.')
+        return
+    # build a compound key for session state based on selected files
+    sel_key = '+'.join(sorted(sel_logs))
+    logfile = None
 
     # Keys for refresh/truncate counters used to bust the cached reader
-    refresh_key = f'lv_{log_filename}_refresh'
-    trunc_key = f'lv_{log_filename}_truncated'
+    refresh_key = f'lv_{sel_key}_refresh'
+    trunc_key = f'lv_{sel_key}_truncated'
     if refresh_key not in st.session_state:
         st.session_state[refresh_key] = 0
     if trunc_key not in st.session_state:
@@ -38,55 +63,58 @@ def view_log_filtered(log_filename: str):
             return []
 
     # If logfile doesn't exist, show an info message; otherwise use cached reader.
-    if not logfile.exists():
-        st.info(f'{log_filename} logfile not found yet.')
-        lines = []
-    else:
-        # Read logfile directly (no caching). This avoids stale GUI cache
-        # behavior and ensures the view always reflects current disk contents.
-        lines = _read_log(str(logfile))
-
-    # Logfile expander (collapsed by default). Track open state in session_state
-    expander_key = f'lv_{log_filename}_expander'
-    # Default the expander to closed on first load (user requested behavior).
-    if expander_key not in st.session_state:
-        st.session_state[expander_key] = False
-
-    # Make sure we have some recent lines loaded so the expander will show
-    # content immediately when the user opens it, without requiring a
-    # manual refresh. Limit the pre-load to the most recent 2000 lines to
-    # avoid reading extremely large files on initial render.
-    if (not lines) and logfile.exists():
+    # Read selected logfiles and merge by timestamp. Limit per-file read to
+    # recent 2000 lines for performance.
+    lines = []
+    for name in sel_logs:
+        p = logs_dir / f"{name}.log"
+        if not p.exists():
+            continue
         try:
-            with open(logfile, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(p, 'r', encoding='utf-8', errors='ignore') as f:
                 all_lines = f.readlines()
-                if all_lines:
-                    # newest-first ordering
-                    lines = list(reversed(all_lines))
+                # newest-first
+                rev = list(reversed(all_lines))
+                # keep recent portion to avoid massive merges
+                lines.extend(rev[:2000])
         except Exception:
-            lines = []
+            continue
 
-    # Use a checkbox to control visibility of the logfile area. Older
-    # Streamlit versions don't provide a stable way to observe `st.expander`
-    # open/close state, so a checkbox is a reliable substitute: the user
-    # explicitly toggles visibility and we can perform a direct disk read
-    # when visibility is enabled so logs show immediately.
-    show_log = st.checkbox('Show Logfile', key=expander_key)
-    if show_log:
-        # When the user opens the log view, read the latest content from
-        # disk (uncached) so the up-to-date logfile is visible immediately.
-        if logfile.exists():
+    # Make sure we have some recent lines loaded so the view will show
+    # content immediately without requiring a manual refresh. Limit the
+    # pre-load to the most recent 2000 lines to avoid reading extremely
+    # large files on initial render.
+    if not lines:
+        # try a full read for selected files if previous step yielded nothing
+        for name in sel_logs:
+            p = logs_dir / f"{name}.log"
+            if not p.exists():
+                continue
             try:
-                with open(logfile, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(p, 'r', encoding='utf-8', errors='ignore') as f:
                     all_lines = f.readlines()
                     if all_lines:
-                        lines = list(reversed(all_lines))
-                    else:
-                        lines = []
+                        lines.extend(list(reversed(all_lines)))
             except Exception:
-                lines = []
-        else:
-            lines = []
+                pass
+
+    # When at least one logfile is selected, show the logfile area.
+    show_log = True
+    if show_log:
+        # When the user opens the view, re-read all selected files from disk
+        # (uncached) so the up-to-date logfile(s) are visible immediately.
+        lines = []
+        for name in sel_logs:
+            p = logs_dir / f"{name}.log"
+            if not p.exists():
+                continue
+            try:
+                with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                    all_lines = f.readlines()
+                    if all_lines:
+                        lines.extend(list(reversed(all_lines)))
+            except Exception:
+                pass
 
         # users
         try:
@@ -222,21 +250,21 @@ def view_log_filtered(log_filename: str):
         # Arrange filters compactly in two columns to save vertical space
         col_f1, col_f2 = st.columns([1, 1])
         with col_f1:
-            sel_users = st.multiselect('Users (filter)', user_list, key=f'lv_{log_filename}_sel_users')
+            sel_users = st.multiselect('Users (filter)', user_list, key=f'lv_{sel_key}_sel_users')
         with col_f2:
-            sel_services = st.multiselect('Services (filter)', services, key=f'lv_{log_filename}_sel_services')
+            sel_services = st.multiselect('Services (filter)', sorted(services), key=f'lv_{sel_key}_sel_services')
 
         col_f3, col_f4 = st.columns([1, 1])
         with col_f3:
-            sel_tags = st.multiselect('Tags (from [tag])', tags, key=f'lv_{log_filename}_sel_tags')
+            sel_tags = st.multiselect('Tags (from [tag])', tags, key=f'lv_{sel_key}_sel_tags')
         with col_f4:
-            free_text = st.text_input('Free-text', key=f'lv_{log_filename}_free_text', placeholder='search...')
+            free_text = st.text_input('Free-text', key=f'lv_{sel_key}_free_text', placeholder='search...')
 
         # Add a compact levels filter so users can restrict visible severities
         levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         # place levels control under the tags column to keep layout compact
         with col_f3:
-            sel_levels = st.multiselect('Levels (filter)', levels, key=f'lv_{log_filename}_sel_levels')
+            sel_levels = st.multiselect('Levels (filter)', levels, key=f'lv_{sel_key}_sel_levels')
 
         # Layout: compact right cluster for buttons
         # Use a wide spacer column and three small columns for the buttons so
@@ -245,8 +273,8 @@ def view_log_filtered(log_filename: str):
         col_clear, col_refresh, col_raw, col_trunc, col_spacer = st.columns([1, 1, 1, 1, 5])
 
         # session keys for refresh/truncate actions
-        refresh_key = f'lv_{log_filename}_refresh'
-        trunc_key = f'lv_{log_filename}_truncated'
+        refresh_key = f'lv_{sel_key}_refresh'
+        trunc_key = f'lv_{sel_key}_truncated'
         # Use an integer refresh counter so we can invalidate the cached reader
         if refresh_key not in st.session_state:
             st.session_state[refresh_key] = 0
@@ -255,10 +283,16 @@ def view_log_filtered(log_filename: str):
 
         def _clear_filters():
             # callback used by the button to safely update widget-backed session keys
-            st.session_state[f'lv_{log_filename}_sel_users'] = []
-            st.session_state[f'lv_{log_filename}_sel_tags'] = []
-            st.session_state[f'lv_{log_filename}_free_text'] = ''
-            # Removed reverse checkbox: nothing to clear here anymore
+            st.session_state[f'lv_{sel_key}_sel_users'] = []
+            st.session_state[f'lv_{sel_key}_sel_services'] = []
+            st.session_state[f'lv_{sel_key}_sel_tags'] = []
+            st.session_state[f'lv_{sel_key}_sel_levels'] = []
+            st.session_state[f'lv_{sel_key}_free_text'] = ''
+            st.session_state[f'lv_{sel_key}_show_raw'] = False
+            # bump refresh counter so the reader reloads and the view updates
+            st.session_state[refresh_key] = st.session_state.get(refresh_key, 0) + 1
+            # keep the filters visible so user sees the cleared state
+            pass
 
         def _mark_refresh(session_key: str, expander_session_key: str = None):
             # bump the refresh counter to force the cached reader to reload
@@ -266,74 +300,117 @@ def view_log_filtered(log_filename: str):
             # Ensure the expander remains open after a refresh so the user
             # immediately sees the updated log content without having to
             # re-open the panel manually.
-            if expander_session_key:
-                st.session_state[expander_session_key] = True
-
+            # no-op for expander since the view is always visible when files are selected
         def _truncate_and_mark(path_str: str, session_key: str):
-            try:
-                with open(path_str, 'r+') as f:
-                    f.truncate()
+            # If path_str is empty, operate on all selected files (multi-select)
+            paths = []
+            if path_str:
+                paths = [path_str]
+            else:
+                for name in sel_logs:
+                    p = logs_dir / f"{name}.log"
+                    if p.exists():
+                        paths.append(str(p))
+
+            if not paths:
+                st.error('No logfile selected to purge')
+                return
+
+            any_success = False
+            for pth in paths:
+                success, msg = logging_helpers.purge_log_to_rotated(pth, 10 * 1024 * 1024)
+                if success:
+                    st.success(f'{Path(pth).name}: {msg}')
+                    any_success = True
+                else:
+                    st.error(f'{Path(pth).name}: {msg}')
+
+            if any_success:
                 # bump refresh counter so readers reload immediately
                 st.session_state[session_key] = st.session_state.get(session_key, 0) + 1
-                # Keep the Filters expander open after truncating so the UI
-                # doesn't unexpectedly collapse for the user.
-                st.session_state[expander_key] = True
-            except Exception as e:
-                st.error(f'Failed to truncate logfile: {e}')
 
         # Emoji-only buttons (compact "image-like" appearance). Left-aligned.
         # Remove textual captions to save vertical space; icons should be intuitive.
         with col_clear:
-            st.button('✖', key=f'lv_{log_filename}_clear', on_click=_clear_filters)
+            st.button('✖', key=f'lv_{sel_key}_clear', on_click=_clear_filters)
         with col_refresh:
-            st.button('🔄', key=f'lv_{log_filename}_refresh_btn', on_click=_mark_refresh, args=(refresh_key, expander_key))
+            st.button('🔄', key=f'lv_{sel_key}_refresh_btn', on_click=_mark_refresh, args=(refresh_key,))
         with col_raw:
             # Small persistent toggle to view the raw logfile (ignores filters)
-            st.checkbox('RAW', key=f'lv_{log_filename}_show_raw', help=pbgui_help.show_raw_log)
+            st.checkbox('RAW', key=f'lv_{sel_key}_show_raw', help=pbgui_help.show_raw_log)
         with col_trunc:
-            st.button('🗑️', key=f'lv_{log_filename}_truncate', on_click=_truncate_and_mark, args=(str(logfile), trunc_key))
+            st.button('🗑️', key=f'lv_{sel_key}_truncate', on_click=_truncate_and_mark, args=(str(logfile) if logfile else '', trunc_key))
 
         # Determine whether any filters active
         has_filters = False
-        if st.session_state.get(f'lv_{log_filename}_sel_users'):
+        if st.session_state.get(f'lv_{sel_key}_sel_users'):
             has_filters = True
-        if st.session_state.get(f'lv_{log_filename}_sel_services'):
+        if st.session_state.get(f'lv_{sel_key}_sel_services'):
             has_filters = True
-        if st.session_state.get(f'lv_{log_filename}_sel_tags'):
+        if st.session_state.get(f'lv_{sel_key}_sel_tags'):
             has_filters = True
-        if st.session_state.get(f'lv_{log_filename}_sel_levels'):
+        if st.session_state.get(f'lv_{sel_key}_sel_levels'):
             has_filters = True
-        if st.session_state.get(f'lv_{log_filename}_free_text'):
+        if st.session_state.get(f'lv_{sel_key}_free_text'):
             has_filters = True
 
         # Handle refresh / truncate actions triggered by callbacks in the filters area.
         # If the refresh flag is set, re-read the logfile into `lines` so the
         # displayed content reflects the latest file state. If the truncate flag is
         # set, treat the logfile as empty.
-        refresh_key = f'lv_{log_filename}_refresh'
-        trunc_key = f'lv_{log_filename}_truncated'
+        refresh_key = f'lv_{sel_key}_refresh'
+        trunc_key = f'lv_{sel_key}_truncated'
         if st.session_state.get(trunc_key):
             # logfile was truncated — show empty view and clear the flag
             lines = []
             st.session_state[trunc_key] = False
         if st.session_state.get(refresh_key):
             # re-read logfile from disk and clear flag
-            if logfile.exists():
+            # re-read selected files
+            lines = []
+            for name in sel_logs:
+                p = logs_dir / f"{name}.log"
+                if not p.exists():
+                    continue
                 try:
-                    with open(logfile, 'r', encoding='utf-8', errors='ignore') as f:
+                    with open(p, 'r', encoding='utf-8', errors='ignore') as f:
                         log = f.readlines()
-                        lines = list(reversed(log))
+                        lines.extend(list(reversed(log)))
                 except Exception:
-                    lines = []
-            else:
-                lines = []
+                    pass
             st.session_state[refresh_key] = False
 
-        display_lines = lines
+        # If multiple files selected, merge them by timestamp
+        def parse_iso_to_epoch(ts_str: str):
+            try:
+                s = ts_str.strip()
+                if s.endswith('Z'):
+                    s = s[:-1]
+                s = s.replace('T', ' ')
+                # datetime.fromisoformat handles fractional seconds
+                return datetime.fromisoformat(s).timestamp()
+            except Exception:
+                try:
+                    # Fallback to parsing prefix only
+                    return datetime.strptime(ts_str.split()[0], '%Y-%m-%d').timestamp()
+                except Exception:
+                    return 0
+
+        annotated = []
+        for ln in lines:
+            parsed = parse_log_line(ln)
+            if parsed and parsed.get('timestamp'):
+                epoch = parse_iso_to_epoch(parsed.get('timestamp'))
+            else:
+                epoch = 0
+            annotated.append((epoch, ln))
+        # sort newest-first
+        annotated.sort(key=lambda x: x[0], reverse=True)
+        display_lines = [ln for _, ln in annotated]
         # If the user requests the raw view, ignore filters and show the
         # cached raw lines (newest-first). The `RAW` checkbox is persistent
         # via session_state key `lv_<logfile>_show_raw`.
-        show_raw = st.session_state.get(f'lv_{log_filename}_show_raw', False)
+        show_raw = st.session_state.get(f'lv_{sel_key}_show_raw', False)
         if show_raw:
             # RAW mode: show unadorned lines, but if any filters are active
             # respect them — users expect RAW to disable formatting/icons,
@@ -341,15 +418,22 @@ def view_log_filtered(log_filename: str):
             if has_filters:
                 # Reuse the filtered-path but do not add severity markers.
                 filter_sig = (tuple(sel_users), tuple(sel_services), tuple(sel_tags), tuple(sel_levels), free_text)
-                try:
-                    all_lines = _read_log(str(logfile))
-                except Exception:
-                    all_lines = lines
-                sel_users = st.session_state.get(f'lv_{log_filename}_sel_users', [])
-                sel_services = st.session_state.get(f'lv_{log_filename}_sel_services', [])
-                sel_tags = st.session_state.get(f'lv_{log_filename}_sel_tags', [])
-                free_text = st.session_state.get(f'lv_{log_filename}_free_text', '')
-                sel_levels = st.session_state.get(f'lv_{log_filename}_sel_levels', [])
+                # Read all selected files into all_lines for filtering
+                all_lines = []
+                for name in sel_logs:
+                    p = logs_dir / f"{name}.log"
+                    if not p.exists():
+                        continue
+                    try:
+                        with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                            all_lines.extend(list(reversed(f.readlines())))
+                    except Exception:
+                        pass
+                sel_users = st.session_state.get(f'lv_{sel_key}_sel_users', [])
+                sel_services = st.session_state.get(f'lv_{sel_key}_sel_services', [])
+                sel_tags = st.session_state.get(f'lv_{sel_key}_sel_tags', [])
+                free_text = st.session_state.get(f'lv_{sel_key}_free_text', '')
+                sel_levels = st.session_state.get(f'lv_{sel_key}_sel_levels', [])
 
                 def line_has_any_tag(line, taglist):
                     for t in taglist:
@@ -398,15 +482,24 @@ def view_log_filtered(log_filename: str):
             # allowing an automatic cache-bust when filters change.
             filter_sig = (tuple(sel_users), tuple(sel_services), tuple(sel_tags), tuple(sel_levels), free_text)
             try:
-                # Always re-read the logfile on filter change to avoid stale results.
-                all_lines = _read_log(str(logfile))
+                # Always re-read the selected files on filter change to avoid stale results.
+                all_lines = []
+                for name in sel_logs:
+                    p = logs_dir / f"{name}.log"
+                    if not p.exists():
+                        continue
+                    try:
+                        with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                            all_lines.extend(list(reversed(f.readlines())))
+                    except Exception:
+                        pass
             except Exception:
                 all_lines = lines
-            sel_users = st.session_state.get(f'lv_{log_filename}_sel_users', [])
-            sel_services = st.session_state.get(f'lv_{log_filename}_sel_services', [])
-            sel_tags = st.session_state.get(f'lv_{log_filename}_sel_tags', [])
-            free_text = st.session_state.get(f'lv_{log_filename}_free_text', '')
-            sel_levels = st.session_state.get(f'lv_{log_filename}_sel_levels', [])
+            sel_users = st.session_state.get(f'lv_{sel_key}_sel_users', [])
+            sel_services = st.session_state.get(f'lv_{sel_key}_sel_services', [])
+            sel_tags = st.session_state.get(f'lv_{sel_key}_sel_tags', [])
+            free_text = st.session_state.get(f'lv_{sel_key}_free_text', '')
+            sel_levels = st.session_state.get(f'lv_{sel_key}_sel_levels', [])
 
             def line_has_any_tag(line, taglist):
                 for t in taglist:
@@ -478,7 +571,7 @@ def view_log_filtered(log_filename: str):
             display_lines = prefixed
 
         # Render log inside the expander (below the filters)
-        stx.scrollableTextbox(''.join(display_lines), height="800", key=f'stx_lv_{log_filename}_inner')
+        stx.scrollableTextbox(''.join(display_lines), height="800", key=f'stx_lv_{sel_key}_inner')
 
     # Render (log rendering moved into the expander above)
     # Keep a small, read-only fallback if the inner textbox isn't available
@@ -486,4 +579,4 @@ def view_log_filtered(log_filename: str):
         # If we get here, the inner textbox has already rendered inside the expander
         pass
     except Exception:
-        stx.scrollableTextbox(''.join(lines), height="800", key=f'stx_lv_{log_filename}_fallback')
+        stx.scrollableTextbox(''.join(lines), height="800", key=f'stx_lv_{sel_key}_fallback')
