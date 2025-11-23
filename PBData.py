@@ -129,7 +129,10 @@ class PBData():
         self._ws_restarted_once = set()  # set of (exchange, user_name)
         self._ws_success_counts = defaultdict(int)  # (exchange, user_name) -> consecutive successes
         self._ws_success_required = 3  # successes required to clear restart marker
-        self._ws_restart_sleep = 0.5  # base sleep (s) before re-creating client
+        # Base sleep (s) before re-creating client. Increased to reduce
+        # synchronized reconnect storms when many watchers detect keepalive
+        # timeouts simultaneously.
+        self._ws_restart_sleep = 1.5  # base sleep (s) before re-creating client
         # Per-user last fetch timestamps (key: (user_name, kind) -> epoch seconds)
         # kind in {'balances','positions','orders','history'}
         self._last_fetch_ts = defaultdict(dict)
@@ -158,6 +161,34 @@ class PBData():
             'inflight': set(),                # set of keys currently reserved by manager
             'warned_global': False,           # whether a global-cap warning was emitted
             'warned_per_exch': {},            # exchange -> bool
+        }
+
+        # REST-fallback throttling: per-exchange semaphores to limit concurrent
+        # REST calls issued as fallbacks when WS handlers cannot persist data.
+        self._rest_semaphores = {}
+        # Tunable per-exchange concurrent REST slots (lower for sensitive exchanges)
+        self._rest_semaphore_limits_by_exchange = {
+            'bybit': 1,
+            'hyperliquid': 1,
+        }
+        self._default_rest_semaphore_limit = 3
+        # How long (s) to wait to acquire a REST slot before skipping the update
+        self._rest_semaphore_acquire_timeout = 5.0
+
+        # Debounce settings for WS-driven DB writes (seconds)
+        self._debounce_interval_by_kind = {
+            'balances': 2.0,
+            'positions': 2.0,
+            'orders': 5.0,
+        }
+        # Maximum time we'll retry gated REST writes before giving up (seconds)
+        self._debounce_max_retry_seconds = 30.0
+
+        # In-memory debounce buffers: { kind: { user_name: { 'user': User, 'first_ts': float, 'task': asyncio.Task } } }
+        self._debounce_buffers = {
+            'balances': {},
+            'positions': {},
+            'orders': {},
         }
 
         # Register with Exchange to be notified when private clients are closed
@@ -338,7 +369,11 @@ class PBData():
                     # emit warning once
                     if not self._private_client_manager_state.get('warned_global'):
                         try:
-                            _human_log('PBData', f"[ws-manager] reached GLOBAL cap ({total_now + inflight_count}/{global_cap}); returning None for user={getattr(user,'name',None)}", level='WARNING', user=user)
+                            # Include a compact snapshot to aid debugging: client metrics
+                            # and currently reserved inflight keys. Keep it concise.
+                            snapshot = dict(metrics) if isinstance(metrics, dict) else {}
+                            infl = list(self._private_client_manager_state.get('inflight', []))
+                            _human_log('PBData', f"[ws-manager] reached GLOBAL cap ({total_now + inflight_count}/{global_cap}); returning None for user={getattr(user,'name',None)} snapshot_metrics={snapshot} inflight={infl}", level='WARNING', user=user)
                         except Exception:
                             pass
                         self._private_client_manager_state['warned_global'] = True
@@ -372,7 +407,9 @@ class PBData():
                         warned = self._private_client_manager_state['warned_per_exch'].get(base_key, False)
                         if not warned:
                             try:
-                                _human_log('PBData', f"[ws-manager] reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None for user={getattr(user,'name',None)}", level='WARNING', user=user)
+                                snapshot = dict(metrics) if isinstance(metrics, dict) else {}
+                                infl = list(self._private_client_manager_state.get('inflight', []))
+                                _human_log('PBData', f"[ws-manager] reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None for user={getattr(user,'name',None)} snapshot_metrics={snapshot} inflight={infl}", level='WARNING', user=user)
                             except Exception:
                                 pass
                             self._private_client_manager_state['warned_per_exch'][base_key] = True
@@ -480,6 +517,176 @@ class PBData():
                     pass
         except Exception:
             pass
+
+
+    async def _enqueue_debounce(self, kind: str, user):
+        """Enqueue a debounce flush for `kind` ('balances'|'positions'|'orders') for `user`.
+
+        Multiple calls within the debounce interval reset the timer. The actual
+        DB write is performed by `_debounce_flusher` which respects `_rest_slot`
+        gating and will retry for up to `_debounce_max_retry_seconds` before
+        dropping the update.
+        """
+        try:
+            if kind not in self._debounce_buffers:
+                return
+            buf = self._debounce_buffers[kind]
+            name = getattr(user, 'name', None)
+            now = datetime.now().timestamp()
+            entry = buf.get(name)
+            # Cancel existing timer task if present (to reset debounce)
+            if entry is None:
+                task = asyncio.create_task(self._debounce_flusher(kind, name))
+                buf[name] = {'user': user, 'first_ts': now, 'task': task}
+            else:
+                # update user reference and reset timer
+                entry['user'] = user
+                entry_task = entry.get('task')
+                try:
+                    if entry_task and not entry_task.done():
+                        entry_task.cancel()
+                except Exception:
+                    pass
+                entry['task'] = asyncio.create_task(self._debounce_flusher(kind, name))
+        except Exception:
+            try:
+                _human_log('PBData', f"[debounce] failed to enqueue {kind} for {getattr(user,'name',None)}", level='DEBUG')
+            except Exception:
+                pass
+
+    async def _debounce_flusher(self, kind: str, user_name: str):
+        """Task that waits the debounce interval, then attempts to persist the
+        latest update for `user_name`/`kind`. Respects REST semaphore gating and
+        will retry with small backoff until `_debounce_max_retry_seconds` have
+        elapsed since the first queued event.
+        """
+        try:
+            buf = self._debounce_buffers.get(kind, {})
+            entry = buf.get(user_name)
+            if not entry:
+                return
+            interval = float(self._debounce_interval_by_kind.get(kind, 2.0))
+            first_ts = entry.get('first_ts', datetime.now().timestamp())
+            # initial debounce sleep
+            await asyncio.sleep(interval)
+            # retrieve latest user ref
+            entry = buf.get(user_name)
+            if not entry:
+                return
+            user = entry.get('user')
+            # If user object missing, try to find by name
+            if user is None:
+                try:
+                    user = self.users.find_user(user_name)
+                except Exception:
+                    user = None
+            if not user:
+                # Nothing to flush
+                try:
+                    buf.pop(user_name, None)
+                except Exception:
+                    pass
+                return
+
+            start_retry = datetime.now().timestamp()
+            while True:
+                tried = False
+                try:
+                    # Use rest_slot gating for the actual DB write
+                    async with self._rest_slot(user.exchange) as got:
+                        if got:
+                            if kind == 'balances':
+                                await asyncio.to_thread(self.db.update_balances, user)
+                            elif kind == 'positions':
+                                await asyncio.to_thread(self.db.update_positions, user)
+                            elif kind == 'orders':
+                                await asyncio.to_thread(self.db.update_orders, user)
+                            try:
+                                self._last_fetch_ts[(user.name, kind)] = datetime.now().timestamp()
+                            except Exception:
+                                pass
+                            try:
+                                self._write_fetch_summary()
+                            except Exception:
+                                pass
+                            # success: remove from buffer and exit
+                            try:
+                                buf.pop(user_name, None)
+                            except Exception:
+                                pass
+                            return
+                        else:
+                            tried = True
+                            # Could not acquire REST slot; fall through to retry logic
+                except asyncio.CancelledError:
+                    # task was cancelled (likely due to a reset); stop quietly
+                    return
+                except Exception as e:
+                    tried = True
+                    try:
+                        _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
+                    except Exception:
+                        pass
+
+                # Decide whether to retry or give up based on elapsed time since first event
+                now_ts = datetime.now().timestamp()
+                elapsed_since_first = now_ts - first_ts
+                if elapsed_since_first >= float(self._debounce_max_retry_seconds):
+                    try:
+                        _human_log('PBData', f"[debounce] giving up flush for {kind} {user_name} after {int(elapsed_since_first)}s (dropped)", level='WARNING')
+                    except Exception:
+                        pass
+                    try:
+                        buf.pop(user_name, None)
+                    except Exception:
+                        pass
+                    return
+
+                # Backoff a bit and retry; include jitter
+                await asyncio.sleep(min(1.0 + random.random() * 1.5, self._debounce_max_retry_seconds))
+        except Exception:
+            try:
+                _human_log('PBData', f"[debounce] unexpected error in flusher for {kind} {user_name}", level='ERROR')
+            except Exception:
+                pass
+
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _rest_slot(self, exchange: str, timeout: float = None):
+        """Async context manager to acquire a per-exchange REST slot.
+
+        Yields True if slot acquired, False if timed out. Caller is expected
+        to skip or defer the REST call when False is yielded.
+        """
+        try:
+            if timeout is None:
+                timeout = getattr(self, '_rest_semaphore_acquire_timeout', 5.0)
+            sem = self._rest_semaphores.get(exchange)
+            if sem is None:
+                limit = self._rest_semaphore_limits_by_exchange.get(exchange, getattr(self, '_default_rest_semaphore_limit', 3))
+                sem = asyncio.Semaphore(limit)
+                self._rest_semaphores[exchange] = sem
+            acquired = False
+            try:
+                await asyncio.wait_for(sem.acquire(), timeout=timeout)
+                acquired = True
+                yield True
+            except asyncio.TimeoutError:
+                yield False
+            finally:
+                if acquired:
+                    try:
+                        sem.release()
+                    except Exception:
+                        pass
+        except Exception:
+            # On any unexpected error, yield False so callers skip REST updates
+            try:
+                yield False
+            except Exception:
+                pass
 
 
     def _set_exchange_backoff(self, exchange: str, reason: str = None, duration: int = None, user=None):
@@ -864,32 +1071,11 @@ class PBData():
                             except Exception:
                                 pass
 
-                    # On any balance update, persist balances (REST fallback)
+                    # On any balance update, debounce and persist balances via background flusher
                     try:
-                        await asyncio.to_thread(self.db.update_balances, user)
-                        # record last fetch timestamp for balances
-                        try:
-                            self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
-                        except Exception:
-                            pass
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
+                        await self._enqueue_debounce('balances', user)
                     except Exception as e:
-                        _human_log('PBData', f"[ws->REST] DB balance update failed (REST fallback) for {user.name}: {e}", level='ERROR')
-                        try:
-                            await asyncio.to_thread(self.db.update_positions, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
-                        except Exception as e:
-                            _human_log('PBData', f"[ws->REST] DB positions update failed (REST fallback) for {user.name}: {e}", level='ERROR')
+                        _human_log('PBData', f"[ws->REST] enqueue debounce failed for balances {user.name}: {e}", level='ERROR')
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
@@ -1100,21 +1286,9 @@ class PBData():
                     if now_sec - last_positions_refresh >= min_positions_refresh_interval:
                         last_positions_refresh = now_sec
                         try:
-                            await asyncio.to_thread(self.db.update_positions, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
+                            await self._enqueue_debounce('positions', user)
                         except Exception as e:
-                            _human_log('PBData', f"[ws] DB positions update failed for {user.name}: {e}", level='ERROR')
+                            _human_log('PBData', f"[ws] enqueue debounce failed for positions {user.name}: {e}", level='ERROR')
                     # Debug: optionally log the positions payload
                     # Debug: optionally log the positions payload
                     try:
@@ -1309,21 +1483,9 @@ class PBData():
                     if now_sec - last_orders_refresh >= min_orders_refresh_interval:
                         last_orders_refresh = now_sec
                         try:
-                            await asyncio.to_thread(self.db.update_orders, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
-                                try:
-                                    self._write_fetch_summary()
-                                except Exception:
-                                    pass
+                            await self._enqueue_debounce('orders', user)
                         except Exception as e:
-                            _human_log('PBData', f"[ws->REST] DB orders update failed (REST fallback) for {user.name}: {e}")
+                            _human_log('PBData', f"[ws->REST] enqueue debounce failed for orders {user.name}: {e}")
                 except Exception as e:
                     raw = str(e)
                     lower = raw.lower()
