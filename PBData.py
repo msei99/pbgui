@@ -10,6 +10,7 @@ import platform
 import traceback
 from pbgui_func import PBGDIR
 import json
+import re
 from pathlib import Path as _Path
 from Database import Database
 from User import Users
@@ -266,7 +267,7 @@ class PBData():
                 try:
                     set_ws_limits(global_max=ws_max)
                     self._ws_max_loaded = ws_max
-                    _human_log('PBData', f"Set Exchange.ws global cap via pbgui.ini [pbdata] ws_max={ws_max}", level='DEBUG')
+                    _human_log('PBData', f"Set Exchange.ws global cap via pbgui.ini [pbdata] ws_max={ws_max}", level='INFO')
                 except Exception:
                     try:
                         _human_log('PBData', f"Failed to call Exchange.set_ws_limits with ws_max={ws_max}", level='WARNING')
@@ -287,7 +288,7 @@ class PBData():
                 try:
                     set_service_min_level('PBData', log_level)
                     self._log_level_loaded = log_level
-                    _human_log('PBData', f"PBData log level set via pbgui.ini [pbdata] log_level={log_level}", level='DEBUG')
+                    _human_log('PBData', f"PBData log level set via pbgui.ini [pbdata] log_level={log_level}", level='INFO')
                 except Exception:
                     try:
                         _human_log('PBData', f"Failed to set PBData log level to {log_level}", level='WARNING')
@@ -661,14 +662,29 @@ class PBData():
                         is_invalid_nonce = False
 
                     if is_invalid_nonce:
-                        # Log and put exchange into backoff to avoid immediate retries
+                        # Parse recv_window/server timestamps if possible and include in logs
                         try:
-                            meta = {'traceback': tb} if tb else None
+                            parsed = self._parse_recv_window_from_exception(e)
+                        except Exception:
+                            parsed = {}
+                        try:
+                            meta = {'traceback': tb} if tb else {}
+                            if parsed:
+                                meta.update(parsed)
+                            if not meta:
+                                meta = None
                             _human_log('PBData', f"[debounce] InvalidNonce / recv_window error for {user.exchange} {user_name}: {e}", level='WARNING', meta=meta, user=user)
                         except Exception:
                             pass
                         try:
-                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                            # Choose backoff duration based on observed timestamp delta when available.
+                            dur = None
+                            if parsed and parsed.get('delta_ms') is not None:
+                                # If server timestamp is ahead of request by more than recv_window,
+                                # backoff at least long enough for human-visible recovery; clamp to reasonable bounds.
+                                delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                dur = min(max(60, delta_s + 10), 600)
+                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
                         except Exception:
                             pass
                         # Drop this buffered entry to avoid repeated immediate retries
@@ -755,12 +771,58 @@ class PBData():
         try:
             now = datetime.now().timestamp()
             dur = duration if duration is not None else self._backoff_duration_seconds
-            until = now + dur
+            # If already in backoff, increase duration (exponential-ish) to avoid
+            # repeated tight retry loops. Clamp to a reasonable maximum.
+            prev_until = self._exchange_backoff_until.get(exchange, 0)
+            prev_remaining = max(0, prev_until - now)
+            # If previously backing off, double the remaining time up to max
+            if prev_remaining > 0:
+                new_dur = min(max(self._backoff_duration_seconds, dur, int(prev_remaining * 2)), 3600)
+            else:
+                new_dur = dur
+            until = now + new_dur
             self._exchange_backoff_until[exchange] = until
             # Pass username as `user` kwarg to human_log (human_log supports `user`)
-            _human_log('PBData', f"[BACKOFF] Entering backoff for exchange {exchange} for {dur}s (reason={reason})", level='WARNING', user=getattr(user, 'name', None))
+            _human_log('PBData', f"[BACKOFF] Entering backoff for exchange {exchange} for {int(new_dur)}s (reason={reason})", level='WARNING', user=getattr(user, 'name', None))
         except Exception:
             pass
+
+    def _parse_recv_window_from_exception(self, e) -> dict:
+        """Attempt to extract req_timestamp and server_timestamp from ccxt/bybit InvalidNonce error messages.
+
+        Returns dict with keys 'req_ts', 'server_ts', 'delta_ms' if found, otherwise empty dict.
+        """
+        try:
+            text = str(e)
+            # First try JSON body inside the message
+            m = re.search(r"\{.*\}", text)
+            if m:
+                try:
+                    body = json.loads(m.group(0))
+                except Exception:
+                    body = None
+            else:
+                body = None
+            # Try regex extraction like req_timestamp[123],server_timestamp[456]
+            rx = re.search(r"req_timestamp\[(\d+)\].*server_timestamp\[(\d+)\]", text, flags=re.IGNORECASE)
+            if rx:
+                req_ts = int(rx.group(1))
+                server_ts = int(rx.group(2))
+                delta = server_ts - req_ts
+                return {'req_ts': req_ts, 'server_ts': server_ts, 'delta_ms': delta, 'body': body}
+            # Fallback: look for numeric 'time' in JSON body
+            if body and isinstance(body, dict):
+                if 'time' in body and isinstance(body['time'], int):
+                    server_ts = int(body['time'])
+                    # try to find req_timestamp in message text
+                    rx2 = re.search(r"req_timestamp\[(\d+)\]", text, flags=re.IGNORECASE)
+                    if rx2:
+                        req_ts = int(rx2.group(1))
+                        delta = server_ts - req_ts
+                        return {'req_ts': req_ts, 'server_ts': server_ts, 'delta_ms': delta, 'body': body}
+            return {}
+        except Exception:
+            return {}
 
     def _is_exchange_in_backoff(self, exchange: str) -> bool:
         """Return True if we are currently backing off for this exchange."""
@@ -1763,11 +1825,24 @@ class PBData():
                                     if 'invalid request' in msg and 'recv_window' in msg:
                                         tb = traceback.format_exc()
                                         try:
-                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
+                                            parsed = self._parse_recv_window_from_exception(e)
+                                        except Exception:
+                                            parsed = {}
+                                        try:
+                                            meta = {'traceback': tb} if tb else {}
+                                            if parsed:
+                                                meta.update(parsed)
+                                            if not meta:
+                                                meta = None
+                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
                                         except Exception:
                                             pass
                                         try:
-                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                                            dur = None
+                                            if parsed and parsed.get('delta_ms') is not None:
+                                                delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                                dur = min(max(60, delta_s + 10), 600)
+                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
                                         except Exception:
                                             pass
                                         had_rate_limit = True
@@ -1805,11 +1880,24 @@ class PBData():
                                     if 'invalid request' in msg and 'recv_window' in msg:
                                         tb = traceback.format_exc()
                                         try:
-                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
+                                            parsed = self._parse_recv_window_from_exception(e)
+                                        except Exception:
+                                            parsed = {}
+                                        try:
+                                            meta = {'traceback': tb} if tb else {}
+                                            if parsed:
+                                                meta.update(parsed)
+                                            if not meta:
+                                                meta = None
+                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
                                         except Exception:
                                             pass
                                         try:
-                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                                            dur = None
+                                            if parsed and parsed.get('delta_ms') is not None:
+                                                delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                                dur = min(max(60, delta_s + 10), 600)
+                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
                                         except Exception:
                                             pass
                                         had_rate_limit = True
@@ -1843,11 +1931,24 @@ class PBData():
                                             if 'invalid request' in lower and 'recv_window' in lower:
                                                 tb = traceback.format_exc()
                                                 try:
-                                                    _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
+                                                    parsed = self._parse_recv_window_from_exception(e)
+                                                except Exception:
+                                                    parsed = {}
+                                                try:
+                                                    meta = {'traceback': tb} if tb else {}
+                                                    if parsed:
+                                                        meta.update(parsed)
+                                                    if not meta:
+                                                        meta = None
+                                                    _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
                                                 except Exception:
                                                     pass
                                                 try:
-                                                    self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                                                    dur = None
+                                                    if parsed and parsed.get('delta_ms') is not None:
+                                                        delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                                        dur = min(max(60, delta_s + 10), 600)
+                                                    self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
                                                 except Exception:
                                                     pass
                                                 had_rate_limit = True
@@ -1916,17 +2017,30 @@ class PBData():
                                 try:
                                     msg = str(e).lower()
                                     if 'invalid request' in msg and 'recv_window' in msg:
-                                        tb = traceback.format_exc()
-                                        try:
-                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
-                                        except Exception:
-                                            pass
-                                        try:
-                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                                        continue
+                                            tb = traceback.format_exc()
+                                            try:
+                                                parsed = self._parse_recv_window_from_exception(e)
+                                            except Exception:
+                                                parsed = {}
+                                            try:
+                                                meta = {'traceback': tb} if tb else {}
+                                                if parsed:
+                                                    meta.update(parsed)
+                                                if not meta:
+                                                    meta = None
+                                                _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
+                                            except Exception:
+                                                pass
+                                            try:
+                                                dur = None
+                                                if parsed and parsed.get('delta_ms') is not None:
+                                                    delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                                    dur = min(max(60, delta_s + 10), 600)
+                                                self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
+                                            except Exception:
+                                                pass
+                                            had_rate_limit = True
+                                            continue
                                 except Exception:
                                     pass
                         # (duplicate branches removed)
