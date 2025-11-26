@@ -381,14 +381,14 @@ class PBData():
 
                 # Global cap check
                 if global_cap is not None and (total_now + inflight_count) >= global_cap:
-                    # emit warning once
+                    # emit warning once (use DEBUG to avoid spamming production logs)
                     if not self._private_client_manager_state.get('warned_global'):
                         try:
                             # Include a compact snapshot to aid debugging: client metrics
                             # and currently reserved inflight keys. Keep it concise.
                             snapshot = dict(metrics) if isinstance(metrics, dict) else {}
                             infl = list(self._private_client_manager_state.get('inflight', []))
-                            _human_log('PBData', f"[ws-manager] reached GLOBAL cap ({total_now + inflight_count}/{global_cap}); returning None for user={getattr(user,'name',None)} snapshot_metrics={snapshot} inflight={infl}", level='WARNING', user=user)
+                            _human_log('PBData', f"[ws-manager] reached GLOBAL cap ({total_now + inflight_count}/{global_cap}); returning None for user={getattr(user,'name',None)} snapshot_metrics={snapshot} inflight={infl}", level='DEBUG', user=user)
                         except Exception:
                             pass
                         self._private_client_manager_state['warned_global'] = True
@@ -424,7 +424,7 @@ class PBData():
                             try:
                                 snapshot = dict(metrics) if isinstance(metrics, dict) else {}
                                 infl = list(self._private_client_manager_state.get('inflight', []))
-                                _human_log('PBData', f"[ws-manager] reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None for user={getattr(user,'name',None)} snapshot_metrics={snapshot} inflight={infl}", level='WARNING', user=user)
+                                _human_log('PBData', f"[ws-manager] reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None for user={getattr(user,'name',None)} snapshot_metrics={snapshot} inflight={infl}", level='DEBUG', user=user)
                             except Exception:
                                 pass
                             self._private_client_manager_state['warned_per_exch'][base_key] = True
