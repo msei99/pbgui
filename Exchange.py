@@ -179,19 +179,7 @@ class Exchange:
         self.error = None
 
 
-    def _log(self, msg: str):
-        """Log a message tagged with module name.
-
-        Write a timestamped message to stdout. The centralized GUI
-        debuglog was removed; this function intentionally avoids
-        importing GUI helpers so it is safe to call from background
-        threads and async tasks.
-        """
-        try:
-            ts = datetime.now().isoformat(sep=" ", timespec="seconds")
-        except TypeError:
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{ts} [Exchange] {msg}")
+    # _log removed: Exchange module uses `logging_helpers.human_log` directly
 
     @property
     def user(self): return self._user
@@ -1288,7 +1276,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', user=self.user)
+                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 # if history["info"]["symbol"] and history["info"]["amount"] != "0":
@@ -1336,7 +1324,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', user=self.user)
+                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["info"]["contract"] and history["amount"] != "0":
@@ -1387,7 +1375,7 @@ class Exchange:
                     since = end
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', user=self.user)
+                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["incomeType"] in ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"]:
@@ -1424,7 +1412,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', user=self.user)
+                    _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -1450,7 +1438,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', user=self.user)
+                    _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -1460,7 +1448,7 @@ class Exchange:
                         if "nextPageCursor" in last_trade["info"]:
                             cursor = last_trade["info"]["nextPageCursor"]
                             while True:
-                                _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {cursor}', user=self.user)
+                                _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {cursor}', level='INFO', user=self.user)
                                 all_trades = all_trades + trades
                                 trades = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, 'cursor': cursor, 'endTime': end_time })
                                 if len(trades):
@@ -1486,15 +1474,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += week
                         end = since + week
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
             elif self.id == "okx":
                 week = 7 * 24 * 60 * 60 * 1000
@@ -1510,15 +1498,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += week
                         end = since + week
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
             elif self.id == "bingx":
                 week = 7 * 24 * 60 * 60 * 1000
@@ -1537,15 +1525,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["time"]} till {last_trade["time"]}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["time"]} till {last_trade["time"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         since = int(trades[-1]['time'])
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += week
                         end = since + week
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
                 bingx_trades = []
                 for trade in all_trades:
@@ -1569,15 +1557,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += max
                         end = since + max
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', user=self.user)
+                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
         if all_trades:
             sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])
@@ -1687,7 +1675,7 @@ class Exchange:
                 try:
                     symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
                 except Exception as e:
-                    _human_log('Exchange', f'Error: {e}', user=self.user)
+                    _human_log('Exchange', f'Error: {e}', level='ERROR', user=self.user)
                     return
                 for symbol in symbols["data"]:
                     cpSymbols.append(symbol["symbol"])
