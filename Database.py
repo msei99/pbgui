@@ -3,6 +3,7 @@ from datetime import datetime
 from User import Users, User
 from Exchange import Exchange
 from pbgui_func import PBGDIR
+from logging_helpers import human_log as _human_log
 import shutil
 import sqlite3
 import json
@@ -19,18 +20,6 @@ class Database():
         self._local = threading.local()
         self.create_tables()
 
-    def _log(self, msg: str, level: str = 'INFO'):
-        """Print a log line with timestamp, module tag and level."""
-        try:
-            ts = datetime.now().isoformat(sep=" ", timespec="seconds")
-        except TypeError:
-            # Fallback if timespec unsupported
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            print(f"{ts} [Database] [{level}] {msg}")
-        except Exception:
-            # best-effort fallback
-            print(f"{ts} [Database] {msg}")
     
     def _connect(self):
         """Return a per-thread cached SQLite connection.
@@ -102,7 +91,10 @@ class Database():
                 pass
             return str(backup_path)
         except Exception as e:
-            print(e)
+            try:
+                _human_log('Database', f"backup_full_db error: {e}", level='ERROR')
+            except Exception:
+                pass
             return None
 
     # Restore DB from a given backup file path
@@ -115,7 +107,10 @@ class Database():
             shutil.copy2(src, self.db)
             return True
         except Exception as e:
-            print(e)
+            try:
+                _human_log('Database', f"restore_db_from error: {e}", level='ERROR')
+            except Exception:
+                pass
             return False
 
     # --- Change-detection helpers removed: fragments auto-refresh panels ---
@@ -199,7 +194,7 @@ class Database():
                 except Exception:
                     pass
         except sqlite3.Error as e:
-            self._log(f"DB create_tables error: {e}")
+            _human_log('Database', f"DB create_tables error: {e}", level='ERROR')
 
     def close_thread_connections(self):
         """Close any cached per-thread SQLite connection(s).
@@ -225,16 +220,16 @@ class Database():
             pass
 
     def update_history(self, user: User):
-        self._log(f"update_history called for user={getattr(user, 'name', user)}")
+        _human_log('Database', f"update_history called for user={getattr(user, 'name', user)}", level='INFO', user=getattr(user, 'name', user))
         history = self.fetch_history(user)
         try:
             if history is None:
-                self._log(f"fetch_history returned None for user={user.name}")
+                _human_log('Database', f"fetch_history returned None for user={user.name}", level='INFO', user=user.name)
             else:
-                self._log(f"fetch_history returned {len(history)} items for user={user.name}")
+                _human_log('Database', f"fetch_history returned {len(history)} items for user={user.name}", level='INFO', user=user.name)
                 if len(history) > 0:
                     try:
-                        self._log(f"fetch_history sample[0] for {user.name}: {history[0]}")
+                        _human_log('Database', f"fetch_history sample[0] for {user.name}: {history[0]}", level='DEBUG', user=user.name)
                     except Exception:
                         pass
         except Exception:
@@ -256,7 +251,7 @@ class Database():
                             ]
                             self.add_history(conn, income)
         except sqlite3.Error as e:
-            self._log(f"DB update_history error for {user.name}: {e}")
+            _human_log('Database', f"DB update_history error for {user.name}: {e}", level='ERROR', user=user.name)
     
     def update_positions(self, user: User):
         positions_db = self.fetch_positions(user)
@@ -298,13 +293,13 @@ class Database():
                     # First remove any duplicate DB rows for the same
                     # (symbol, side); keep only the latest row per key.
                     for dup_id in duplicate_ids:
-                        self._log(f"Removing duplicate position id={dup_id} for {user.name}")
+                        _human_log('Database', f"Removing duplicate position id={dup_id} for {user.name}", level='INFO', user=user.name)
                         self.remove_position(conn, dup_id)
 
                     # Remove positions that are not in the exchange
                     for position in latest_by_key.values():
                         if (position[1], position[7]) not in symbols:
-                            self._log(f"[positions] Removing position for user={user.name} symbol={position[1]} side={position[7]}")
+                            _human_log('Database', f"[positions] Removing position for user={user.name} symbol={position[1]} side={position[7]}", level='INFO', user=user.name)
                             self.remove_position(conn, position[0])
 
                     # Update positions
@@ -328,16 +323,16 @@ class Database():
                             pos[0] = int(datetime.now().timestamp() * 1000)
                         key = (pos[4], pos[6])
                         if key in symbols_db:
-                            self._log(f"[positions] Updating position for user={user.name} symbol={pos[4]} side={pos[6]}")
+                            _human_log('Database', f"[positions] Updating position for user={user.name} symbol={pos[4]} side={pos[6]}", level='INFO', user=user.name)
                             self.update_position(conn, pos)
                         else:
-                            self._log(f"[positions] Adding position for user={user.name} symbol={pos[4]} side={pos[6]}")
+                            _human_log('Database', f"[positions] Adding position for user={user.name} symbol={pos[4]} side={pos[6]}", level='INFO', user=user.name)
                             self.add_position(conn, pos)
                             # Ensure we do not create multiple rows for the
                             # same (symbol, side) within one update run.
                             symbols_db.add(key)
             except sqlite3.Error as e:
-                self._log(f"DB update_positions error for {user.name}: {e}")
+                _human_log('Database', f"DB update_positions error for {user.name}: {e}", level='ERROR', user=user.name)
     
     def update_orders(self, user: User):
         positions_db = self.fetch_positions(user)
@@ -354,7 +349,7 @@ class Database():
                 all_orders.extend(orders)
             except Exception as e:
                 # Fetch failed (possibly rate limit) — log and skip this position
-                self._log(f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING')
+                _human_log('Database', f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING', user=user.name)
                 continue
         # Existing order IDs in DB (uniqueid column); use a set to avoid
         # inserting duplicates even if the DB uniqueness constraint is
@@ -367,7 +362,7 @@ class Database():
                     # Remove orders that are not in the exchange
                     for order in orders_db:
                         if order[6] not in ids:
-                            self._log(f"Removing order {order[6]} for user {user.name}")
+                            _human_log('Database', f"Removing order {order[6]} for user {user.name}", level='INFO', user=user.name)
                             self.remove_order(conn, order[0])
                     # Update orders
                     for order in all_orders:
@@ -382,17 +377,17 @@ class Database():
                             user.name
                         ]
                         if uniqueid in ids_db:
-                            self._log(f"Updating order {uniqueid} for user {user.name}")
+                            _human_log('Database', f"Updating order {uniqueid} for user {user.name}", level='INFO', user=user.name)
                             self.update_order(conn, ord)
                         else:
-                            self._log(f"Adding order {uniqueid} for user {user.name}")
+                            _human_log('Database', f"Adding order {uniqueid} for user {user.name}", level='INFO', user=user.name)
                             self.add_order(conn, ord)
                             # Ensure we don't insert the same order twice in
                             # a single update run if the exchange returns
                             # duplicates.
                             ids_db.add(uniqueid)
             except sqlite3.Error as e:
-                self._log(f"DB update_orders error for {user.name}: {e}")
+                _human_log('Database', f"DB update_orders error for {user.name}: {e}", level='ERROR', user=user.name)
 
     def update_prices(self, user: User):
         positions_db = self.fetch_positions(user)
@@ -423,7 +418,7 @@ class Database():
                     # Remove symbols that are not in the exchange
                     for symbol in symbols_db:
                         if symbol not in symbols:
-                            self._log(f"Removing price {symbol} for {user.name}")
+                            _human_log('Database', f"Removing price {symbol} for {user.name}", level='INFO', user=user.name)
                             self.remove_price(conn, symbol, user.name)
                     # Update prices
                     for symbol in symbols:
@@ -441,13 +436,13 @@ class Database():
                             user.name
                         ]
                         if symbol in symbols_db:
-                            self._log(f"Updating price {symbol} for {user.name}")
+                            _human_log('Database', f"Updating price {symbol} for {user.name}", level='INFO', user=user.name)
                             self.update_price(conn, price)
                         else:
-                            self._log(f"Adding price {symbol} for {user.name}")
+                            _human_log('Database', f"Adding price {symbol} for {user.name}", level='INFO', user=user.name)
                             self.add_price(conn, price)
             except sqlite3.Error as e:
-                self._log(f"DB update_prices error for {user.name}: {e}")
+                _human_log('Database', f"DB update_prices error for {user.name}: {e}", level='ERROR', user=user.name)
 
     def update_balances(self, user: User):
         exchange = Exchange(user.exchange, user)
@@ -456,7 +451,7 @@ class Database():
             balance = exchange.fetch_balance(market_type)
         except Exception as e:
             # Exchange fetch failed (rate limit or other). Log and skip writing.
-            self._log(f"DB update_balances fetch_balance failed for {user.name}: {e}", level='WARNING')
+            _human_log('Database', f"DB update_balances fetch_balance failed for {user.name}: {e}", level='WARNING', user=user.name)
             return
         with self._write_lock:
             try:
@@ -466,10 +461,10 @@ class Database():
                         balance,
                         user.name
                     ]
-                    self._log(f"Updating balance {user.name}")
+                    _human_log('Database', f"Updating balance {user.name}", level='INFO', user=user.name)
                     self.update_balance(conn, balance_list)
             except sqlite3.Error as e:
-                self._log(f"DB update_balances error for {user.name}: {e}")
+                _human_log('Database', f"DB update_balances error for {user.name}: {e}", level='ERROR', user=user.name)
 
     def add_history(self, conn: sqlite3.Connection, history: list):
         sql = '''INSERT INTO history(symbol,timestamp,income,uniqueid,user)
@@ -483,7 +478,7 @@ class Database():
             msg = str(e).lower()
             if 'unique constraint failed' in msg and 'history.uniqueid' in msg:
                 return
-            self._log(f"DB add_history error {e} data={history}")
+            _human_log('Database', f"DB add_history error {e} data={history}", level='ERROR')
     
     def add_position(self, conn: sqlite3.Connection, position: list):
         sql = '''INSERT INTO position(timestamp,psize,upnl,entry,symbol,user,side)
@@ -493,7 +488,7 @@ class Database():
             cur.execute(sql, position)
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB add_position error {e} data={position}")
+            _human_log('Database', f"DB add_position error {e} data={position}", level='ERROR')
         return cur.lastrowid
 
     def add_order(self, conn: sqlite3.Connection, order: list):
@@ -504,7 +499,7 @@ class Database():
             cur.execute(sql, order)
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB add_order error {e} data={order}")
+            _human_log('Database', f"DB add_order error {e} data={order}", level='ERROR')
 
     def add_price(self, conn: sqlite3.Connection, price: list):
         sql = '''INSERT INTO prices(timestamp,price,symbol,user)
@@ -514,7 +509,7 @@ class Database():
             cur.execute(sql, price)
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB add_price error {e} data={price}")
+            _human_log('Database', f"DB add_price error {e} data={price}", level='ERROR')
 
     def remove_position(self, conn: sqlite3.Connection, id: int):
         sql = '''DELETE FROM position WHERE id = ? '''
@@ -523,7 +518,7 @@ class Database():
             cur.execute(sql, [id])
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB remove_position error {e} id={id}")
+            _human_log('Database', f"DB remove_position error {e} id={id}", level='ERROR')
     
     def remove_order(self, conn: sqlite3.Connection, id: int):
         sql = '''DELETE FROM orders WHERE id = ? '''
@@ -532,7 +527,7 @@ class Database():
             cur.execute(sql, [id])
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB remove_order error {e} id={id}")
+            _human_log('Database', f"DB remove_order error {e} id={id}", level='ERROR')
 
     def remove_price(self, conn: sqlite3.Connection, symbol: str, user: str):
         sql = '''DELETE FROM prices WHERE symbol = ? AND user = ? '''
@@ -541,7 +536,7 @@ class Database():
             cur.execute(sql, [symbol, user])
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB remove_price error {e} symbol={symbol} user={user}")
+            _human_log('Database', f"DB remove_price error {e} symbol={symbol} user={user}", level='ERROR', user=user)
 
     def update_position(self, conn: sqlite3.Connection, position: list):
         sql = '''UPDATE position
@@ -555,7 +550,7 @@ class Database():
             cur.execute(sql, position)
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB update_position error {e} data={position}")
+            _human_log('Database', f"DB update_position error {e} data={position}", level='ERROR')
 
     def update_order(self, conn: sqlite3.Connection, order: list):
         sql = '''UPDATE orders
@@ -569,7 +564,7 @@ class Database():
             cur.execute(sql, order)
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB update_order error {e} data={order}")
+            _human_log('Database', f"DB update_order error {e} data={order}", level='ERROR')
 
     def update_price(self, conn: sqlite3.Connection, price: list):
         sql = '''UPDATE prices
@@ -581,7 +576,7 @@ class Database():
             cur.execute(sql, price)
             conn.commit()
         except sqlite3.Error as e:
-            self._log(f"DB update_price error {e} data={price}")
+            _human_log('Database', f"DB update_price error {e} data={price}", level='ERROR')
 
     def upsert_price(self, user: User, symbol: str, timestamp: int, price_value: float):
         """Insert or update a single price tick for (user, symbol)."""
@@ -605,10 +600,10 @@ class Database():
                         attempts += 1
                         time.sleep(0.05 * attempts)
                         continue
-                    self._log(f"DB upsert_price error {e} user={user.name} symbol={symbol} price={price_value} attempts={attempts}")
+                    _human_log('Database', f"DB upsert_price error {e} user={user.name} symbol={symbol} price={price_value} attempts={attempts}", level='ERROR', user=user.name)
                     break
                 except sqlite3.Error as e:
-                    self._log(f"DB upsert_price error {e} user={user.name} symbol={symbol} price={price_value} attempts={attempts}")
+                    _human_log('Database', f"DB upsert_price error {e} user={user.name} symbol={symbol} price={price_value} attempts={attempts}", level='ERROR', user=user.name)
                     break
 
     def batch_upsert_prices(self, rows: list):
@@ -633,7 +628,7 @@ class Database():
                                     cur.execute('INSERT INTO prices(timestamp,price,symbol,user) VALUES(?,?,?,?)', (timestamp, price, symbol, user))
                             except sqlite3.Error as e:
                                 # Log and continue with other rows
-                                self._log(f"DB batch_upsert_prices row error {e} user={user} symbol={symbol} price={price}")
+                                _human_log('Database', f"DB batch_upsert_prices row error {e} user={user} symbol={symbol} price={price}", level='ERROR', user=user)
                         conn.commit()
                     break
                 except sqlite3.OperationalError as e:
@@ -641,10 +636,10 @@ class Database():
                         attempts += 1
                         time.sleep(0.05 * attempts)
                         continue
-                    self._log(f"DB batch_upsert_prices error {e} attempts={attempts}")
+                    _human_log('Database', f"DB batch_upsert_prices error {e} attempts={attempts}", level='ERROR')
                     break
                 except sqlite3.Error as e:
-                    self._log(f"DB batch_upsert_prices error {e} attempts={attempts}")
+                    _human_log('Database', f"DB batch_upsert_prices error {e} attempts={attempts}", level='ERROR')
                     break
 
     def update_balance(self, conn: sqlite3.Connection, balance: list):
@@ -652,7 +647,7 @@ class Database():
                 VALUES(?,?,?) '''
         try:
             if not balance or len(balance) < 3:
-                self._log(f"DB update_balance called with invalid balance data: {balance}")
+                _human_log('Database', f"DB update_balance called with invalid balance data: {balance}", level='WARNING')
                 return
             # Defensive checks: avoid writing Exception objects or other
             # unserializable types into the DB which cause SQLite bind errors.
@@ -662,7 +657,7 @@ class Database():
             except Exception:
                 payload = None
             if isinstance(payload, Exception):
-                self._log(f"DB update_balance aborting: balance fetch returned exception object for user={balance[2]}: {payload}", level='WARNING')
+                _human_log('Database', f"DB update_balance aborting: balance fetch returned exception object for user={balance[2]}: {payload}", level='WARNING', user=balance[2])
                 return
             # Try to coerce numeric-like payloads to float; otherwise stringify
             try:
@@ -671,9 +666,9 @@ class Database():
             except Exception:
                 try:
                     balance[1] = str(payload)
-                    self._log(f"DB update_balance coerced non-numeric balance to string for user={balance[2]}", level='WARNING')
+                    _human_log('Database', f"DB update_balance coerced non-numeric balance to string for user={balance[2]}", level='WARNING', user=balance[2])
                 except Exception:
-                    self._log(f"DB update_balance aborting: cannot coerce balance for user={balance[2]}: {payload}", level='WARNING')
+                    _human_log('Database', f"DB update_balance aborting: cannot coerce balance for user={balance[2]}: {payload}", level='WARNING', user=balance[2])
                     return
             cur = conn.cursor()
             cur.execute(sql, balance)
@@ -694,18 +689,18 @@ class Database():
                 cur.execute(cleanup_sql, (user, user))
                 removed = cur.rowcount
                 if removed and removed > 0:
-                    self._log(f"DB update_balance removed {removed} older balances for user={user}")
+                    _human_log('Database', f"DB update_balance removed {removed} older balances for user={user}", level='INFO', user=user)
             except sqlite3.Error as e:
                 # Log but don't raise; allow normal flow to continue
-                self._log(f"DB update_balance cleanup error {e} user={balance[2]}")
+                _human_log('Database', f"DB update_balance cleanup error {e} user={balance[2]}", level='WARNING', user=balance[2])
 
             conn.commit()
         except sqlite3.Error as e:
             msg = str(e).lower()
             if 'binding parameter' in msg or 'unsupported type' in msg:
-                self._log(f"DB update_balance error {e} data={balance}", level='WARNING')
+                _human_log('Database', f"DB update_balance error {e} data={balance}", level='WARNING')
             else:
-                self._log(f"DB update_balance error {e} data={balance}")
+                _human_log('Database', f"DB update_balance error {e} data={balance}", level='ERROR')
 
     def fetch_history(self, user: User):
         """Fetch history from the exchange starting at the DB's last timestamp."""
@@ -714,7 +709,7 @@ class Database():
             since = self.find_last_timestamp(user) or 0
         except Exception:
             since = 0
-        self._log(f"fetch_history: user={user.name} exchange={user.exchange} since={since} (type={type(since)})")
+        _human_log('Database', f"fetch_history: user={user.name} exchange={user.exchange} since={since} (type={type(since)})", level='INFO', user=user.name)
         # Time the exchange.fetch_history call to help diagnose slow history polls.
         try:
             start_ts = time.time()
@@ -724,12 +719,12 @@ class Database():
                 length = len(history) if history is not None else 0
             except Exception:
                 length = 0
-            self._log(f"fetch_history DONE: user={user.name} exchange={user.exchange} duration_s={dur:.3f} items={length}")
+            _human_log('Database', f"fetch_history DONE: user={user.name} exchange={user.exchange} duration_s={dur:.3f} items={length}", level='INFO', user=user.name)
             return history
         except Exception as e:
             # Do not swallow exceptions here — re-raise so callers (and tests)
             # can inspect the full traceback and we can debug exchange.fetch_history.
-            self._log(f"fetch_history ERROR for user={user.name} exchange={user.exchange}: {e}")
+            _human_log('Database', f"fetch_history ERROR for user={user.name} exchange={user.exchange}: {e}", level='ERROR', user=user.name)
             raise
 
     def fetch_positions(self, user: User):
@@ -742,7 +737,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB fetch_positions error {e} user={user.name}")
+            _human_log('Database', f"DB fetch_positions error {e} user={user.name}", level='ERROR', user=user.name)
 
     def fetch_orders(self, user: User):
         sql = '''SELECT * FROM "orders"
@@ -754,7 +749,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB fetch_orders error {e} user={user.name}")
+            _human_log('Database', f"DB fetch_orders error {e} user={user.name}", level='ERROR', user=user.name)
     
     def fetch_orders_by_symbol(self, user: str, symbol: str):
         sql = '''SELECT * FROM "orders"
@@ -767,7 +762,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB fetch_orders_by_symbol error {e} user={user} symbol={symbol}")
+            _human_log('Database', f"DB fetch_orders_by_symbol error {e} user={user} symbol={symbol}", level='ERROR', user=user)
 
     def fetch_prices(self, user: User):
         sql = '''SELECT * FROM "prices"
@@ -779,7 +774,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB fetch_prices error {e} user={user.name}")
+            _human_log('Database', f"DB fetch_prices error {e} user={user.name}", level='ERROR', user=user.name)
 
     def fetch_balances(self, user: list):
         sql = '''SELECT * FROM "balances"
@@ -791,7 +786,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB fetch_balances error {e} users={user}")
+            _human_log('Database', f"DB fetch_balances error {e} users={user}", level='ERROR')
 
     def select_top(self, user: list, start: str, end: str, top: int):
         if 'ALL' in user:
@@ -818,7 +813,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB select_top error {e}")
+            _human_log('Database', f"DB select_top error {e}", level='ERROR')
         
     def select_pnl(self, user: list, start: str, end: str):
         if 'ALL' in user:
@@ -841,7 +836,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB select_pnl error {e}")
+            _human_log('Database', f"DB select_pnl error {e}", level='ERROR')
     
     def select_ppl(self, user: list, start: str, end: str, sum_period: str):
     # Define date formats for different sum_period values
@@ -893,7 +888,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB select_ppl error {e}")
+            _human_log('Database', f"DB select_ppl error {e}", level='ERROR')
 
     def select_income(self, user: list, start: str, end: str):
         if 'ALL' in user:
@@ -916,7 +911,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB select_income error {e}")
+            _human_log('Database', f"DB select_income error {e}", level='ERROR')
     
     # select income grouped by symbol not sum
     def select_income_by_symbol(self, user: list, start: str, end: str):
@@ -940,7 +935,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB select_income_by_symbol error {e}")
+            _human_log('Database', f"DB select_income_by_symbol error {e}", level='ERROR')
 
     # Same as select_income_by_symbol but includes row id for deletion mapping
     def select_income_by_symbol_with_id(self, user: list, start: str, end: str):
@@ -964,7 +959,7 @@ class Database():
                 rows = cur.fetchall()
                 return rows
         except sqlite3.Error as e:
-            self._log(f"DB select_income_by_symbol_with_id error {e}")
+            _human_log('Database', f"DB select_income_by_symbol_with_id error {e}", level='ERROR')
 
     # Delete specific income rows by primary key ids
     def delete_income_by_ids(self, ids: list):
@@ -979,7 +974,7 @@ class Database():
                 conn.commit()
                 return cur.rowcount
         except sqlite3.Error as e:
-            self._log(f"DB delete_income_by_ids error {e}")
+            _human_log('Database', f"DB delete_income_by_ids error {e}", level='ERROR')
             return 0
 
     # Delete all income rows for a user older than or equal to a timestamp (ms)
@@ -992,7 +987,7 @@ class Database():
                 conn.commit()
                 return cur.rowcount
         except sqlite3.Error as e:
-            self._log(f"DB delete_income_older_than_user error {e}")
+            _human_log('Database', f"DB delete_income_older_than_user error {e}", level='ERROR')
             return 0
 
     # Delete all income rows older than or equal to a timestamp for given users list.
@@ -1011,7 +1006,7 @@ class Database():
                 conn.commit()
                 return cur.rowcount
         except sqlite3.Error as e:
-            self._log(f"DB delete_income_older_than error {e}")
+            _human_log('Database', f"DB delete_income_older_than error {e}", level='ERROR')
             return 0
 
     def find_last_timestamp(self, user: User):
@@ -1026,7 +1021,7 @@ class Database():
                     return 0
                 return rows[0][0]
         except sqlite3.Error as e:
-            self._log(f"DB find_last_timestamp error {e} user={user.name}")
+            _human_log('Database', f"DB find_last_timestamp error {e} user={user.name}", level='ERROR', user=user.name)
 
     def fetch_history2(self, user: User):
         exchange = Exchange(user.exchange, user)
@@ -1056,13 +1051,19 @@ class Database():
                             ]
                             self.add_history(conn, income)
                     except sqlite3.Error as e:
-                        self._log(f"DB import_from_save_income_other error {e}")
+                        _human_log('Database', f"DB import_from_save_income_other error {e}", level='ERROR')
                 else:
-                    print("not import")
-                    print(item)
+                        try:
+                            _human_log('Database', f"import skipped (not import) item={item}", level='DEBUG')
+                        except Exception:
+                            pass
 
 def main():
-    print("Don't Run this Class from CLI")
+    try:
+        _human_log('Database', "Don't Run this Class from CLI", level='INFO')
+    except Exception:
+        # Silently ignore logging failures in CLI helper
+        pass
     # users = Users()
     # user = users.find_user("hl_mani_crash_hunter")
     # db = Database()
