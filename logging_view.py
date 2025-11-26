@@ -226,13 +226,10 @@ def view_log_filtered(log_filename: str):
                 break
             return tags
 
-        services = set()
         for line in window:
             parsed = parse_log_line(line)
             if not parsed:
                 continue
-            if parsed.get('service'):
-                services.add(parsed['service'])
             for tok in parsed.get('tags', []):
                 tok = tok.strip()
                 # skip list-style prints or quoted reprs
@@ -245,37 +242,11 @@ def view_log_filtered(log_filename: str):
                 candidates.add(tok)
 
         tags = sorted(candidates)
-        services = sorted(services)
+        # services list removed: logs are split per-service into separate files
 
-        # Arrange filters compactly in two columns to save vertical space
-        col_f1, col_f2 = st.columns([1, 1])
-        with col_f1:
-            sel_users = st.multiselect('Users (filter)', user_list, key=f'lv_{sel_key}_sel_users')
-        with col_f2:
-            sel_services = st.multiselect('Services (filter)', sorted(services), key=f'lv_{sel_key}_sel_services')
-
-        col_f3, col_f4 = st.columns([1, 1])
-        with col_f3:
-            sel_tags = st.multiselect('Tags (from [tag])', tags, key=f'lv_{sel_key}_sel_tags')
-        with col_f4:
-            free_text = st.text_input('Free-text', key=f'lv_{sel_key}_free_text', placeholder='search...')
-
-        # Add a compact levels filter so users can restrict visible severities
-        levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-        # place levels control under the tags column to keep layout compact
-        with col_f3:
-            sel_levels = st.multiselect('Levels (filter)', levels, key=f'lv_{sel_key}_sel_levels')
-
-        # Layout: compact right cluster for buttons
-        # Use a wide spacer column and three small columns for the buttons so
-        # they appear grouped rather than spread across the whole width.
-        # Buttons as small emoji-only icons on the left, spacer to the right
-        col_clear, col_refresh, col_raw, col_trunc, col_spacer = st.columns([1, 1, 1, 1, 5])
-
-        # session keys for refresh/truncate actions
+        # Prepare session keys and callbacks for filter actions
         refresh_key = f'lv_{sel_key}_refresh'
         trunc_key = f'lv_{sel_key}_truncated'
-        # Use an integer refresh counter so we can invalidate the cached reader
         if refresh_key not in st.session_state:
             st.session_state[refresh_key] = 0
         if trunc_key not in st.session_state:
@@ -283,24 +254,18 @@ def view_log_filtered(log_filename: str):
 
         def _clear_filters():
             # callback used by the button to safely update widget-backed session keys
-            st.session_state[f'lv_{sel_key}_sel_users'] = []
-            st.session_state[f'lv_{sel_key}_sel_services'] = []
-            st.session_state[f'lv_{sel_key}_sel_tags'] = []
-            st.session_state[f'lv_{sel_key}_sel_levels'] = []
-            st.session_state[f'lv_{sel_key}_free_text'] = ''
-            st.session_state[f'lv_{sel_key}_show_raw'] = False
+            st.session_state['lv_sel_users'] = []
+            st.session_state['lv_sel_tags'] = []
+            st.session_state['lv_sel_levels'] = []
+            st.session_state['lv_free_text'] = ''
+            st.session_state['lv_show_raw'] = False
             # bump refresh counter so the reader reloads and the view updates
             st.session_state[refresh_key] = st.session_state.get(refresh_key, 0) + 1
-            # keep the filters visible so user sees the cleared state
-            pass
 
         def _mark_refresh(session_key: str, expander_session_key: str = None):
             # bump the refresh counter to force the cached reader to reload
             st.session_state[session_key] = st.session_state.get(session_key, 0) + 1
-            # Ensure the expander remains open after a refresh so the user
-            # immediately sees the updated log content without having to
-            # re-open the panel manually.
-            # no-op for expander since the view is always visible when files are selected
+
         def _truncate_and_mark(path_str: str, session_key: str):
             # If path_str is empty, operate on all selected files (multi-select)
             paths = []
@@ -329,29 +294,94 @@ def view_log_filtered(log_filename: str):
                 # bump refresh counter so readers reload immediately
                 st.session_state[session_key] = st.session_state.get(session_key, 0) + 1
 
-        # Emoji-only buttons (compact "image-like" appearance). Left-aligned.
-        # Remove textual captions to save vertical space; icons should be intuitive.
-        with col_clear:
-            st.button('✖', key=f'lv_{sel_key}_clear', on_click=_clear_filters)
-        with col_refresh:
-            st.button('🔄', key=f'lv_{sel_key}_refresh_btn', on_click=_mark_refresh, args=(refresh_key,))
-        with col_raw:
-            # Small persistent toggle to view the raw logfile (ignores filters)
-            st.checkbox('RAW', key=f'lv_{sel_key}_show_raw', help=pbgui_help.show_raw_log)
-        with col_trunc:
-            st.button('🗑️', key=f'lv_{sel_key}_truncate', on_click=_truncate_and_mark, args=(str(logfile) if logfile else '', trunc_key))
+        # Two-column compact filter layout (equal width)
+        # Left: Users + Tags + RAW + buttons. Right: Levels + Free-text.
+        col_left, col_right = st.columns([1, 1])
+        with col_left:
+            sel_users = st.multiselect('Users (filter)', user_list, key='lv_sel_users')
+            sel_tags = st.multiselect('Tags (from [tag])', tags, key='lv_sel_tags')
+            # Move RAW checkbox to the left under the filters
+            st.checkbox('RAW', key='lv_show_raw', help=pbgui_help.show_raw_log)
+
+            # Buttons row under the filters (left column)
+            b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
+            with b1:
+                st.button('✖', key=f'lv_{sel_key}_clear', on_click=_clear_filters)
+            with b2:
+                st.button('🔄', key=f'lv_{sel_key}_refresh_btn', on_click=_mark_refresh, args=(refresh_key,))
+            with b3:
+                st.button('🗑️', key=f'lv_{sel_key}_truncate', on_click=_truncate_and_mark, args=(str(logfile) if logfile else '', trunc_key))
+            with b4:
+                st.empty()
+
+        with col_right:
+            levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+            sel_levels = st.multiselect('Levels (filter)', levels, key='lv_sel_levels')
+            free_text = st.text_input('Free-text', key='lv_free_text', placeholder='search...')
+
+        # session keys for refresh/truncate actions
+        refresh_key = f'lv_{sel_key}_refresh'
+        trunc_key = f'lv_{sel_key}_truncated'
+        # Use an integer refresh counter so we can invalidate the cached reader
+        if refresh_key not in st.session_state:
+            st.session_state[refresh_key] = 0
+        if trunc_key not in st.session_state:
+            st.session_state[trunc_key] = False
+
+        def _clear_filters():
+            # callback used by the button to safely update widget-backed session keys
+            st.session_state['lv_sel_users'] = []
+            st.session_state['lv_sel_tags'] = []
+            st.session_state['lv_sel_levels'] = []
+            st.session_state['lv_free_text'] = ''
+            st.session_state['lv_show_raw'] = False
+            # bump refresh counter so the reader reloads and the view updates
+            st.session_state[refresh_key] = st.session_state.get(refresh_key, 0) + 1
+
+        def _mark_refresh(session_key: str, expander_session_key: str = None):
+            # bump the refresh counter to force the cached reader to reload
+            st.session_state[session_key] = st.session_state.get(session_key, 0) + 1
+
+        def _truncate_and_mark(path_str: str, session_key: str):
+            # If path_str is empty, operate on all selected files (multi-select)
+            paths = []
+            if path_str:
+                paths = [path_str]
+            else:
+                for name in sel_logs:
+                    p = logs_dir / f"{name}.log"
+                    if p.exists():
+                        paths.append(str(p))
+
+            if not paths:
+                st.error('No logfile selected to purge')
+                return
+
+            any_success = False
+            for pth in paths:
+                success, msg = logging_helpers.purge_log_to_rotated(pth, 10 * 1024 * 1024)
+                if success:
+                    st.success(f'{Path(pth).name}: {msg}')
+                    any_success = True
+                else:
+                    st.error(f'{Path(pth).name}: {msg}')
+
+            if any_success:
+                # bump refresh counter so readers reload immediately
+                st.session_state[session_key] = st.session_state.get(session_key, 0) + 1
+
+        # (Removed duplicate buttons on the right column - buttons are shown on the left)
 
         # Determine whether any filters active
         has_filters = False
-        if st.session_state.get(f'lv_{sel_key}_sel_users'):
+        if st.session_state.get('lv_sel_users'):
             has_filters = True
-        if st.session_state.get(f'lv_{sel_key}_sel_services'):
+        # services filter removed (logs are split per-service)
+        if st.session_state.get('lv_sel_tags'):
             has_filters = True
-        if st.session_state.get(f'lv_{sel_key}_sel_tags'):
+        if st.session_state.get('lv_sel_levels'):
             has_filters = True
-        if st.session_state.get(f'lv_{sel_key}_sel_levels'):
-            has_filters = True
-        if st.session_state.get(f'lv_{sel_key}_free_text'):
+        if st.session_state.get('lv_free_text'):
             has_filters = True
 
         # Handle refresh / truncate actions triggered by callbacks in the filters area.
@@ -410,14 +440,14 @@ def view_log_filtered(log_filename: str):
         # If the user requests the raw view, ignore filters and show the
         # cached raw lines (newest-first). The `RAW` checkbox is persistent
         # via session_state key `lv_<logfile>_show_raw`.
-        show_raw = st.session_state.get(f'lv_{sel_key}_show_raw', False)
+        show_raw = st.session_state.get('lv_show_raw', False)
         if show_raw:
             # RAW mode: show unadorned lines, but if any filters are active
             # respect them — users expect RAW to disable formatting/icons,
             # not to disable filtering entirely.
             if has_filters:
                 # Reuse the filtered-path but do not add severity markers.
-                filter_sig = (tuple(sel_users), tuple(sel_services), tuple(sel_tags), tuple(sel_levels), free_text)
+                filter_sig = (tuple(sel_users), tuple(sel_tags), tuple(sel_levels), free_text)
                 # Read all selected files into all_lines for filtering
                 all_lines = []
                 for name in sel_logs:
@@ -429,11 +459,10 @@ def view_log_filtered(log_filename: str):
                             all_lines.extend(list(reversed(f.readlines())))
                     except Exception:
                         pass
-                sel_users = st.session_state.get(f'lv_{sel_key}_sel_users', [])
-                sel_services = st.session_state.get(f'lv_{sel_key}_sel_services', [])
-                sel_tags = st.session_state.get(f'lv_{sel_key}_sel_tags', [])
-                free_text = st.session_state.get(f'lv_{sel_key}_free_text', '')
-                sel_levels = st.session_state.get(f'lv_{sel_key}_sel_levels', [])
+                sel_users = st.session_state.get('lv_sel_users', [])
+                sel_tags = st.session_state.get('lv_sel_tags', [])
+                free_text = st.session_state.get('lv_free_text', '')
+                sel_levels = st.session_state.get('lv_sel_levels', [])
 
                 def line_has_any_tag(line, taglist):
                     for t in taglist:
@@ -443,13 +472,8 @@ def view_log_filtered(log_filename: str):
 
                 filtered_raw = []
                 for ln in all_lines:
-                    ok = True
                     parsed = parse_log_line(ln)
-                    if sel_services:
-                        if not parsed or parsed.get('service') not in sel_services:
-                            ok = False
-                    if not ok:
-                        continue
+                    ok = True
                     if sel_users:
                         if not any(u in ln for u in sel_users):
                             ok = False
@@ -480,7 +504,7 @@ def view_log_filtered(log_filename: str):
             # fresh read when any of the filter controls change. Using the
             # cached reader keeps centralized caching behaviour while still
             # allowing an automatic cache-bust when filters change.
-            filter_sig = (tuple(sel_users), tuple(sel_services), tuple(sel_tags), tuple(sel_levels), free_text)
+            filter_sig = (tuple(sel_users), tuple(sel_tags), tuple(sel_levels), free_text)
             try:
                 # Always re-read the selected files on filter change to avoid stale results.
                 all_lines = []
@@ -495,11 +519,10 @@ def view_log_filtered(log_filename: str):
                         pass
             except Exception:
                 all_lines = lines
-            sel_users = st.session_state.get(f'lv_{sel_key}_sel_users', [])
-            sel_services = st.session_state.get(f'lv_{sel_key}_sel_services', [])
-            sel_tags = st.session_state.get(f'lv_{sel_key}_sel_tags', [])
-            free_text = st.session_state.get(f'lv_{sel_key}_free_text', '')
-            sel_levels = st.session_state.get(f'lv_{sel_key}_sel_levels', [])
+            sel_users = st.session_state.get('lv_sel_users', [])
+            sel_tags = st.session_state.get('lv_sel_tags', [])
+            free_text = st.session_state.get('lv_free_text', '')
+            sel_levels = st.session_state.get('lv_sel_levels', [])
 
             def line_has_any_tag(line, taglist):
                 for t in taglist:
@@ -509,14 +532,8 @@ def view_log_filtered(log_filename: str):
 
             filtered = []
             for ln in all_lines:
-                ok = True
                 parsed = parse_log_line(ln)
-                if sel_services:
-                    # if we can't parse service, treat as non-matching
-                    if not parsed or parsed.get('service') not in sel_services:
-                        ok = False
-                if not ok:
-                    continue
+                ok = True
                 if sel_users:
                     if not any(u in ln for u in sel_users):
                         ok = False
