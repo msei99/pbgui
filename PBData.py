@@ -1514,7 +1514,7 @@ class PBData():
                                 try:
                                     ex2 = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
                                     if not ex2:
-                                        _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST")
+                                        _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST", level='WARNING', user=user)
                                         try:
                                             await Exchange.close_private_ws_client(user.exchange, user)
                                         except Exception:
@@ -1528,7 +1528,7 @@ class PBData():
                                     except Exception:
                                         pass
                                     return
-                    _human_log('PBData', f"[ws] watch_positions error for {user.name}: {e}")
+                    _human_log('PBData', f"[ws] watch_positions error for {user.name}: {e}", level='ERROR', user=user)
                     # Add jittered backoff to avoid synchronized reconnect storms
                     await asyncio.sleep(1 + random.random() * 4)
         finally:
@@ -1583,7 +1583,7 @@ class PBData():
                         if self._ws_success_counts.get(key, 0) >= self._ws_success_required:
                             if key in self._ws_restarted_once:
                                 self._ws_restarted_once.discard(key)
-                                _human_log('PBData', f"[ws] Restart state cleared for {user.name} ({user.exchange}) after {self._ws_success_required} successful watch events")
+                                _human_log('PBData', f"[ws] Restart state cleared for {user.name} ({user.exchange}) after {self._ws_success_required} successful watch events", level='INFO', user=user)
                             self._ws_success_counts[key] = 0
                     except Exception:
                         pass
@@ -1714,7 +1714,7 @@ class PBData():
                                     return
                     raw_msg = str(e)
                     exc_type = type(e).__name__
-                    _human_log('PBData', f"[ws] watch_orders error for {user.name}: {raw_msg} (type={exc_type})")
+                    _human_log('PBData', f"[ws] watch_orders error for {user.name}: {raw_msg} (type={exc_type})", level='ERROR', user=user)
                     # Add jittered backoff to avoid synchronized reconnect storms
                     await asyncio.sleep(1 + random.random() * 4)
         finally:
@@ -1726,7 +1726,7 @@ class PBData():
                 pass
 
     async def _order_poll_loop(self, user, interval_seconds: int = 5):
-        _human_log('PBData', f"[poll] Starting orders poller for {user.name}")
+        _human_log('PBData', f"[poll] Starting orders poller for {user.name}", level='INFO', user=user)
         while True:
             try:
                 await asyncio.to_thread(self.db.update_orders, user)
@@ -1739,11 +1739,11 @@ class PBData():
                 except Exception:
                     pass
             except Exception as e:
-                _human_log('PBData', f"[poll] Orders poll failed for {user.name}: {e}")
+                _human_log('PBData', f"[poll] Orders poll failed for {user.name}: {e}", level='ERROR', user=user)
             await asyncio.sleep(interval_seconds)
 
     async def _position_poll_loop(self, user, interval_seconds: int = 5):
-        _human_log('PBData', f"[poll] Starting positions poller for {user.name}")
+        _human_log('PBData', f"[poll] Starting positions poller for {user.name}", level='INFO', user=user)
         while True:
             try:
                 await asyncio.to_thread(self.db.update_positions, user)
@@ -1756,7 +1756,7 @@ class PBData():
                 except Exception:
                     pass
             except Exception as e:
-                _human_log('PBData', f"[poll] Positions poll failed for {user.name}: {e}")
+                _human_log('PBData', f"[poll] Positions poll failed for {user.name}: {e}", level='ERROR', user=user)
             await asyncio.sleep(interval_seconds)
 
     async def _shared_poll_serial(self, kind: str, interval_seconds: int, per_exchange: bool = True):
@@ -1764,7 +1764,7 @@ class PBData():
         backoff = 0
         max_backoff = 600
         base_interval = max(10, interval_seconds)
-        _human_log('PBData', f"[poll] Starting shared serial poller kind={kind} interval={base_interval}s")
+        _human_log('PBData', f"[poll] Starting shared serial poller kind={kind} interval={base_interval}s", level='INFO')
         while True:
             delay = base_interval + backoff
             await asyncio.sleep(delay)
@@ -1782,7 +1782,7 @@ class PBData():
             for exch, batch_users in batches:
                 # Skip this exchange while in backoff
                 if exch and self._is_exchange_in_backoff(exch):
-                    _human_log('PBData', f"[poll] Skipping shared {kind} poll for {exch} due to backoff")
+                    _human_log('PBData', f"[poll] Skipping shared {kind} poll for {exch} due to backoff", level='INFO')
                     continue
                 for user in batch_users:
                     try:
@@ -1798,7 +1798,7 @@ class PBData():
                                 last_log = getattr(self, '_last_skipped_position_log', 0)
                                 now_ts = datetime.now().timestamp()
                                 if now_ts - last_log > 300:
-                                    _human_log('PBData', f"[poll] Skipping shared positions update for {user.name} because WS watcher active")
+                                    _human_log('PBData', f"[poll] Skipping shared positions update for {user.name} because WS watcher active", level='INFO', user=user)
                                     self._last_skipped_position_log = now_ts
                                 continue
                             # Gate shared REST calls using per-exchange REST slot
@@ -1908,7 +1908,7 @@ class PBData():
                             # Instrument shared history polling for debugging/tracing
                             key = (user.name, user.exchange)
                             start_ts = datetime.now().timestamp()
-                            _human_log('PBData', f"[poll] Shared history poll START for {user.name} ({user.exchange})")
+                            _human_log('PBData', f"[poll] Shared history poll START for {user.name} ({user.exchange})", level='INFO', user=user)
                             # Time the history update; if it is very long, mark exchange backoff
                             exchange_for_slot = exch or user.exchange
                             try:
@@ -1983,7 +1983,7 @@ class PBData():
                                 self._write_fetch_summary()
                             except Exception:
                                 pass
-                            _human_log('PBData', f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms")
+                            _human_log('PBData', f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms", level='INFO', user=user)
                         elif kind == 'balances':
                             # Skip shared balances poll if user has active WS balances watcher
                             ws_task = self._balance_ws_tasks.get(user.name)
@@ -2069,7 +2069,7 @@ class PBData():
                 backoff = min(max_backoff, backoff + 30)
             else:
                 if backoff:
-                    _human_log('PBData', f"[poll] Shared {kind} poll recovered; resetting backoff")
+                    _human_log('PBData', f"[poll] Shared {kind} poll recovered; resetting backoff", level='INFO')
                 backoff = 0
 
     async def _shared_combined_poll_serial(self, interval_seconds: int = 60, per_exchange: bool = True):
@@ -2082,7 +2082,7 @@ class PBData():
         backoff = 0
         max_backoff = 600
         base_interval = max(10, interval_seconds)
-        _human_log('PBData', f"[poll] Starting shared COMBINED poller interval={base_interval}s")
+        _human_log('PBData', f"[poll] Starting shared COMBINED poller interval={base_interval}s", level='INFO')
         while True:
             delay = base_interval + backoff
             await asyncio.sleep(delay)
@@ -2159,7 +2159,7 @@ class PBData():
                 backoff = 0
 
     async def _balance_poll_loop(self, user, interval_seconds: int = 30):
-        _human_log('PBData', f"[poll] Starting balance poller for {user.name}")
+        _human_log('PBData', f"[poll] Starting balance poller for {user.name}", level='INFO', user=user)
         while True:
             try:
                 await asyncio.to_thread(self.db.update_balances, user)
@@ -2168,7 +2168,7 @@ class PBData():
                 except Exception:
                     pass
             except Exception as e:
-                _human_log('PBData', f"[poll] Balance poll failed for {user.name}: {e}")
+                _human_log('PBData', f"[poll] Balance poll failed for {user.name}: {e}", level='ERROR', user=user)
             await asyncio.sleep(interval_seconds)
 
     def _to_ccxt_symbol(self, symbol: str) -> str:
@@ -2187,10 +2187,10 @@ class PBData():
             exch = Exchange(exchange, None)
             ex = await Exchange.get_shared_ws_client(exchange)
             if not ex:
-                _human_log('PBData', f"[ws] ccxtpro unavailable (price) for exchange {exchange}; retrying in 10s")
+                _human_log('PBData', f"[ws] ccxtpro unavailable (price) for exchange {exchange}; retrying in 10s", level='WARNING')
                 await asyncio.sleep(10)
                 continue
-            _human_log('PBData', f"[ws] Starting price watcher for exchange {exchange}")
+            _human_log('PBData', f"[ws] Starting price watcher for exchange {exchange}", level='INFO')
             started_logged = False
             last_heartbeat_ts = 0
             self._price_ticks_count[exchange] = 0
@@ -2204,7 +2204,7 @@ class PBData():
                         # Run sync load_markets without blocking loop
                         await asyncio.to_thread(ex.load_markets)
             except Exception as e:
-                _human_log('PBData', f"[ws] load_markets failed for exchange {exchange}: {e}")
+                _human_log('PBData', f"[ws] load_markets failed for exchange {exchange}: {e}", level='WARNING')
             try:
                 subscribe_backoff = 0
                 while True:
@@ -2254,10 +2254,10 @@ class PBData():
                             prev = self._price_subscribe_trim_snapshot.get(exchange)
                             curr_snapshot = tuple(allowed_list)
                             if prev != curr_snapshot:
-                                _human_log('PBData', f"[ws] Exchange {exchange} has {len(unique_users)} users but limit is {user_limit}; subscribing only for {len(allowed_list)} users and falling back to REST for others")
+                                _human_log('PBData', f"[ws] Exchange {exchange} has {len(unique_users)} users but limit is {user_limit}; subscribing only for {len(allowed_list)} users and falling back to REST for others", level='INFO')
                                 try:
-                                    _human_log('PBData', f"[ws] Allowed users for {exchange}: {', '.join(allowed_list)}")
-                                    _human_log('PBData', f"[ws] Blocked users for {exchange}: {', '.join(blocked_list)}")
+                                    _human_log('PBData', f"[ws] Allowed users for {exchange}: {', '.join(allowed_list)}", level='INFO')
+                                    _human_log('PBData', f"[ws] Blocked users for {exchange}: {', '.join(blocked_list)}", level='INFO')
                                 except Exception:
                                     pass
                                 self._price_subscribe_trim_snapshot[exchange] = curr_snapshot
@@ -2278,12 +2278,12 @@ class PBData():
                     now_ts = int(datetime.now().timestamp())
                     if now_ts - last_heartbeat_ts >= 120:
                         tick_count = self._price_ticks_count.get(exchange, 0)
-                        _human_log('PBData', f"[ws] Price heartbeat for exchange {exchange}: {len(symbols)} symbol(s), mode={'batch' if supports_batch else 'per-symbol'}, ticks_since_last={tick_count}")
+                        _human_log('PBData', f"[ws] Price heartbeat for exchange {exchange}: {len(symbols)} symbol(s), mode={'batch' if supports_batch else 'per-symbol'}, ticks_since_last={tick_count}", level='INFO')
                         self._price_ticks_count[exchange] = 0
                         last_heartbeat_ts = now_ts
                     if not started_logged:
                         mode = 'batch watch_tickers' if supports_batch else 'per-symbol watch_ticker'
-                        _human_log('PBData', f"[ws] Price stream active for exchange {exchange}: {len(symbols)} symbol(s), mode={mode}")
+                        _human_log('PBData', f"[ws] Price stream active for exchange {exchange}: {len(symbols)} symbol(s), mode={mode}", level='INFO')
                         started_logged = True
 
                     if supports_batch:
@@ -2362,7 +2362,7 @@ class PBData():
                                             raise RuntimeError("subscribe_chunk_failed")
                                         # For other errors, log full traceback to aid debugging
                                         tb = traceback.format_exc()
-                                        _human_log('PBData', f"[ws] watch_tickers subscribe ERROR for exchange {exchange} (chunk {i}-{i+chunk_size}): {e}\n{tb}")
+                                        _human_log('PBData', f"[ws] watch_tickers subscribe ERROR for exchange {exchange} (chunk {i}-{i+chunk_size}): {e}\n{tb}", level='ERROR')
                                         # If we repeatedly fail, close shared client to force a fresh reconnect
                                         subscribe_backoff = min(subscribe_backoff + 1, 6)
                                         if subscribe_backoff >= 3:
@@ -2390,10 +2390,10 @@ class PBData():
                             else:
                                 tickers = await ex.watch_tickers(list(requested_set))
                         except asyncio.TimeoutError:
-                            _human_log('PBData', f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client")
+                            _human_log('PBData', f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client", level='WARNING')
                             ex = await Exchange.get_shared_ws_client(exchange)
                             if not ex:
-                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
                                 return
                             subscribe_backoff = min(subscribe_backoff + 1, 6)
                             delay = min(5 * subscribe_backoff, 30)
@@ -2404,17 +2404,17 @@ class PBData():
                             lower = raw.lower()
                             # If this was a benign/normal close (e.g. code 1000) attempt lightweight reconnect
                             if self._is_normal_ws_close(raw):
-                                _human_log('PBData', f"[ws] watch_tickers normal websocket close for exchange {exchange}: {e}; attempting reconnect")
+                                _human_log('PBData', f"[ws] watch_tickers normal websocket close for exchange {exchange}: {e}; attempting reconnect", level='WARNING')
                                 ex = await Exchange.get_shared_ws_client(exchange)
                                 if not ex:
-                                    _human_log('PBData', f"[ws] ccxtpro unavailable (price) after normal close reconnect for exchange {exchange}")
+                                    _human_log('PBData', f"[ws] ccxtpro unavailable (price) after normal close reconnect for exchange {exchange}", level='WARNING')
                                     return
                                 await asyncio.sleep(1)
                                 continue
                             # If the exchange enforces a hard subscribe limit, close client and backoff
                             if 'cannot track more than' in lower or 'cannot track more than' in raw:
                                 try:
-                                    _human_log('PBData', f"[ws] watch_tickers subscribe REJECTED by exchange {exchange}: {e}; users={len(unique_users_all)}; closing shared client and entering backoff")
+                                    _human_log('PBData', f"[ws] watch_tickers subscribe REJECTED by exchange {exchange}: {e}; users={len(unique_users_all)}; closing shared client and entering backoff", level='ERROR')
                                 except Exception:
                                     pass
                                 try:
@@ -2429,7 +2429,7 @@ class PBData():
                                 continue
                             # Treat ccxt RequestTimeout / connection timeouts as transient here too
                             if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
-                                _human_log('PBData', f"[ws] watch_tickers REQUESTTIMEOUT for exchange {exchange}: {e}; reconnecting price client (transient)")
+                                _human_log('PBData', f"[ws] watch_tickers REQUESTTIMEOUT for exchange {exchange}: {e}; reconnecting price client (transient)", level='WARNING')
                                 ex = await Exchange.get_shared_ws_client(exchange)
                                 if not ex:
                                     _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
@@ -2438,7 +2438,7 @@ class PBData():
                                 delay = min(5 * subscribe_backoff, 30)
                                 await asyncio.sleep(delay)
                                 continue
-                            _human_log('PBData', f"[ws] watch_tickers ERROR for exchange {exchange}: {e}")
+                            _human_log('PBData', f"[ws] watch_tickers ERROR for exchange {exchange}: {e}", level='ERROR')
                             ex = await Exchange.get_shared_ws_client(exchange)
                             if not ex:
                                 _human_log('PBData', f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
@@ -2448,11 +2448,11 @@ class PBData():
                             await asyncio.sleep(delay)
                             continue
                         except asyncio.TimeoutError:
-                            _human_log('PBData', f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client")
+                            _human_log('PBData', f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client", level='WARNING')
                             # Re-acquire shared client instance; don't close existing shared instance here.
                             ex = await Exchange.get_shared_ws_client(exchange)
                             if not ex:
-                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
                                 return
                             subscribe_backoff = min(subscribe_backoff + 1, 6)
                             delay = min(5 * subscribe_backoff, 30)
@@ -2466,10 +2466,10 @@ class PBData():
                             # Treat this as non-fatal: wait briefly and continue
                             # without force-closing the client to avoid races.
                             if 'already subscribed' in lower or 'already subscribed' in raw:
-                                _human_log('PBData', f"[ws] watch_tickers: already subscribed for exchange {exchange}: {e}; ignoring and continuing")
+                                _human_log('PBData', f"[ws] watch_tickers: already subscribed for exchange {exchange}: {e}; ignoring and continuing", level='DEBUG')
                                 await asyncio.sleep(1)
                                 continue
-                            _human_log('PBData', f"[ws] watch_tickers ERROR for exchange {exchange}: {e}")
+                            _human_log('PBData', f"[ws] watch_tickers ERROR for exchange {exchange}: {e}", level='ERROR')
                             # Re-acquire shared client instance for subsequent iterations.
                             ex = await Exchange.get_shared_ws_client(exchange)
                             if not ex:
@@ -2496,7 +2496,7 @@ class PBData():
                                             last_price_write_ts[key] = now_sec
                                             await self.buffer_price(user, internal_symbol, ts, last)
                                 except Exception as e:
-                                    _human_log('PBData', f"[ws] upsert_price failed {user_name} {internal_symbol}: {e}")
+                                    _human_log('PBData', f"[ws] upsert_price failed {user_name} {internal_symbol}: {e}", level='WARNING', user=user_name)
                     else:
                         # Fallback: iterate symbols and watch individually (still single task)
                         ts_now = int(datetime.now().timestamp() * 1000)
@@ -2507,10 +2507,10 @@ class PBData():
                                     try:
                                         ticker = await asyncio.wait_for(ex.watch_ticker(ccxt_symbol), timeout=timeout_val)
                                     except asyncio.TimeoutError:
-                                        _human_log('PBData', f"[ws] watch_ticker TIMEOUT exchange {exchange} {ccxt_symbol}; reconnecting price client")
+                                        _human_log('PBData', f"[ws] watch_ticker TIMEOUT exchange {exchange} {ccxt_symbol}; reconnecting price client", level='WARNING')
                                         ex = await Exchange.get_shared_ws_client(exchange)
                                         if not ex:
-                                            _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                            _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
                                             raise RuntimeError("price client unavailable after watch_ticker timeout")
                                         continue
                                 else:
@@ -2520,25 +2520,25 @@ class PBData():
                                         raw = str(e)
                                         lower = raw.lower()
                                         if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
-                                            _human_log('PBData', f"[ws] watch_ticker REQUESTTIMEOUT exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client (transient)")
+                                            _human_log('PBData', f"[ws] watch_ticker REQUESTTIMEOUT exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client (transient)", level='WARNING')
                                             ex = await Exchange.get_shared_ws_client(exchange)
                                             if not ex:
-                                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
                                                 raise RuntimeError("price client unavailable after watch_ticker error")
                                             await asyncio.sleep(1)
                                             continue
                                         if self._is_normal_ws_close(raw):
-                                            _human_log('PBData', f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect")
+                                            _human_log('PBData', f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect", level='WARNING')
                                             ex = await Exchange.get_shared_ws_client(exchange)
                                             if not ex:
-                                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}")
+                                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
                                                 raise RuntimeError("price client unavailable after watch_ticker error")
                                             await asyncio.sleep(1)
                                             continue
-                                        _human_log('PBData', f"[ws] watch_ticker ERROR exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client")
+                                            _human_log('PBData', f"[ws] watch_ticker ERROR exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client", level='ERROR')
                                         ex = await Exchange.get_shared_ws_client(exchange)
                                         if not ex:
-                                            _human_log('PBData', f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
+                                            _human_log('PBData', f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}", level='WARNING')
                                             raise RuntimeError("price client unavailable after watch_ticker error")
                                         await asyncio.sleep(1)
                                         continue
@@ -2558,18 +2558,18 @@ class PBData():
                                                 await self.buffer_price(user, internal_symbol, ts, last)
                                                 # _human_log('PBData', f"[ws] upsert_price wrote {user.name} {internal_symbol} price={last} ts={ts}")
                                     except Exception as e:
-                                        _human_log('PBData', f"[ws] upsert_price failed {user_name} {internal_symbol}: {e}")
+                                        _human_log('PBData', f"[ws] upsert_price failed {user_name} {internal_symbol}: {e}", level='WARNING', user=user_name)
                             except Exception as e:
-                                _human_log('PBData', f"[ws] watch_ticker error exchange {exchange} {ccxt_symbol}: {e}")
+                                _human_log('PBData', f"[ws] watch_ticker error exchange {exchange} {ccxt_symbol}: {e}", level='ERROR')
                                 await asyncio.sleep(0.5)
             except Exception as e:
                 raw = str(e)
                 # treat normal closes as less severe and attempt graceful reconnect
                 if self._is_normal_ws_close(raw):
-                    _human_log('PBData', f"[ws] price loop normal websocket close exchange {exchange}: {e}; restarting price watcher after short pause")
+                    _human_log('PBData', f"[ws] price loop normal websocket close exchange {exchange}: {e}; restarting price watcher after short pause", level='WARNING')
                     await asyncio.sleep(2)
                     continue
-                _human_log('PBData', f"[ws] price loop error exchange {exchange}: {e}; restarting price watcher")
+                _human_log('PBData', f"[ws] price loop error exchange {exchange}: {e}; restarting price watcher", level='ERROR')
             finally:
                 # Do not close the websocket client here. Closing a shared
                 # client can abort other watchers that rely on the same
@@ -2593,20 +2593,20 @@ class PBData():
                     task.cancel()
                 except Exception:
                     pass
-            _human_log('PBData', f"[ws] Stopped price watcher for exchange {exchange}: no symbols for fetch_users")
+            _human_log('PBData', f"[ws] Stopped price watcher for exchange {exchange}: no symbols for fetch_users", level='INFO')
             self._price_exchange_config.pop(exchange, None)
             return
         cfg = self._price_exchange_config.get(exchange)
         if not cfg:
             self._price_exchange_config[exchange] = {'mapping': mapping, 'symbols': symbols}
-            _human_log('PBData', f"[ws] Preparing price watcher for exchange {exchange}: {len(symbols)} symbol(s)")
+            _human_log('PBData', f"[ws] Preparing price watcher for exchange {exchange}: {len(symbols)} symbol(s)", level='INFO')
         else:
             # Update mapping and symbols; log changes if any
             old_symbols = cfg.get('symbols', set())
             if old_symbols != symbols:
                 added = symbols - old_symbols
                 removed = old_symbols - symbols
-                _human_log('PBData', f"[ws] Updated symbols for exchange {exchange}: {len(symbols)} now; +{len(added)} / -{len(removed)}")
+                _human_log('PBData', f"[ws] Updated symbols for exchange {exchange}: {len(symbols)} now; +{len(added)} / -{len(removed)}", level='INFO')
             cfg['mapping'] = mapping
             cfg['symbols'] = symbols
         task = self._price_exchange_tasks.get(exchange)
@@ -2629,13 +2629,13 @@ class PBData():
             if now_ts - last < self._mapping_rebuild_min_interval:
                 return
             self._last_mapping_log_ts_by_exchange[exchange] = now_ts
-            _human_log('PBData', f"[async] Building price mapping for exchange {exchange} with {len(users)} user(s)")
+            _human_log('PBData', f"[async] Building price mapping for exchange {exchange} with {len(users)} user(s)", level='INFO')
             mapping = {}
             for user in users:
                 try:
                     positions = await asyncio.to_thread(self.db.fetch_positions, user)
                 except Exception as e:
-                    _human_log('PBData', f"[async] fetch_positions failed for {user.name} ({exchange}): {e}")
+                    _human_log('PBData', f"[async] fetch_positions failed for {user.name} ({exchange}): {e}", level='ERROR', user=user)
                     continue
                 for pos in positions:
                     internal_symbol = pos[1]
@@ -2643,10 +2643,10 @@ class PBData():
                     mapping.setdefault(ccxt_symbol, []).append((user.name, internal_symbol))
             # Always log the final symbol count so we know whether the
             # mapping contains anything for this exchange.
-            _human_log('PBData', f"[async] Built price mapping for exchange {exchange}: {len(mapping)} symbol(s)")
+            _human_log('PBData', f"[async] Built price mapping for exchange {exchange}: {len(mapping)} symbol(s)", level='INFO')
             await self._ensure_exchange_price_watcher(exchange, mapping)
         except Exception as e:
-            _human_log('PBData', f"[async] _build_price_mapping_for_exchange error {exchange}: {e}")
+            _human_log('PBData', f"[async] _build_price_mapping_for_exchange error {exchange}: {e}", level='ERROR')
 
     async def update_db_async(self):
         # Load users first so filtering in load_fetch_users is correct
@@ -2661,7 +2661,7 @@ class PBData():
         # Only log when the set changes or periodically
         current_users_set = set(self.fetch_users)
         if current_users_set != self._last_fetch_users_snapshot or (now_ts - self._last_queue_log_ts) >= self._queue_log_every_secs:
-            _human_log('PBData', f"[async] Will process users: {self.fetch_users}")
+            _human_log('PBData', f"[async] Will process users: {self.fetch_users}", level='INFO')
             self._last_fetch_users_snapshot = current_users_set
             self._last_queue_log_ts = now_ts
             try:
@@ -2689,7 +2689,7 @@ class PBData():
             count = len(users)
             prev = self._last_exchange_queue_counts.get(exchange)
             if prev != count or (now_ts - self._last_queue_log_ts) >= self._queue_log_every_secs:
-                _human_log('PBData', f"[async] Queueing {count} user(s) for exchange: {exchange}")
+                _human_log('PBData', f"[async] Queueing {count} user(s) for exchange: {exchange}", level='INFO')
                 self._last_exchange_queue_counts[exchange] = count
 
         # Phase websocket watcher startup per user to avoid bursts:
@@ -2879,12 +2879,12 @@ class PBData():
             except Exception:
                 # If writing JSON fails, fall back to logging a minimal error
                 try:
-                    _human_log('PBData', f"[summary] Failed to write fetch_summary.json")
+                    _human_log('PBData', f"[summary] Failed to write fetch_summary.json", level='WARNING')
                 except Exception:
                     pass
         except Exception as e:
             try:
-                _human_log('PBData', f"[summary] Failed to build fetch method summary: {e}")
+                _human_log('PBData', f"[summary] Failed to build fetch method summary: {e}", level='WARNING')
             except Exception:
                 pass
 
