@@ -275,9 +275,10 @@ def human_log(service: str, msg: str, user: str = None, tags=None, level: str = 
             # Heuristic: if caller didn't pass a level, infer from message content
             try:
                 low = (rest or '').lower()
+                warn_tokens = ('warn', 'demot', 'backoff', 'timeout', 'could not', "couldn't", 'cannot', 'requesttimeout', 'rate limit')
                 if any(k in low for k in ('error', 'failed', 'exception', 'traceback')):
                     lev = 'ERROR'
-                elif any(k in low for k in ('warn', 'demot', 'backoff', 'timeout', 'could not', "couldn't", 'cannot', 'requesttimeout', 'rate limit', '429')):
+                elif any(k in low for k in warn_tokens) or re.search(r"\b429\b", low):
                     lev = 'WARNING'
                 elif any(k in low for k in ('debug', 'payload', 'preview')):
                     lev = 'DEBUG'
