@@ -60,6 +60,14 @@ class PBData():
         # (IO tracking removed) -- process/db IO debugging variables removed
 
         self._history_rest_last = {}
+        # Log level used when a REST slot is busy and an update is skipped.
+        # Default to 'DEBUG' to avoid spamming the logs; set to 'INFO' when
+        # you want to surface these events without treating them as warnings.
+        self._rest_slot_busy_log_level = 'DEBUG'
+        # Log level used when the debounce flusher gives up after retries.
+        # These events are informational in normal operation; set to 'DEBUG'
+        # so they don't fill logs during normal runs.
+        self._debounce_giveup_log_level = 'DEBUG'
         self._last_fetch_users_snapshot = set()
         self._last_exchange_queue_counts = {}
         self._last_queue_log_ts = 0.0
@@ -634,23 +642,59 @@ class PBData():
                         tb = traceback.format_exc()
                     except Exception:
                         tb = None
+                    # Detect ccxt InvalidNonce (recv_window / server timestamp mismatch)
+                    is_invalid_nonce = False
                     try:
-                        if tb:
-                            _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING', meta={'traceback': tb})
-                        else:
-                            _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
-                    except Exception:
+                        # Try import ccxt error class if available
                         try:
-                            _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
+                            from ccxt.base.errors import InvalidNonce as _InvalidNonce
+                        except Exception:
+                            _InvalidNonce = None
+                        if _InvalidNonce is not None and isinstance(e, _InvalidNonce):
+                            is_invalid_nonce = True
+                        else:
+                            # fallback: inspect message for recv_window/server timestamp pattern
+                            msg = str(e).lower()
+                            if 'invalid request' in msg and 'recv_window' in msg:
+                                is_invalid_nonce = True
+                    except Exception:
+                        is_invalid_nonce = False
+
+                    if is_invalid_nonce:
+                        # Log and put exchange into backoff to avoid immediate retries
+                        try:
+                            meta = {'traceback': tb} if tb else None
+                            _human_log('PBData', f"[debounce] InvalidNonce / recv_window error for {user.exchange} {user_name}: {e}", level='WARNING', meta=meta, user=user)
                         except Exception:
                             pass
+                        try:
+                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                        except Exception:
+                            pass
+                        # Drop this buffered entry to avoid repeated immediate retries
+                        try:
+                            buf.pop(user_name, None)
+                        except Exception:
+                            pass
+                        return
+                    else:
+                        try:
+                            if tb:
+                                _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING', meta={'traceback': tb})
+                            else:
+                                _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
+                        except Exception:
+                            try:
+                                _human_log('PBData', f"[debounce] write failed for {kind} {user_name}: {e}", level='WARNING')
+                            except Exception:
+                                pass
 
                 # Decide whether to retry or give up based on elapsed time since first event
                 now_ts = datetime.now().timestamp()
                 elapsed_since_first = now_ts - first_ts
                 if elapsed_since_first >= float(self._debounce_max_retry_seconds):
                     try:
-                        _human_log('PBData', f"[debounce] giving up flush for {kind} {user_name} after {int(elapsed_since_first)}s (dropped)", level='WARNING')
+                        _human_log('PBData', f"[debounce] giving up flush for {kind} {user_name} after {int(elapsed_since_first)}s (dropped)", level=self._debounce_giveup_log_level)
                     except Exception:
                         pass
                     try:
@@ -677,33 +721,34 @@ class PBData():
         Yields True if slot acquired, False if timed out. Caller is expected
         to skip or defer the REST call when False is yielded.
         """
+        # Simpler, safer implementation: do not attempt to yield again when
+        # an exception is propagated into this generator (the asynccontextmanager
+        # machinery will re-throw the with-block exception into this generator).
+        # If that happens we must not perform another yield() from here or
+        # Python will raise "generator didn't stop after athrow()". Instead
+        # allow the exception to propagate after performing cleanup in
+        # `finally`.
+        if timeout is None:
+            timeout = getattr(self, '_rest_semaphore_acquire_timeout', 5.0)
+        sem = self._rest_semaphores.get(exchange)
+        if sem is None:
+            limit = self._rest_semaphore_limits_by_exchange.get(exchange, getattr(self, '_default_rest_semaphore_limit', 3))
+            sem = asyncio.Semaphore(limit)
+            self._rest_semaphores[exchange] = sem
+        acquired = False
         try:
-            if timeout is None:
-                timeout = getattr(self, '_rest_semaphore_acquire_timeout', 5.0)
-            sem = self._rest_semaphores.get(exchange)
-            if sem is None:
-                limit = self._rest_semaphore_limits_by_exchange.get(exchange, getattr(self, '_default_rest_semaphore_limit', 3))
-                sem = asyncio.Semaphore(limit)
-                self._rest_semaphores[exchange] = sem
-            acquired = False
-            try:
-                await asyncio.wait_for(sem.acquire(), timeout=timeout)
-                acquired = True
-                yield True
-            except asyncio.TimeoutError:
-                yield False
-            finally:
-                if acquired:
-                    try:
-                        sem.release()
-                    except Exception:
-                        pass
-        except Exception:
-            # On any unexpected error, yield False so callers skip REST updates
-            try:
-                yield False
-            except Exception:
-                pass
+            await asyncio.wait_for(sem.acquire(), timeout=timeout)
+            acquired = True
+            yield True
+        except asyncio.TimeoutError:
+            # Timed out acquiring slot: signal caller to skip the REST update
+            yield False
+        finally:
+            if acquired:
+                try:
+                    sem.release()
+                except Exception:
+                    pass
 
 
     def _set_exchange_backoff(self, exchange: str, reason: str = None, duration: int = None, user=None):
@@ -1696,20 +1741,39 @@ class PBData():
                                 continue
                             # Gate shared REST calls using per-exchange REST slot
                             exchange_for_slot = exch or user.exchange
-                            async with self._rest_slot(exchange_for_slot) as got:
-                                if got:
-                                    await asyncio.to_thread(self.db.update_positions, user)
-                                    try:
-                                        self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
-                                    except Exception:
-                                        pass
-                                else:
-                                    # Could not acquire REST slot; skip this update
-                                    try:
-                                        _human_log('PBData', f"[poll] Skipped positions update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
-                                    except Exception:
-                                        pass
-                                    had_rate_limit = True
+                            try:
+                                async with self._rest_slot(exchange_for_slot) as got:
+                                    if got:
+                                        await asyncio.to_thread(self.db.update_positions, user)
+                                        try:
+                                            self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                                        except Exception:
+                                            pass
+                                    else:
+                                        # Could not acquire REST slot; skip this update
+                                        try:
+                                            _human_log('PBData', f"[poll] Skipped positions update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                            except Exception as e:
+                                # Handle InvalidNonce specially to avoid generator issues and retry storms
+                                try:
+                                    msg = str(e).lower()
+                                    if 'invalid request' in msg and 'recv_window' in msg:
+                                        tb = traceback.format_exc()
+                                        try:
+                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
+                                        except Exception:
+                                            pass
+                                        try:
+                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                                        continue
+                                except Exception:
+                                    pass
                         elif kind == 'orders':
                             # Skip shared orders poll if user has active WS orders watcher
                             ws_task = self._order_ws_tasks.get(user.name)
@@ -1721,19 +1785,37 @@ class PBData():
                                     self._last_skipped_order_log = now_ts
                                 continue
                             exchange_for_slot = exch or user.exchange
-                            async with self._rest_slot(exchange_for_slot) as got:
-                                if got:
-                                    await asyncio.to_thread(self.db.update_orders, user)
-                                    try:
-                                        self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
-                                    except Exception:
-                                        pass
-                                else:
-                                    try:
-                                        _human_log('PBData', f"[poll] Skipped orders update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
-                                    except Exception:
-                                        pass
-                                    had_rate_limit = True
+                            try:
+                                async with self._rest_slot(exchange_for_slot) as got:
+                                    if got:
+                                        await asyncio.to_thread(self.db.update_orders, user)
+                                        try:
+                                            self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                                        except Exception:
+                                            pass
+                                    else:
+                                        try:
+                                            _human_log('PBData', f"[poll] Skipped orders update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                            except Exception as e:
+                                try:
+                                    msg = str(e).lower()
+                                    if 'invalid request' in msg and 'recv_window' in msg:
+                                        tb = traceback.format_exc()
+                                        try:
+                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
+                                        except Exception:
+                                            pass
+                                        try:
+                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                                        continue
+                                except Exception:
+                                    pass
                         elif kind == 'history':
                             # Instrument shared history polling for debugging/tracing
                             key = (user.name, user.exchange)
@@ -1745,7 +1827,7 @@ class PBData():
                                 async with self._rest_slot(exchange_for_slot) as got:
                                     if not got:
                                         try:
-                                            _human_log('PBData', f"[poll] Skipped history update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
+                                            _human_log('PBData', f"[poll] Skipped history update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
                                         except Exception:
                                             pass
                                         had_rate_limit = True
@@ -1757,7 +1839,19 @@ class PBData():
                                             # "generator didn't stop after athrow()". Treat these
                                             # as transient and escalate to backoff while logging.
                                             msg = str(e)
-                                            if 'generator didn\'t stop after athrow' in msg or 'athrow' in msg.lower():
+                                            lower = msg.lower()
+                                            if 'invalid request' in lower and 'recv_window' in lower:
+                                                tb = traceback.format_exc()
+                                                try:
+                                                    _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                                                except Exception:
+                                                    pass
+                                                had_rate_limit = True
+                                            elif 'generator didn\'t stop after athrow' in msg or 'athrow' in lower:
                                                 try:
                                                     _human_log('PBData', f"[poll] history update failed for {user.name}: {msg}", level='ERROR')
                                                 except Exception:
@@ -1800,23 +1894,41 @@ class PBData():
                                     self._last_skipped_balance_log = now_ts
                                 continue
                             exchange_for_slot = exch or user.exchange
-                            async with self._rest_slot(exchange_for_slot) as got:
-                                if got:
-                                    await asyncio.to_thread(self.db.update_balances, user)
-                                    try:
-                                        self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
-                                    except Exception:
-                                        pass
-                                    try:
-                                        self._write_fetch_summary()
-                                    except Exception:
-                                        pass
-                                else:
-                                    try:
-                                        _human_log('PBData', f"[poll] Skipped balances update for {user.name}; rest slot busy for {exchange_for_slot}", level='WARNING')
-                                    except Exception:
-                                        pass
-                                    had_rate_limit = True
+                            try:
+                                async with self._rest_slot(exchange_for_slot) as got:
+                                    if got:
+                                        await asyncio.to_thread(self.db.update_balances, user)
+                                        try:
+                                            self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                                        except Exception:
+                                            pass
+                                        try:
+                                            self._write_fetch_summary()
+                                        except Exception:
+                                            pass
+                                    else:
+                                        try:
+                                            _human_log('PBData', f"[poll] Skipped balances update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                            except Exception as e:
+                                try:
+                                    msg = str(e).lower()
+                                    if 'invalid request' in msg and 'recv_window' in msg:
+                                        tb = traceback.format_exc()
+                                        try:
+                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta={'traceback': tb})
+                                        except Exception:
+                                            pass
+                                        try:
+                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=60, user=user)
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                                        continue
+                                except Exception:
+                                    pass
                         # (duplicate branches removed)
                     except Exception as e:
                         msg = str(e)
