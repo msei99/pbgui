@@ -951,8 +951,9 @@ class BacktestV7Result:
         self.config.load_config()
         self.backtest_config = self.load_backtest_config()
         self.ed = self.config.backtest.end_date
-        self.adg = self.result["adg"]
-        self.drawdown_worst = self.result["drawdown_worst"]
+        # Support both 'adg' and 'adg_usd' fields (newer JSON files use 'adg_usd')
+        self.adg = self.result.get("adg_usd") or self.result.get("adg", 0)
+        self.drawdown_worst = self.result.get("drawdown_worst", 0)
         # safe read: prefer numeric value, fallback to None if missing/invalid
         self.equity_balance_diff_neg_max = None
         if isinstance(self.result, dict):
@@ -963,7 +964,7 @@ class BacktestV7Result:
                 except (TypeError, ValueError):
                     # keep None on conversion failure
                     self.equity_balance_diff_neg_max = None
-        self.sharpe_ratio = self.result["sharpe_ratio"]
+        self.sharpe_ratio = self.result.get("sharpe_ratio", 0)
         self.starting_balance = self.config.backtest.starting_balance
         self.be = None
         self.final_balance, self.final_balance_btc = self.load_final_balance()
@@ -1012,44 +1013,112 @@ class BacktestV7Result:
 
     def load_final_balance(self):
         balance = Path(f'{self.result_path}/balance_and_equity.csv')
-        if balance.exists():
-            with open(balance, "r", encoding='utf-8') as file:
-                # Read first line
-                first_line = file.readline()
-                if first_line.count(',') == 2:
-                    format = 3
-                elif first_line.count(',') == 4:
-                    format = 5
-                end_of_file = file.seek(0, 2)
-                file.seek(end_of_file)
-                n = 0
-                for num in range(end_of_file+1):            
-                    file.seek(end_of_file - num)    
-                    last_line = file.read()
-                    if last_line.count('\n') == 1:
-                        if len(last_line.split(',')) == format:
-                            final_balance = last_line.split(',')[1]
-                            final_balance_btc = None
-                            if format == 5:
-                                final_balance_btc = last_line.split(',')[3]
-                            return final_balance, final_balance_btc
-                        else: last_line = None
+        balance_gz = Path(f'{self.result_path}/balance_and_equity.csv.gz')
+        
+        file_path = balance if balance.exists() else (balance_gz if balance_gz.exists() else None)
+        if not file_path:
+            return 0, 0
+        
+        try:
+            import gzip
+            open_func = (lambda p: gzip.open(p, 'rt', encoding='utf-8')) if str(file_path).endswith('.gz') else (lambda p: open(p, 'r', encoding='utf-8'))
+            
+            with open_func(file_path) as f:
+                header = f.readline().strip().split(',')
+                
+                # Seek to end and read backwards to find last line
+                if not str(file_path).endswith('.gz'):
+                    f.seek(0, 2)
+                    end_of_file = f.tell()
+                    for num in range(1, min(end_of_file + 1, 10000)):
+                        f.seek(max(0, end_of_file - num))
+                        lines = f.readlines()
+                        if len(lines) >= 2:
+                            last_line = lines[-1].strip().split(',')
+                            break
+                else:
+                    # For .gz files, just read all lines
+                    last_line = None
+                    for line in f:
+                        last_line = line.strip().split(',')
+                
+                if not last_line:
+                    return 0, 0
+                
+                # New format: columns like "usd_total_balance"
+                if 'usd_total_balance' in header:
+                    idx = header.index('usd_total_balance')
+                    btc_idx = header.index('btc_total_balance') if 'btc_total_balance' in header else None
+                    return (last_line[idx] if idx < len(last_line) else 0,
+                            last_line[btc_idx] if btc_idx and btc_idx < len(last_line) else None)
+                
+                # Old format: 3 or 5 columns
+                if len(header) in (3, 5):
+                    return (last_line[1] if len(last_line) > 1 else 0,
+                            last_line[3] if len(header) == 5 and len(last_line) > 3 else None)
+                
+        except Exception:
+            pass
+        
         return 0, 0
 
     def load_be(self):
+        print(f"Loading balance and equity data for {self.result_path}")
         if self.be is None:
+            print("Balance and equity data not loaded, loading now...")
+            # Try both .csv and .csv.gz
             be = f'{self.result_path}/balance_and_equity.csv'
+            be_gz = f'{self.result_path}/balance_and_equity.csv.gz'
+            
+            file_path = None
+            compression = None
+            
             if Path(be).exists():
-                self.be = pd.read_csv(be)
-                timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
-                start_time = timestamp - (self.be.iloc[:, 0].iloc[-1] * 60)
-                self.be['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.be.iloc[:, 0], unit='m')
+                print("Balance and equity file exists, reading...") 
+                file_path = be
+                compression = None
+            elif Path(be_gz).exists():
+                print("Balance and equity .gz file exists, reading...")
+                file_path = be_gz
+                compression = 'gzip'
+            
+            if file_path:
+                self.be = pd.read_csv(file_path, compression=compression, index_col=0)
+                
+                # Check if new format (timestamps) or old format (minutes)
+                # New format: index is timestamp string like "2020-01-03 19:00:00"
+                # Old format: index is numeric (minutes)
+                try:
+                    # Try to convert index to datetime (new format)
+                    self.be.index = pd.to_datetime(self.be.index)
+                    # New format: columns are usd_total_balance, usd_total_equity, etc.
+                    if 'usd_total_balance' in self.be.columns and 'usd_total_equity' in self.be.columns:
+                        self.be['balance'] = self.be['usd_total_balance']
+                        self.be['equity'] = self.be['usd_total_equity']
+                    if 'btc_total_balance' in self.be.columns and 'btc_total_equity' in self.be.columns:
+                        self.be['balance_btc'] = self.be['btc_total_balance']
+                        self.be['equity_btc'] = self.be['btc_total_equity']
+                    self.be['time'] = self.be.index
+                except (ValueError, TypeError):
+                    # Old format: index is minutes (numeric)
+                    print("Using old format (minutes-based index)")
+                    timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+                    start_time = timestamp - (float(self.be.index[-1]) * 60)
+                    self.be['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.be.index, unit='m')
 
     def load_fills(self):
         if self.fills is None:
+            # Try both .csv and .csv.gz
             fills = f'{self.result_path}/fills.csv'
+            fills_gz = f'{self.result_path}/fills.csv.gz'
+            
             if Path(fills).exists():
                 self.fills = pd.read_csv(fills)
+                timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
+                start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
+                self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
+            elif Path(fills_gz).exists():
+                self.fills = pd.read_csv(fills_gz, compression='gzip')
                 timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
                 start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
                 self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
