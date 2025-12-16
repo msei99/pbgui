@@ -103,19 +103,25 @@ class BacktestV7QueueItem():
         return False
 
     def is_finish(self):
+        # Can only be finished if the process is not running anymore
+        if self.is_running():
+            return False
+        
         log = self.load_log()
         if log:
-            if "Plotting fills" in log:
+            # Check for the completion marker
+            if "seconds elapsed for backtest:" in log:
                 return True
-            else:
-                return False
-        else:
-            return False
+        return False
 
     def is_error(self):
         log = self.load_log()
         if log:
-            if "Plotting fills" in log:
+            # If backtest finished successfully, no error
+            if "seconds elapsed for backtest:" in log:
+                return False
+            # If process is still running, not an error yet
+            elif self.is_running():
                 return False
             else:
                 return True
@@ -126,12 +132,13 @@ class BacktestV7QueueItem():
         if self.is_running():
             log = self.load_log()
             if log:
-                if "Plotting fills" in log:
+                # If finished, not backtesting anymore
+                if "seconds elapsed for backtest:" in log:
                     return False
-                elif "Starting backtest..." in log:
+                # If we see "Backtesting " in the log, we're in backtesting phase
+                elif "Backtesting " in log:
                     return True
-            else:
-                return False
+        return False
 
     def stop(self):
         if self.is_running():
