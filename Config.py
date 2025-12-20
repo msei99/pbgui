@@ -2248,7 +2248,7 @@ class Live:
 class Optimize:
     def __init__(self):
         self._bounds = Bounds()
-        self._limits = {}
+        self._limits = []  # New list format: [{"metric": "x", "penalize_if": "greater_than", "value": 0.5}, ...]
         # optimize
         self._compress_results_file = True
         self._crossover_probability = 0.7
@@ -2377,8 +2377,122 @@ class Optimize:
         self._optimize["compress_results_file"] = self._compress_results_file
     @limits.setter
     def limits(self, new_limits):
-        self._limits = new_limits
+        # Convert legacy dict format to new list format
+        if isinstance(new_limits, dict):
+            self._limits = self._convert_legacy_limits(new_limits)
+        elif isinstance(new_limits, list):
+            self._limits = new_limits
+        else:
+            self._limits = []
         self._optimize["limits"] = self._limits
+
+    def _convert_legacy_limits(self, limits_dict: dict) -> list:
+        """Convert legacy dict format to new list format.
+        
+        Legacy formats:
+        - penalize_if_greater_than_X: value -> {metric: X, penalize_if: greater_than, value: ...}
+        - penalize_if_lower_than_X: value -> {metric: X, penalize_if: less_than, value: ...}
+        - penalize_if_greater_than_btc_X: value -> {metric: X_btc, penalize_if: greater_than, value: ...}
+        - penalize_if_lower_than_btc_X: value -> {metric: X_btc, penalize_if: less_than, value: ...}
+        - lower_bound_X: value -> {metric: X, penalize_if: greater_than, value: ...}
+        - upper_bound_X: value -> {metric: X, penalize_if: less_than, value: ...}
+        
+        Currency metrics without suffix get _usd appended (like PassivBot canonicalize_metric_name).
+        Invalid/unknown metrics are skipped with a warning.
+        """
+        # Currency metrics that need _usd or _btc suffix
+        CURRENCY_METRICS = {
+            "adg", "adg_per_exposure_long", "adg_per_exposure_short", "adg_w",
+            "adg_w_per_exposure_long", "adg_w_per_exposure_short", "calmar_ratio",
+            "calmar_ratio_w", "drawdown_worst", "drawdown_worst_mean_1pct",
+            "equity_balance_diff_neg_max", "equity_balance_diff_neg_mean",
+            "equity_balance_diff_pos_max", "equity_balance_diff_pos_mean",
+            "equity_choppiness", "equity_choppiness_w", "equity_jerkiness",
+            "equity_jerkiness_w", "peak_recovery_hours_equity", "expected_shortfall_1pct",
+            "exponential_fit_error", "exponential_fit_error_w", "gain",
+            "gain_per_exposure_long", "gain_per_exposure_short", "mdg",
+            "mdg_per_exposure_long", "mdg_per_exposure_short", "mdg_w",
+            "mdg_w_per_exposure_long", "mdg_w_per_exposure_short", "omega_ratio",
+            "omega_ratio_w", "sharpe_ratio", "sharpe_ratio_w", "sortino_ratio",
+            "sortino_ratio_w", "sterling_ratio", "sterling_ratio_w",
+        }
+        
+        # Shared metrics (no suffix needed)
+        SHARED_METRICS = {
+            "positions_held_per_day", "positions_held_per_day_w",
+            "position_held_hours_mean", "position_held_hours_max",
+            "position_held_hours_median", "position_unchanged_hours_max",
+            "volume_pct_per_day_avg", "volume_pct_per_day_avg_w",
+            "loss_profit_ratio", "loss_profit_ratio_w",
+            "peak_recovery_hours_pnl", "adg_pnl", "adg_pnl_w",
+            "mdg_pnl", "mdg_pnl_w", "sharpe_ratio_pnl", "sharpe_ratio_pnl_w",
+            "sortino_ratio_pnl", "sortino_ratio_pnl_w",
+        }
+        
+        # Build set of all valid metrics
+        ALL_VALID_METRICS = SHARED_METRICS.copy()
+        for m in CURRENCY_METRICS:
+            ALL_VALID_METRICS.add(f"{m}_usd")
+            ALL_VALID_METRICS.add(f"{m}_btc")
+        
+        entries = []
+        for key, value in limits_dict.items():
+            metric = None
+            penalize_if = None
+            
+            # Handle lower_bound_X format (older format)
+            if key.startswith("lower_bound_btc_"):
+                metric = key[len("lower_bound_btc_"):] + "_btc"
+                penalize_if = "greater_than"
+            elif key.startswith("lower_bound_"):
+                metric = key[len("lower_bound_"):]
+                penalize_if = "greater_than"
+            # Handle upper_bound_X format (older format)
+            elif key.startswith("upper_bound_btc_"):
+                metric = key[len("upper_bound_btc_"):] + "_btc"
+                penalize_if = "less_than"
+            elif key.startswith("upper_bound_"):
+                metric = key[len("upper_bound_"):]
+                penalize_if = "less_than"
+            # Handle penalize_if_greater_than_X format
+            elif key.startswith("penalize_if_greater_than_btc_"):
+                metric = key[len("penalize_if_greater_than_btc_"):] + "_btc"
+                penalize_if = "greater_than"
+            elif key.startswith("penalize_if_lower_than_btc_"):
+                metric = key[len("penalize_if_lower_than_btc_"):] + "_btc"
+                penalize_if = "less_than"
+            elif key.startswith("penalize_if_greater_than_"):
+                metric = key[len("penalize_if_greater_than_"):]
+                penalize_if = "greater_than"
+            elif key.startswith("penalize_if_lower_than_"):
+                metric = key[len("penalize_if_lower_than_"):]
+                penalize_if = "less_than"
+            else:
+                # Unknown format, skip
+                continue
+            
+            # Canonicalize metric name (like PassivBot does)
+            # If it's a currency metric without suffix, append _usd
+            if metric and not metric.endswith("_usd") and not metric.endswith("_btc"):
+                if metric in CURRENCY_METRICS:
+                    metric = f"{metric}_usd"
+            
+            # Validate metric - skip if not in valid metrics list
+            if metric not in ALL_VALID_METRICS:
+                print(f"Warning: Skipping invalid/obsolete limit metric '{key}' -> '{metric}'")
+                continue
+            
+            try:
+                numeric_value = float(value)
+                entries.append({
+                    "metric": metric,
+                    "penalize_if": penalize_if,
+                    "value": numeric_value
+                })
+            except (TypeError, ValueError):
+                continue
+        
+        return entries
     @crossover_probability.setter
     def crossover_probability(self, new_crossover_probability):
         self._crossover_probability = new_crossover_probability

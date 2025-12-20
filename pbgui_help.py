@@ -840,30 +840,115 @@ limits_lower_bound_position_held_hours_max = """
 
 limits = """
     ```
-    The optimizer will penalize backtests whose metrics exceed the given values
-    Performance Metrics:
-    Returns & Growth:
-    adg                           Average Daily Gain (smoothed geometric)
-    mdg                           Median Daily Gain
-    gain                          Final Balance Gain (ratio of end/start balance)
-    Risk Metrics:
+    Optimizer Limits - Penalize backtests whose metrics exceed thresholds
+    
+    Penalties are added to every objective as a positive modifier; they do not
+    disqualify a config but will push it far from the Pareto front when violated.
+    
+    Select a metric and configure when to penalize:
+    - Metric: The performance metric to evaluate
+    - Currency: For currency metrics, choose USD or BTC (default: USD)
+    - Penalize If: Comparison operator (>, <, outside_range, inside_range)
+    - Stat: Override aggregation statistic (min, max, mean, std)
+    - Value/Range: The threshold value or [low, high] range
+    
+    ═══════════════════════════════════════════════════════════════════════
+    RETURNS & GROWTH (currency metrics - append _usd or _btc):
+    ═══════════════════════════════════════════════════════════════════════
+    adg, adg_w                    Average Daily Gain (smoothed geometric) 
+                                  and its recency-biased counterpart
+    mdg, mdg_w                    Median Daily Gain and recency-biased variant
+    gain                          Final balance gain (end/start ratio)
+    *_per_exposure_{long,short}   Above metrics divided by exposure limit per side
+    
+    ═══════════════════════════════════════════════════════════════════════
+    RISK METRICS (currency metrics - append _usd or _btc):
+    ═══════════════════════════════════════════════════════════════════════
     drawdown_worst                Maximum peak-to-trough drawdown
-    drawdown_worst_mean_1pct      Mean of worst 1% drawdowns
+    drawdown_worst_mean_1pct      Mean of worst 1% drawdowns (daily)
     expected_shortfall_1pct       Mean of worst 1% daily losses (CVaR)
-    equity_balance_diff_neg_max   Maximum negative equity-balance difference
-    equity_balance_diff_neg_mean  Mean negative equity-balance difference
-    equity_balance_diff_pos_max   Maximum positive equity-balance difference
-    equity_balance_diff_pos_mean  Mean positive equity-balance difference
-    Ratios & Efficiency:
-    positions_held_per_day	      Average number of positions held daily
-    position_held_hours_max       Maximum duration of any position (hours)
-    position_held_hours_mean      Average position duration (hours)
-    position_held_hours_median    Median position duration (hours)
-    position_unchanged_hours_max  Maximum time between position adjustments (hours)
-    Equity Curve Quality:
-    equity_choppiness             Normalized total variation (lower is smoother)
-    equity_jerkiness              Normalized mean absolute second derivative
-    exponential_fit_error         MSE from log-linear fit (lower = more consistent growth)
+    equity_balance_diff_neg_max   Largest negative equity-balance divergence
+    equity_balance_diff_neg_mean  Average negative equity-balance divergence
+    equity_balance_diff_pos_max   Largest positive equity-balance divergence
+    equity_balance_diff_pos_mean  Average positive equity-balance divergence
+    
+    ═══════════════════════════════════════════════════════════════════════
+    RATIOS & EFFICIENCY (currency metrics - append _usd or _btc):
+    ═══════════════════════════════════════════════════════════════════════
+    sharpe_ratio, sharpe_ratio_w                  Return-to-volatility ratio
+    sortino_ratio, sortino_ratio_w                Return-to-downside-volatility ratio
+    calmar_ratio, calmar_ratio_w                  Return divided by maximum drawdown
+    sterling_ratio, sterling_ratio_w              Return divided by avg worst 1% drawdowns
+    omega_ratio, omega_ratio_w                    Sum(positive returns) / sum(abs negative returns)
+    
+    ═══════════════════════════════════════════════════════════════════════
+    EQUITY CURVE QUALITY (currency metrics - append _usd or _btc):
+    ═══════════════════════════════════════════════════════════════════════
+    equity_choppiness, equity_choppiness_w        Normalized total variation (lower=smoother)
+    equity_jerkiness, equity_jerkiness_w          Normalized mean absolute 2nd derivative
+    exponential_fit_error, exponential_fit_error_w MSE from log-linear equity fit
+    peak_recovery_hours_equity                    Longest time equity stayed below prior peak
+    
+    ═══════════════════════════════════════════════════════════════════════
+    POSITION & EXECUTION METRICS (shared - no currency suffix):
+    ═══════════════════════════════════════════════════════════════════════
+    positions_held_per_day        Average positions opened per day
+    position_held_hours_max       Maximum holding time (hours)
+    position_held_hours_mean      Average holding time (hours)
+    position_held_hours_median    Median holding time (hours)
+    position_unchanged_hours_max  Longest span without modifying a position
+    volume_pct_per_day_avg        Average traded volume as % of account/day
+    n_fills_per_day               Average number of fills per day
+    loss_profit_ratio             abs(sum(losses)) / sum(profit)
+    loss_streak_max               Maximum consecutive losing trades
+    hrs_stuck_avg                 Average hours stuck in a position
+    hrs_stuck_max                 Maximum hours stuck in a position
+    n_positions_max               Maximum concurrent positions
+    
+    Metrics with *_w suffix use recency-weighted means (biased toward recent behavior).
+    ```"""
+
+limits_penalize_if = """
+    ```
+    Comparison operator determining when to penalize a backtest result:
+    
+    > or greater_than   Penalize if metric value > threshold
+                        Use for metrics to minimize (drawdown, loss_profit_ratio)
+                        Default stat: max
+    
+    < or less_than      Penalize if metric value < threshold
+                        Use for metrics to maximize (adg, sharpe_ratio)
+                        Default stat: min
+    
+    outside_range       Penalize if value < low OR value > high
+                        Use to keep a metric within [low, high]
+                        Default stat: mean
+    
+    inside_range        Penalize if low <= value <= high
+                        Use to exclude a specific range of values
+                        Default stat: mean
+    
+    auto                Automatically determine based on scoring weight:
+                        - scoring weight < 0 (maximize): becomes less_than
+                        - scoring weight > 0 (minimize): becomes greater_than
+                        - metric not in scoring: limit is ignored
+    ```"""
+
+limits_stat = """
+    ```
+    Override the aggregation statistic for limit checking across exchanges/scenarios:
+    
+    mean    Use the mean value (default for range checks)
+    min     Use the minimum value (default for less_than)
+    max     Use the maximum value (default for greater_than)
+    std     Use the standard deviation
+    
+    Leave empty to use the default based on penalize_if mode.
+    min     Use the minimum value (default for less_than)
+    max     Use the maximum value (default for greater_than)
+    std     Use the standard deviation
+    
+    Leave empty to use the default based on penalize_if mode.
     ```"""
 
 population_size = """

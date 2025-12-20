@@ -805,8 +805,10 @@ class OptimizeV7Item:
         else:
             self.initialize()
         self._calculate_results()
-        if "limits_data" in st.session_state:
-            del st.session_state.limits_data
+        # Clean up limits session state when loading new config
+        for key in list(st.session_state.keys()):
+            if key.startswith("limits_") or key.startswith("edit_limit") or key.startswith("add_limit") or key.startswith("select_limits_"):
+                del st.session_state[key]
 
     def _calculate_results(self):
         if self.name:
@@ -837,6 +839,10 @@ class OptimizeV7Item:
         
         if "edit_opt_v7_name" in st.session_state:
             st.session_state.edit_opt_v7_name = self.name
+        # Clean up limits session state when loading preset
+        for key in list(st.session_state.keys()):
+            if key.startswith("limits_") or key.startswith("edit_limit") or key.startswith("add_limit") or key.startswith("select_limits_"):
+                del st.session_state[key]
         
     def preset_save(self) -> bool:
         if self.name == "":
@@ -2703,57 +2709,32 @@ class OptimizeV7Item:
             help=pbgui_help.risk_twel_enforcer_threshold)
 
     @st.fragment
+    @st.fragment
     def fragment_limits(self):
-        LIMITS = [
-            "adg",
-            "adg_per_exposure_long",
-            "adg_per_exposure_short",
-            "adg_w",
-            "adg_w_per_exposure_long",
-            "adg_w_per_exposure_short",
-            "calmar_ratio",
-            "calmar_ratio_w",
-            "drawdown_worst",
-            "drawdown_worst_mean_1pct",
-            "equity_balance_diff_neg_max",
-            "equity_balance_diff_neg_mean",
-            "equity_balance_diff_pos_max",
-            "equity_balance_diff_pos_mean",
-            "equity_choppiness",
-            "equity_choppiness_w",
-            "equity_jerkiness",
-            "equity_jerkiness_w",
-            "expected_shortfall_1pct",
-            "exponential_fit_error",
-            "exponential_fit_error_w",
-            "gain",
-            "gain_per_exposure_long",
-            "gain_per_exposure_short",
+        # Shared metrics (no suffix needed)
+        SHARED_METRICS = [
+            "adg_pnl",
+            "adg_pnl_w",
             "loss_profit_ratio",
             "loss_profit_ratio_w",
-            "mdg",
-            "mdg_per_exposure_long",
-            "mdg_per_exposure_short",
-            "mdg_w",
-            "mdg_w_per_exposure_long",
-            "mdg_w_per_exposure_short",
-            "omega_ratio",
-            "omega_ratio_w",
+            "mdg_pnl",
+            "mdg_pnl_w",
+            "peak_recovery_hours_pnl",
             "position_held_hours_max",
             "position_held_hours_mean",
             "position_held_hours_median",
             "position_unchanged_hours_max",
             "positions_held_per_day",
-            "sharpe_ratio",
-            "sharpe_ratio_w",
-            "sortino_ratio",
-            "sortino_ratio_w",
-            "sterling_ratio",
-            "sterling_ratio_w",
+            "positions_held_per_day_w",
+            "sharpe_ratio_pnl",
+            "sharpe_ratio_pnl_w",
+            "sortino_ratio_pnl",
+            "sortino_ratio_pnl_w",
             "volume_pct_per_day_avg",
             "volume_pct_per_day_avg_w",
         ]
-        LIMITS_BTC = [
+        # Currency metrics (need _usd or _btc suffix)
+        CURRENCY_METRICS_BASE = [
             "adg",
             "adg_per_exposure_long",
             "adg_per_exposure_short",
@@ -2778,8 +2759,6 @@ class OptimizeV7Item:
             "gain",
             "gain_per_exposure_long",
             "gain_per_exposure_short",
-            "loss_profit_ratio",
-            "loss_profit_ratio_w",
             "mdg",
             "mdg_per_exposure_long",
             "mdg_per_exposure_short",
@@ -2788,6 +2767,7 @@ class OptimizeV7Item:
             "mdg_w_per_exposure_short",
             "omega_ratio",
             "omega_ratio_w",
+            "peak_recovery_hours_equity",
             "sharpe_ratio",
             "sharpe_ratio_w",
             "sortino_ratio",
@@ -2795,95 +2775,269 @@ class OptimizeV7Item:
             "sterling_ratio",
             "sterling_ratio_w",
         ]
+        
+        # Combined list for UI selection (base metrics only)
+        ALL_BASE_METRICS = sorted(SHARED_METRICS + CURRENCY_METRICS_BASE)
+        CURRENCY_METRICS_SET = set(CURRENCY_METRICS_BASE)
+        
+        PENALIZE_IF_OPTIONS = ["greater_than", "less_than", "outside_range", "inside_range", "auto"]
+        STAT_OPTIONS = ["", "mean", "min", "max", "std"]
+        CURRENCY_OPTIONS = ["usd", "btc"]
+        
         # Edit limits
-        if self.config.optimize.limits:
-            limits = True
-        else:
-            limits = False
-        with st.expander("Edit Limits", expanded=limits):
-            # Init
-            if not "ed_key" in st.session_state:
-                st.session_state.ed_key = 0
-            ed_key = st.session_state.ed_key
+        has_limits = bool(self.config.optimize.limits)
+        with st.expander("Edit Limits", expanded=has_limits):
+            # Init session state
+            if "limits_ed_key" not in st.session_state:
+                st.session_state.limits_ed_key = 0
+            ed_key = st.session_state.limits_ed_key
+            
+            # Handle data_editor events
             if f'select_limits_{ed_key}' in st.session_state:
                 ed = st.session_state[f'select_limits_{ed_key}']
                 for row in ed["edited_rows"]:
-                    if "edit" in ed["edited_rows"][row]:
-                        if ed["edited_rows"][row]["edit"]:
-                            st.session_state.edit_limits = st.session_state.limits_data[row]["limit"]
-                    if "delete" in ed["edited_rows"][row]:
-                        if ed["edited_rows"][row]["delete"]:
-                            self.config.optimize.limits.pop(st.session_state.limits_data[row]["limit"])
-                            self.clean_limits_session_state()
-                            st.rerun()
-            if not "limits_data" in st.session_state:
-                limits_data = []
-                if self.config.optimize.limits:
-                    for limit, value in self.config.optimize.limits.items():
-                        limits_data.append({
-                            "limit": limit,
-                            "value": value,
-                            "edit": False,
-                            "delete": False
-                        })
-                st.session_state.limits_data = limits_data
-            # Display limits
-            if st.session_state.limits_data and not "edit_limits" in st.session_state:
-                d = st.session_state.limits_data
-                st.data_editor(data=d, height=36+(len(d))*35, key=f'select_limits_{ed_key}', disabled=['limit','value'])
-            if "edit_opt_v7_add_limits_greater" in st.session_state:
-                if st.session_state.edit_opt_v7_add_limits_greater_button:
-                    self.config.optimize.limits[f'penalize_if_greater_than_{st.session_state.edit_opt_v7_add_limits_greater}'] = st.session_state.edit_opt_v7_add_limits_greater_value
-                    self.clean_limits_session_state()
-                    st.rerun()
-            if "edit_opt_v7_add_limits_lower" in st.session_state:
-                if st.session_state.edit_opt_v7_add_limits_lower_button:
-                    self.config.optimize.limits[f'penalize_if_lower_than_{st.session_state.edit_opt_v7_add_limits_lower}'] = st.session_state.edit_opt_v7_add_limits_lower_value
-                    self.clean_limits_session_state()
-                    st.rerun()
-            if "edit_opt_v7_add_limits_greater_btc" in st.session_state:
-                if st.session_state.edit_opt_v7_add_limits_greater_btc_button:
-                    self.config.optimize.limits[f'penalize_if_greater_than_btc_{st.session_state.edit_opt_v7_add_limits_greater_btc}'] = st.session_state.edit_opt_v7_add_limits_greater_value_btc
-                    self.clean_limits_session_state()
-                    st.rerun()
-            if "edit_opt_v7_add_limits_lower_btc" in st.session_state:
-                if st.session_state.edit_opt_v7_add_limits_lower_btc_button:
-                    self.config.optimize.limits[f'penalize_if_lower_than_btc_{st.session_state.edit_opt_v7_add_limits_lower_btc}'] = st.session_state.edit_opt_v7_add_limits_lower_value_btc
-                    self.clean_limits_session_state()
-                    st.rerun()
-            if "edit_limits" in st.session_state:
-                if st.session_state.edit_limits in self.config.optimize.limits:
-                    self.edit_limits(st.session_state.edit_limits, self.config.optimize.limits[st.session_state.edit_limits])
-                else:
-                    self.edit_limits(st.session_state.edit_limits)
+                    if ed["edited_rows"][row].get("delete"):
+                        limits_list = self.config.optimize.limits
+                        if 0 <= row < len(limits_list):
+                            limits_list.pop(row)
+                            self.config.optimize.limits = limits_list
+                        self.clean_limits_session_state()
+                        st.rerun()
+                    if ed["edited_rows"][row].get("edit"):
+                        st.session_state.edit_limit_idx = row
+            
+            # Build display data with separate columns
+            if "limits_display_data" not in st.session_state:
+                limits_display_data = []
+                for entry in self.config.optimize.limits:
+                    metric = entry.get("metric", "?")
+                    penalize_if = entry.get("penalize_if", "?")
+                    stat = entry.get("stat", "")
+                    
+                    # Format value/range
+                    if penalize_if in ("outside_range", "inside_range"):
+                        rng = entry.get("range", [0, 0])
+                        value_str = f"[{rng[0]}, {rng[1]}]"
+                    else:
+                        value_str = str(entry.get("value", 0))
+                    
+                    limits_display_data.append({
+                        "metric": metric,
+                        "penalize_if": penalize_if,
+                        "stat": stat,
+                        "value": value_str,
+                        "edit": False,
+                        "delete": False
+                    })
+                st.session_state.limits_display_data = limits_display_data
+            
+            # Display limits table
+            if st.session_state.limits_display_data and "edit_limit_idx" not in st.session_state:
+                d = st.session_state.limits_display_data
+                column_config = {
+                    "metric": st.column_config.TextColumn("Metric", width="medium"),
+                    "penalize_if": st.column_config.TextColumn("Penalize If", width="small"),
+                    "stat": st.column_config.TextColumn("Stat", width="small"),
+                    "value": st.column_config.TextColumn("Value", width="small"),
+                    "edit": st.column_config.CheckboxColumn("Edit", width="small"),
+                    "delete": st.column_config.CheckboxColumn("Delete", width="small"),
+                }
+                st.data_editor(data=d, height=36+(len(d))*35, key=f'select_limits_{ed_key}', 
+                              disabled=['metric', 'penalize_if', 'stat', 'value'],
+                              column_config=column_config)
+            
+            # Edit single limit
+            if "edit_limit_idx" in st.session_state:
+                idx = st.session_state.edit_limit_idx
+                limits_list = self.config.optimize.limits
+                if 0 <= idx < len(limits_list):
+                    entry = limits_list[idx]
+                    self._edit_single_limit(entry, idx, ALL_BASE_METRICS, CURRENCY_METRICS_SET, CURRENCY_OPTIONS, PENALIZE_IF_OPTIONS, STAT_OPTIONS)
             else:
-                col1, col2, col3, col4, col5, col6 = st.columns([1,0.5,0.5,1,0.5,0.5], vertical_alignment="bottom")
-                with col1:
-                    st.selectbox('penalize_if_greater_than', LIMITS, key="edit_opt_v7_add_limits_greater", help=pbgui_help.limits)
-                with col2:
-                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_greater_value")
-                with col3:
-                    st.button("Add Limit", key="edit_opt_v7_add_limits_greater_button")
-                with col4:
-                    st.selectbox('penalize_if_lower_than', LIMITS, key="edit_opt_v7_add_limits_lower", help=pbgui_help.limits)
-                with col5:
-                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_lower_value")
-                with col6:
-                    st.button("Add Limit", key="edit_opt_v7_add_limits_lower_button")
-                # btc
-                col1, col2, col3, col4, col5, col6 = st.columns([1,0.5,0.5,1,0.5,0.5], vertical_alignment="bottom")
-                with col1:
-                    st.selectbox('penalize_if_greater_than_btc', LIMITS_BTC, key="edit_opt_v7_add_limits_greater_btc", help=pbgui_help.limits)
-                with col2:
-                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_greater_value_btc")
-                with col3:
-                    st.button("Add Limit", key="edit_opt_v7_add_limits_greater_btc_button")
-                with col4:
-                    st.selectbox('penalize_if_lower_than_btc', LIMITS_BTC, key="edit_opt_v7_add_limits_lower_btc", help=pbgui_help.limits)
-                with col5:
-                    st.number_input("limit", format="%.5f", key="edit_opt_v7_add_limits_lower_value_btc")
-                with col6:
-                    st.button("Add Limit", key="edit_opt_v7_add_limits_lower_btc_button")
+                # Add new limit UI
+                self._add_new_limit_ui(ALL_BASE_METRICS, CURRENCY_METRICS_SET, CURRENCY_OPTIONS, PENALIZE_IF_OPTIONS, STAT_OPTIONS)
+    
+    def _format_limit_display(self, entry: dict) -> str:
+        """Format a limit entry for display in the table."""
+        metric = entry.get("metric", "?")
+        penalize_if = entry.get("penalize_if", "?")
+        stat = entry.get("stat", "")
+        stat_str = f" ({stat})" if stat else ""
+        
+        if penalize_if in ("outside_range", "inside_range"):
+            rng = entry.get("range", [0, 0])
+            return f"{metric}{stat_str} {penalize_if} [{rng[0]}, {rng[1]}]"
+        else:
+            value = entry.get("value", 0)
+            return f"{metric}{stat_str} {penalize_if} {value}"
+    
+    def _edit_single_limit(self, entry: dict, idx: int, base_metrics: list, currency_metrics_set: set, currency_options: list, penalize_options: list, stat_options: list):
+        """UI for editing a single limit entry with split metric/currency selection."""
+        st.subheader(f"Edit Limit #{idx + 1}")
+        
+        # Split current metric into base and currency
+        current_full_metric = entry.get("metric", base_metrics[0])
+        current_base = current_full_metric
+        current_currency = "usd"
+        for suffix in ('_usd', '_btc'):
+            if current_full_metric.endswith(suffix):
+                base = current_full_metric[:-len(suffix)]
+                if base in currency_metrics_set:
+                    current_base = base
+                    current_currency = suffix[1:]  # Remove leading underscore
+                    break
+        
+        # Get current values
+        current_penalize = entry.get("penalize_if", "greater_than")
+        current_stat = entry.get("stat", "")
+        is_range = current_penalize in ("outside_range", "inside_range")
+        
+        # Dynamic column layout
+        if is_range:
+            col1, col2, col3, col4, col5, col6 = st.columns([1.5, 0.6, 1, 0.6, 0.8, 0.8])
+        else:
+            col1, col2, col3, col4, col5 = st.columns([1.5, 0.6, 1, 0.6, 1])
+        
+        with col1:
+            base_idx = base_metrics.index(current_base) if current_base in base_metrics else 0
+            new_base = st.selectbox("Metric", base_metrics, index=base_idx, key="edit_limit_base_metric", help=pbgui_help.limits)
+        
+        # Check if newly selected base is a currency metric
+        new_is_currency = new_base in currency_metrics_set
+        
+        with col2:
+            if new_is_currency:
+                curr_idx = currency_options.index(current_currency) if current_currency in currency_options else 0
+                new_currency = st.selectbox("Currency", currency_options, index=curr_idx, key="edit_limit_currency")
+            else:
+                st.write("")  # Empty placeholder
+                new_currency = None
+        
+        with col3:
+            penalize_idx = penalize_options.index(current_penalize) if current_penalize in penalize_options else 0
+            new_penalize = st.selectbox("Penalize If", penalize_options, index=penalize_idx, key="edit_limit_penalize", help=pbgui_help.limits_penalize_if)
+        
+        with col4:
+            stat_idx = stat_options.index(current_stat) if current_stat in stat_options else 0
+            new_stat = st.selectbox("Stat", stat_options, index=stat_idx, key="edit_limit_stat", help=pbgui_help.limits_stat)
+        
+        # Combine base + currency for final metric
+        if new_is_currency and new_currency:
+            new_metric = f"{new_base}_{new_currency}"
+        else:
+            new_metric = new_base
+        
+        # Value or range input
+        if is_range:
+            current_range = entry.get("range", [0.0, 1.0])
+            with col5:
+                range_low = st.number_input("Range Low", value=float(current_range[0]), format="%.6f", key="edit_limit_range_low")
+            with col6:
+                range_high = st.number_input("Range High", value=float(current_range[1]), format="%.6f", key="edit_limit_range_high")
+        else:
+            current_value = entry.get("value", 0.0)
+            with col5:
+                new_value = st.number_input("Value", value=float(current_value), format="%.6f", key="edit_limit_value")
+        
+        # Buttons row
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            if st.button("OK", key="edit_limit_save"):
+                new_entry = {"metric": new_metric, "penalize_if": new_penalize}
+                if new_stat:
+                    new_entry["stat"] = new_stat
+                if new_penalize in ("outside_range", "inside_range"):
+                    new_entry["range"] = [range_low, range_high]
+                else:
+                    new_entry["value"] = new_value
+                
+                limits_list = self.config.optimize.limits
+                limits_list[idx] = new_entry
+                self.config.optimize.limits = limits_list
+                self.clean_limits_session_state()
+                st.rerun()
+        with col2:
+            if st.button("Cancel", key="edit_limit_cancel"):
+                self.clean_limits_session_state()
+                st.rerun()
+        with col3:
+            if st.button("Delete", key="edit_limit_delete"):
+                limits_list = self.config.optimize.limits
+                limits_list.pop(idx)
+                self.config.optimize.limits = limits_list
+                self.clean_limits_session_state()
+                st.rerun()
+
+    def _add_new_limit_ui(self, base_metrics: list, currency_metrics_set: set, currency_options: list, penalize_options: list, stat_options: list):
+        """UI for adding a new limit with split metric/currency selection."""
+        st.subheader("Add New Limit")
+        
+        # Check if currently selected base metric is a currency metric
+        current_base = st.session_state.get("add_limit_base_metric", base_metrics[0])
+        is_currency = current_base in currency_metrics_set
+        is_range = st.session_state.get("add_limit_penalize", "greater_than") in ("outside_range", "inside_range")
+        
+        # Dynamic column layout
+        if is_range:
+            col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 0.6, 1, 0.6, 0.8, 0.8, 0.6], vertical_alignment="bottom")
+        else:
+            col1, col2, col3, col4, col5, col6 = st.columns([1.5, 0.6, 1, 0.6, 1, 0.6], vertical_alignment="bottom")
+        
+        with col1:
+            new_base = st.selectbox("Metric", base_metrics, key="add_limit_base_metric", help=pbgui_help.limits)
+        
+        # Recheck after selectbox - it may have changed
+        is_currency = new_base in currency_metrics_set
+        
+        with col2:
+            if is_currency:
+                new_currency = st.selectbox("Currency", currency_options, key="add_limit_currency")
+            else:
+                st.write("")  # Empty placeholder
+                new_currency = None
+        
+        with col3:
+            new_penalize = st.selectbox("Penalize If", penalize_options, key="add_limit_penalize", help=pbgui_help.limits_penalize_if)
+        
+        with col4:
+            new_stat = st.selectbox("Stat", stat_options, key="add_limit_stat", help=pbgui_help.limits_stat)
+        
+        if is_range:
+            with col5:
+                range_low = st.number_input("Range Low", value=0.0, format="%.6f", key="add_limit_range_low")
+            with col6:
+                range_high = st.number_input("Range High", value=1.0, format="%.6f", key="add_limit_range_high")
+            with col7:
+                add_button = st.button("Add", key="add_limit_button")
+        else:
+            with col5:
+                new_value = st.number_input("Value", value=0.0, format="%.6f", key="add_limit_value")
+            with col6:
+                add_button = st.button("Add", key="add_limit_button")
+        
+        if add_button:
+            # Combine base and currency for currency metrics
+            final_base = st.session_state.get("add_limit_base_metric", base_metrics[0])
+            if final_base in currency_metrics_set:
+                curr = st.session_state.get("add_limit_currency", "usd")
+                final_metric = f"{final_base}_{curr}"
+            else:
+                final_metric = final_base
+            
+            new_entry = {"metric": final_metric, "penalize_if": st.session_state.get("add_limit_penalize", "greater_than")}
+            stat_val = st.session_state.get("add_limit_stat", "")
+            if stat_val:
+                new_entry["stat"] = stat_val
+            if st.session_state.get("add_limit_penalize", "greater_than") in ("outside_range", "inside_range"):
+                new_entry["range"] = [st.session_state.get("add_limit_range_low", 0.0), st.session_state.get("add_limit_range_high", 1.0)]
+            else:
+                new_entry["value"] = st.session_state.get("add_limit_value", 0.0)
+            
+            limits_list = self.config.optimize.limits
+            limits_list.append(new_entry)
+            self.config.optimize.limits = limits_list
+            self.clean_limits_session_state()
+            st.rerun()
 
 
     def edit(self):
@@ -3043,50 +3197,15 @@ class OptimizeV7Item:
                 self.fragment_short_unstuck_loss_allowance_pct()
                 self.fragment_short_unstuck_threshold()
 
-    def edit_limits(self, limit, value = 0.0):
-        value = float(value)
-        st.number_input(limit, value=value, format="%.5f", key="edit_opt_v7_limits", help=pbgui_help.limits)
-        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1], vertical_alignment="bottom")
-        with col1:
-            if st.button("Save"):
-                self.config.optimize.limits[limit] = st.session_state.edit_opt_v7_limits
-                self.clean_limits_session_state()
-                st.rerun()
-        with col2:
-            if st.button("Cancel"):
-                self.clean_limits_session_state()
-                st.rerun()
-        with col3:
-            if st.button("Delete"):
-                self.config.optimize.limits.pop(limit)
-                self.clean_limits_session_state()
-                st.rerun()
-
     def clean_limits_session_state(self):
-        if "edit_opt_v7_limits" in st.session_state:
-            del st.session_state.edit_opt_v7_limits
-        if "limits_data" in st.session_state:
-            del st.session_state.limits_data
-        if "ed_key" in st.session_state:
-            del st.session_state.ed_key
-        if "edit_limits" in st.session_state:
-            del st.session_state.edit_limits
-        if "edit_opt_v7_add_limits_greater_button" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_greater_button
-        if "edit_opt_v7_add_limits_greater_value" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_greater_value
-        if "edit_opt_v7_add_limits_lower_button" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_lower_button
-        if "edit_opt_v7_add_limits_lower_value" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_lower_value
-        if "edit_opt_v7_add_limits_greater_btc_button" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_greater_btc_button
-        if "edit_opt_v7_add_limits_greater_value_btc" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_greater_value_btc
-        if "edit_opt_v7_add_limits_lower_btc_button" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_lower_btc_button
-        if "edit_opt_v7_add_limits_lower_value_btc" in st.session_state:
-            del st.session_state.edit_opt_v7_add_limits_lower_value_btc
+        # Remove all limits-related session state keys
+        keys_to_remove = [k for k in st.session_state.keys() if 
+                         k.startswith("limits_") or 
+                         k.startswith("edit_limit") or 
+                         k.startswith("add_limit") or
+                         k.startswith("select_limits_")]
+        for key in keys_to_remove:
+            del st.session_state[key]
 
     def save(self):
         self.path = Path(f'{PBGDIR}/data/opt_v7')
