@@ -581,59 +581,117 @@ class OptimizeV7Results:
         if not self.paretos:
             self.load_paretos(index)
         select_analysis = []
-        if "analyses_combined" in self.paretos[0]:
-            select_analysis.append("analyses_combined")
-        if "analyses" in self.paretos[0]:
-            for analyse in self.paretos[0]["analyses"]:
-                select_analysis.append(analyse)
+        
+        # Detect format: new format has "metrics", old format has "analyses_combined"
+        is_new_format = "metrics" in self.paretos[0]
+        
+        if is_new_format:
+            # New format: no analysis selection dropdown needed
+            pass
+        else:
+            # Old format
+            if "analyses_combined" in self.paretos[0]:
+                select_analysis.append("analyses_combined")
+            if "analyses" in self.paretos[0]:
+                for analyse in self.paretos[0]["analyses"]:
+                    select_analysis.append(analyse)
+            
+            # Validate and fix the selected analysis BEFORE using it
+            if select_analysis:
+                if "opt_v7_pareto_select_analysis" not in st.session_state:
+                    st.session_state.opt_v7_pareto_select_analysis = select_analysis[0]
+                    self.selected_analysis = select_analysis[0]
+                elif st.session_state.opt_v7_pareto_select_analysis not in select_analysis:
+                    # Current selection is invalid, reset to first available
+                    st.session_state.opt_v7_pareto_select_analysis = select_analysis[0]
+                    self.selected_analysis = select_analysis[0]
+                    if "d_paretos" in st.session_state:
+                        del st.session_state.d_paretos
+        
         def clear_paretos():
             if "d_paretos" in st.session_state:
                 del st.session_state.d_paretos
+        
         col1, col2 = st.columns([1, 3], gap="small")
         with col1:
-            if "opt_v7_pareto_select_analysis" in st.session_state:
+            # Only show analysis selector for old format
+            if not is_new_format and select_analysis:
                 if st.session_state.opt_v7_pareto_select_analysis != self.selected_analysis:
                     self.selected_analysis = st.session_state.opt_v7_pareto_select_analysis
-            else:
-                st.session_state.opt_v7_pareto_select_analysis = self.selected_analysis
-            st.selectbox('analyses', options=select_analysis, key="opt_v7_pareto_select_analysis", on_change=clear_paretos)
+                st.selectbox('analyses', options=select_analysis, key="opt_v7_pareto_select_analysis", on_change=clear_paretos)
+        
         if not "d_paretos" in st.session_state:
             d = []
             for id, pareto in enumerate(self.paretos):
-                if select_analysis:
-                    name = pareto["index_filename"].split("/")[-1]
-                    if st.session_state.opt_v7_pareto_select_analysis == "analyses_combined":
-                        analysis = pareto["analyses_combined"]
-                        d.append({
-                            'Select': False,
-                            'id': id,
-                            'view': False,
-                            'adg': analysis["adg_max"],
-                            'mdg': analysis["mdg_max"],
-                            'drawdown_worst': analysis["drawdown_worst_max"],
-                            'gain': analysis["gain_max"],
-                            'loss_profit_ratio': analysis["loss_profit_ratio_max"],
-                            'position_held_hours_max': analysis["position_held_hours_max_max"],
-                            'sharpe_ratio': analysis["sharpe_ratio_max"],
-                            'Name': name,
-                            'file': pareto["index_filename"],
-                        })
-                    else:
-                        analysis = pareto["analyses"][st.session_state.opt_v7_pareto_select_analysis]
-                        d.append({
-                            'Select': False,
-                            'id': id,
-                            'view': False,
-                            'adg': analysis["adg"],
-                            'mdg': analysis["mdg"],
-                            'drawdown_worst': analysis["drawdown_worst"],
-                            'gain': analysis["gain"],
-                            'loss_profit_ratio': analysis["loss_profit_ratio"],
-                            'position_held_hours_max': analysis["position_held_hours_max"],
-                            'sharpe_ratio': analysis["sharpe_ratio"],
-                            'Name': name,
-                            'file': pareto["index_filename"],
-                        })
+                name = pareto["index_filename"].split("/")[-1]
+                
+                if is_new_format:
+                    # New format: extract from metrics.stats
+                    stats = pareto.get("metrics", {}).get("stats", {})
+                    
+                    # Helper to get mean value from stat
+                    def get_stat(key, default=0):
+                        return stats.get(key, {}).get("mean", default)
+                    
+                    d.append({
+                        'Select': False,
+                        'id': id,
+                        'view': False,
+                        'adg': get_stat("adg_usd"),
+                        'mdg': get_stat("mdg_usd"),
+                        'drawdown_worst': get_stat("drawdown_worst_usd"),
+                        'gain': get_stat("gain_usd"),
+                        'loss_profit_ratio': get_stat("loss_profit_ratio"),
+                        'position_held_hours_max': get_stat("position_held_hours_max"),
+                        'sharpe_ratio': get_stat("sharpe_ratio_usd"),
+                        'Name': name,
+                        'file': pareto["index_filename"],
+                    })
+                else:
+                    # Old format
+                    if select_analysis and st.session_state.opt_v7_pareto_select_analysis in select_analysis:
+                        if st.session_state.opt_v7_pareto_select_analysis == "analyses_combined":
+                            analysis = pareto["analyses_combined"]
+                            # Support both old format (_max suffix) and new format (_mean suffix)
+                            adg = analysis.get("adg_max", analysis.get("adg_mean", 0))
+                            mdg = analysis.get("mdg_max", analysis.get("mdg_mean", 0))
+                            drawdown_worst = analysis.get("drawdown_worst_max", analysis.get("drawdown_worst_mean", 0))
+                            gain = analysis.get("gain_max", analysis.get("gain_mean", 0))
+                            loss_profit_ratio = analysis.get("loss_profit_ratio_max", analysis.get("loss_profit_ratio_mean", 0))
+                            position_held_hours_max = analysis.get("position_held_hours_max_max", analysis.get("position_held_hours_max_mean", 0))
+                            sharpe_ratio = analysis.get("sharpe_ratio_max", analysis.get("sharpe_ratio_mean", 0))
+                            d.append({
+                                'Select': False,
+                                'id': id,
+                                'view': False,
+                                'adg': adg,
+                                'mdg': mdg,
+                                'drawdown_worst': drawdown_worst,
+                                'gain': gain,
+                                'loss_profit_ratio': loss_profit_ratio,
+                                'position_held_hours_max': position_held_hours_max,
+                                'sharpe_ratio': sharpe_ratio,
+                                'Name': name,
+                                'file': pareto["index_filename"],
+                            })
+                        else:
+                            # Check if the selected analysis exists in this pareto's analyses
+                            if st.session_state.opt_v7_pareto_select_analysis in pareto.get("analyses", {}):
+                                analysis = pareto["analyses"][st.session_state.opt_v7_pareto_select_analysis]
+                                d.append({
+                                    'Select': False,
+                                    'id': id,
+                                    'view': False,
+                                    'adg': analysis["adg"],
+                                    'mdg': analysis["mdg"],
+                                    'drawdown_worst': analysis["drawdown_worst"],
+                                    'gain': analysis["gain"],
+                                    'loss_profit_ratio': analysis["loss_profit_ratio"],
+                                    'position_held_hours_max': analysis["position_held_hours_max"],
+                                    'sharpe_ratio': analysis["sharpe_ratio"],
+                                    'Name': name,
+                                    'file': pareto["index_filename"],
+                                })
             st.session_state.d_paretos = d
         d_paretos = st.session_state.d_paretos
         column_config = {
@@ -919,15 +977,29 @@ class OptimizeV7Item:
             st.session_state.edit_opt_v7_compress_results_file = self.config.optimize.compress_results_file
         st.checkbox("compress_results_file", key="edit_opt_v7_compress_results_file", help=pbgui_help.compress_results_file)
     
-    # use_btc_collateral
+    # btc_collateral_cap
     @st.fragment
-    def fragment_use_btc_collateral(self):
-        if "edit_opt_v7_use_btc_collateral" in st.session_state:
-            if st.session_state.edit_opt_v7_use_btc_collateral != self.config.backtest.use_btc_collateral:
-                self.config.backtest.use_btc_collateral = st.session_state.edit_opt_v7_use_btc_collateral
+    def fragment_btc_collateral_cap(self):
+        if "edit_opt_v7_btc_collateral_cap" in st.session_state:
+            if st.session_state.edit_opt_v7_btc_collateral_cap != self.config.backtest.btc_collateral_cap:
+                self.config.backtest.btc_collateral_cap = st.session_state.edit_opt_v7_btc_collateral_cap
         else:
-            st.session_state.edit_opt_v7_use_btc_collateral = self.config.backtest.use_btc_collateral
-        st.checkbox("use_btc_collateral", key="edit_opt_v7_use_btc_collateral", help=pbgui_help.use_btc_collateral)
+            st.session_state.edit_opt_v7_btc_collateral_cap = self.config.backtest.btc_collateral_cap
+        st.number_input("btc_collateral_cap", min_value=0.0, max_value=10.0, step=0.1, format="%.2f", key="edit_opt_v7_btc_collateral_cap", help=pbgui_help.btc_collateral_cap)
+
+    # btc_collateral_ltv_cap
+    @st.fragment
+    def fragment_btc_collateral_ltv_cap(self):
+        if "edit_opt_v7_btc_collateral_ltv_cap" in st.session_state:
+            new_val = st.session_state.edit_opt_v7_btc_collateral_ltv_cap
+            # Convert 0 to None for the config
+            config_val = None if new_val == 0.0 else new_val
+            if config_val != self.config.backtest.btc_collateral_ltv_cap:
+                self.config.backtest.btc_collateral_ltv_cap = config_val
+        else:
+            # Convert None to 0 for the UI
+            st.session_state.edit_opt_v7_btc_collateral_ltv_cap = self.config.backtest.btc_collateral_ltv_cap if self.config.backtest.btc_collateral_ltv_cap is not None else 0.0
+        st.number_input("btc_collateral_ltv_cap", min_value=0.0, max_value=1.0, step=0.1, format="%.2f", key="edit_opt_v7_btc_collateral_ltv_cap", help=pbgui_help.btc_collateral_ltv_cap)
 
     # write_all_results
     @st.fragment
@@ -948,6 +1020,16 @@ class OptimizeV7Item:
         else:
             st.session_state.edit_opt_v7_population_size = self.config.optimize.population_size
         st.number_input("population_size", min_value=1, max_value=10000, step=1, format="%d", key="edit_opt_v7_population_size", help=pbgui_help.population_size)
+
+    # pareto_max_size
+    @st.fragment
+    def fragment_pareto_max_size(self):
+        if "edit_opt_v7_pareto_max_size" in st.session_state:
+            if st.session_state.edit_opt_v7_pareto_max_size != self.config.optimize.pareto_max_size:
+                self.config.optimize.pareto_max_size = st.session_state.edit_opt_v7_pareto_max_size
+        else:
+            st.session_state.edit_opt_v7_pareto_max_size = self.config.optimize.pareto_max_size
+        st.number_input("pareto_max_size", min_value=1, max_value=10000, step=10, format="%d", key="edit_opt_v7_pareto_max_size", help=pbgui_help.pareto_max_size)
 
     # offspring_multiplier
     @st.fragment
@@ -1432,41 +1514,41 @@ class OptimizeV7Item:
             key="edit_opt_v7_long_entry_grid_double_down_factor",
             help=pbgui_help.entry_grid_double_down_factor)
     
-    # long_entry_grid_spacing_log_span_hours
+    # long_entry_volatility_ema_span_hours
     @st.fragment
-    def fragment_long_entry_grid_spacing_log_span_hours(self):
-        if "edit_opt_v7_long_entry_grid_spacing_log_span_hours" in st.session_state:
-            if st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours != (self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_1):
-                self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours[0]
-                self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours[1]
+    def fragment_long_entry_volatility_ema_span_hours(self):
+        if "edit_opt_v7_long_entry_volatility_ema_span_hours" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours != (self.config.optimize.bounds.long_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.long_entry_volatility_ema_span_hours_1):
+                self.config.optimize.bounds.long_entry_volatility_ema_span_hours_0 = st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours[0]
+                self.config.optimize.bounds.long_entry_volatility_ema_span_hours_1 = st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours[1]
         else:
-            st.session_state.edit_opt_v7_long_entry_grid_spacing_log_span_hours = (self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.long_entry_grid_spacing_log_span_hours_1)
+            st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours = (self.config.optimize.bounds.long_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.long_entry_volatility_ema_span_hours_1)
         st.slider(
-            "long_entry_grid_spacing_log_span_hours",
-            min_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MIN,
-            max_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MAX,
-            step=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_STEP,
-            format=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_FORMAT,
-            key="edit_opt_v7_long_entry_grid_spacing_log_span_hours",
-            help=pbgui_help.entry_grid_spacing_log)
+            "long_entry_volatility_ema_span_hours",
+            min_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MIN,
+            max_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MAX,
+            step=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_STEP,
+            format=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_FORMAT,
+            key="edit_opt_v7_long_entry_volatility_ema_span_hours",
+            help=pbgui_help.entry_volatility_ema_span_hours)
 
-    # long_entry_grid_spacing_log_weight
+    # long_entry_grid_spacing_volatility_weight
     @st.fragment
-    def fragment_long_entry_grid_spacing_log_weight(self):
-        if "edit_opt_v7_long_entry_grid_spacing_log_weight" in st.session_state:
-            if st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight != (self.config.optimize.bounds.long_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_log_weight_1):
-                self.config.optimize.bounds.long_entry_grid_spacing_log_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight[0]
-                self.config.optimize.bounds.long_entry_grid_spacing_log_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight[1]
+    def fragment_long_entry_grid_spacing_volatility_weight(self):
+        if "edit_opt_v7_long_entry_grid_spacing_volatility_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight != (self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_1):
+                self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight[0]
+                self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight[1]
         else:
-            st.session_state.edit_opt_v7_long_entry_grid_spacing_log_weight = (self.config.optimize.bounds.long_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_log_weight_1)
+            st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight = (self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_1)
         st.slider(
-            "long_entry_grid_spacing_log_weight",
-            min_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MIN,
-            max_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MAX,
-            step=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_STEP,
-            format=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_FORMAT,
-            key="edit_opt_v7_long_entry_grid_spacing_log_weight",
-            help=pbgui_help.entry_grid_spacing_log)
+            "long_entry_grid_spacing_volatility_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_grid_spacing_volatility_weight",
+            help=pbgui_help.entry_grid_spacing_volatility_weight)
 
     # long_entry_grid_spacing_pct
     @st.fragment
@@ -1593,7 +1675,43 @@ class OptimizeV7Item:
             format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
             key="edit_opt_v7_long_entry_trailing_retracement_pct",
             help=pbgui_help.trailing_parameters)
-    
+
+    # long_entry_trailing_retracement_we_weight
+    @st.fragment
+    def fragment_long_entry_trailing_retracement_we_weight(self):
+        if "edit_opt_v7_long_entry_trailing_retracement_we_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight != (self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_1):
+                self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight[0]
+                self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight = (self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_1)
+        st.slider(
+            "long_entry_trailing_retracement_we_weight",
+            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_retracement_we_weight",
+            help=pbgui_help.entry_trailing_retracement_we_weight)
+
+    # long_entry_trailing_retracement_volatility_weight
+    @st.fragment
+    def fragment_long_entry_trailing_retracement_volatility_weight(self):
+        if "edit_opt_v7_long_entry_trailing_retracement_volatility_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight != (self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_1):
+                self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight[0]
+                self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight = (self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_1)
+        st.slider(
+            "long_entry_trailing_retracement_volatility_weight",
+            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_retracement_volatility_weight",
+            help=pbgui_help.entry_trailing_retracement_volatility_weight)
+
     # long_entry_trailing_threshold_pct
     @st.fragment
     def fragment_long_entry_trailing_threshold_pct(self):
@@ -1611,24 +1729,78 @@ class OptimizeV7Item:
             format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
             key="edit_opt_v7_long_entry_trailing_threshold_pct",
             help=pbgui_help.trailing_parameters)
-    
-    # long_filter_log_range_ema_span
+
+    # long_entry_trailing_threshold_we_weight
     @st.fragment
-    def fragment_long_filter_log_range_ema_span(self):
-        if "edit_opt_v7_long_filter_log_range_ema_span" in st.session_state:
-            if st.session_state.edit_opt_v7_long_filter_log_range_ema_span != (self.config.optimize.bounds.long_filter_log_range_ema_span_0, self.config.optimize.bounds.long_filter_log_range_ema_span_1):
-                self.config.optimize.bounds.long_filter_log_range_ema_span_0 = st.session_state.edit_opt_v7_long_filter_log_range_ema_span[0]
-                self.config.optimize.bounds.long_filter_log_range_ema_span_1 = st.session_state.edit_opt_v7_long_filter_log_range_ema_span[1]
+    def fragment_long_entry_trailing_threshold_we_weight(self):
+        if "edit_opt_v7_long_entry_trailing_threshold_we_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight != (self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_1):
+                self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight[0]
+                self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight[1]
         else:
-            st.session_state.edit_opt_v7_long_filter_log_range_ema_span = (self.config.optimize.bounds.long_filter_log_range_ema_span_0, self.config.optimize.bounds.long_filter_log_range_ema_span_1)
+            st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight = (self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_1)
         st.slider(
-            "long_filter_log_range_ema_span",
-            min_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MIN,
-            max_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MAX,
-            step=Bounds.FILTER_LOG_RANGE_EMA_SPAN_STEP,
-            format=Bounds.FILTER_LOG_RANGE_EMA_SPAN_FORMAT,
-            key="edit_opt_v7_long_filter_log_range_ema_span",
-            help=pbgui_help.filter_rolling_window)
+            "long_entry_trailing_threshold_we_weight",
+            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_threshold_we_weight",
+            help=pbgui_help.entry_trailing_threshold_we_weight)
+
+    # long_entry_trailing_threshold_volatility_weight
+    @st.fragment
+    def fragment_long_entry_trailing_threshold_volatility_weight(self):
+        if "edit_opt_v7_long_entry_trailing_threshold_volatility_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight != (self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_1):
+                self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight[0]
+                self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight[1]
+        else:
+            st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight = (self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_1)
+        st.slider(
+            "long_entry_trailing_threshold_volatility_weight",
+            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_FORMAT,
+            key="edit_opt_v7_long_entry_trailing_threshold_volatility_weight",
+            help=pbgui_help.entry_trailing_threshold_volatility_weight)
+
+    # long_filter_volatility_ema_span
+    @st.fragment
+    def fragment_long_filter_volatility_ema_span(self):
+        if "edit_opt_v7_long_filter_volatility_ema_span" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_volatility_ema_span != (self.config.optimize.bounds.long_filter_volatility_ema_span_0, self.config.optimize.bounds.long_filter_volatility_ema_span_1):
+                self.config.optimize.bounds.long_filter_volatility_ema_span_0 = st.session_state.edit_opt_v7_long_filter_volatility_ema_span[0]
+                self.config.optimize.bounds.long_filter_volatility_ema_span_1 = st.session_state.edit_opt_v7_long_filter_volatility_ema_span[1]
+        else:
+            st.session_state.edit_opt_v7_long_filter_volatility_ema_span = (self.config.optimize.bounds.long_filter_volatility_ema_span_0, self.config.optimize.bounds.long_filter_volatility_ema_span_1)
+        st.slider(
+            "long_filter_volatility_ema_span",
+            min_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MIN,
+            max_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MAX,
+            step=Bounds.FILTER_VOLATILITY_EMA_SPAN_STEP,
+            format=Bounds.FILTER_VOLATILITY_EMA_SPAN_FORMAT,
+            key="edit_opt_v7_long_filter_volatility_ema_span",
+            help=pbgui_help.filter_ema_span)
+
+    # long_filter_volatility_drop_pct
+    @st.fragment
+    def fragment_long_filter_volatility_drop_pct(self):
+        if "edit_opt_v7_long_filter_volatility_drop_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_filter_volatility_drop_pct != (self.config.optimize.bounds.long_filter_volatility_drop_pct_0, self.config.optimize.bounds.long_filter_volatility_drop_pct_1):
+                self.config.optimize.bounds.long_filter_volatility_drop_pct_0 = st.session_state.edit_opt_v7_long_filter_volatility_drop_pct[0]
+                self.config.optimize.bounds.long_filter_volatility_drop_pct_1 = st.session_state.edit_opt_v7_long_filter_volatility_drop_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_filter_volatility_drop_pct = (self.config.optimize.bounds.long_filter_volatility_drop_pct_0, self.config.optimize.bounds.long_filter_volatility_drop_pct_1)
+        st.slider(
+            "long_filter_volatility_drop_pct",
+            min_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MIN,
+            max_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MAX,
+            step=Bounds.FILTER_VOLATILITY_DROP_PCT_STEP,
+            format=Bounds.FILTER_VOLATILITY_DROP_PCT_FORMAT,
+            key="edit_opt_v7_long_filter_volatility_drop_pct",
+            help=pbgui_help.filter_volatility_drop_pct)
 
     # long_filter_volume_drop_pct
     @st.fragment
@@ -1664,7 +1836,7 @@ class OptimizeV7Item:
             step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
             format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
             key="edit_opt_v7_long_filter_volume_ema_span",
-            help=pbgui_help.filter_rolling_window)
+            help=pbgui_help.filter_ema_span)
 
     # long_n_positions
     @st.fragment
@@ -1773,6 +1945,60 @@ class OptimizeV7Item:
             format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
             key="edit_opt_v7_long_unstuck_threshold",
             help=pbgui_help.unstuck_threshold)
+
+    # long_risk_wel_enforcer_threshold
+    @st.fragment
+    def fragment_long_risk_wel_enforcer_threshold(self):
+        if "edit_opt_v7_long_risk_wel_enforcer_threshold" in st.session_state:
+            if st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold != (self.config.optimize.bounds.long_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_wel_enforcer_threshold_1):
+                self.config.optimize.bounds.long_risk_wel_enforcer_threshold_0 = st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold[0]
+                self.config.optimize.bounds.long_risk_wel_enforcer_threshold_1 = st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold[1]
+        else:
+            st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold = (self.config.optimize.bounds.long_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_wel_enforcer_threshold_1)
+        st.slider(
+            "long_risk_wel_enforcer_threshold",
+            min_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MIN,
+            max_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MAX,
+            step=Bounds.RISK_WEL_ENFORCER_THRESHOLD_STEP,
+            format=Bounds.RISK_WEL_ENFORCER_THRESHOLD_FORMAT,
+            key="edit_opt_v7_long_risk_wel_enforcer_threshold",
+            help=pbgui_help.risk_wel_enforcer_threshold)
+
+    # long_risk_we_excess_allowance_pct
+    @st.fragment
+    def fragment_long_risk_we_excess_allowance_pct(self):
+        if "edit_opt_v7_long_risk_we_excess_allowance_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct != (self.config.optimize.bounds.long_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.long_risk_we_excess_allowance_pct_1):
+                self.config.optimize.bounds.long_risk_we_excess_allowance_pct_0 = st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct[0]
+                self.config.optimize.bounds.long_risk_we_excess_allowance_pct_1 = st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct[1]
+        else:
+            st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct = (self.config.optimize.bounds.long_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.long_risk_we_excess_allowance_pct_1)
+        st.slider(
+            "long_risk_we_excess_allowance_pct",
+            min_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MIN,
+            max_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MAX,
+            step=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_STEP,
+            format=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_FORMAT,
+            key="edit_opt_v7_long_risk_we_excess_allowance_pct",
+            help=pbgui_help.risk_we_excess_allowance_pct)
+
+    # long_risk_twel_enforcer_threshold
+    @st.fragment
+    def fragment_long_risk_twel_enforcer_threshold(self):
+        if "edit_opt_v7_long_risk_twel_enforcer_threshold" in st.session_state:
+            if st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold != (self.config.optimize.bounds.long_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_twel_enforcer_threshold_1):
+                self.config.optimize.bounds.long_risk_twel_enforcer_threshold_0 = st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold[0]
+                self.config.optimize.bounds.long_risk_twel_enforcer_threshold_1 = st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold[1]
+        else:
+            st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold = (self.config.optimize.bounds.long_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_twel_enforcer_threshold_1)
+        st.slider(
+            "long_risk_twel_enforcer_threshold",
+            min_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MIN,
+            max_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MAX,
+            step=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_STEP,
+            format=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_FORMAT,
+            key="edit_opt_v7_long_risk_twel_enforcer_threshold",
+            help=pbgui_help.risk_twel_enforcer_threshold)
 
     # # short_close_grid_markup_range
     # @st.fragment
@@ -1990,41 +2216,41 @@ class OptimizeV7Item:
             key="edit_opt_v7_short_entry_grid_double_down_factor",
             help=pbgui_help.entry_grid_double_down_factor)
 
-    # short_entry_grid_spacing_log_span_hours
+    # short_entry_volatility_ema_span_hours
     @st.fragment
-    def fragment_short_entry_grid_spacing_log_span_hours(self):
-        if "edit_opt_v7_short_entry_grid_spacing_log_span_hours" in st.session_state:
-            if st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours != (self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_1):
-                self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours[0]
-                self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours[1]
+    def fragment_short_entry_volatility_ema_span_hours(self):
+        if "edit_opt_v7_short_entry_volatility_ema_span_hours" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours != (self.config.optimize.bounds.short_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.short_entry_volatility_ema_span_hours_1):
+                self.config.optimize.bounds.short_entry_volatility_ema_span_hours_0 = st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours[0]
+                self.config.optimize.bounds.short_entry_volatility_ema_span_hours_1 = st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours[1]
         else:
-            st.session_state.edit_opt_v7_short_entry_grid_spacing_log_span_hours = (self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_0, self.config.optimize.bounds.short_entry_grid_spacing_log_span_hours_1)
+            st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours = (self.config.optimize.bounds.short_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.short_entry_volatility_ema_span_hours_1)
         st.slider(
-            "short_entry_grid_spacing_log_span_hours",
-            min_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MIN,
-            max_value=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MAX,
-            step=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_STEP,
-            format=Bounds.ENTRY_GRID_SPACING_LOG_SPAN_HOURS_FORMAT,
-            key="edit_opt_v7_short_entry_grid_spacing_log_span_hours",
-            help=pbgui_help.entry_grid_spacing_log)
+            "short_entry_volatility_ema_span_hours",
+            min_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MIN,
+            max_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MAX,
+            step=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_STEP,
+            format=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_FORMAT,
+            key="edit_opt_v7_short_entry_volatility_ema_span_hours",
+            help=pbgui_help.entry_volatility_ema_span_hours)
 
-    # short_entry_grid_spacing_log_weight
+    # short_entry_grid_spacing_volatility_weight
     @st.fragment
-    def fragment_short_entry_grid_spacing_log_weight(self):
-        if "edit_opt_v7_short_entry_grid_spacing_log_weight" in st.session_state:
-            if st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight != (self.config.optimize.bounds.short_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_log_weight_1):
-                self.config.optimize.bounds.short_entry_grid_spacing_log_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight[0]
-                self.config.optimize.bounds.short_entry_grid_spacing_log_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight[1]
+    def fragment_short_entry_grid_spacing_volatility_weight(self):
+        if "edit_opt_v7_short_entry_grid_spacing_volatility_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight != (self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_1):
+                self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight[0]
+                self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight[1]
         else:
-            st.session_state.edit_opt_v7_short_entry_grid_spacing_log_weight = (self.config.optimize.bounds.short_entry_grid_spacing_log_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_log_weight_1)
+            st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight = (self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_1)
         st.slider(
-            "short_entry_grid_spacing_log_weight",
-            min_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MIN,
-            max_value=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_MAX,
-            step=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_STEP,
-            format=Bounds.ENTRY_GRID_SPACING_LOG_WEIGHT_FORMAT,
-            key="edit_opt_v7_short_entry_grid_spacing_log_weight",
-            help=pbgui_help.entry_grid_spacing_log)
+            "short_entry_grid_spacing_volatility_weight",
+            min_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MAX,
+            step=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_STEP,
+            format=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_grid_spacing_volatility_weight",
+            help=pbgui_help.entry_grid_spacing_volatility_weight)
 
     # short_entry_grid_spacing_pct
     @st.fragment
@@ -2151,7 +2377,43 @@ class OptimizeV7Item:
             format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
             key="edit_opt_v7_short_entry_trailing_retracement_pct",
             help=pbgui_help.trailing_parameters)
-    
+
+    # short_entry_trailing_retracement_we_weight
+    @st.fragment
+    def fragment_short_entry_trailing_retracement_we_weight(self):
+        if "edit_opt_v7_short_entry_trailing_retracement_we_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight != (self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_1):
+                self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight[0]
+                self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight = (self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_1)
+        st.slider(
+            "short_entry_trailing_retracement_we_weight",
+            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_retracement_we_weight",
+            help=pbgui_help.entry_trailing_retracement_we_weight)
+
+    # short_entry_trailing_retracement_volatility_weight
+    @st.fragment
+    def fragment_short_entry_trailing_retracement_volatility_weight(self):
+        if "edit_opt_v7_short_entry_trailing_retracement_volatility_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight != (self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_1):
+                self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight[0]
+                self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight = (self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_1)
+        st.slider(
+            "short_entry_trailing_retracement_volatility_weight",
+            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_retracement_volatility_weight",
+            help=pbgui_help.entry_trailing_retracement_volatility_weight)
+
     # short_entry_trailing_threshold_pct
     @st.fragment
     def fragment_short_entry_trailing_threshold_pct(self):
@@ -2169,24 +2431,78 @@ class OptimizeV7Item:
             format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
             key="edit_opt_v7_short_entry_trailing_threshold_pct",
             help=pbgui_help.trailing_parameters)
-    
-    # short_filter_log_range_ema_span
+
+    # short_entry_trailing_threshold_we_weight
     @st.fragment
-    def fragment_short_filter_log_range_ema_span(self):
-        if "edit_opt_v7_short_filter_log_range_ema_span" in st.session_state:
-            if st.session_state.edit_opt_v7_short_filter_log_range_ema_span != (self.config.optimize.bounds.short_filter_log_range_ema_span_0, self.config.optimize.bounds.short_filter_log_range_ema_span_1):
-                self.config.optimize.bounds.short_filter_log_range_ema_span_0 = st.session_state.edit_opt_v7_short_filter_log_range_ema_span[0]
-                self.config.optimize.bounds.short_filter_log_range_ema_span_1 = st.session_state.edit_opt_v7_short_filter_log_range_ema_span[1]
+    def fragment_short_entry_trailing_threshold_we_weight(self):
+        if "edit_opt_v7_short_entry_trailing_threshold_we_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight != (self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_1):
+                self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight[0]
+                self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight[1]
         else:
-            st.session_state.edit_opt_v7_short_filter_log_range_ema_span = (self.config.optimize.bounds.short_filter_log_range_ema_span_0, self.config.optimize.bounds.short_filter_log_range_ema_span_1)
+            st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight = (self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_1)
         st.slider(
-            "short_filter_log_range_ema_span",
-            min_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MIN,
-            max_value=Bounds.FILTER_LOG_RANGE_EMA_SPAN_MAX,
-            step=Bounds.FILTER_LOG_RANGE_EMA_SPAN_STEP,
-            format=Bounds.FILTER_LOG_RANGE_EMA_SPAN_FORMAT,
-            key="edit_opt_v7_short_filter_log_range_ema_span",
-            help=pbgui_help.filter_rolling_window)
+            "short_entry_trailing_threshold_we_weight",
+            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_threshold_we_weight",
+            help=pbgui_help.entry_trailing_threshold_we_weight)
+
+    # short_entry_trailing_threshold_volatility_weight
+    @st.fragment
+    def fragment_short_entry_trailing_threshold_volatility_weight(self):
+        if "edit_opt_v7_short_entry_trailing_threshold_volatility_weight" in st.session_state:
+            if st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight != (self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_1):
+                self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight[0]
+                self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight[1]
+        else:
+            st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight = (self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_1)
+        st.slider(
+            "short_entry_trailing_threshold_volatility_weight",
+            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MIN,
+            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MAX,
+            step=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_STEP,
+            format=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_FORMAT,
+            key="edit_opt_v7_short_entry_trailing_threshold_volatility_weight",
+            help=pbgui_help.entry_trailing_threshold_volatility_weight)
+
+    # short_filter_volatility_ema_span
+    @st.fragment
+    def fragment_short_filter_volatility_ema_span(self):
+        if "edit_opt_v7_short_filter_volatility_ema_span" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_volatility_ema_span != (self.config.optimize.bounds.short_filter_volatility_ema_span_0, self.config.optimize.bounds.short_filter_volatility_ema_span_1):
+                self.config.optimize.bounds.short_filter_volatility_ema_span_0 = st.session_state.edit_opt_v7_short_filter_volatility_ema_span[0]
+                self.config.optimize.bounds.short_filter_volatility_ema_span_1 = st.session_state.edit_opt_v7_short_filter_volatility_ema_span[1]
+        else:
+            st.session_state.edit_opt_v7_short_filter_volatility_ema_span = (self.config.optimize.bounds.short_filter_volatility_ema_span_0, self.config.optimize.bounds.short_filter_volatility_ema_span_1)
+        st.slider(
+            "short_filter_volatility_ema_span",
+            min_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MIN,
+            max_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MAX,
+            step=Bounds.FILTER_VOLATILITY_EMA_SPAN_STEP,
+            format=Bounds.FILTER_VOLATILITY_EMA_SPAN_FORMAT,
+            key="edit_opt_v7_short_filter_volatility_ema_span",
+            help=pbgui_help.filter_ema_span)
+    
+    # short_filter_volatility_drop_pct
+    @st.fragment
+    def fragment_short_filter_volatility_drop_pct(self):
+        if "edit_opt_v7_short_filter_volatility_drop_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_filter_volatility_drop_pct != (self.config.optimize.bounds.short_filter_volatility_drop_pct_0, self.config.optimize.bounds.short_filter_volatility_drop_pct_1):
+                self.config.optimize.bounds.short_filter_volatility_drop_pct_0 = st.session_state.edit_opt_v7_short_filter_volatility_drop_pct[0]
+                self.config.optimize.bounds.short_filter_volatility_drop_pct_1 = st.session_state.edit_opt_v7_short_filter_volatility_drop_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_filter_volatility_drop_pct = (self.config.optimize.bounds.short_filter_volatility_drop_pct_0, self.config.optimize.bounds.short_filter_volatility_drop_pct_1)
+        st.slider(
+            "short_filter_volatility_drop_pct",
+            min_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MIN,
+            max_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MAX,
+            step=Bounds.FILTER_VOLATILITY_DROP_PCT_STEP,
+            format=Bounds.FILTER_VOLATILITY_DROP_PCT_FORMAT,
+            key="edit_opt_v7_short_filter_volatility_drop_pct",
+            help=pbgui_help.filter_volatility_drop_pct)
     
     # short_filter_volume_drop_pct
     @st.fragment
@@ -2222,7 +2538,7 @@ class OptimizeV7Item:
             step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
             format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
             key="edit_opt_v7_short_filter_volume_ema_span",
-            help=pbgui_help.filter_rolling_window)
+            help=pbgui_help.filter_ema_span)
 
     # short_n_positions
     @st.fragment
@@ -2331,6 +2647,60 @@ class OptimizeV7Item:
             format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
             key="edit_opt_v7_short_unstuck_threshold",
             help=pbgui_help.unstuck_threshold)
+
+    # short_risk_wel_enforcer_threshold
+    @st.fragment
+    def fragment_short_risk_wel_enforcer_threshold(self):
+        if "edit_opt_v7_short_risk_wel_enforcer_threshold" in st.session_state:
+            if st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold != (self.config.optimize.bounds.short_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_wel_enforcer_threshold_1):
+                self.config.optimize.bounds.short_risk_wel_enforcer_threshold_0 = st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold[0]
+                self.config.optimize.bounds.short_risk_wel_enforcer_threshold_1 = st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold[1]
+        else:
+            st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold = (self.config.optimize.bounds.short_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_wel_enforcer_threshold_1)
+        st.slider(
+            "short_risk_wel_enforcer_threshold",
+            min_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MIN,
+            max_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MAX,
+            step=Bounds.RISK_WEL_ENFORCER_THRESHOLD_STEP,
+            format=Bounds.RISK_WEL_ENFORCER_THRESHOLD_FORMAT,
+            key="edit_opt_v7_short_risk_wel_enforcer_threshold",
+            help=pbgui_help.risk_wel_enforcer_threshold)
+
+    # short_risk_we_excess_allowance_pct
+    @st.fragment
+    def fragment_short_risk_we_excess_allowance_pct(self):
+        if "edit_opt_v7_short_risk_we_excess_allowance_pct" in st.session_state:
+            if st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct != (self.config.optimize.bounds.short_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.short_risk_we_excess_allowance_pct_1):
+                self.config.optimize.bounds.short_risk_we_excess_allowance_pct_0 = st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct[0]
+                self.config.optimize.bounds.short_risk_we_excess_allowance_pct_1 = st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct[1]
+        else:
+            st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct = (self.config.optimize.bounds.short_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.short_risk_we_excess_allowance_pct_1)
+        st.slider(
+            "short_risk_we_excess_allowance_pct",
+            min_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MIN,
+            max_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MAX,
+            step=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_STEP,
+            format=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_FORMAT,
+            key="edit_opt_v7_short_risk_we_excess_allowance_pct",
+            help=pbgui_help.risk_we_excess_allowance_pct)
+
+    # short_risk_twel_enforcer_threshold
+    @st.fragment
+    def fragment_short_risk_twel_enforcer_threshold(self):
+        if "edit_opt_v7_short_risk_twel_enforcer_threshold" in st.session_state:
+            if st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold != (self.config.optimize.bounds.short_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_twel_enforcer_threshold_1):
+                self.config.optimize.bounds.short_risk_twel_enforcer_threshold_0 = st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold[0]
+                self.config.optimize.bounds.short_risk_twel_enforcer_threshold_1 = st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold[1]
+        else:
+            st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold = (self.config.optimize.bounds.short_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_twel_enforcer_threshold_1)
+        st.slider(
+            "short_risk_twel_enforcer_threshold",
+            min_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MIN,
+            max_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MAX,
+            step=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_STEP,
+            format=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_FORMAT,
+            key="edit_opt_v7_short_risk_twel_enforcer_threshold",
+            help=pbgui_help.risk_twel_enforcer_threshold)
 
     @st.fragment
     def fragment_limits(self):
@@ -2531,7 +2901,7 @@ class OptimizeV7Item:
             st.session_state.coindata_bitget = CoinData()
             st.session_state.coindata_bitget.exchange = "bitget"
         # Display Editor
-        col1, col2, col3, col4, col5 = st.columns([1,1,0.5,0.5,1])
+        col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5])
         with col1:
             self.fragment_exchanges()
         with col2:
@@ -2541,7 +2911,9 @@ class OptimizeV7Item:
         with col4:
             self.fragment_end_date()
         with col5:
-            self.fragment_logging()
+            self.fragment_btc_collateral_cap()
+        with col6:
+            self.fragment_btc_collateral_ltv_cap()
         col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5], vertical_alignment="bottom")
         with col1:
             self.fragment_starting_balance()
@@ -2550,12 +2922,12 @@ class OptimizeV7Item:
         with col3:
             self.fragment_n_cpus()
         with col4:
-            self.fragment_starting_config()
-            self.fragment_use_btc_collateral()
+            self.fragment_logging()
         with col5:
+            self.fragment_starting_config()
             self.fragment_combine_ohlcvs()
-            self.fragment_compress_results_file()
         with col6:
+            self.fragment_compress_results_file()
             self.fragment_write_all_results()
         with st.expander("Edit Config", expanded=False):
             self.config.bot.edit()
@@ -2568,20 +2940,21 @@ class OptimizeV7Item:
         with col1:
             self.fragment_population_size()
         with col2:
-            self.fragment_offspring_multiplier()
+            self.fragment_pareto_max_size()
         with col3:
-            self.fragment_crossover_probability()
+            self.fragment_offspring_multiplier()
         with col4:
-            self.fragment_crossover_eta()
+            self.fragment_mutation_indpb()
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            self.fragment_mutation_probability()
+            self.fragment_crossover_probability()
         with col2:
-            self.fragment_mutation_eta()
+            self.fragment_crossover_eta()
         with col3:
-            self.fragment_mutation_indpb()
+            self.fragment_mutation_probability()
         with col4:
-            self.fragment_scoring()
+            self.fragment_mutation_eta()
+        self.fragment_scoring()
 
         # Filters
         self.fragment_filter_coins()
@@ -2591,8 +2964,6 @@ class OptimizeV7Item:
         with col1:
             with st.container(border=True):
                 st.write("Bounds long")
-                # self.fragment_long_close_grid_markup_range()
-                # self.fragment_long_close_grid_min_markup()
                 self.fragment_long_close_grid_markup_end()
                 self.fragment_long_close_grid_markup_start()
                 self.fragment_long_close_grid_qty_pct()
@@ -2603,20 +2974,28 @@ class OptimizeV7Item:
                 self.fragment_long_ema_span_0()
                 self.fragment_long_ema_span_1()
                 self.fragment_long_entry_grid_double_down_factor()
-                self.fragment_long_entry_grid_spacing_log_span_hours()
-                self.fragment_long_entry_grid_spacing_log_weight()
                 self.fragment_long_entry_grid_spacing_pct()
+                self.fragment_long_entry_grid_spacing_volatility_weight()
                 self.fragment_long_entry_grid_spacing_we_weight()
                 self.fragment_long_entry_initial_ema_dist()
                 self.fragment_long_entry_initial_qty_pct()
                 self.fragment_long_entry_trailing_double_down_factor()
                 self.fragment_long_entry_trailing_grid_ratio()
                 self.fragment_long_entry_trailing_retracement_pct()
+                self.fragment_long_entry_trailing_retracement_volatility_weight()
+                self.fragment_long_entry_trailing_retracement_we_weight()
                 self.fragment_long_entry_trailing_threshold_pct()
-                self.fragment_long_filter_log_range_ema_span()
+                self.fragment_long_entry_trailing_threshold_volatility_weight()
+                self.fragment_long_entry_trailing_threshold_we_weight()
+                self.fragment_long_entry_volatility_ema_span_hours()
+                self.fragment_long_filter_volatility_drop_pct()
+                self.fragment_long_filter_volatility_ema_span()
                 self.fragment_long_filter_volume_drop_pct()
                 self.fragment_long_filter_volume_ema_span()
                 self.fragment_long_n_positions()
+                self.fragment_long_risk_twel_enforcer_threshold()
+                self.fragment_long_risk_we_excess_allowance_pct()
+                self.fragment_long_risk_wel_enforcer_threshold()
                 self.fragment_long_total_wallet_exposure_limit()
                 self.fragment_long_unstuck_close_pct()
                 self.fragment_long_unstuck_ema_dist()
@@ -2626,8 +3005,6 @@ class OptimizeV7Item:
         with col2:
             with st.container(border=True):
                 st.write("Bounds short")
-                # self.fragment_short_close_grid_markup_range()
-                # self.fragment_short_close_grid_min_markup()
                 self.fragment_short_close_grid_markup_end()
                 self.fragment_short_close_grid_markup_start()
                 self.fragment_short_close_grid_qty_pct()
@@ -2638,20 +3015,28 @@ class OptimizeV7Item:
                 self.fragment_short_ema_span_0()
                 self.fragment_short_ema_span_1()
                 self.fragment_short_entry_grid_double_down_factor()
-                self.fragment_short_entry_grid_spacing_log_span_hours()
-                self.fragment_short_entry_grid_spacing_log_weight()
                 self.fragment_short_entry_grid_spacing_pct()
+                self.fragment_short_entry_grid_spacing_volatility_weight()
                 self.fragment_short_entry_grid_spacing_we_weight()
                 self.fragment_short_entry_initial_ema_dist()
                 self.fragment_short_entry_initial_qty_pct()
                 self.fragment_short_entry_trailing_double_down_factor()
                 self.fragment_short_entry_trailing_grid_ratio()
                 self.fragment_short_entry_trailing_retracement_pct()
+                self.fragment_short_entry_trailing_retracement_volatility_weight()
+                self.fragment_short_entry_trailing_retracement_we_weight()
                 self.fragment_short_entry_trailing_threshold_pct()
-                self.fragment_short_filter_log_range_ema_span()
+                self.fragment_short_entry_trailing_threshold_volatility_weight()
+                self.fragment_short_entry_trailing_threshold_we_weight()
+                self.fragment_short_entry_volatility_ema_span_hours()
+                self.fragment_short_filter_volatility_drop_pct()
+                self.fragment_short_filter_volatility_ema_span()
                 self.fragment_short_filter_volume_drop_pct()
                 self.fragment_short_filter_volume_ema_span()
                 self.fragment_short_n_positions()
+                self.fragment_short_risk_twel_enforcer_threshold()
+                self.fragment_short_risk_we_excess_allowance_pct()
+                self.fragment_short_risk_wel_enforcer_threshold()
                 self.fragment_short_total_wallet_exposure_limit()
                 self.fragment_short_unstuck_close_pct()
                 self.fragment_short_unstuck_ema_dist()
