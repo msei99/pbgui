@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.38
+# v1.39
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -288,6 +288,18 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.39 (20-12-2025)
+- **Optimizer Limits**: Complete rewrite for PassivBot v7.5.x compatibility
+  - New list-based limits format replacing the old dict format
+  - Interactive UI with split metric/currency selection for cleaner dropdown menus
+  - Support for all penalize_if modes: greater_than, less_than, outside_range, inside_range, auto
+  - Optional stat aggregation: mean, min, max, std
+  - Automatic legacy config conversion (old dict format → new list format)
+  - Currency metrics with _usd/_btc suffix selection (default: usd)
+  - Shared metrics (loss_profit_ratio, position_held_hours_max, etc.) without suffix
+  - Edit/Delete limits directly from the table view
+- **UI Improvements**: Wider and taller help tooltips for better readability
 
 ## v1.38 (20-12-2025)
 - Compatible with passivbot 7.5.8
