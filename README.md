@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.37
+# v1.38
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -288,6 +288,29 @@ Start PBCoinData.py using the start.sh script.
 Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
+
+## v1.38 (20-12-2025)
+- Compatible with passivbot 7.5.8
+- Added new Live parameters: recv_window_ms, order_match_tolerance_pct, balance_override, balance_hysteresis_snap_pct, max_warmup_minutes
+- Added new Logging parameters: level, memory_snapshot_interval_minutes, volume_refresh_info_threshold_seconds
+- Added new Backtest parameter: balance_sample_divider (controls resolution of balance/equity data to reduce file sizes)
+- Added new Optimize parameter: pareto_max_size
+- Improved Optimizer UI layout (4+4+1 row arrangement)
+- Reordered bounds to match template.json alphabetical order
+- Migrated use_btc_collateral to btc_collateral_cap and btc_collateral_ltv_cap
+- PBData async for faster data fetching from exchanges
+- Swap usage monitoring and memory-based bot restart
+- Configurable server warning thresholds for memory, disk, swap and cpu
+- Detect liquidation in backtest and display warning banner
+- Enhanced websocket handling with backoff strategy and per-exchange client limits
+- Price buffering and background writer for improved performance
+- Dashboard: per-cell refresh intervals and auto-refresh functionality
+- Income data edit/backup/restore functionality
+- Enhanced VPS management: SSH key generation, firewall updates, role display
+- Master VPS setup with OpenVPN and TOTP support
+- Cleanup of pbgui_help.py (removed 185 duplicate help entries)
+- Fixed KeyError issues in pareto view
+- Many bugfixes
 
 ## v1.37 (19-10-2025)
 - Compatible with passivbot 7.4.1
