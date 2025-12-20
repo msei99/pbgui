@@ -94,7 +94,7 @@ class BacktestV7QueueItem():
         if not self.pid:
             self.load_pid()
         try:
-            if self.pid and psutil.pid_exists(self.pid) and (any(sub.lower().endswith("backtest.py") or sub.lower().endswith(f"backtest_{self.config.pbgui.backtest_div_by}.py") for sub in psutil.Process(self.pid).cmdline())):
+            if self.pid and psutil.pid_exists(self.pid) and (any(sub.lower().endswith("backtest.py") for sub in psutil.Process(self.pid).cmdline())):
                 return True
         except psutil.NoSuchProcess:
             pass
@@ -157,25 +157,10 @@ class BacktestV7QueueItem():
 
     def run(self):
         if not self.is_finish() and not self.is_running():
-            if self.config.pbgui.backtest_div_by != 60:
-                # copy backtest.py to backtest_div_by.py
-                src = Path(f'{pb7dir()}/src/backtest.py')
-                dest = Path(f'{pb7dir()}/src/backtest_{self.config.pbgui.backtest_div_by}.py')
-                if not dest.exists():
-                    shutil.copyfile(src, dest)
-                    # modify backtest_div_by.py to set div_by
-                    with open(dest, 'r') as f:
-                        content = f.read()
-                    content = content.replace("div_by = 60", f"div_by = {self.config.pbgui.backtest_div_by}")
-                    with open(dest, 'w') as f:
-                        f.write(content)
-                backtest_py = f"backtest_{self.config.pbgui.backtest_div_by}.py"
-            else:
-                backtest_py = "backtest.py"
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(pb7venv()) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
-            cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/{backtest_py}'), str(PurePath(f'{self.json}'))]
+            cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/backtest.py'), str(PurePath(f'{self.json}'))]
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -519,15 +504,15 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_end_date = datetime.datetime.strptime(self.config.backtest.end_date, '%Y-%m-%d')
         st.date_input("end_date", format="YYYY-MM-DD", key="edit_bt_v7_end_date")
 
-    # div_by
+    # balance_sample_divider
     @st.fragment
-    def fragment_div_by(self):
-        if "edit_bt_v7_div_by" in st.session_state:
-            if st.session_state.edit_bt_v7_div_by != self.config.pbgui.backtest_div_by:
-                self.config.pbgui.backtest_div_by = st.session_state.edit_bt_v7_div_by
+    def fragment_balance_sample_divider(self):
+        if "edit_bt_v7_balance_sample_divider" in st.session_state:
+            if st.session_state.edit_bt_v7_balance_sample_divider != self.config.backtest.balance_sample_divider:
+                self.config.backtest.balance_sample_divider = st.session_state.edit_bt_v7_balance_sample_divider
         else:
-            st.session_state.edit_bt_v7_div_by = self.config.pbgui.backtest_div_by
-        st.number_input("div_by", min_value=1, step=1, key="edit_bt_v7_div_by", help=pbgui_help.backtest_div_by)
+            st.session_state.edit_bt_v7_balance_sample_divider = self.config.backtest.balance_sample_divider
+        st.number_input("balance_sample_divider", min_value=1, step=1, key="edit_bt_v7_balance_sample_divider", help=pbgui_help.backtest_balance_sample_divider)
 
     # logging
     @st.fragment
@@ -579,6 +564,16 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_max_warmup_minutes = self.config.backtest.max_warmup_minutes
         st.number_input("max_warmup_minutes", min_value=0.0, step=1440.0, key="edit_bt_v7_max_warmup_minutes", help=pbgui_help.max_warmup_minutes)
 
+    # filter_by_min_effective_cost
+    @st.fragment
+    def fragment_filter_by_min_effective_cost(self):
+        if "edit_bt_v7_filter_by_min_effective_cost" in st.session_state:
+            if st.session_state.edit_bt_v7_filter_by_min_effective_cost != self.config.backtest.filter_by_min_effective_cost:
+                self.config.backtest.filter_by_min_effective_cost = st.session_state.edit_bt_v7_filter_by_min_effective_cost
+        else:
+            st.session_state.edit_bt_v7_filter_by_min_effective_cost = self.config.backtest.filter_by_min_effective_cost
+        st.checkbox("filter_by_min_effective_cost", key="edit_bt_v7_filter_by_min_effective_cost", help=pbgui_help.bt_filter_by_min_effective_cost)
+
     # combine_ohlcvs
     @st.fragment
     def fragment_combine_ohlcvs(self):
@@ -599,15 +594,29 @@ class BacktestV7Item:
             st.session_state.edit_bt_v7_compress_cache = self.config.backtest.compress_cache
         st.checkbox("compress_cache", key="edit_bt_v7_compress_cache", help=pbgui_help.compress_cache)
     
-    # use_btc_collateral
+    # btc_collateral_cap
     @st.fragment
-    def fragment_use_btc_collateral(self):
-        if "edit_bt_v7_use_btc_collateral" in st.session_state:
-            if st.session_state.edit_bt_v7_use_btc_collateral != self.config.backtest.use_btc_collateral:
-                self.config.backtest.use_btc_collateral = st.session_state.edit_bt_v7_use_btc_collateral
+    def fragment_btc_collateral_cap(self):
+        if "edit_bt_v7_btc_collateral_cap" in st.session_state:
+            if st.session_state.edit_bt_v7_btc_collateral_cap != self.config.backtest.btc_collateral_cap:
+                self.config.backtest.btc_collateral_cap = st.session_state.edit_bt_v7_btc_collateral_cap
         else:
-            st.session_state.edit_bt_v7_use_btc_collateral = self.config.backtest.use_btc_collateral
-        st.checkbox("use_btc_collateral", key="edit_bt_v7_use_btc_collateral", help=pbgui_help.use_btc_collateral)
+            st.session_state.edit_bt_v7_btc_collateral_cap = self.config.backtest.btc_collateral_cap
+        st.number_input("btc_collateral_cap", min_value=0.0, max_value=10.0, step=0.1, format="%.2f", key="edit_bt_v7_btc_collateral_cap", help=pbgui_help.btc_collateral_cap)
+
+    # btc_collateral_ltv_cap
+    @st.fragment
+    def fragment_btc_collateral_ltv_cap(self):
+        if "edit_bt_v7_btc_collateral_ltv_cap" in st.session_state:
+            new_val = st.session_state.edit_bt_v7_btc_collateral_ltv_cap
+            # Convert 0 to None for the config
+            config_val = None if new_val == 0.0 else new_val
+            if config_val != self.config.backtest.btc_collateral_ltv_cap:
+                self.config.backtest.btc_collateral_ltv_cap = config_val
+        else:
+            # Convert None to 0 for the UI
+            st.session_state.edit_bt_v7_btc_collateral_ltv_cap = self.config.backtest.btc_collateral_ltv_cap if self.config.backtest.btc_collateral_ltv_cap is not None else 0.0
+        st.number_input("btc_collateral_ltv_cap", min_value=0.0, max_value=1.0, step=0.1, format="%.2f", key="edit_bt_v7_btc_collateral_ltv_cap", help=pbgui_help.btc_collateral_ltv_cap)
 
     # filters
     def fragment_filter_coins(self):
@@ -836,9 +845,9 @@ class BacktestV7Item:
         with col4:
             self.fragment_end_date()
         with col5:
-            self.fragment_div_by()
+            self.fragment_btc_collateral_cap()
         with col6:
-            self.fragment_logging()
+            self.fragment_btc_collateral_ltv_cap()
         col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5])
         with col1:
             self.fragment_starting_balance()
@@ -849,10 +858,20 @@ class BacktestV7Item:
         with col4:
             self.fragment_max_warmup_minutes()
         with col5:
-            self.fragment_combine_ohlcvs()
-            self.fragment_compress_cache()
+            self.fragment_balance_sample_divider()
         with col6:
-            self.fragment_use_btc_collateral()
+            self.fragment_logging()
+        # Backtest Options
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            self.fragment_combine_ohlcvs()
+        with col2:
+            self.fragment_compress_cache()
+        with col3:
+            self.fragment_filter_by_min_effective_cost()
+        # PBGui Filter
+        st.markdown("---")
+        st.markdown("##### PBGui Filter")
         #Filters
         self.fragment_filter_coins()
         # coin_overrides
@@ -1305,7 +1324,19 @@ class BacktestV7Result:
 
                 # Determine whether to use 'symbol' or 'coin'
                 coin_or_symbol = "symbol" if "symbol" in self.fills else "coin"
-                self.fills['we'] = 1 / self.fills["balance"] * self.fills['psize'] * self.fills['pprice']
+                
+                # Find the balance column (try different names for compatibility)
+                balance_col = None
+                for col_name in ["balance", "usd_total_balance"]:
+                    if col_name in self.fills.columns:
+                        balance_col = col_name
+                        break
+                
+                if balance_col:
+                    self.fills['we'] = 1 / self.fills[balance_col] * self.fills['psize'] * self.fills['pprice']
+                else:
+                    st.error(f"Balance column not found. Available columns: {list(self.fills.columns)}")
+                    return
 
                 #write self.fills to csv
                 # self.fills.to_csv(f'{self.result_path}/fills_with_we.csv', index=False)
@@ -1834,7 +1865,7 @@ class BacktestV7Results:
                         self.results_d[row]["index"].load_be()
                         self.results_d[row]["index"].view_chart_be()
                         self.results_d[row]["index"].view_chart_drawdown()
-                        if self.results_d[row]["index"].config.backtest.use_btc_collateral:
+                        if self.results_d[row]["index"].config.backtest.btc_collateral_cap > 0:
                             self.results_d[row]["index"].view_chart_be_btc()
                             self.results_d[row]["index"].view_chart_drawdown_btc()
                         self.results_d[row]["index"].view_chart_symbol()
@@ -2076,7 +2107,7 @@ class BacktestV7Results:
                     formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
                     self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity'], name=f"{name} {formatted_time} equity", line=dict(width=0.75)))
                     self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['balance'], name=f"{name} {formatted_time} balance", line=dict(width=2.5)))
-                    if result.config.backtest.use_btc_collateral:
+                    if result.config.backtest.btc_collateral_cap > 0:
                         name = PurePath(*result.result_path.parts[-3:-2])
                         formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
                         self.compare_fig_btc.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity_btc'], name=f"{name} {formatted_time} equity_btc", line=dict(width=0.75)))

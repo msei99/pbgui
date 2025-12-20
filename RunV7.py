@@ -176,6 +176,33 @@ class V7Instance():
         st.number_input("warmup_ratio", min_value=0.0, step=0.1, max_value=1.0, format="%.2f", key="edit_run_v7_warmup_ratio", help=pbgui_help.warmup_ratio)
 
     @st.fragment
+    def fragment_max_warmup_minutes(self):
+        if "edit_run_v7_max_warmup_minutes" in st.session_state:
+            if st.session_state.edit_run_v7_max_warmup_minutes != self.config.live.max_warmup_minutes:
+                self.config.live.max_warmup_minutes = st.session_state.edit_run_v7_max_warmup_minutes
+        else:
+            st.session_state.edit_run_v7_max_warmup_minutes = self.config.live.max_warmup_minutes
+        st.number_input("max_warmup_minutes", min_value=0, step=100, format="%.d", key="edit_run_v7_max_warmup_minutes", help=pbgui_help.max_warmup_minutes)
+
+    @st.fragment
+    def fragment_memory_snapshot_interval_minutes(self):
+        if "edit_run_v7_memory_snapshot_interval_minutes" in st.session_state:
+            if st.session_state.edit_run_v7_memory_snapshot_interval_minutes != self.config.logging.memory_snapshot_interval_minutes:
+                self.config.logging.memory_snapshot_interval_minutes = st.session_state.edit_run_v7_memory_snapshot_interval_minutes
+        else:
+            st.session_state.edit_run_v7_memory_snapshot_interval_minutes = self.config.logging.memory_snapshot_interval_minutes
+        st.number_input("memory_snapshot_interval_minutes", min_value=1, step=5, format="%.d", key="edit_run_v7_memory_snapshot_interval_minutes", help=pbgui_help.memory_snapshot_interval_minutes)
+
+    @st.fragment
+    def fragment_volume_refresh_info_threshold_seconds(self):
+        if "edit_run_v7_volume_refresh_info_threshold_seconds" in st.session_state:
+            if st.session_state.edit_run_v7_volume_refresh_info_threshold_seconds != self.config.logging.volume_refresh_info_threshold_seconds:
+                self.config.logging.volume_refresh_info_threshold_seconds = st.session_state.edit_run_v7_volume_refresh_info_threshold_seconds
+        else:
+            st.session_state.edit_run_v7_volume_refresh_info_threshold_seconds = self.config.logging.volume_refresh_info_threshold_seconds
+        st.number_input("volume_refresh_info_threshold_seconds", min_value=0, step=5, format="%.d", key="edit_run_v7_volume_refresh_info_threshold_seconds", help=pbgui_help.volume_refresh_info_threshold_seconds)
+
+    @st.fragment
     def fragment_note(self):
         if "edit_run_v7_note" in st.session_state:
             if st.session_state.edit_run_v7_note != self.config.pbgui.note:
@@ -311,6 +338,45 @@ class V7Instance():
             else:
                 st.session_state.edit_run_v7_time_in_force = self.TIME_IN_FORCE[0]
         st.selectbox('time_in_force', self.TIME_IN_FORCE, key="edit_run_v7_time_in_force", help=pbgui_help.time_in_force)
+
+    @st.fragment
+    def fragment_recv_window_ms(self):
+        if "edit_run_v7_recv_window_ms" in st.session_state:
+            if st.session_state.edit_run_v7_recv_window_ms != self.config.live.recv_window_ms:
+                self.config.live.recv_window_ms = st.session_state.edit_run_v7_recv_window_ms
+        else:
+            st.session_state.edit_run_v7_recv_window_ms = self.config.live.recv_window_ms
+        st.number_input("recv_window_ms", min_value=1000, max_value=60000, step=1000, format="%.d", key="edit_run_v7_recv_window_ms", help=pbgui_help.recv_window_ms)
+
+    @st.fragment
+    def fragment_order_match_tolerance_pct(self):
+        if "edit_run_v7_order_match_tolerance_pct" in st.session_state:
+            if st.session_state.edit_run_v7_order_match_tolerance_pct != self.config.live.order_match_tolerance_pct:
+                self.config.live.order_match_tolerance_pct = st.session_state.edit_run_v7_order_match_tolerance_pct
+        else:
+            st.session_state.edit_run_v7_order_match_tolerance_pct = self.config.live.order_match_tolerance_pct
+        st.number_input("order_match_tolerance_pct", min_value=0.0, max_value=0.01, step=0.0001, format="%.4f", key="edit_run_v7_order_match_tolerance_pct", help=pbgui_help.order_match_tolerance_pct)
+
+    @st.fragment
+    def fragment_balance_override(self):
+        if "edit_run_v7_balance_override" in st.session_state:
+            value = st.session_state.edit_run_v7_balance_override
+            if value == 0.0:
+                self.config.live.balance_override = None
+            else:
+                self.config.live.balance_override = value
+        else:
+            st.session_state.edit_run_v7_balance_override = self.config.live.balance_override if self.config.live.balance_override is not None else 0.0
+        st.number_input("balance_override", min_value=0.0, step=100.0, format="%.2f", key="edit_run_v7_balance_override", help=pbgui_help.balance_override)
+
+    @st.fragment
+    def fragment_balance_hysteresis_snap_pct(self):
+        if "edit_run_v7_balance_hysteresis_snap_pct" in st.session_state:
+            if st.session_state.edit_run_v7_balance_hysteresis_snap_pct != self.config.live.balance_hysteresis_snap_pct:
+                self.config.live.balance_hysteresis_snap_pct = st.session_state.edit_run_v7_balance_hysteresis_snap_pct
+        else:
+            st.session_state.edit_run_v7_balance_hysteresis_snap_pct = self.config.live.balance_hysteresis_snap_pct
+        st.number_input("balance_hysteresis_snap_pct", min_value=0.0, max_value=0.5, step=0.01, format="%.2f", key="edit_run_v7_balance_hysteresis_snap_pct", help=pbgui_help.balance_hysteresis_snap_pct)
 
     def fragment_filter_coins(self):
         col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
@@ -549,6 +615,21 @@ class V7Instance():
             col1, col2, col3, col4 = st.columns([1,1,1,1])
             with col1:
                 self.inactive_coin_candle_ttl_minutes()
+            with col2:
+                self.fragment_recv_window_ms()
+            with col3:
+                self.fragment_order_match_tolerance_pct()
+            with col4:
+                self.fragment_balance_hysteresis_snap_pct()
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                self.fragment_balance_override()
+            with col2:
+                self.fragment_max_warmup_minutes()
+            with col3:
+                self.fragment_memory_snapshot_interval_minutes()
+            with col4:
+                self.fragment_volume_refresh_info_threshold_seconds()
 
         #Filters
         self.fragment_filter_coins()

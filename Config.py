@@ -281,170 +281,360 @@ class Config:
             st.text_area(f'config converted to v7', self.config_v7, key="config_instance_config_v7", height=height, disabled=True)
 
 # config template
-# {"backtest": {"base_dir": "backtests",
-#               "combine_ohlcvs": true,
-#               "compress_cache": true,
-#               "end_date": "now",
-#               "exchanges": ["binance", "bybit"],
-#               "gap_tolerance_ohlcvs_minutes": 120,
-#               "start_date": "2020-01-01",
-#               "starting_balance": 100000,
-#               "use_btc_collateral": true},
-#  "bot": {"long": {"close_grid_markup_end": 0.003354,
-#                   "close_grid_markup_start": 0.006385,
-#                   "close_grid_qty_pct": 0.9429,
-#                   "close_trailing_grid_ratio": -0.006244,
-#                   "close_trailing_qty_pct": 0.2677,
-#                   "close_trailing_retracement_pct": 0.0007421,
-#                   "close_trailing_threshold_pct": 0.05089,
-#                   "ema_span_0": 279,
-#                   "ema_span_1": 475.6,
-#                   "enforce_exposure_limit": true,
-#                   "entry_grid_double_down_factor": 0.8473,
-#                   "entry_grid_spacing_log_span_hours": 72,
-#                   "entry_grid_spacing_log_weight": 0.0,
-#                   "entry_grid_spacing_pct": 0.02744,
-#                   "entry_grid_spacing_we_weight": 0.313,
-#                   "entry_initial_ema_dist": -0.00364,
-#                   "entry_initial_qty_pct": 0.01633,
-#                   "entry_trailing_double_down_factor": 3.042,
-#                   "entry_trailing_grid_ratio": 0.007105,
-#                   "entry_trailing_retracement_pct": 0.01368,
-#                   "entry_trailing_threshold_pct": 0.06497,
-#                   "filter_log_range_ema_span": 39.82,
-#                   "filter_volume_drop_pct": 0.5077,
-#                   "filter_volume_ema_span": 1886,
-#                   "n_positions": 7.057,
-#                   "total_wallet_exposure_limit": 2,
-#                   "unstuck_close_pct": 0.04102,
-#                   "unstuck_ema_dist": 0.002879,
-#                   "unstuck_loss_allowance_pct": 0.002158,
-#                   "unstuck_threshold": 0.6771},
-#          "short": {"close_grid_markup_end": 0.001698,
-#                    "close_grid_markup_start": 0.02009,
-#                    "close_grid_qty_pct": 0.05233,
-#                    "close_trailing_grid_ratio": -0.1265,
-#                    "close_trailing_qty_pct": 0.07382,
-#                    "close_trailing_retracement_pct": 0.003562,
-#                    "close_trailing_threshold_pct": -0.009199,
-#                    "ema_span_0": 1365,
-#                    "ema_span_1": 985.1,
-#                    "enforce_exposure_limit": true,
-#                    "entry_grid_double_down_factor": 3.41,
-#                    "entry_grid_spacing_log_span_hours": 72,
-#                    "entry_grid_spacing_log_weight": 0.0,
-#                    "entry_grid_spacing_pct": 0.03714,
-#                    "entry_grid_spacing_we_weight": 1.656,
-#                    "entry_initial_ema_dist": -0.09702,
-#                    "entry_initial_qty_pct": 0.009357,
-#                    "entry_trailing_double_down_factor": 0.01,
-#                    "entry_trailing_grid_ratio": -0.9565,
-#                    "entry_trailing_retracement_pct": 0.08704,
-#                    "entry_trailing_threshold_pct": 0.04012,
-#                    "filter_log_range_ema_span": 335.7,
-#                    "filter_volume_drop_pct": 0.5257,
-#                    "filter_volume_ema_span": 2643,
-#                    "n_positions": 7.211,
-#                    "total_wallet_exposure_limit": 0,
-#                    "unstuck_close_pct": 0.074,
-#                    "unstuck_ema_dist": -0.02015,
-#                    "unstuck_loss_allowance_pct": 0.003297,
-#                    "unstuck_threshold": 0.898}},
-#  "coin_overrides": {},
-#  "live": {"approved_coins": "configs/approved_coins_top23mcap.json",
-#           "auto_gs": true,
-#           "inactive_coin_candle_ttl": 10.0,
-#           "empty_means_all_approved": true,
-#           "execution_delay_seconds": 2,
-#           "filter_by_min_effective_cost": true,
-#           "forced_mode_long": "",
-#           "forced_mode_short": "",
-#           "ignored_coins": {"long": [], "short": []},
-#           "leverage": 10,
-#           "market_orders_allowed": false,
-#           "max_disk_candles_per_symbol_per_tf": 2000000,
-#           "max_memory_candles_per_symbol":200000,
-#           "max_n_cancellations_per_batch": 5,
-#           "max_n_creations_per_batch": 3,
-#           "max_n_restarts_per_day": 10,
-#           "minimum_coin_age_days": 180,
-#           "pnls_max_lookback_days": 30,
-#           "price_distance_threshold": 0.002,
-#           "time_in_force": "good_till_cancelled",
-#           "user": "bybit_01"},
-#  "optimize": {"bounds": {"long_close_grid_markup_end": [0.001, 0.03],
-#                          "long_close_grid_markup_start": [0.001, 0.03],
-#                          "long_close_grid_qty_pct": [0.05, 1],
-#                          "long_close_trailing_grid_ratio": [-1, 1],
-#                          "long_close_trailing_qty_pct": [0.05, 1],
-#                          "long_close_trailing_retracement_pct": [0.0001, 0.1],
-#                          "long_close_trailing_threshold_pct": [-0.01, 0.1],
-#                          "long_ema_span_0": [200, 1440],
-#                          "long_ema_span_1": [200, 1440],
-#                          "long_entry_grid_double_down_factor": [0.01, 4],
-#                          "long_entry_grid_spacing_log_span_hours": [672, 2688],
-#                          "long_entry_grid_spacing_log_weight": [0.1, 400],
-#                          "long_entry_grid_spacing_pct": [0.001, 0.06],
-#                          "long_entry_grid_spacing_we_weight": [0, 10],
-#                          "long_entry_initial_ema_dist": [-0.1, 0.003],
-#                          "long_entry_initial_qty_pct": [0.004, 0.1],
-#                          "long_entry_trailing_double_down_factor": [0.01, 4],
-#                          "long_entry_trailing_grid_ratio": [-1, 1],
-#                          "long_entry_trailing_retracement_pct": [0.0001, 0.1],
-#                          "long_entry_trailing_threshold_pct": [-0.01, 0.1],
-#                          "long_filter_log_range_ema_span": [10, 360],
-#                          "long_filter_volume_drop_pct": [0.5, 1],
-#                          "long_filter_volume_ema_span": [360, 2880],
-#                          "long_n_positions": [7, 20],
-#                          "long_total_wallet_exposure_limit": [2, 2],
-#                          "long_unstuck_close_pct": [0.001, 0.1],
-#                          "long_unstuck_ema_dist": [-0.1, 0.01],
-#                          "long_unstuck_loss_allowance_pct": [0.001, 0.05],
-#                          "long_unstuck_threshold": [0.4, 0.95],
-#                          "short_close_grid_markup_end": [0.001, 0.03],
-#                          "short_close_grid_markup_start": [0.001, 0.03],
-#                          "short_close_grid_qty_pct": [0.05, 1],
-#                          "short_close_trailing_grid_ratio": [-1, 1],
-#                          "short_close_trailing_qty_pct": [0.05, 1],
-#                          "short_close_trailing_retracement_pct": [0.0001, 0.1],
-#                          "short_close_trailing_threshold_pct": [-0.01, 0.1],
-#                          "short_ema_span_0": [200, 1440],
-#                          "short_ema_span_1": [200, 1440],
-#                          "short_entry_grid_double_down_factor": [0.01, 4],
-#                          "short_entry_grid_spacing_log_span_hours": [672, 2688],
-#                          "short_entry_grid_spacing_log_weight": [0.1, 400],
-#                          "short_entry_grid_spacing_pct": [0.001, 0.06],
-#                          "short_entry_grid_spacing_we_weight": [0, 10],
-#                          "short_entry_initial_ema_dist": [-0.1, 0.003],
-#                          "short_entry_initial_qty_pct": [0.004, 0.1],
-#                          "short_entry_trailing_double_down_factor": [0.01, 4],
-#                          "short_entry_trailing_grid_ratio": [-1, 1],
-#                          "short_entry_trailing_retracement_pct": [0.0001, 0.1],
-#                          "short_entry_trailing_threshold_pct": [-0.01, 0.1],
-#                          "short_filter_log_range_ema_span": [10, 360],
-#                          "short_filter_volume_drop_pct": [0.5, 1],
-#                          "short_filter_volume_ema_span": [360, 2880],
-#                          "short_n_positions": [0, 0],
-#                          "short_total_wallet_exposure_limit": [0, 0],
-#                          "short_unstuck_close_pct": [0.001, 0.1],
-#                          "short_unstuck_ema_dist": [-0.1, 0.01],
-#                          "short_unstuck_loss_allowance_pct": [0.001, 0.05],
-#                          "short_unstuck_threshold": [0.4, 0.95]},
-#               "compress_results_file": true,
-#               "crossover_probability": 0.64,
-#               "enable_overrides": [],
-#               "iters": 300000,
-#               "limits": {"penalize_if_greater_than_btc_drawdown_worst": 0.5,
-#                          "penalize_if_greater_than_flat_btc_balance_hours": 672,
-#                          "penalize_if_greater_than_loss_profit_ratio": 0.35},
-#               "mutation_probability": 0.34,
-#               "n_cpus": 6,
-#               "population_size": 300,
-#               "round_to_n_significant_digits": 4,
-#               "scoring": ["btc_adg_w",
-#                           "btc_mdg_w",
-#                           "btc_sharpe_ratio"],
-#               "write_all_results": false}}
+# {
+#     "backtest": {
+#         "balance_sample_divider": 60,
+#         "base_dir": "backtests",
+#         "btc_collateral_cap": 0.7,
+#         "btc_collateral_ltv_cap": null,
+#         "combine_ohlcvs": true,
+#         "compress_cache": true,
+#         "end_date": "now",
+#         "exchanges": ["binance","bybit"],
+#         "filter_by_min_effective_cost": false,
+#         "gap_tolerance_ohlcvs_minutes": 120,
+#         "max_warmup_minutes": 0,
+#         "start_date": "2021-03-01",
+#         "starting_balance": 100000,
+#         "suite": {
+#             "aggregate": {"default":"mean"},
+#             "base_label": "base",
+#             "enabled": false,
+#             "include_base_scenario": true,
+#             "scenarios": [
+#                 {
+#                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
+#                     "label": "trump_troupe"
+#                 },
+#                 {
+#                     "coins": [
+#                         "ADA",
+#                         "BCH",
+#                         "BNB",
+#                         "BTC",
+#                         "DOGE",
+#                         "ETH",
+#                         "HYPE",
+#                         "LINK",
+#                         "SOL",
+#                         "TRX",
+#                         "XRP"
+#                     ],
+#                     "label": "subset1"
+#                 },
+#                 {
+#                     "coins": [
+#                         "AVAX",
+#                         "DOT",
+#                         "HBAR",
+#                         "LTC",
+#                         "SHIB",
+#                         "SUI",
+#                         "TON",
+#                         "UNI",
+#                         "XLM",
+#                         "XMR",
+#                         "ZEC"
+#                     ],
+#                     "label": "subset2"
+#                 },
+#                 {
+#                     "coins": [
+#                         "AVAX",
+#                         "BTC",
+#                         "DOGE",
+#                         "HYPE",
+#                         "LINK",
+#                         "SHIB",
+#                         "SOL",
+#                         "UNI",
+#                         "XMR",
+#                         "XRP",
+#                         "ZEC"
+#                     ],
+#                     "label": "subset3"
+#                 },
+#                 {
+#                     "coins": [
+#                         "ADA",
+#                         "BCH",
+#                         "BNB",
+#                         "DOT",
+#                         "ETH",
+#                         "HBAR",
+#                         "LTC",
+#                         "SUI",
+#                         "TON",
+#                         "TRX",
+#                         "XLM"
+#                     ],
+#                     "label": "subset4"
+#                 },
+#                 {
+#                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
+#                     "label": "pure_trailing",
+#                     "overrides": {"bot.long.entry_trailing_grid_ratio":1, "bot.long.close_trailing_grid_ratio":1},
+#                     "start_date": "2024-07"
+#                 },
+#                 {
+#                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
+#                     "label": "pure_grid",
+#                     "overrides": {"bot.long.entry_trailing_grid_ratio":0, "bot.long.close_trailing_grid_ratio":0},
+#                     "start_date": "2024-07"
+#                 },
+#                 {
+#                     "label": "n_positions=3",
+#                     "overrides": {"bot.long.n_positions":3},
+#                     "start_date": "2024-07"
+#                 }
+#             ]
+#         }
+#     },
+#     "bot": {
+#         "long": {
+#             "close_grid_markup_end": 0.00294,
+#             "close_grid_markup_start": 0.00401,
+#             "close_grid_qty_pct": 0.328,
+#             "close_trailing_grid_ratio": -0.541,
+#             "close_trailing_qty_pct": 0.133,
+#             "close_trailing_retracement_pct": 0.00214,
+#             "close_trailing_threshold_pct": 0.0344,
+#             "ema_span_0": 1130.0,
+#             "ema_span_1": 1370.0,
+#             "entry_grid_double_down_factor": 2.28,
+#             "entry_grid_spacing_pct": 0.0147,
+#             "entry_grid_spacing_volatility_weight": 93.7,
+#             "entry_grid_spacing_we_weight": 4.35,
+#             "entry_initial_ema_dist": 0.00245,
+#             "entry_initial_qty_pct": 0.0159,
+#             "entry_trailing_double_down_factor": 0.443,
+#             "entry_trailing_grid_ratio": -0.519,
+#             "entry_trailing_retracement_pct": 0.00724,
+#             "entry_trailing_retracement_volatility_weight": 140.0,
+#             "entry_trailing_retracement_we_weight": 18.6,
+#             "entry_trailing_threshold_pct": 0.00911,
+#             "entry_trailing_threshold_volatility_weight": 199.0,
+#             "entry_trailing_threshold_we_weight": 2.11,
+#             "entry_volatility_ema_span_hours": 2540.0,
+#             "filter_volatility_drop_pct": 0,
+#             "filter_volatility_ema_span": 103.0,
+#             "filter_volume_drop_pct": 0.5,
+#             "filter_volume_ema_span": 2160,
+#             "n_positions": 7,
+#             "risk_twel_enforcer_threshold": 0.99,
+#             "risk_we_excess_allowance_pct": 0.907,
+#             "risk_wel_enforcer_threshold": 0.985,
+#             "total_wallet_exposure_limit": 1,
+#             "unstuck_close_pct": 0.0182,
+#             "unstuck_ema_dist": -0.0906,
+#             "unstuck_loss_allowance_pct": 0.00143,
+#             "unstuck_threshold": 0.447
+#         },
+#         "short": {
+#             "close_grid_markup_end": 0.001,
+#             "close_grid_markup_start": 0.001,
+#             "close_grid_qty_pct": 0.05,
+#             "close_trailing_grid_ratio": -1,
+#             "close_trailing_qty_pct": 0.05,
+#             "close_trailing_retracement_pct": 0.0001,
+#             "close_trailing_threshold_pct": 0.0001,
+#             "ema_span_0": 200,
+#             "ema_span_1": 200,
+#             "entry_grid_double_down_factor": 0.2,
+#             "entry_grid_spacing_pct": 0.001,
+#             "entry_grid_spacing_volatility_weight": 1,
+#             "entry_grid_spacing_we_weight": 0.1,
+#             "entry_initial_ema_dist": -0.1,
+#             "entry_initial_qty_pct": 0.004,
+#             "entry_trailing_double_down_factor": 0.2,
+#             "entry_trailing_grid_ratio": -1,
+#             "entry_trailing_retracement_pct": 0.0001,
+#             "entry_trailing_retracement_volatility_weight": 1,
+#             "entry_trailing_retracement_we_weight": 0,
+#             "entry_trailing_threshold_pct": 0.0001,
+#             "entry_trailing_threshold_volatility_weight": 1,
+#             "entry_trailing_threshold_we_weight": 0,
+#             "entry_volatility_ema_span_hours": 672,
+#             "filter_volatility_drop_pct": 0,
+#             "filter_volatility_ema_span": 10,
+#             "filter_volume_drop_pct": 0.5,
+#             "filter_volume_ema_span": 360,
+#             "n_positions": 7,
+#             "risk_twel_enforcer_threshold": 0.95,
+#             "risk_we_excess_allowance_pct": 0,
+#             "risk_wel_enforcer_threshold": 0.95,
+#             "total_wallet_exposure_limit": 0,
+#             "unstuck_close_pct": 0.001,
+#             "unstuck_ema_dist": -0.1,
+#             "unstuck_loss_allowance_pct": 0.001,
+#             "unstuck_threshold": 0.4
+#         }
+#     },
+#     "coin_overrides": {},
+#     "live": {
+#         "approved_coins": "configs/approved_coins.json",
+#         "auto_gs": true,
+#         "empty_means_all_approved": true,
+#         "execution_delay_seconds": 2,
+#         "filter_by_min_effective_cost": true,
+#         "forced_mode_long": "",
+#         "forced_mode_short": "",
+#         "ignored_coins": {"long":[],"short":[]},
+#         "inactive_coin_candle_ttl_minutes": 10,
+#         "leverage": 10,
+#         "market_orders_allowed": false,
+#         "max_disk_candles_per_symbol_per_tf": 2000000,
+#         "max_memory_candles_per_symbol": 200000,
+#         "max_n_cancellations_per_batch": 5,
+#         "max_n_creations_per_batch": 3,
+#         "max_n_restarts_per_day": 10,
+#         "max_warmup_minutes": 0,
+#         "minimum_coin_age_days": 180,
+#         "order_match_tolerance_pct": 0.0002,
+#         "pnls_max_lookback_days": 30,
+#         "price_distance_threshold": 0.002,
+#         "recv_window_ms": 5000,
+#         "time_in_force": "good_till_cancelled",
+#         "balance_override": null,
+#         "balance_hysteresis_snap_pct": 0.02,
+#         "user": "bybit_01",
+#         "warmup_ratio": 0.3
+#     },
+#     "logging": {
+#         "level": 1,
+#         "memory_snapshot_interval_minutes": 30,
+#         "volume_refresh_info_threshold_seconds": 30
+#     },
+#     "optimize": {
+#         "bounds": {
+#             "long_close_grid_markup_end": [0.001,0.025],
+#             "long_close_grid_markup_start": [0.001,0.025],
+#             "long_close_grid_qty_pct": [0.05,1],
+#             "long_close_trailing_grid_ratio": [-1,1],
+#             "long_close_trailing_qty_pct": [0.05,1],
+#             "long_close_trailing_retracement_pct": [0.0001,0.025],
+#             "long_close_trailing_threshold_pct": [0.0001,0.035],
+#             "long_ema_span_0": [200,1440],
+#             "long_ema_span_1": [200,1440],
+#             "long_entry_grid_double_down_factor": [0.2,3],
+#             "long_entry_grid_spacing_pct": [0.001,0.045],
+#             "long_entry_grid_spacing_volatility_weight": [1,300],
+#             "long_entry_grid_spacing_we_weight": [0.1,20],
+#             "long_entry_initial_ema_dist": [-0.1,0.003],
+#             "long_entry_initial_qty_pct": [0.004,0.05],
+#             "long_entry_trailing_double_down_factor": [0.2,2],
+#             "long_entry_trailing_grid_ratio": [-1,1],
+#             "long_entry_trailing_retracement_pct": [0.0001,0.03],
+#             "long_entry_trailing_retracement_volatility_weight": [1,300],
+#             "long_entry_trailing_retracement_we_weight": [0,20],
+#             "long_entry_trailing_threshold_pct": [0.0001,0.03],
+#             "long_entry_trailing_threshold_volatility_weight": [1,300],
+#             "long_entry_trailing_threshold_we_weight": [0,20],
+#             "long_entry_volatility_ema_span_hours": [672,2688],
+#             "long_filter_volatility_drop_pct": [0,0],
+#             "long_filter_volatility_ema_span": [10,720],
+#             "long_filter_volume_drop_pct": [0.5,1],
+#             "long_filter_volume_ema_span": [360,2880],
+#             "long_n_positions": [7,20],
+#             "long_risk_twel_enforcer_threshold": [0.95,0.99],
+#             "long_risk_we_excess_allowance_pct": [0,3],
+#             "long_risk_wel_enforcer_threshold": [0.95,0.99],
+#             "long_total_wallet_exposure_limit": [1,1],
+#             "long_unstuck_close_pct": [0.001,0.05],
+#             "long_unstuck_ema_dist": [-0.1,0.01],
+#             "long_unstuck_loss_allowance_pct": [0.001,0.05],
+#             "long_unstuck_threshold": [0.4,0.99],
+#             "short_close_grid_markup_end": [0.001,0.025],
+#             "short_close_grid_markup_start": [0.001,0.025],
+#             "short_close_grid_qty_pct": [0.05,1],
+#             "short_close_trailing_grid_ratio": [-1,1],
+#             "short_close_trailing_qty_pct": [0.05,1],
+#             "short_close_trailing_retracement_pct": [0.0001,0.025],
+#             "short_close_trailing_threshold_pct": [0.0001,0.035],
+#             "short_ema_span_0": [200,1440],
+#             "short_ema_span_1": [200,1440],
+#             "short_entry_grid_double_down_factor": [0.2,3],
+#             "short_entry_grid_spacing_pct": [0.001,0.045],
+#             "short_entry_grid_spacing_volatility_weight": [1,300],
+#             "short_entry_grid_spacing_we_weight": [0.1,20],
+#             "short_entry_initial_ema_dist": [-0.1,0.003],
+#             "short_entry_initial_qty_pct": [0.004,0.05],
+#             "short_entry_trailing_double_down_factor": [0.2,2],
+#             "short_entry_trailing_grid_ratio": [-1,1],
+#             "short_entry_trailing_retracement_pct": [0.0001,0.03],
+#             "short_entry_trailing_retracement_volatility_weight": [1,300],
+#             "short_entry_trailing_retracement_we_weight": [0,20],
+#             "short_entry_trailing_threshold_pct": [0.0001,0.03],
+#             "short_entry_trailing_threshold_volatility_weight": [1,300],
+#             "short_entry_trailing_threshold_we_weight": [0,20],
+#             "short_entry_volatility_ema_span_hours": [672,2688],
+#             "short_filter_volatility_drop_pct": [0,0],
+#             "short_filter_volatility_ema_span": [10,720],
+#             "short_filter_volume_drop_pct": [0.5,1],
+#             "short_filter_volume_ema_span": [360,2880],
+#             "short_n_positions": [7,20],
+#             "short_risk_twel_enforcer_threshold": [0.95,0.99],
+#             "short_risk_we_excess_allowance_pct": [0,3],
+#             "short_risk_wel_enforcer_threshold": [0.95,0.99],
+#             "short_total_wallet_exposure_limit": [0,0],
+#             "short_unstuck_close_pct": [0.001,0.05],
+#             "short_unstuck_ema_dist": [-0.1,0.01],
+#             "short_unstuck_loss_allowance_pct": [0.001,0.05],
+#             "short_unstuck_threshold": [0.4,0.99]
+#         },
+#         "compress_results_file": true,
+#         "crossover_eta": 20,
+#         "crossover_probability": 0.64,
+#         "enable_overrides": [],
+#         "iters": 500000,
+#         "limits": [
+#             {"metric":"drawdown_worst_btc","penalize_if":"greater_than","value":0.9},
+#             {"metric":"drawdown_worst_usd","penalize_if":"greater_than","value":0.9},
+#             {"metric":"loss_profit_ratio","penalize_if":"greater_than","value":0.6},
+#             {
+#                 "metric": "adg_pnl_w",
+#                 "penalize_if": "less_than",
+#                 "stat": "mean",
+#                 "value": 0.0007
+#             },
+#             {
+#                 "metric": "peak_recovery_hours_pnl",
+#                 "penalize_if": "greater_than",
+#                 "value": 1344
+#             },
+#             {
+#                 "metric": "position_held_hours_max",
+#                 "penalize_if": "greater_than",
+#                 "value": 1344
+#             },
+#             {
+#                 "metric": "position_unchanged_hours_max",
+#                 "penalize_if": "greater_than",
+#                 "value": 840
+#             }
+#         ],
+#         "mutation_eta": 20,
+#         "mutation_indpb": 0.05,
+#         "mutation_probability": 0.34,
+#         "n_cpus": 8,
+#         "offspring_multiplier": 1,
+#         "pareto_max_size": 250,
+#         "population_size": 250,
+#         "round_to_n_significant_digits": 3,
+#         "scoring": [
+#             "adg_pnl_w",
+#             "mdg_pnl_w",
+#             "loss_profit_ratio",
+#             "peak_recovery_hours_pnl",
+#             "position_held_hours_max",
+#             "position_unchanged_hours_max",
+#             "volume_pct_per_day_avg_w",
+#             "entry_initial_balance_pct_long"
+#         ],
+#         "write_all_results": true
+#     }
+# }
+
 
 
 class Logging:
@@ -457,8 +647,12 @@ class Logging:
 
     def __init__(self):
         self._level = 1
+        self._memory_snapshot_interval_minutes = 30
+        self._volume_refresh_info_threshold_seconds = 30
         self._logging = {
-            "level": self._level
+            "level": self._level,
+            "memory_snapshot_interval_minutes": self._memory_snapshot_interval_minutes,
+            "volume_refresh_info_threshold_seconds": self._volume_refresh_info_threshold_seconds
         }
     
     def __repr__(self):
@@ -470,36 +664,58 @@ class Logging:
     def logging(self, new_logging):
         if "level" in new_logging:
             self.level = new_logging["level"]
+        if "memory_snapshot_interval_minutes" in new_logging:
+            self.memory_snapshot_interval_minutes = new_logging["memory_snapshot_interval_minutes"]
+        if "volume_refresh_info_threshold_seconds" in new_logging:
+            self.volume_refresh_info_threshold_seconds = new_logging["volume_refresh_info_threshold_seconds"]
     
     @property
     def level(self): return self._level
+    @property
+    def memory_snapshot_interval_minutes(self): return self._memory_snapshot_interval_minutes
+    @property
+    def volume_refresh_info_threshold_seconds(self): return self._volume_refresh_info_threshold_seconds
     @level.setter
     def level(self, new_level):
         self._level = new_level
         self._logging["level"] = self._level
+    @memory_snapshot_interval_minutes.setter
+    def memory_snapshot_interval_minutes(self, new_memory_snapshot_interval_minutes):
+        self._memory_snapshot_interval_minutes = new_memory_snapshot_interval_minutes
+        self._logging["memory_snapshot_interval_minutes"] = self._memory_snapshot_interval_minutes
+    @volume_refresh_info_threshold_seconds.setter
+    def volume_refresh_info_threshold_seconds(self, new_volume_refresh_info_threshold_seconds):
+        self._volume_refresh_info_threshold_seconds = new_volume_refresh_info_threshold_seconds
+        self._logging["volume_refresh_info_threshold_seconds"] = self._volume_refresh_info_threshold_seconds
 
 class Backtest:
     def __init__(self):
+        self._balance_sample_divider = 60
         self._base_dir = "backtests"
         self._combine_ohlcvs = True
         self._compress_cache = True
         self._end_date = "now"
         self._exchanges = ["binance", "bybit"]
+        self._filter_by_min_effective_cost = False
         self._gap_tolerance_ohlcvs_minutes = 120.0
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
-        self._use_btc_collateral = False
+        self._btc_collateral_cap = 0.0
+        self._btc_collateral_ltv_cap = None
         self._max_warmup_minutes = 0.0
         self._backtest = {
+            "balance_sample_divider": self._balance_sample_divider,
             "base_dir": self._base_dir,
             "combine_ohlcvs": self._combine_ohlcvs,
             "compress_cache": self._compress_cache,
             "end_date": self._end_date,
             "exchanges": self._exchanges,
+            "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
             "gap_tolerance_ohlcvs_minutes": self._gap_tolerance_ohlcvs_minutes,
             "start_date": self._start_date,
             "starting_balance": self._starting_balance,
-            "use_btc_collateral": self._use_btc_collateral,
+            "btc_collateral_cap": self._btc_collateral_cap,
+            "btc_collateral_ltv_cap": self._btc_collateral_ltv_cap,
             "max_warmup_minutes": self._max_warmup_minutes
         }
     
@@ -510,6 +726,8 @@ class Backtest:
     def backtest(self): return self._backtest
     @backtest.setter
     def backtest(self, new_backtest):
+        if "balance_sample_divider" in new_backtest:
+            self.balance_sample_divider = new_backtest["balance_sample_divider"]
         if "base_dir" in new_backtest:
             self.base_dir = new_backtest["base_dir"]
         if "combine_ohlcvs" in new_backtest:
@@ -520,17 +738,29 @@ class Backtest:
             self.end_date = new_backtest["end_date"]
         if "exchanges" in new_backtest:
             self.exchanges = new_backtest["exchanges"]
+        if "filter_by_min_effective_cost" in new_backtest:
+            self.filter_by_min_effective_cost = new_backtest["filter_by_min_effective_cost"]
         if "gap_tolerance_ohlcvs_minutes" in new_backtest:
             self.gap_tolerance_ohlcvs_minutes = new_backtest["gap_tolerance_ohlcvs_minutes"]
         if "start_date" in new_backtest:
             self.start_date = new_backtest["start_date"]
         if "starting_balance" in new_backtest:
             self.starting_balance = new_backtest["starting_balance"]
+        if "btc_collateral_cap" in new_backtest:
+            self.btc_collateral_cap = new_backtest["btc_collateral_cap"]
+        if "btc_collateral_ltv_cap" in new_backtest:
+            self.btc_collateral_ltv_cap = new_backtest["btc_collateral_ltv_cap"]
+        # Legacy support: convert use_btc_collateral to btc_collateral_cap
         if "use_btc_collateral" in new_backtest:
-            self.use_btc_collateral = new_backtest["use_btc_collateral"]
+            if new_backtest["use_btc_collateral"]:
+                self.btc_collateral_cap = 1.0
+            else:
+                self.btc_collateral_cap = 0.0
         if "max_warmup_minutes" in new_backtest:
             self.max_warmup_minutes = new_backtest["max_warmup_minutes"]
     
+    @property
+    def balance_sample_divider(self): return self._balance_sample_divider
     @property
     def base_dir(self): return self._base_dir
     @property
@@ -545,16 +775,24 @@ class Backtest:
     @property
     def exchanges(self): return self._exchanges
     @property
+    def filter_by_min_effective_cost(self): return self._filter_by_min_effective_cost
+    @property
     def gap_tolerance_ohlcvs_minutes(self): return self._gap_tolerance_ohlcvs_minutes
     @property
     def start_date(self): return self._start_date
     @property
     def starting_balance(self): return self._starting_balance
     @property
-    def use_btc_collateral(self): return self._use_btc_collateral
+    def btc_collateral_cap(self): return self._btc_collateral_cap
+    @property
+    def btc_collateral_ltv_cap(self): return self._btc_collateral_ltv_cap
     @property
     def max_warmup_minutes(self): return self._max_warmup_minutes
 
+    @balance_sample_divider.setter
+    def balance_sample_divider(self, new_balance_sample_divider):
+        self._balance_sample_divider = new_balance_sample_divider
+        self._backtest["balance_sample_divider"] = self._balance_sample_divider
     @base_dir.setter
     def base_dir(self, new_base_dir):
         self._base_dir = new_base_dir
@@ -575,6 +813,10 @@ class Backtest:
     def exchanges(self, new_exchanges):
         self._exchanges = new_exchanges
         self._backtest["exchanges"] = self._exchanges
+    @filter_by_min_effective_cost.setter
+    def filter_by_min_effective_cost(self, new_filter_by_min_effective_cost):
+        self._filter_by_min_effective_cost = new_filter_by_min_effective_cost
+        self._backtest["filter_by_min_effective_cost"] = self._filter_by_min_effective_cost
     @gap_tolerance_ohlcvs_minutes.setter
     def gap_tolerance_ohlcvs_minutes(self, new_gap_tolerance_ohlcvs_minutes):
         self._gap_tolerance_ohlcvs_minutes = new_gap_tolerance_ohlcvs_minutes
@@ -587,10 +829,14 @@ class Backtest:
     def starting_balance(self, new_starting_balance):
         self._starting_balance = new_starting_balance
         self._backtest["starting_balance"] = self._starting_balance
-    @use_btc_collateral.setter
-    def use_btc_collateral(self, new_use_btc_collateral):
-        self._use_btc_collateral = new_use_btc_collateral
-        self._backtest["use_btc_collateral"] = self._use_btc_collateral
+    @btc_collateral_cap.setter
+    def btc_collateral_cap(self, new_btc_collateral_cap):
+        self._btc_collateral_cap = new_btc_collateral_cap
+        self._backtest["btc_collateral_cap"] = self._btc_collateral_cap
+    @btc_collateral_ltv_cap.setter
+    def btc_collateral_ltv_cap(self, new_btc_collateral_ltv_cap):
+        self._btc_collateral_ltv_cap = new_btc_collateral_ltv_cap
+        self._backtest["btc_collateral_ltv_cap"] = self._btc_collateral_ltv_cap
     @max_warmup_minutes.setter
     def max_warmup_minutes(self, new_max_warmup_minutes):
         self._max_warmup_minutes = new_max_warmup_minutes
@@ -781,36 +1027,43 @@ class Long:
     def __init__(self):
         # self._close_grid_markup_range = 0.0015976
         # self._close_grid_min_markup = 0.012839
-        self._close_grid_markup_end = 0.001161
-        self._close_grid_markup_start = 0.009675
-        self._close_grid_qty_pct = 0.8195
-        self._close_trailing_grid_ratio = 0.042114
-        self._close_trailing_qty_pct = 1
-        self._close_trailing_retracement_pct = 0.066097
-        self._close_trailing_threshold_pct = 0.06726
-        self._ema_span_0 = 469.02
-        self._ema_span_1 = 1118.9
-        self._enforce_exposure_limit = True
-        self._entry_grid_double_down_factor = 2.3738
-        self._entry_grid_spacing_log_span_hours = 72
-        self._entry_grid_spacing_log_weight = 0.0
-        self._entry_grid_spacing_pct = 0.052372
-        self._entry_grid_spacing_we_weight = 0.17715
-        self._entry_initial_ema_dist = -0.0060574
-        self._entry_initial_qty_pct = 0.019955
-        self._entry_trailing_double_down_factor = 1.441
-        self._entry_trailing_grid_ratio = -0.28053
-        self._entry_trailing_retracement_pct = 0.0024762
-        self._entry_trailing_threshold_pct = 0.014956
-        self._filter_volume_drop_pct = 0.7021
-        self._filter_volume_ema_span = 303.6
-        self._filter_log_range_ema_span = 303.6
-        self._n_positions = 9.6662
-        self._total_wallet_exposure_limit = 0.8536
-        self._unstuck_close_pct = 0.049593
-        self._unstuck_ema_dist = -0.051669
-        self._unstuck_loss_allowance_pct = 0.044329
-        self._unstuck_threshold = 0.46953
+        self._close_grid_markup_end = 0.0089
+        self._close_grid_markup_start = 0.0344
+        self._close_grid_qty_pct = 0.125
+        self._close_trailing_grid_ratio = 0.5
+        self._close_trailing_qty_pct = 0.125
+        self._close_trailing_retracement_pct = 0.002
+        self._close_trailing_threshold_pct = 0.008
+        self._ema_span_0 = 1318.0
+        self._ema_span_1 = 1435.0
+        self._entry_grid_double_down_factor = 0.894
+        self._entry_grid_spacing_volatility_weight = 72.0
+        self._entry_grid_spacing_pct = 0.04
+        self._entry_grid_spacing_we_weight = 0.697
+        self._entry_initial_ema_dist = -0.00738
+        self._entry_initial_qty_pct = 0.00592
+        self._entry_trailing_double_down_factor = 0.894
+        self._entry_trailing_grid_ratio = 0.5
+        self._entry_trailing_retracement_pct = 0.01
+        self._entry_trailing_threshold_pct = 0.05
+        self._entry_trailing_threshold_we_weight = 0.0
+        self._entry_trailing_threshold_volatility_weight = 0.0
+        self._entry_trailing_retracement_we_weight = 0.0
+        self._entry_trailing_retracement_volatility_weight = 0.0
+        self._entry_volatility_ema_span_hours = 72
+        self._filter_volatility_ema_span = 60.0
+        self._filter_volatility_drop_pct = 0.0
+        self._filter_volume_drop_pct = 0.95
+        self._filter_volume_ema_span = 60.0
+        self._n_positions = 10.0
+        self._total_wallet_exposure_limit = 1.7
+        self._unstuck_close_pct = 0.001
+        self._unstuck_ema_dist = 0.0
+        self._unstuck_loss_allowance_pct = 0.03
+        self._unstuck_threshold = 0.916
+        self._risk_wel_enforcer_threshold = 1.0
+        self._risk_we_excess_allowance_pct = 0.0
+        self._risk_twel_enforcer_threshold = 1.0
         self._long = {
             "close_grid_markup_end": self._close_grid_markup_end,
             "close_grid_markup_start": self._close_grid_markup_start,
@@ -823,10 +1076,8 @@ class Long:
             "close_trailing_threshold_pct": self._close_trailing_threshold_pct,
             "ema_span_0": self._ema_span_0,
             "ema_span_1": self._ema_span_1,
-            "enforce_exposure_limit": self._enforce_exposure_limit,
             "entry_grid_double_down_factor": self._entry_grid_double_down_factor,
-            "entry_grid_spacing_log_span_hours": self._entry_grid_spacing_log_span_hours,
-            "entry_grid_spacing_log_weight": self._entry_grid_spacing_log_weight,
+            "entry_grid_spacing_volatility_weight": self._entry_grid_spacing_volatility_weight,
             "entry_grid_spacing_pct": self._entry_grid_spacing_pct,
             "entry_grid_spacing_we_weight": self._entry_grid_spacing_we_weight,
             "entry_initial_ema_dist": self._entry_initial_ema_dist,
@@ -835,7 +1086,13 @@ class Long:
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
-            "filter_log_range_ema_span": self._filter_log_range_ema_span,
+            "entry_trailing_threshold_we_weight": self._entry_trailing_threshold_we_weight,
+            "entry_trailing_threshold_volatility_weight": self._entry_trailing_threshold_volatility_weight,
+            "entry_trailing_retracement_we_weight": self._entry_trailing_retracement_we_weight,
+            "entry_trailing_retracement_volatility_weight": self._entry_trailing_retracement_volatility_weight,
+            "entry_volatility_ema_span_hours": self._entry_volatility_ema_span_hours,
+            "filter_volatility_ema_span": self._filter_volatility_ema_span,
+            "filter_volatility_drop_pct": self._filter_volatility_drop_pct,
             "filter_volume_drop_pct": self._filter_volume_drop_pct,
             "filter_volume_ema_span": self._filter_volume_ema_span,
             "n_positions": self._n_positions,
@@ -843,7 +1100,10 @@ class Long:
             "unstuck_close_pct": self._unstuck_close_pct,
             "unstuck_ema_dist": self._unstuck_ema_dist,
             "unstuck_loss_allowance_pct": self._unstuck_loss_allowance_pct,
-            "unstuck_threshold": self._unstuck_threshold
+            "unstuck_threshold": self._unstuck_threshold,
+            "risk_wel_enforcer_threshold": self._risk_wel_enforcer_threshold,
+            "risk_we_excess_allowance_pct": self._risk_we_excess_allowance_pct,
+            "risk_twel_enforcer_threshold": self._risk_twel_enforcer_threshold
         }
 
     def __repr__(self):
@@ -875,14 +1135,13 @@ class Long:
             self.ema_span_0 = new_long["ema_span_0"]
         if "ema_span_1" in new_long:
             self.ema_span_1 = new_long["ema_span_1"]
-        if "enforce_exposure_limit" in new_long:
-            self.enforce_exposure_limit = new_long["enforce_exposure_limit"]
         if "entry_grid_double_down_factor" in new_long:
             self.entry_grid_double_down_factor = new_long["entry_grid_double_down_factor"]
-        if "entry_grid_spacing_log_span_hours" in new_long:
-            self.entry_grid_spacing_log_span_hours = new_long["entry_grid_spacing_log_span_hours"]
-        if "entry_grid_spacing_log_weight" in new_long:
-            self.entry_grid_spacing_log_weight = new_long["entry_grid_spacing_log_weight"]
+        if "entry_grid_spacing_volatility_weight" in new_long:
+            self.entry_grid_spacing_volatility_weight = new_long["entry_grid_spacing_volatility_weight"]
+        # Fix for old configs
+        elif "entry_grid_spacing_log_weight" in new_long:
+            self.entry_grid_spacing_volatility_weight = new_long["entry_grid_spacing_log_weight"]
         if "entry_grid_spacing_pct" in new_long:
             self.entry_grid_spacing_pct = new_long["entry_grid_spacing_pct"]
         if "entry_grid_spacing_we_weight" in new_long:
@@ -904,13 +1163,23 @@ class Long:
             self.entry_trailing_retracement_pct = new_long["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_long:
             self.entry_trailing_threshold_pct = new_long["entry_trailing_threshold_pct"]
-        if "filter_log_range_ema_span" in new_long:
-            self.filter_log_range_ema_span = new_long["filter_log_range_ema_span"]
+        if "entry_volatility_ema_span_hours" in new_long:
+            self.entry_volatility_ema_span_hours = new_long["entry_volatility_ema_span_hours"]
+        # Fix for old configs
+        elif "entry_grid_spacing_log_span_hours" in new_long:
+            self.entry_volatility_ema_span_hours = new_long["entry_grid_spacing_log_span_hours"]
+        if "filter_volatility_ema_span" in new_long:
+            self.filter_volatility_ema_span = new_long["filter_volatility_ema_span"]
+        # Fix for old configs
+        elif "filter_log_range_ema_span" in new_long:
+            self.filter_volatility_ema_span = new_long["filter_log_range_ema_span"]
         # Fix for old configs
         elif "filter_noisiness_rolling_window" in new_long:
             self.filter_log_range_ema_span = new_long["filter_noisiness_rolling_window"]
         elif "filter_rolling_window" in new_long:
             self.filter_log_range_ema_span = new_long["filter_rolling_window"]
+        if "filter_volatility_drop_pct" in new_long:
+            self.filter_volatility_drop_pct = new_long["filter_volatility_drop_pct"]
         if "filter_volume_drop_pct" in new_long:
             self.filter_volume_drop_pct = new_long["filter_volume_drop_pct"]
         # Fix for old configs
@@ -933,6 +1202,12 @@ class Long:
             self.unstuck_loss_allowance_pct = new_long["unstuck_loss_allowance_pct"]
         if "unstuck_threshold" in new_long:
             self.unstuck_threshold = new_long["unstuck_threshold"]
+        if "risk_wel_enforcer_threshold" in new_long:
+            self.risk_wel_enforcer_threshold = new_long["risk_wel_enforcer_threshold"]
+        if "risk_we_excess_allowance_pct" in new_long:
+            self.risk_we_excess_allowance_pct = new_long["risk_we_excess_allowance_pct"]
+        if "risk_twel_enforcer_threshold" in new_long:
+            self.risk_twel_enforcer_threshold = new_long["risk_twel_enforcer_threshold"]
 
     # @property
     # def close_grid_markup_range(self): return self._close_grid_markup_range
@@ -957,13 +1232,9 @@ class Long:
     @property
     def ema_span_1(self): return self._ema_span_1
     @property
-    def enforce_exposure_limit(self): return self._enforce_exposure_limit
-    @property
     def entry_grid_double_down_factor(self): return self._entry_grid_double_down_factor
     @property
-    def entry_grid_spacing_log_span_hours(self): return self._entry_grid_spacing_log_span_hours
-    @property
-    def entry_grid_spacing_log_weight(self): return self._entry_grid_spacing_log_weight
+    def entry_grid_spacing_volatility_weight(self): return self._entry_grid_spacing_volatility_weight
     @property
     def entry_grid_spacing_pct(self): return self._entry_grid_spacing_pct
     @property
@@ -981,7 +1252,19 @@ class Long:
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
     @property
-    def filter_log_range_ema_span(self): return self._filter_log_range_ema_span
+    def entry_trailing_threshold_we_weight(self): return self._entry_trailing_threshold_we_weight
+    @property
+    def entry_trailing_threshold_volatility_weight(self): return self._entry_trailing_threshold_volatility_weight
+    @property
+    def entry_trailing_retracement_we_weight(self): return self._entry_trailing_retracement_we_weight
+    @property
+    def entry_trailing_retracement_volatility_weight(self): return self._entry_trailing_retracement_volatility_weight
+    @property
+    def entry_volatility_ema_span_hours(self): return self._entry_volatility_ema_span_hours
+    @property
+    def filter_volatility_ema_span(self): return self._filter_volatility_ema_span
+    @property
+    def filter_volatility_drop_pct(self): return self._filter_volatility_drop_pct
     @property
     def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
     @property
@@ -998,6 +1281,12 @@ class Long:
     def unstuck_loss_allowance_pct(self): return self._unstuck_loss_allowance_pct
     @property
     def unstuck_threshold(self): return self._unstuck_threshold
+    @property
+    def risk_wel_enforcer_threshold(self): return self._risk_wel_enforcer_threshold
+    @property
+    def risk_we_excess_allowance_pct(self): return self._risk_we_excess_allowance_pct
+    @property
+    def risk_twel_enforcer_threshold(self): return self._risk_twel_enforcer_threshold
 
     @close_grid_markup_end.setter
     def close_grid_markup_end(self, new_close_grid_markup_end):
@@ -1043,22 +1332,14 @@ class Long:
     def ema_span_1(self, new_ema_span_1):
         self._ema_span_1 = new_ema_span_1
         self._long["ema_span_1"] = self._ema_span_1
-    @enforce_exposure_limit.setter
-    def enforce_exposure_limit(self, new_enforce_exposure_limit):
-        self._enforce_exposure_limit = new_enforce_exposure_limit
-        self._long["enforce_exposure_limit"] = self._enforce_exposure_limit
     @entry_grid_double_down_factor.setter
     def entry_grid_double_down_factor(self, new_entry_grid_double_down_factor):
         self._entry_grid_double_down_factor = new_entry_grid_double_down_factor
         self._long["entry_grid_double_down_factor"] = self._entry_grid_double_down_factor
-    @entry_grid_spacing_log_span_hours.setter
-    def entry_grid_spacing_log_span_hours(self, new_entry_grid_spacing_log_span_hours):
-        self._entry_grid_spacing_log_span_hours = new_entry_grid_spacing_log_span_hours
-        self._long["entry_grid_spacing_log_span_hours"] = self._entry_grid_spacing_log_span_hours
-    @entry_grid_spacing_log_weight.setter
-    def entry_grid_spacing_log_weight(self, new_entry_grid_spacing_log_weight):
-        self._entry_grid_spacing_log_weight = new_entry_grid_spacing_log_weight
-        self._long["entry_grid_spacing_log_weight"] = self._entry_grid_spacing_log_weight
+    @entry_grid_spacing_volatility_weight.setter
+    def entry_grid_spacing_volatility_weight(self, new_entry_grid_spacing_volatility_weight):
+        self._entry_grid_spacing_volatility_weight = new_entry_grid_spacing_volatility_weight
+        self._long["entry_grid_spacing_volatility_weight"] = self._entry_grid_spacing_volatility_weight
     @entry_grid_spacing_pct.setter
     def entry_grid_spacing_pct(self, new_entry_grid_spacing_pct):
         self._entry_grid_spacing_pct = new_entry_grid_spacing_pct
@@ -1091,10 +1372,34 @@ class Long:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._long["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
-    @filter_log_range_ema_span.setter
-    def filter_log_range_ema_span(self, new_filter_log_range_ema_span):
-        self._filter_log_range_ema_span = new_filter_log_range_ema_span
-        self._long["filter_log_range_ema_span"] = self._filter_log_range_ema_span
+    @entry_trailing_threshold_we_weight.setter
+    def entry_trailing_threshold_we_weight(self, new_entry_trailing_threshold_we_weight):
+        self._entry_trailing_threshold_we_weight = new_entry_trailing_threshold_we_weight
+        self._long["entry_trailing_threshold_we_weight"] = self._entry_trailing_threshold_we_weight
+    @entry_trailing_threshold_volatility_weight.setter
+    def entry_trailing_threshold_volatility_weight(self, new_entry_trailing_threshold_volatility_weight):
+        self._entry_trailing_threshold_volatility_weight = new_entry_trailing_threshold_volatility_weight
+        self._long["entry_trailing_threshold_volatility_weight"] = self._entry_trailing_threshold_volatility_weight
+    @entry_trailing_retracement_we_weight.setter
+    def entry_trailing_retracement_we_weight(self, new_entry_trailing_retracement_we_weight):
+        self._entry_trailing_retracement_we_weight = new_entry_trailing_retracement_we_weight
+        self._long["entry_trailing_retracement_we_weight"] = self._entry_trailing_retracement_we_weight
+    @entry_trailing_retracement_volatility_weight.setter
+    def entry_trailing_retracement_volatility_weight(self, new_entry_trailing_retracement_volatility_weight):
+        self._entry_trailing_retracement_volatility_weight = new_entry_trailing_retracement_volatility_weight
+        self._long["entry_trailing_retracement_volatility_weight"] = self._entry_trailing_retracement_volatility_weight
+    @entry_volatility_ema_span_hours.setter
+    def entry_volatility_ema_span_hours(self, new_entry_volatility_ema_span_hours):
+        self._entry_volatility_ema_span_hours = new_entry_volatility_ema_span_hours
+        self._long["entry_volatility_ema_span_hours"] = self._entry_volatility_ema_span_hours
+    @filter_volatility_ema_span.setter
+    def filter_volatility_ema_span(self, new_filter_volatility_ema_span):
+        self._filter_volatility_ema_span = new_filter_volatility_ema_span
+        self._long["filter_volatility_ema_span"] = self._filter_volatility_ema_span
+    @filter_volatility_drop_pct.setter
+    def filter_volatility_drop_pct(self, new_filter_volatility_drop_pct):
+        self._filter_volatility_drop_pct = new_filter_volatility_drop_pct
+        self._long["filter_volatility_drop_pct"] = self._filter_volatility_drop_pct
     @filter_volume_drop_pct.setter
     def filter_volume_drop_pct(self, new_filter_volume_drop_pct):
         self._filter_volume_drop_pct = new_filter_volume_drop_pct
@@ -1128,40 +1433,62 @@ class Long:
         self._unstuck_threshold = new_unstuck_threshold
         self._long["unstuck_threshold"] = self._unstuck_threshold
 
+    @risk_wel_enforcer_threshold.setter
+    def risk_wel_enforcer_threshold(self, new_risk_wel_enforcer_threshold):
+        self._risk_wel_enforcer_threshold = new_risk_wel_enforcer_threshold
+        self._long["risk_wel_enforcer_threshold"] = self._risk_wel_enforcer_threshold
+
+    @risk_we_excess_allowance_pct.setter
+    def risk_we_excess_allowance_pct(self, new_risk_we_excess_allowance_pct):
+        self._risk_we_excess_allowance_pct = new_risk_we_excess_allowance_pct
+        self._long["risk_we_excess_allowance_pct"] = self._risk_we_excess_allowance_pct
+
+    @risk_twel_enforcer_threshold.setter
+    def risk_twel_enforcer_threshold(self, new_risk_twel_enforcer_threshold):
+        self._risk_twel_enforcer_threshold = new_risk_twel_enforcer_threshold
+        self._long["risk_twel_enforcer_threshold"] = self._risk_twel_enforcer_threshold
+
 class Short:
     def __init__(self):
         # self._close_grid_markup_range = 0.028266
         # self._close_grid_min_markup = 0.013899
-        self._close_grid_markup_end = 0.001
-        self._close_grid_markup_start = 0.001
-        self._close_grid_qty_pct = 0.05
-        self._close_trailing_grid_ratio = 0.93658
-        self._close_trailing_qty_pct = 1
-        self._close_trailing_retracement_pct = 0.098179
-        self._close_trailing_threshold_pct = -0.059383
-        self._ema_span_0 = 794.32
-        self._ema_span_1 = 1176.7
-        self._enforce_exposure_limit = True
-        self._entry_grid_double_down_factor = 2.1256
-        self._entry_grid_spacing_log_span_hours = 72
-        self._entry_grid_spacing_log_weight = 0.0
-        self._entry_grid_spacing_pct = 0.072906
-        self._entry_grid_spacing_we_weight = 0.98867
-        self._entry_initial_ema_dist = -0.060333
-        self._entry_initial_qty_pct = 0.066426
-        self._entry_trailing_double_down_factor = 0.72508
-        self._entry_trailing_grid_ratio = -0.026647
-        self._entry_trailing_retracement_pct = 0.016626
-        self._entry_trailing_threshold_pct = 0.052728
-        self._filter_log_range_ema_span = 320.18
-        self._filter_volume_drop_pct = 0.57973
-        self._filter_volume_ema_span = 320.18
+        self._close_grid_markup_end = 0.0089
+        self._close_grid_markup_start = 0.0344
+        self._close_grid_qty_pct = 0.125
+        self._close_trailing_grid_ratio = 0.5
+        self._close_trailing_qty_pct = 0.125
+        self._close_trailing_retracement_pct = 0.002
+        self._close_trailing_threshold_pct = 0.008
+        self._ema_span_0 = 1318.0
+        self._ema_span_1 = 1435.0
+        self._entry_grid_double_down_factor = 0.894
+        self._entry_grid_spacing_volatility_weight = 0.0
+        self._entry_grid_spacing_pct = 0.04
+        self._entry_grid_spacing_we_weight = 0.697
+        self._entry_initial_ema_dist = -0.00738
+        self._entry_initial_qty_pct = 0.00592
+        self._entry_trailing_double_down_factor = 0.894
+        self._entry_trailing_grid_ratio = 0.5
+        self._entry_trailing_retracement_pct = 0.01
+        self._entry_trailing_threshold_pct = 0.05
+        self._entry_trailing_threshold_we_weight = 0.0
+        self._entry_trailing_threshold_volatility_weight = 0.0
+        self._entry_trailing_retracement_we_weight = 0.0
+        self._entry_trailing_retracement_volatility_weight = 0.0
+        self._entry_volatility_ema_span_hours = 72
+        self._filter_volatility_ema_span = 60.0
+        self._filter_volatility_drop_pct = 0.0
+        self._filter_volume_drop_pct = 0.95
+        self._filter_volume_ema_span = 60.0
         self._n_positions = 0.0
         self._total_wallet_exposure_limit = 0.0
-        self._unstuck_close_pct = 0.052992
-        self._unstuck_ema_dist = -0.0465
-        self._unstuck_loss_allowance_pct = 0.045415
-        self._unstuck_threshold = 0.92228
+        self._unstuck_close_pct = 0.001
+        self._unstuck_ema_dist = 0.0
+        self._unstuck_loss_allowance_pct = 0.03
+        self._unstuck_threshold = 0.916
+        self._risk_wel_enforcer_threshold = 1.0
+        self._risk_we_excess_allowance_pct = 0.0
+        self._risk_twel_enforcer_threshold = 1.0
         self._short = {
             "close_grid_markup_end": self._close_grid_markup_end,
             "close_grid_markup_start": self._close_grid_markup_start,
@@ -1174,10 +1501,8 @@ class Short:
             "close_trailing_threshold_pct": self._close_trailing_threshold_pct,
             "ema_span_0": self._ema_span_0,
             "ema_span_1": self._ema_span_1,
-            "enforce_exposure_limit": self._enforce_exposure_limit,
             "entry_grid_double_down_factor": self._entry_grid_double_down_factor,
-            "entry_grid_spacing_log_span_hours": self._entry_grid_spacing_log_span_hours,
-            "entry_grid_spacing_log_weight": self._entry_grid_spacing_log_weight,
+            "entry_grid_spacing_volatility_weight": self._entry_grid_spacing_volatility_weight,
             "entry_grid_spacing_pct": self._entry_grid_spacing_pct,
             "entry_grid_spacing_we_weight": self._entry_grid_spacing_we_weight,
             "entry_initial_ema_dist": self._entry_initial_ema_dist,
@@ -1186,7 +1511,13 @@ class Short:
             "entry_trailing_grid_ratio": self._entry_trailing_grid_ratio,
             "entry_trailing_retracement_pct": self._entry_trailing_retracement_pct,
             "entry_trailing_threshold_pct": self._entry_trailing_threshold_pct,
-            "filter_log_range_ema_span": self._filter_log_range_ema_span,
+            "entry_trailing_threshold_we_weight": self._entry_trailing_threshold_we_weight,
+            "entry_trailing_threshold_volatility_weight": self._entry_trailing_threshold_volatility_weight,
+            "entry_trailing_retracement_we_weight": self._entry_trailing_retracement_we_weight,
+            "entry_trailing_retracement_volatility_weight": self._entry_trailing_retracement_volatility_weight,
+            "entry_volatility_ema_span_hours": self._entry_volatility_ema_span_hours,
+            "filter_volatility_ema_span": self._filter_volatility_ema_span,
+            "filter_volatility_drop_pct": self._filter_volatility_drop_pct,
             "filter_volume_drop_pct": self._filter_volume_drop_pct,
             "filter_volume_ema_span": self._filter_volume_ema_span,
             "n_positions": self._n_positions,
@@ -1194,7 +1525,10 @@ class Short:
             "unstuck_close_pct": self._unstuck_close_pct,
             "unstuck_ema_dist": self._unstuck_ema_dist,
             "unstuck_loss_allowance_pct": self._unstuck_loss_allowance_pct,
-            "unstuck_threshold": self._unstuck_threshold
+            "unstuck_threshold": self._unstuck_threshold,
+            "risk_wel_enforcer_threshold": self._risk_wel_enforcer_threshold,
+            "risk_we_excess_allowance_pct": self._risk_we_excess_allowance_pct,
+            "risk_twel_enforcer_threshold": self._risk_twel_enforcer_threshold
         }
 
     def __repr__(self):
@@ -1226,14 +1560,13 @@ class Short:
             self.ema_span_0 = new_short["ema_span_0"]
         if "ema_span_1" in new_short:
             self.ema_span_1 = new_short["ema_span_1"]
-        if "enforce_exposure_limit" in new_short:
-            self.enforce_exposure_limit = new_short["enforce_exposure_limit"]
         if "entry_grid_double_down_factor" in new_short:
             self.entry_grid_double_down_factor = new_short["entry_grid_double_down_factor"]
-        if "entry_grid_spacing_log_span_hours" in new_short:
-            self.entry_grid_spacing_log_span_hours = new_short["entry_grid_spacing_log_span_hours"]
-        if "entry_grid_spacing_log_weight" in new_short:
-            self.entry_grid_spacing_log_weight = new_short["entry_grid_spacing_log_weight"]
+        if "entry_grid_spacing_volatility_weight" in new_short:
+            self.entry_grid_spacing_volatility_weight = new_short["entry_grid_spacing_volatility_weight"]
+        # Fix for old configs
+        elif "entry_grid_spacing_log_weight" in new_short:
+            self.entry_grid_spacing_volatility_weight = new_short["entry_grid_spacing_log_weight"]
         if "entry_grid_spacing_pct" in new_short:
             self.entry_grid_spacing_pct = new_short["entry_grid_spacing_pct"]
         if "entry_grid_spacing_we_weight" in new_short:
@@ -1255,13 +1588,23 @@ class Short:
             self.entry_trailing_retracement_pct = new_short["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_short:
             self.entry_trailing_threshold_pct = new_short["entry_trailing_threshold_pct"]
-        if "filter_log_range_ema_span" in new_short:
-            self.filter_log_range_ema_span = new_short["filter_log_range_ema_span"]
+        if "entry_volatility_ema_span_hours" in new_short:
+            self.entry_volatility_ema_span_hours = new_short["entry_volatility_ema_span_hours"]
+        # Fix for old configs
+        elif "entry_grid_spacing_log_span_hours" in new_short:
+            self.entry_volatility_ema_span_hours = new_short["entry_grid_spacing_log_span_hours"]
+        if "filter_volatility_ema_span" in new_short:
+            self.filter_volatility_ema_span = new_short["filter_volatility_ema_span"]
+        # Fix for old configs
+        elif "filter_log_range_ema_span" in new_short:
+            self.filter_volatility_ema_span = new_short["filter_log_range_ema_span"]
         # Fix for old configs
         elif "filter_noisiness_rolling_window" in new_short:
             self.filter_log_range_ema_span = new_short["filter_noisiness_rolling_window"]
         elif "filter_rolling_window" in new_short:
             self.filter_log_range_ema_span = new_short["filter_rolling_window"]
+        if "filter_volatility_drop_pct" in new_short:
+            self.filter_volatility_drop_pct = new_short["filter_volatility_drop_pct"]
         if "filter_volume_drop_pct" in new_short:
             self.filter_volume_drop_pct = new_short["filter_volume_drop_pct"]
         # Fix for old configs
@@ -1284,6 +1627,12 @@ class Short:
             self.unstuck_loss_allowance_pct = new_short["unstuck_loss_allowance_pct"]
         if "unstuck_threshold" in new_short:
             self.unstuck_threshold = new_short["unstuck_threshold"]
+        if "risk_wel_enforcer_threshold" in new_short:
+            self.risk_wel_enforcer_threshold = new_short["risk_wel_enforcer_threshold"]
+        if "risk_we_excess_allowance_pct" in new_short:
+            self.risk_we_excess_allowance_pct = new_short["risk_we_excess_allowance_pct"]
+        if "risk_twel_enforcer_threshold" in new_short:
+            self.risk_twel_enforcer_threshold = new_short["risk_twel_enforcer_threshold"]
 
     @property
     def close_grid_markup_end(self): return self._close_grid_markup_end
@@ -1308,13 +1657,9 @@ class Short:
     @property
     def ema_span_1(self): return self._ema_span_1
     @property
-    def enforce_exposure_limit(self): return self._enforce_exposure_limit
-    @property
     def entry_grid_double_down_factor(self): return self._entry_grid_double_down_factor
     @property
-    def entry_grid_spacing_log_span_hours(self): return self._entry_grid_spacing_log_span_hours
-    @property
-    def entry_grid_spacing_log_weight(self): return self._entry_grid_spacing_log_weight
+    def entry_grid_spacing_volatility_weight(self): return self._entry_grid_spacing_volatility_weight
     @property
     def entry_grid_spacing_pct(self): return self._entry_grid_spacing_pct
     @property
@@ -1332,7 +1677,19 @@ class Short:
     @property
     def entry_trailing_threshold_pct(self): return self._entry_trailing_threshold_pct
     @property
-    def filter_log_range_ema_span(self): return self._filter_log_range_ema_span
+    def entry_trailing_threshold_we_weight(self): return self._entry_trailing_threshold_we_weight
+    @property
+    def entry_trailing_threshold_volatility_weight(self): return self._entry_trailing_threshold_volatility_weight
+    @property
+    def entry_trailing_retracement_we_weight(self): return self._entry_trailing_retracement_we_weight
+    @property
+    def entry_trailing_retracement_volatility_weight(self): return self._entry_trailing_retracement_volatility_weight
+    @property
+    def entry_volatility_ema_span_hours(self): return self._entry_volatility_ema_span_hours
+    @property
+    def filter_volatility_ema_span(self): return self._filter_volatility_ema_span
+    @property
+    def filter_volatility_drop_pct(self): return self._filter_volatility_drop_pct
     @property
     def filter_volume_drop_pct(self): return self._filter_volume_drop_pct
     @property
@@ -1349,6 +1706,12 @@ class Short:
     def unstuck_loss_allowance_pct(self): return self._unstuck_loss_allowance_pct
     @property
     def unstuck_threshold(self): return self._unstuck_threshold
+    @property
+    def risk_wel_enforcer_threshold(self): return self._risk_wel_enforcer_threshold
+    @property
+    def risk_we_excess_allowance_pct(self): return self._risk_we_excess_allowance_pct
+    @property
+    def risk_twel_enforcer_threshold(self): return self._risk_twel_enforcer_threshold
 
     @close_grid_markup_end.setter
     def close_grid_markup_end(self, new_close_grid_markup_end):
@@ -1394,22 +1757,14 @@ class Short:
     def ema_span_1(self, new_ema_span_1):
         self._ema_span_1 = new_ema_span_1
         self._short["ema_span_1"] = self._ema_span_1
-    @enforce_exposure_limit.setter
-    def enforce_exposure_limit(self, new_enforce_exposure_limit):
-        self._enforce_exposure_limit = new_enforce_exposure_limit
-        self._short["enforce_exposure_limit"] = self._enforce_exposure_limit
     @entry_grid_double_down_factor.setter
     def entry_grid_double_down_factor(self, new_entry_grid_double_down_factor):
         self._entry_grid_double_down_factor = new_entry_grid_double_down_factor
         self._short["entry_grid_double_down_factor"] = self._entry_grid_double_down_factor
-    @entry_grid_spacing_log_span_hours.setter
-    def entry_grid_spacing_log_span_hours(self, new_entry_grid_spacing_log_span_hours):
-        self._entry_grid_spacing_log_span_hours = new_entry_grid_spacing_log_span_hours
-        self._short["entry_grid_spacing_log_span_hours"] = self._entry_grid_spacing_log_span_hours
-    @entry_grid_spacing_log_weight.setter
-    def entry_grid_spacing_log_weight(self, new_entry_grid_spacing_log_weight):
-        self._entry_grid_spacing_log_weight = new_entry_grid_spacing_log_weight
-        self._short["entry_grid_spacing_log_weight"] = self._entry_grid_spacing_log_weight
+    @entry_grid_spacing_volatility_weight.setter
+    def entry_grid_spacing_volatility_weight(self, new_entry_grid_spacing_volatility_weight):
+        self._entry_grid_spacing_volatility_weight = new_entry_grid_spacing_volatility_weight
+        self._short["entry_grid_spacing_volatility_weight"] = self._entry_grid_spacing_volatility_weight
     @entry_grid_spacing_pct.setter
     def entry_grid_spacing_pct(self, new_entry_grid_spacing_pct):
         self._entry_grid_spacing_pct = new_entry_grid_spacing_pct
@@ -1442,10 +1797,34 @@ class Short:
     def entry_trailing_threshold_pct(self, new_entry_trailing_threshold_pct):
         self._entry_trailing_threshold_pct = new_entry_trailing_threshold_pct
         self._short["entry_trailing_threshold_pct"] = self._entry_trailing_threshold_pct
-    @filter_log_range_ema_span.setter
-    def filter_log_range_ema_span(self, new_filter_log_range_ema_span):
-        self._filter_log_range_ema_span = new_filter_log_range_ema_span
-        self._short["filter_log_range_ema_span"] = self._filter_log_range_ema_span
+    @entry_trailing_threshold_we_weight.setter
+    def entry_trailing_threshold_we_weight(self, new_entry_trailing_threshold_we_weight):
+        self._entry_trailing_threshold_we_weight = new_entry_trailing_threshold_we_weight
+        self._short["entry_trailing_threshold_we_weight"] = self._entry_trailing_threshold_we_weight
+    @entry_trailing_threshold_volatility_weight.setter
+    def entry_trailing_threshold_volatility_weight(self, new_entry_trailing_threshold_volatility_weight):
+        self._entry_trailing_threshold_volatility_weight = new_entry_trailing_threshold_volatility_weight
+        self._short["entry_trailing_threshold_volatility_weight"] = self._entry_trailing_threshold_volatility_weight
+    @entry_trailing_retracement_we_weight.setter
+    def entry_trailing_retracement_we_weight(self, new_entry_trailing_retracement_we_weight):
+        self._entry_trailing_retracement_we_weight = new_entry_trailing_retracement_we_weight
+        self._short["entry_trailing_retracement_we_weight"] = self._entry_trailing_retracement_we_weight
+    @entry_trailing_retracement_volatility_weight.setter
+    def entry_trailing_retracement_volatility_weight(self, new_entry_trailing_retracement_volatility_weight):
+        self._entry_trailing_retracement_volatility_weight = new_entry_trailing_retracement_volatility_weight
+        self._short["entry_trailing_retracement_volatility_weight"] = self._entry_trailing_retracement_volatility_weight
+    @entry_volatility_ema_span_hours.setter
+    def entry_volatility_ema_span_hours(self, new_entry_volatility_ema_span_hours):
+        self._entry_volatility_ema_span_hours = new_entry_volatility_ema_span_hours
+        self._short["entry_volatility_ema_span_hours"] = self._entry_volatility_ema_span_hours
+    @filter_volatility_ema_span.setter
+    def filter_volatility_ema_span(self, new_filter_volatility_ema_span):
+        self._filter_volatility_ema_span = new_filter_volatility_ema_span
+        self._short["filter_volatility_ema_span"] = self._filter_volatility_ema_span
+    @filter_volatility_drop_pct.setter
+    def filter_volatility_drop_pct(self, new_filter_volatility_drop_pct):
+        self._filter_volatility_drop_pct = new_filter_volatility_drop_pct
+        self._short["filter_volatility_drop_pct"] = self._filter_volatility_drop_pct
     @filter_volume_drop_pct.setter
     def filter_volume_drop_pct(self, new_filter_volume_drop_pct):
         self._filter_volume_drop_pct = new_filter_volume_drop_pct
@@ -1478,6 +1857,21 @@ class Short:
     def unstuck_threshold(self, new_unstuck_threshold):
         self._unstuck_threshold = new_unstuck_threshold
         self._short["unstuck_threshold"] = self._unstuck_threshold
+
+    @risk_wel_enforcer_threshold.setter
+    def risk_wel_enforcer_threshold(self, new_risk_wel_enforcer_threshold):
+        self._risk_wel_enforcer_threshold = new_risk_wel_enforcer_threshold
+        self._short["risk_wel_enforcer_threshold"] = self._risk_wel_enforcer_threshold
+
+    @risk_we_excess_allowance_pct.setter
+    def risk_we_excess_allowance_pct(self, new_risk_we_excess_allowance_pct):
+        self._risk_we_excess_allowance_pct = new_risk_we_excess_allowance_pct
+        self._short["risk_we_excess_allowance_pct"] = self._risk_we_excess_allowance_pct
+
+    @risk_twel_enforcer_threshold.setter
+    def risk_twel_enforcer_threshold(self, new_risk_twel_enforcer_threshold):
+        self._risk_twel_enforcer_threshold = new_risk_twel_enforcer_threshold
+        self._short["risk_twel_enforcer_threshold"] = self._risk_twel_enforcer_threshold
 
 class ApprovedCoins:
     def __init__(self):
@@ -1584,10 +1978,15 @@ class Live:
         self._max_n_creations_per_batch = 3
         self._max_n_restarts_per_day = 10
         self._minimum_coin_age_days = 30.0
+        self._order_match_tolerance_pct = 0.0002
         self._pnls_max_lookback_days = 30.0
         self._price_distance_threshold = 0.002
+        self._recv_window_ms = 5000
         self._time_in_force = "good_till_cancelled"
         self._warmup_ratio = 0.2
+        self._max_warmup_minutes = 0
+        self._balance_override = None
+        self._balance_hysteresis_snap_pct = 0.02
         self._user = "bybit_01"
 
         self._live = {
@@ -1608,10 +2007,15 @@ class Live:
             "max_n_creations_per_batch": self._max_n_creations_per_batch,
             "max_n_restarts_per_day": self._max_n_restarts_per_day,
             "minimum_coin_age_days": self._minimum_coin_age_days,
+            "order_match_tolerance_pct": self._order_match_tolerance_pct,
             "pnls_max_lookback_days": self._pnls_max_lookback_days,
             "price_distance_threshold": self._price_distance_threshold,
+            "recv_window_ms": self._recv_window_ms,
             "time_in_force": self._time_in_force,
             "warmup_ratio": self._warmup_ratio,
+            "max_warmup_minutes": self._max_warmup_minutes,
+            "balance_override": self._balance_override,
+            "balance_hysteresis_snap_pct": self._balance_hysteresis_snap_pct,
             "user": self._user
         }
     
@@ -1656,14 +2060,24 @@ class Live:
             self.max_n_restarts_per_day = new_live["max_n_restarts_per_day"]
         if "minimum_coin_age_days" in new_live:
             self.minimum_coin_age_days = new_live["minimum_coin_age_days"]
+        if "order_match_tolerance_pct" in new_live:
+            self.order_match_tolerance_pct = new_live["order_match_tolerance_pct"]
         if "pnls_max_lookback_days" in new_live:
             self.pnls_max_lookback_days = new_live["pnls_max_lookback_days"]
         if "price_distance_threshold" in new_live:
             self.price_distance_threshold = new_live["price_distance_threshold"]
+        if "recv_window_ms" in new_live:
+            self.recv_window_ms = new_live["recv_window_ms"]
         if "time_in_force" in new_live:
             self.time_in_force = new_live["time_in_force"]
         if "warmup_ratio" in new_live:
             self._warmup_ratio = new_live["warmup_ratio"]
+        if "max_warmup_minutes" in new_live:
+            self.max_warmup_minutes = new_live["max_warmup_minutes"]
+        if "balance_override" in new_live:
+            self.balance_override = new_live["balance_override"]
+        if "balance_hysteresis_snap_pct" in new_live:
+            self.balance_hysteresis_snap_pct = new_live["balance_hysteresis_snap_pct"]
         if "user" in new_live:
             self.user = new_live["user"]
     
@@ -1702,13 +2116,23 @@ class Live:
     @property
     def minimum_coin_age_days(self): return self._minimum_coin_age_days
     @property
+    def order_match_tolerance_pct(self): return self._order_match_tolerance_pct
+    @property
     def pnls_max_lookback_days(self): return self._pnls_max_lookback_days
     @property
     def price_distance_threshold(self): return self._price_distance_threshold
     @property
+    def recv_window_ms(self): return self._recv_window_ms
+    @property
     def time_in_force(self): return self._time_in_force
     @property
     def warmup_ratio(self): return self._warmup_ratio
+    @property
+    def max_warmup_minutes(self): return self._max_warmup_minutes
+    @property
+    def balance_override(self): return self._balance_override
+    @property
+    def balance_hysteresis_snap_pct(self): return self._balance_hysteresis_snap_pct
     @property
     def user(self): return self._user
 
@@ -1780,6 +2204,10 @@ class Live:
     def minimum_coin_age_days(self, new_minimum_coin_age_days):
         self._minimum_coin_age_days = new_minimum_coin_age_days
         self._live["minimum_coin_age_days"] = self._minimum_coin_age_days
+    @order_match_tolerance_pct.setter
+    def order_match_tolerance_pct(self, new_order_match_tolerance_pct):
+        self._order_match_tolerance_pct = new_order_match_tolerance_pct
+        self._live["order_match_tolerance_pct"] = self._order_match_tolerance_pct
     @pnls_max_lookback_days.setter
     def pnls_max_lookback_days(self, new_pnls_max_lookback_days):
         self._pnls_max_lookback_days = new_pnls_max_lookback_days
@@ -1788,6 +2216,10 @@ class Live:
     def price_distance_threshold(self, new_price_distance_threshold):
         self._price_distance_threshold = new_price_distance_threshold
         self._live["price_distance_threshold"] = self._price_distance_threshold
+    @recv_window_ms.setter
+    def recv_window_ms(self, new_recv_window_ms):
+        self._recv_window_ms = new_recv_window_ms
+        self._live["recv_window_ms"] = self._recv_window_ms
     @time_in_force.setter
     def time_in_force(self, new_time_in_force):
         self._time_in_force = new_time_in_force
@@ -1796,6 +2228,18 @@ class Live:
     def warmup_ratio(self, new_warmup_ratio):
         self._warmup_ratio = new_warmup_ratio
         self._live["warmup_ratio"] = self._warmup_ratio
+    @max_warmup_minutes.setter
+    def max_warmup_minutes(self, new_max_warmup_minutes):
+        self._max_warmup_minutes = new_max_warmup_minutes
+        self._live["max_warmup_minutes"] = self._max_warmup_minutes
+    @balance_override.setter
+    def balance_override(self, new_balance_override):
+        self._balance_override = new_balance_override
+        self._live["balance_override"] = self._balance_override
+    @balance_hysteresis_snap_pct.setter
+    def balance_hysteresis_snap_pct(self, new_balance_hysteresis_snap_pct):
+        self._balance_hysteresis_snap_pct = new_balance_hysteresis_snap_pct
+        self._live["balance_hysteresis_snap_pct"] = self._balance_hysteresis_snap_pct
     @user.setter
     def user(self, new_user):
         self._user = new_user
@@ -1816,6 +2260,7 @@ class Optimize:
         self._mutation_indpb = 0.0
         self._n_cpus = 5
         self._offspring_multiplier = 1.0
+        self._pareto_max_size = 250
         self._population_size = 1000
         self._round_to_n_significant_digits = 5
         # scoring
@@ -1835,6 +2280,7 @@ class Optimize:
             "mutation_indpb": self._mutation_indpb,
             "n_cpus": self._n_cpus,
             "offspring_multiplier": self._offspring_multiplier,
+            "pareto_max_size": self._pareto_max_size,
             "population_size": self._population_size,
             "round_to_n_significant_digits": self._round_to_n_significant_digits,
             "scoring": self._scoring,
@@ -1872,6 +2318,8 @@ class Optimize:
             self.n_cpus = new_optimize["n_cpus"]
         if "offspring_multiplier" in new_optimize:
             self.offspring_multiplier = new_optimize["offspring_multiplier"]
+        if "pareto_max_size" in new_optimize:
+            self.pareto_max_size = new_optimize["pareto_max_size"]
         if "population_size" in new_optimize:
             self.population_size = new_optimize["population_size"]
         if "round_to_n_significant_digits" in new_optimize:
@@ -1908,6 +2356,8 @@ class Optimize:
         return self._n_cpus
     @property
     def offspring_multiplier(self): return self._offspring_multiplier
+    @property
+    def pareto_max_size(self): return self._pareto_max_size
     @property
     def population_size(self): return self._population_size
     @property
@@ -1967,6 +2417,10 @@ class Optimize:
     def offspring_multiplier(self, new_offspring_multiplier):
         self._offspring_multiplier = new_offspring_multiplier
         self._optimize["offspring_multiplier"] = self._offspring_multiplier
+    @pareto_max_size.setter
+    def pareto_max_size(self, new_pareto_max_size):
+        self._pareto_max_size = new_pareto_max_size
+        self._optimize["pareto_max_size"] = self._pareto_max_size
     @population_size.setter
     def population_size(self, new_population_size):
         self._population_size = new_population_size
@@ -2058,17 +2512,17 @@ class Bounds:
     ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND = 2
     ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT = f'%.{ENTRY_GRID_DOUBLE_DOWN_FACTOR_ROUND}f'
 
-    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MIN = 0.0
-    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_MAX = 10000.0
-    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_STEP = 1.0
-    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_ROUND = 1
-    ENTRY_GRID_SPACING_LOG_SPAN_HOURS_FORMAT = f'%.{ENTRY_GRID_SPACING_LOG_SPAN_HOURS_ROUND}f'
+    ENTRY_VOLATILITY_EMA_SPAN_HOURS_MIN = 0.0
+    ENTRY_VOLATILITY_EMA_SPAN_HOURS_MAX = 10000.0
+    ENTRY_VOLATILITY_EMA_SPAN_HOURS_STEP = 1.0
+    ENTRY_VOLATILITY_EMA_SPAN_HOURS_ROUND = 1
+    ENTRY_VOLATILITY_EMA_SPAN_HOURS_FORMAT = f'%.{ENTRY_VOLATILITY_EMA_SPAN_HOURS_ROUND}f'
 
-    ENTRY_GRID_SPACING_LOG_WEIGHT_MIN = 0.0
-    ENTRY_GRID_SPACING_LOG_WEIGHT_MAX = 10000.0
-    ENTRY_GRID_SPACING_LOG_WEIGHT_STEP = 1.0
-    ENTRY_GRID_SPACING_LOG_WEIGHT_ROUND = 1
-    ENTRY_GRID_SPACING_LOG_WEIGHT_FORMAT = f'%.{ENTRY_GRID_SPACING_LOG_WEIGHT_ROUND}f'
+    ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MIN = 0.0
+    ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MAX = 10000.0
+    ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_STEP = 1.0
+    ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_ROUND = 1
+    ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_FORMAT = f'%.{ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_ROUND}f'
 
     ENTRY_GRID_SPACING_PCT_MIN = 0.0
     ENTRY_GRID_SPACING_PCT_MAX = 1.0
@@ -2112,23 +2566,53 @@ class Bounds:
     ENTRY_TRAILING_RETRACEMENT_PCT_ROUND = 3
     ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT = f'%.{ENTRY_TRAILING_RETRACEMENT_PCT_ROUND}f'
 
+    ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MIN = 0.0
+    ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MAX = 100.0
+    ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_STEP = 0.1
+    ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_ROUND = 1
+    ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_FORMAT = f'%.{ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_ROUND}f'
+
+    ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MIN = 0.0
+    ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MAX = 1000.0
+    ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_STEP = 1.0
+    ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_ROUND = 1
+    ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_FORMAT = f'%.{ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_ROUND}f'
+
     ENTRY_TRAILING_THRESHOLD_PCT_MIN = -1.0
     ENTRY_TRAILING_THRESHOLD_PCT_MAX = 1.0
     ENTRY_TRAILING_THRESHOLD_PCT_STEP = 0.0001
     ENTRY_TRAILING_THRESHOLD_PCT_ROUND = 4
     ENTRY_TRAILING_THRESHOLD_PCT_FORMAT = f'%.{ENTRY_TRAILING_THRESHOLD_PCT_ROUND}f'
 
-    FILTER_LOG_RANGE_EMA_SPAN_MIN = 0.0
-    FILTER_LOG_RANGE_EMA_SPAN_MAX = 10000.0
-    FILTER_LOG_RANGE_EMA_SPAN_STEP = 1.0
-    FILTER_LOG_RANGE_EMA_SPAN_ROUND = 0
-    FILTER_LOG_RANGE_EMA_SPAN_FORMAT = f'%.{FILTER_LOG_RANGE_EMA_SPAN_ROUND}f'
+    ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MIN = 0.0
+    ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MAX = 100.0
+    ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_STEP = 0.1
+    ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_ROUND = 1
+    ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_FORMAT = f'%.{ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_ROUND}f'
+
+    ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MIN = 0.0
+    ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MAX = 1000.0
+    ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_STEP = 1.0
+    ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_ROUND = 1
+    ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_FORMAT = f'%.{ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_ROUND}f'
+
+    FILTER_VOLATILITY_EMA_SPAN_MIN = 0.0
+    FILTER_VOLATILITY_EMA_SPAN_MAX = 10000.0
+    FILTER_VOLATILITY_EMA_SPAN_STEP = 1.0
+    FILTER_VOLATILITY_EMA_SPAN_ROUND = 0
+    FILTER_VOLATILITY_EMA_SPAN_FORMAT = f'%.{FILTER_VOLATILITY_EMA_SPAN_ROUND}f'
 
     FILTER_VOLUME_DROP_PCT_MIN = 0.0
     FILTER_VOLUME_DROP_PCT_MAX = 1.0
     FILTER_VOLUME_DROP_PCT_STEP = 0.01
     FILTER_VOLUME_DROP_PCT_ROUND = 2
     FILTER_VOLUME_DROP_PCT_FORMAT = f'%.{FILTER_VOLUME_DROP_PCT_ROUND}f'
+
+    FILTER_VOLATILITY_DROP_PCT_MIN = 0.0
+    FILTER_VOLATILITY_DROP_PCT_MAX = 1.0
+    FILTER_VOLATILITY_DROP_PCT_STEP = 0.01
+    FILTER_VOLATILITY_DROP_PCT_ROUND = 2
+    FILTER_VOLATILITY_DROP_PCT_FORMAT = f'%.{FILTER_VOLATILITY_DROP_PCT_ROUND}f'
 
     FILTER_VOLUME_EMA_SPAN_MIN = 0.0
     FILTER_VOLUME_EMA_SPAN_MAX = 10000.0
@@ -2172,6 +2656,24 @@ class Bounds:
     UNSTUCK_THRESHOLD_ROUND = 2
     UNSTUCK_THRESHOLD_FORMAT = f'%.{UNSTUCK_THRESHOLD_ROUND}f'
 
+    RISK_WEL_ENFORCER_THRESHOLD_MIN = 0.0
+    RISK_WEL_ENFORCER_THRESHOLD_MAX = 2.0
+    RISK_WEL_ENFORCER_THRESHOLD_STEP = 0.01
+    RISK_WEL_ENFORCER_THRESHOLD_ROUND = 2
+    RISK_WEL_ENFORCER_THRESHOLD_FORMAT = f'%.{RISK_WEL_ENFORCER_THRESHOLD_ROUND}f'
+
+    RISK_WE_EXCESS_ALLOWANCE_PCT_MIN = 0.0
+    RISK_WE_EXCESS_ALLOWANCE_PCT_MAX = 1.0
+    RISK_WE_EXCESS_ALLOWANCE_PCT_STEP = 0.01
+    RISK_WE_EXCESS_ALLOWANCE_PCT_ROUND = 2
+    RISK_WE_EXCESS_ALLOWANCE_PCT_FORMAT = f'%.{RISK_WE_EXCESS_ALLOWANCE_PCT_ROUND}f'
+
+    RISK_TWEL_ENFORCER_THRESHOLD_MIN = 0.0
+    RISK_TWEL_ENFORCER_THRESHOLD_MAX = 2.0
+    RISK_TWEL_ENFORCER_THRESHOLD_STEP = 0.01
+    RISK_TWEL_ENFORCER_THRESHOLD_ROUND = 2
+    RISK_TWEL_ENFORCER_THRESHOLD_FORMAT = f'%.{RISK_TWEL_ENFORCER_THRESHOLD_ROUND}f'
+
     def __init__(self):
         # bounds long
         # self._long_close_grid_markup_range_0 = 0.0
@@ -2198,10 +2700,10 @@ class Bounds:
         self._long_ema_span_1_1 = 1440.0
         self._long_entry_grid_double_down_factor_0 = 0.1
         self._long_entry_grid_double_down_factor_1 = 3.0
-        self._long_entry_grid_spacing_log_span_hours_0 = 24.0
-        self._long_entry_grid_spacing_log_span_hours_1 = 336.0
-        self._long_entry_grid_spacing_log_weight_0 = 0.0
-        self._long_entry_grid_spacing_log_weight_1 = 400.0
+        self._long_entry_volatility_ema_span_hours_0 = 24.0
+        self._long_entry_volatility_ema_span_hours_1 = 336.0
+        self._long_entry_grid_spacing_volatility_weight_0 = 0.0
+        self._long_entry_grid_spacing_volatility_weight_1 = 400.0
         self._long_entry_grid_spacing_pct_0 = 0.001
         self._long_entry_grid_spacing_pct_1 = 0.12
         self._long_entry_grid_spacing_we_weight_0 = 0.0
@@ -2216,12 +2718,22 @@ class Bounds:
         self._long_entry_trailing_grid_ratio_1 = 1.0
         self._long_entry_trailing_retracement_pct_0 = 0.0
         self._long_entry_trailing_retracement_pct_1 = 0.1
+        self._long_entry_trailing_retracement_we_weight_0 = 0.0
+        self._long_entry_trailing_retracement_we_weight_1 = 20.0
+        self._long_entry_trailing_retracement_volatility_weight_0 = 0.0
+        self._long_entry_trailing_retracement_volatility_weight_1 = 300.0
         self._long_entry_trailing_threshold_pct_0 = -0.1
         self._long_entry_trailing_threshold_pct_1 = 0.1
-        self._long_filter_log_range_ema_span_0 = 10.0
-        self._long_filter_log_range_ema_span_1 = 360.0
+        self._long_entry_trailing_threshold_we_weight_0 = 0.0
+        self._long_entry_trailing_threshold_we_weight_1 = 20.0
+        self._long_entry_trailing_threshold_volatility_weight_0 = 0.0
+        self._long_entry_trailing_threshold_volatility_weight_1 = 300.0
+        self._long_filter_volatility_ema_span_0 = 10.0
+        self._long_filter_volatility_ema_span_1 = 360.0
         self._long_filter_volume_drop_pct_0 = 0.5
         self._long_filter_volume_drop_pct_1 = 1.0
+        self._long_filter_volatility_drop_pct_0 = 0.0
+        self._long_filter_volatility_drop_pct_1 = 0.0
         self._long_filter_volume_ema_span_0 = 10.0
         self._long_filter_volume_ema_span_1 = 360.0
         self._long_n_positions_0 = 1.0
@@ -2236,6 +2748,12 @@ class Bounds:
         self._long_unstuck_loss_allowance_pct_1 = 0.05
         self._long_unstuck_threshold_0 = 0.4
         self._long_unstuck_threshold_1 = 0.95
+        self._long_risk_wel_enforcer_threshold_0 = 0.8
+        self._long_risk_wel_enforcer_threshold_1 = 1.2
+        self._long_risk_we_excess_allowance_pct_0 = 0.0
+        self._long_risk_we_excess_allowance_pct_1 = 0.5
+        self._long_risk_twel_enforcer_threshold_0 = 0.8
+        self._long_risk_twel_enforcer_threshold_1 = 1.2
         # bounds short
         # self._short_close_grid_markup_range_0 = 0.0
         # self._short_close_grid_markup_range_1 = 0.03
@@ -2261,10 +2779,10 @@ class Bounds:
         self._short_ema_span_1_1 = 1440.0
         self._short_entry_grid_double_down_factor_0 = 0.1
         self._short_entry_grid_double_down_factor_1 = 3.0
-        self._short_entry_grid_spacing_log_span_hours_0 = 24.0
-        self._short_entry_grid_spacing_log_span_hours_1 = 336.0
-        self._short_entry_grid_spacing_log_weight_0 = 0.0
-        self._short_entry_grid_spacing_log_weight_1 = 400.0
+        self._short_entry_volatility_ema_span_hours_0 = 24.0
+        self._short_entry_volatility_ema_span_hours_1 = 336.0
+        self._short_entry_grid_spacing_volatility_weight_0 = 0.0
+        self._short_entry_grid_spacing_volatility_weight_1 = 400.0
         self._short_entry_grid_spacing_pct_0 = 0.001
         self._short_entry_grid_spacing_pct_1 = 0.12
         self._short_entry_grid_spacing_we_weight_0 = 0.0
@@ -2279,12 +2797,22 @@ class Bounds:
         self._short_entry_trailing_grid_ratio_1 = 1.0
         self._short_entry_trailing_retracement_pct_0 = 0.0
         self._short_entry_trailing_retracement_pct_1 = 0.1
+        self._short_entry_trailing_retracement_we_weight_0 = 0.0
+        self._short_entry_trailing_retracement_we_weight_1 = 20.0
+        self._short_entry_trailing_retracement_volatility_weight_0 = 0.0
+        self._short_entry_trailing_retracement_volatility_weight_1 = 300.0
         self._short_entry_trailing_threshold_pct_0 = -0.1
         self._short_entry_trailing_threshold_pct_1 = 0.1
-        self._short_filter_log_range_ema_span_0 = 10.0
-        self._short_filter_log_range_ema_span_1 = 360.0
+        self._short_entry_trailing_threshold_we_weight_0 = 0.0
+        self._short_entry_trailing_threshold_we_weight_1 = 20.0
+        self._short_entry_trailing_threshold_volatility_weight_0 = 0.0
+        self._short_entry_trailing_threshold_volatility_weight_1 = 300.0
+        self._short_filter_volatility_ema_span_0 = 10.0
+        self._short_filter_volatility_ema_span_1 = 360.0
         self._short_filter_volume_drop_pct_0 = 0.5
         self._short_filter_volume_drop_pct_1 = 1.0
+        self._short_filter_volatility_drop_pct_0 = 0.0
+        self._short_filter_volatility_drop_pct_1 = 0.0
         self._short_filter_volume_ema_span_0 = 10.0
         self._short_filter_volume_ema_span_1 = 360.0
         self._short_n_positions_0 = 1.0
@@ -2299,6 +2827,12 @@ class Bounds:
         self._short_unstuck_loss_allowance_pct_1 = 0.05
         self._short_unstuck_threshold_0 = 0.4
         self._short_unstuck_threshold_1 = 0.95
+        self._short_risk_wel_enforcer_threshold_0 = 0.8
+        self._short_risk_wel_enforcer_threshold_1 = 1.2
+        self._short_risk_we_excess_allowance_pct_0 = 0.0
+        self._short_risk_we_excess_allowance_pct_1 = 0.5
+        self._short_risk_twel_enforcer_threshold_0 = 0.8
+        self._short_risk_twel_enforcer_threshold_1 = 1.2
         self._bounds = {
                 # "long_close_grid_markup_range": [self._long_close_grid_markup_range_0, self._long_close_grid_markup_range_1],
                 # "long_close_grid_min_markup": [self._long_close_grid_min_markup_0, self._long_close_grid_min_markup_1],
@@ -2312,8 +2846,8 @@ class Bounds:
                 "long_ema_span_0": [self._long_ema_span_0_0, self._long_ema_span_0_1],
                 "long_ema_span_1": [self._long_ema_span_1_0, self._long_ema_span_1_1],
                 "long_entry_grid_double_down_factor": [self._long_entry_grid_double_down_factor_0, self._long_entry_grid_double_down_factor_1],
-                "long_entry_grid_spacing_log_span_hours": [self._long_entry_grid_spacing_log_span_hours_0, self._long_entry_grid_spacing_log_span_hours_1],
-                "long_entry_grid_spacing_log_weight": [self._long_entry_grid_spacing_log_weight_0, self._long_entry_grid_spacing_log_weight_1],
+                "long_entry_volatility_ema_span_hours": [self._long_entry_volatility_ema_span_hours_0, self._long_entry_volatility_ema_span_hours_1],
+                "long_entry_grid_spacing_volatility_weight": [self._long_entry_grid_spacing_volatility_weight_0, self._long_entry_grid_spacing_volatility_weight_1],
                 "long_entry_grid_spacing_pct": [self._long_entry_grid_spacing_pct_0, self._long_entry_grid_spacing_pct_1],
                 "long_entry_grid_spacing_we_weight": [self._long_entry_grid_spacing_we_weight_0, self._long_entry_grid_spacing_we_weight_1],
                 "long_entry_initial_ema_dist": [self._long_entry_initial_ema_dist_0, self._long_entry_initial_ema_dist_1],
@@ -2321,9 +2855,14 @@ class Bounds:
                 "long_entry_trailing_double_down_factor": [self._long_entry_trailing_double_down_factor_0, self._long_entry_trailing_double_down_factor_1],
                 "long_entry_trailing_grid_ratio": [self._long_entry_trailing_grid_ratio_0, self._long_entry_trailing_grid_ratio_1],
                 "long_entry_trailing_retracement_pct": [self._long_entry_trailing_retracement_pct_0, self._long_entry_trailing_retracement_pct_1],
+                "long_entry_trailing_retracement_we_weight": [self._long_entry_trailing_retracement_we_weight_0, self._long_entry_trailing_retracement_we_weight_1],
+                "long_entry_trailing_retracement_volatility_weight": [self._long_entry_trailing_retracement_volatility_weight_0, self._long_entry_trailing_retracement_volatility_weight_1],
                 "long_entry_trailing_threshold_pct": [self._long_entry_trailing_threshold_pct_0, self._long_entry_trailing_threshold_pct_1],
-                "long_filter_log_range_ema_span": [self._long_filter_log_range_ema_span_0, self._long_filter_log_range_ema_span_1],
+                "long_entry_trailing_threshold_we_weight": [self._long_entry_trailing_threshold_we_weight_0, self._long_entry_trailing_threshold_we_weight_1],
+                "long_entry_trailing_threshold_volatility_weight": [self._long_entry_trailing_threshold_volatility_weight_0, self._long_entry_trailing_threshold_volatility_weight_1],
+                "long_filter_volatility_ema_span": [self._long_filter_volatility_ema_span_0, self._long_filter_volatility_ema_span_1],
                 "long_filter_volume_drop_pct": [self._long_filter_volume_drop_pct_0, self._long_filter_volume_drop_pct_1],
+                "long_filter_volatility_drop_pct": [self._long_filter_volatility_drop_pct_0, self._long_filter_volatility_drop_pct_1],
                 "long_filter_volume_ema_span": [self._long_filter_volume_ema_span_0, self._long_filter_volume_ema_span_1],
                 "long_n_positions": [self._long_n_positions_0, self._long_n_positions_1],
                 "long_total_wallet_exposure_limit": [self._long_total_wallet_exposure_limit_0, self._long_total_wallet_exposure_limit_1],
@@ -2331,6 +2870,9 @@ class Bounds:
                 "long_unstuck_ema_dist": [self._long_unstuck_ema_dist_0, self._long_unstuck_ema_dist_1],
                 "long_unstuck_loss_allowance_pct": [self._long_unstuck_loss_allowance_pct_0, self._long_unstuck_loss_allowance_pct_1],
                 "long_unstuck_threshold": [self._long_unstuck_threshold_0, self._long_unstuck_threshold_1],
+                "long_risk_wel_enforcer_threshold": [self._long_risk_wel_enforcer_threshold_0, self._long_risk_wel_enforcer_threshold_1],
+                "long_risk_we_excess_allowance_pct": [self._long_risk_we_excess_allowance_pct_0, self._long_risk_we_excess_allowance_pct_1],
+                "long_risk_twel_enforcer_threshold": [self._long_risk_twel_enforcer_threshold_0, self._long_risk_twel_enforcer_threshold_1],
                 # "short_close_grid_markup_range": [self._short_close_grid_markup_range_0, self._short_close_grid_markup_range_1],
                 # "short_close_grid_min_markup": [self._short_close_grid_min_markup_0, self._short_close_grid_min_markup_1],
                 "short_close_grid_markup_end": [self._short_close_grid_markup_end_0, self._short_close_grid_markup_end_1],
@@ -2343,8 +2885,8 @@ class Bounds:
                 "short_ema_span_0": [self._short_ema_span_0_0, self._short_ema_span_0_1],
                 "short_ema_span_1": [self._short_ema_span_1_0, self._short_ema_span_1_1],
                 "short_entry_grid_double_down_factor": [self._short_entry_grid_double_down_factor_0, self._short_entry_grid_double_down_factor_1],
-                "short_entry_grid_spacing_log_span_hours": [self._short_entry_grid_spacing_log_span_hours_0, self._short_entry_grid_spacing_log_span_hours_1],
-                "short_entry_grid_spacing_log_weight": [self._short_entry_grid_spacing_log_weight_0, self._short_entry_grid_spacing_log_weight_1],
+                "short_entry_volatility_ema_span_hours": [self._short_entry_volatility_ema_span_hours_0, self._short_entry_volatility_ema_span_hours_1],
+                "short_entry_grid_spacing_volatility_weight": [self._short_entry_grid_spacing_volatility_weight_0, self._short_entry_grid_spacing_volatility_weight_1],
                 "short_entry_grid_spacing_pct": [self._short_entry_grid_spacing_pct_0, self._short_entry_grid_spacing_pct_1],
                 "short_entry_grid_spacing_we_weight": [self._short_entry_grid_spacing_we_weight_0, self._short_entry_grid_spacing_we_weight_1],
                 "short_entry_initial_ema_dist": [self._short_entry_initial_ema_dist_0, self._short_entry_initial_ema_dist_1],
@@ -2352,16 +2894,24 @@ class Bounds:
                 "short_entry_trailing_double_down_factor": [self._short_entry_trailing_double_down_factor_0, self._short_entry_trailing_double_down_factor_1],
                 "short_entry_trailing_grid_ratio": [self._short_entry_trailing_grid_ratio_0, self._short_entry_trailing_grid_ratio_1],
                 "short_entry_trailing_retracement_pct": [self._short_entry_trailing_retracement_pct_0, self._short_entry_trailing_retracement_pct_1],
+                "short_entry_trailing_retracement_we_weight": [self._short_entry_trailing_retracement_we_weight_0, self._short_entry_trailing_retracement_we_weight_1],
+                "short_entry_trailing_retracement_volatility_weight": [self._short_entry_trailing_retracement_volatility_weight_0, self._short_entry_trailing_retracement_volatility_weight_1],
                 "short_entry_trailing_threshold_pct": [self._short_entry_trailing_threshold_pct_0, self._short_entry_trailing_threshold_pct_1],
-                "short_filter_log_range_ema_span": [self._short_filter_log_range_ema_span_0, self._short_filter_log_range_ema_span_1],
+                "short_entry_trailing_threshold_we_weight": [self._short_entry_trailing_threshold_we_weight_0, self._short_entry_trailing_threshold_we_weight_1],
+                "short_entry_trailing_threshold_volatility_weight": [self._short_entry_trailing_threshold_volatility_weight_0, self._short_entry_trailing_threshold_volatility_weight_1],
+                "short_filter_volatility_ema_span": [self._short_filter_volatility_ema_span_0, self._short_filter_volatility_ema_span_1],
                 "short_filter_volume_drop_pct": [self._short_filter_volume_drop_pct_0, self._short_filter_volume_drop_pct_1],
+                "short_filter_volatility_drop_pct": [self._short_filter_volatility_drop_pct_0, self._short_filter_volatility_drop_pct_1],
                 "short_filter_volume_ema_span": [self._short_filter_volume_ema_span_0, self._short_filter_volume_ema_span_1],
                 "short_n_positions": [self._short_n_positions_0, self._short_n_positions_1],
                 "short_total_wallet_exposure_limit": [self._short_total_wallet_exposure_limit_0, self._short_total_wallet_exposure_limit_1],
                 "short_unstuck_close_pct": [self._short_unstuck_close_pct_0, self._short_unstuck_close_pct_1],
                 "short_unstuck_ema_dist": [self._short_unstuck_ema_dist_0, self._short_unstuck_ema_dist_1],
                 "short_unstuck_loss_allowance_pct": [self._short_unstuck_loss_allowance_pct_0, self._short_unstuck_loss_allowance_pct_1],
-                "short_unstuck_threshold": [self._short_unstuck_threshold_0, self._short_unstuck_threshold_1]
+                "short_unstuck_threshold": [self._short_unstuck_threshold_0, self._short_unstuck_threshold_1],
+                "short_risk_wel_enforcer_threshold": [self._short_risk_wel_enforcer_threshold_0, self._short_risk_wel_enforcer_threshold_1],
+                "short_risk_we_excess_allowance_pct": [self._short_risk_we_excess_allowance_pct_0, self._short_risk_we_excess_allowance_pct_1],
+                "short_risk_twel_enforcer_threshold": [self._short_risk_twel_enforcer_threshold_0, self._short_risk_twel_enforcer_threshold_1]
             }
     
     def __repr__(self):
@@ -2408,12 +2958,20 @@ class Bounds:
         if "long_entry_grid_double_down_factor" in new_bounds:
             self.long_entry_grid_double_down_factor_0 = new_bounds["long_entry_grid_double_down_factor"][0]
             self.long_entry_grid_double_down_factor_1 = new_bounds["long_entry_grid_double_down_factor"][1]
-        if "long_entry_grid_spacing_log_span_hours" in new_bounds:
-            self.long_entry_grid_spacing_log_span_hours_0 = new_bounds["long_entry_grid_spacing_log_span_hours"][0]
-            self.long_entry_grid_spacing_log_span_hours_1 = new_bounds["long_entry_grid_spacing_log_span_hours"][1]
-        if "long_entry_grid_spacing_log_weight" in new_bounds:
-            self.long_entry_grid_spacing_log_weight_0 = new_bounds["long_entry_grid_spacing_log_weight"][0]
-            self.long_entry_grid_spacing_log_weight_1 = new_bounds["long_entry_grid_spacing_log_weight"][1]
+        if "long_entry_volatility_ema_span_hours" in new_bounds:
+            self.long_entry_volatility_ema_span_hours_0 = new_bounds["long_entry_volatility_ema_span_hours"][0]
+            self.long_entry_volatility_ema_span_hours_1 = new_bounds["long_entry_volatility_ema_span_hours"][1]
+        # Fix for old configs
+        elif "long_entry_grid_spacing_log_span_hours" in new_bounds:
+            self.long_entry_volatility_ema_span_hours_0 = new_bounds["long_entry_grid_spacing_log_span_hours"][0]
+            self.long_entry_volatility_ema_span_hours_1 = new_bounds["long_entry_grid_spacing_log_span_hours"][1]
+        if "long_entry_grid_spacing_volatility_weight" in new_bounds:
+            self.long_entry_grid_spacing_volatility_weight_0 = new_bounds["long_entry_grid_spacing_volatility_weight"][0]
+            self.long_entry_grid_spacing_volatility_weight_1 = new_bounds["long_entry_grid_spacing_volatility_weight"][1]
+        # Fix for old configs
+        elif "long_entry_grid_spacing_log_weight" in new_bounds:
+            self.long_entry_grid_spacing_volatility_weight_0 = new_bounds["long_entry_grid_spacing_log_weight"][0]
+            self.long_entry_grid_spacing_volatility_weight_1 = new_bounds["long_entry_grid_spacing_log_weight"][1]
         if "long_entry_grid_spacing_pct" in new_bounds:
             self.long_entry_grid_spacing_pct_0 = new_bounds["long_entry_grid_spacing_pct"][0]
             self.long_entry_grid_spacing_pct_1 = new_bounds["long_entry_grid_spacing_pct"][1]
@@ -2438,9 +2996,25 @@ class Bounds:
         if "long_entry_trailing_threshold_pct" in new_bounds:
             self.long_entry_trailing_threshold_pct_0 = new_bounds["long_entry_trailing_threshold_pct"][0]
             self.long_entry_trailing_threshold_pct_1 = new_bounds["long_entry_trailing_threshold_pct"][1]
-        if "long_filter_log_range_ema_span" in new_bounds:
-            self.long_filter_log_range_ema_span_0 = new_bounds["long_filter_log_range_ema_span"][0]
-            self.long_filter_log_range_ema_span_1 = new_bounds["long_filter_log_range_ema_span"][1]
+        if "long_entry_trailing_threshold_we_weight" in new_bounds:
+            self.long_entry_trailing_threshold_we_weight_0 = new_bounds["long_entry_trailing_threshold_we_weight"][0]
+            self.long_entry_trailing_threshold_we_weight_1 = new_bounds["long_entry_trailing_threshold_we_weight"][1]
+        if "long_entry_trailing_threshold_volatility_weight" in new_bounds:
+            self.long_entry_trailing_threshold_volatility_weight_0 = new_bounds["long_entry_trailing_threshold_volatility_weight"][0]
+            self.long_entry_trailing_threshold_volatility_weight_1 = new_bounds["long_entry_trailing_threshold_volatility_weight"][1]
+        if "long_entry_trailing_retracement_we_weight" in new_bounds:
+            self.long_entry_trailing_retracement_we_weight_0 = new_bounds["long_entry_trailing_retracement_we_weight"][0]
+            self.long_entry_trailing_retracement_we_weight_1 = new_bounds["long_entry_trailing_retracement_we_weight"][1]
+        if "long_entry_trailing_retracement_volatility_weight" in new_bounds:
+            self.long_entry_trailing_retracement_volatility_weight_0 = new_bounds["long_entry_trailing_retracement_volatility_weight"][0]
+            self.long_entry_trailing_retracement_volatility_weight_1 = new_bounds["long_entry_trailing_retracement_volatility_weight"][1]
+        if "long_filter_volatility_ema_span" in new_bounds:
+            self.long_filter_volatility_ema_span_0 = new_bounds["long_filter_volatility_ema_span"][0]
+            self.long_filter_volatility_ema_span_1 = new_bounds["long_filter_volatility_ema_span"][1]
+        # Fix for old configs
+        elif "long_filter_log_range_ema_span" in new_bounds:
+            self.long_filter_volatility_ema_span_0 = new_bounds["long_filter_log_range_ema_span"][0]
+            self.long_filter_volatility_ema_span_1 = new_bounds["long_filter_log_range_ema_span"][1]
         # Fix for old configs
         elif "long_filter_noisiness_rolling_window" in new_bounds:
             self.long_filter_log_range_ema_span_0 = new_bounds["long_filter_noisiness_rolling_window"][0]
@@ -2455,6 +3029,9 @@ class Bounds:
         elif "long_filter_relative_volume_clip_pct" in new_bounds:
             self.long_filter_volume_drop_pct_0 = new_bounds["long_filter_relative_volume_clip_pct"][0]
             self.long_filter_volume_drop_pct_1 = new_bounds["long_filter_relative_volume_clip_pct"][1]
+        if "long_filter_volatility_drop_pct" in new_bounds:
+            self.long_filter_volatility_drop_pct_0 = new_bounds["long_filter_volatility_drop_pct"][0]
+            self.long_filter_volatility_drop_pct_1 = new_bounds["long_filter_volatility_drop_pct"][1]
         if "long_filter_volume_ema_span" in new_bounds:
             self.long_filter_volume_ema_span_0 = new_bounds["long_filter_volume_ema_span"][0]
             self.long_filter_volume_ema_span_1 = new_bounds["long_filter_volume_ema_span"][1]
@@ -2518,12 +3095,20 @@ class Bounds:
         if "short_entry_grid_double_down_factor" in new_bounds:
             self.short_entry_grid_double_down_factor_0 = new_bounds["short_entry_grid_double_down_factor"][0]
             self.short_entry_grid_double_down_factor_1 = new_bounds["short_entry_grid_double_down_factor"][1]
-        if "short_entry_grid_spacing_log_span_hours" in new_bounds:
-            self.short_entry_grid_spacing_log_span_hours_0 = new_bounds["short_entry_grid_spacing_log_span_hours"][0]
-            self.short_entry_grid_spacing_log_span_hours_1 = new_bounds["short_entry_grid_spacing_log_span_hours"][1]
-        if "short_entry_grid_spacing_log_weight" in new_bounds:
-            self.short_entry_grid_spacing_log_weight_0 = new_bounds["short_entry_grid_spacing_log_weight"][0]
-            self.short_entry_grid_spacing_log_weight_1 = new_bounds["short_entry_grid_spacing_log_weight"][1]
+        if "short_entry_volatility_ema_span_hours" in new_bounds:
+            self.short_entry_volatility_ema_span_hours_0 = new_bounds["short_entry_volatility_ema_span_hours"][0]
+            self.short_entry_volatility_ema_span_hours_1 = new_bounds["short_entry_volatility_ema_span_hours"][1]
+        # Fix for old configs
+        elif "short_entry_grid_spacing_log_span_hours" in new_bounds:
+            self.short_entry_volatility_ema_span_hours_0 = new_bounds["short_entry_grid_spacing_log_span_hours"][0]
+            self.short_entry_volatility_ema_span_hours_1 = new_bounds["short_entry_grid_spacing_log_span_hours"][1]
+        if "short_entry_grid_spacing_volatility_weight" in new_bounds:
+            self.short_entry_grid_spacing_volatility_weight_0 = new_bounds["short_entry_grid_spacing_volatility_weight"][0]
+            self.short_entry_grid_spacing_volatility_weight_1 = new_bounds["short_entry_grid_spacing_volatility_weight"][1]
+        # Fix for old configs
+        elif "short_entry_grid_spacing_log_weight" in new_bounds:
+            self.short_entry_grid_spacing_volatility_weight_0 = new_bounds["short_entry_grid_spacing_log_weight"][0]
+            self.short_entry_grid_spacing_volatility_weight_1 = new_bounds["short_entry_grid_spacing_log_weight"][1]
         if "short_entry_grid_spacing_pct" in new_bounds:
             self.short_entry_grid_spacing_pct_0 = new_bounds["short_entry_grid_spacing_pct"][0]
             self.short_entry_grid_spacing_pct_1 = new_bounds["short_entry_grid_spacing_pct"][1]
@@ -2548,16 +3133,31 @@ class Bounds:
         if "short_entry_trailing_threshold_pct" in new_bounds:
             self.short_entry_trailing_threshold_pct_0 = new_bounds["short_entry_trailing_threshold_pct"][0]
             self.short_entry_trailing_threshold_pct_1 = new_bounds["short_entry_trailing_threshold_pct"][1]
-        if "short_filter_log_range_ema_span" in new_bounds:
-            self.short_filter_log_range_ema_span_0 = new_bounds["short_filter_log_range_ema_span"][0]
-            self.short_filter_log_range_ema_span_1 = new_bounds["short_filter_log_range_ema_span"][1]
+        if "short_entry_trailing_threshold_we_weight" in new_bounds:
+            self.short_entry_trailing_threshold_we_weight_0 = new_bounds["short_entry_trailing_threshold_we_weight"][0]
+            self.short_entry_trailing_threshold_we_weight_1 = new_bounds["short_entry_trailing_threshold_we_weight"][1]
+        if "short_entry_trailing_threshold_volatility_weight" in new_bounds:
+            self.short_entry_trailing_threshold_volatility_weight_0 = new_bounds["short_entry_trailing_threshold_volatility_weight"][0]
+            self.short_entry_trailing_threshold_volatility_weight_1 = new_bounds["short_entry_trailing_threshold_volatility_weight"][1]
+        if "short_entry_trailing_retracement_we_weight" in new_bounds:
+            self.short_entry_trailing_retracement_we_weight_0 = new_bounds["short_entry_trailing_retracement_we_weight"][0]
+            self.short_entry_trailing_retracement_we_weight_1 = new_bounds["short_entry_trailing_retracement_we_weight"][1]
+        if "short_entry_trailing_retracement_volatility_weight" in new_bounds:
+            self.short_entry_trailing_retracement_volatility_weight_0 = new_bounds["short_entry_trailing_retracement_volatility_weight"][0]
+            self.short_entry_trailing_retracement_volatility_weight_1 = new_bounds["short_entry_trailing_retracement_volatility_weight"][1]
+        if "short_filter_volatility_ema_span" in new_bounds:
+            self.short_filter_volatility_ema_span_0 = new_bounds["short_filter_volatility_ema_span"][0]
+            self.short_filter_volatility_ema_span_1 = new_bounds["short_filter_volatility_ema_span"][1]
         # Fix for old configs
+        elif "short_filter_log_range_ema_span" in new_bounds:
+            self.short_filter_volatility_ema_span_0 = new_bounds["short_filter_log_range_ema_span"][0]
+            self.short_filter_volatility_ema_span_1 = new_bounds["short_filter_log_range_ema_span"][1]
         elif "short_filter_noisiness_rolling_window" in new_bounds:
-            self.short_filter_log_range_ema_span_0 = new_bounds["short_filter_noisiness_rolling_window"][0]
-            self.short_filter_log_range_ema_span_1 = new_bounds["short_filter_noisiness_rolling_window"][1]
+            self.short_filter_volatility_ema_span_0 = new_bounds["short_filter_noisiness_rolling_window"][0]
+            self.short_filter_volatility_ema_span_1 = new_bounds["short_filter_noisiness_rolling_window"][1]
         elif "short_filter_rolling_window" in new_bounds:
-            self.short_filter_log_range_ema_span_0 = new_bounds["short_filter_rolling_window"][0]
-            self.short_filter_log_range_ema_span_1 = new_bounds["short_filter_rolling_window"][1]
+            self.short_filter_volatility_ema_span_0 = new_bounds["short_filter_rolling_window"][0]
+            self.short_filter_volatility_ema_span_1 = new_bounds["short_filter_rolling_window"][1]
         if "short_filter_volume_drop_pct" in new_bounds:
             self.short_filter_volume_drop_pct_0 = new_bounds["short_filter_volume_drop_pct"][0]
             self.short_filter_volume_drop_pct_1 = new_bounds["short_filter_volume_drop_pct"][1]
@@ -2565,6 +3165,9 @@ class Bounds:
         elif "short_filter_relative_volume_clip_pct" in new_bounds:
             self.short_filter_volume_drop_pct_0 = new_bounds["short_filter_relative_volume_clip_pct"][0]
             self.short_filter_volume_drop_pct_1 = new_bounds["short_filter_relative_volume_clip_pct"][1]
+        if "short_filter_volatility_drop_pct" in new_bounds:
+            self.short_filter_volatility_drop_pct_0 = new_bounds["short_filter_volatility_drop_pct"][0]
+            self.short_filter_volatility_drop_pct_1 = new_bounds["short_filter_volatility_drop_pct"][1]
         if "short_filter_volume_ema_span" in new_bounds:
             self.short_filter_volume_ema_span_0 = new_bounds["short_filter_volume_ema_span"][0]
             self.short_filter_volume_ema_span_1 = new_bounds["short_filter_volume_ema_span"][1]
@@ -2590,6 +3193,24 @@ class Bounds:
         if "short_unstuck_threshold" in new_bounds:
             self.short_unstuck_threshold_0 = new_bounds["short_unstuck_threshold"][0]
             self.short_unstuck_threshold_1 = new_bounds["short_unstuck_threshold"][1]
+        if "long_risk_wel_enforcer_threshold" in new_bounds:
+            self.long_risk_wel_enforcer_threshold_0 = new_bounds["long_risk_wel_enforcer_threshold"][0]
+            self.long_risk_wel_enforcer_threshold_1 = new_bounds["long_risk_wel_enforcer_threshold"][1]
+        if "long_risk_we_excess_allowance_pct" in new_bounds:
+            self.long_risk_we_excess_allowance_pct_0 = new_bounds["long_risk_we_excess_allowance_pct"][0]
+            self.long_risk_we_excess_allowance_pct_1 = new_bounds["long_risk_we_excess_allowance_pct"][1]
+        if "long_risk_twel_enforcer_threshold" in new_bounds:
+            self.long_risk_twel_enforcer_threshold_0 = new_bounds["long_risk_twel_enforcer_threshold"][0]
+            self.long_risk_twel_enforcer_threshold_1 = new_bounds["long_risk_twel_enforcer_threshold"][1]
+        if "short_risk_wel_enforcer_threshold" in new_bounds:
+            self.short_risk_wel_enforcer_threshold_0 = new_bounds["short_risk_wel_enforcer_threshold"][0]
+            self.short_risk_wel_enforcer_threshold_1 = new_bounds["short_risk_wel_enforcer_threshold"][1]
+        if "short_risk_we_excess_allowance_pct" in new_bounds:
+            self.short_risk_we_excess_allowance_pct_0 = new_bounds["short_risk_we_excess_allowance_pct"][0]
+            self.short_risk_we_excess_allowance_pct_1 = new_bounds["short_risk_we_excess_allowance_pct"][1]
+        if "short_risk_twel_enforcer_threshold" in new_bounds:
+            self.short_risk_twel_enforcer_threshold_0 = new_bounds["short_risk_twel_enforcer_threshold"][0]
+            self.short_risk_twel_enforcer_threshold_1 = new_bounds["short_risk_twel_enforcer_threshold"][1]
         
     # Long parameters
     # @property
@@ -2641,13 +3262,13 @@ class Bounds:
     @property
     def long_entry_grid_double_down_factor_1(self): return self._long_entry_grid_double_down_factor_1
     @property
-    def long_entry_grid_spacing_log_span_hours_0(self): return self._long_entry_grid_spacing_log_span_hours_0
+    def long_entry_volatility_ema_span_hours_0(self): return self._long_entry_volatility_ema_span_hours_0
     @property
-    def long_entry_grid_spacing_log_span_hours_1(self): return self._long_entry_grid_spacing_log_span_hours_1
+    def long_entry_volatility_ema_span_hours_1(self): return self._long_entry_volatility_ema_span_hours_1
     @property
-    def long_entry_grid_spacing_log_weight_0(self): return self._long_entry_grid_spacing_log_weight_0
+    def long_entry_grid_spacing_volatility_weight_0(self): return self._long_entry_grid_spacing_volatility_weight_0
     @property
-    def long_entry_grid_spacing_log_weight_1(self): return self._long_entry_grid_spacing_log_weight_1
+    def long_entry_grid_spacing_volatility_weight_1(self): return self._long_entry_grid_spacing_volatility_weight_1
     @property
     def long_entry_grid_spacing_pct_0(self): return self._long_entry_grid_spacing_pct_0
     @property
@@ -2677,17 +3298,37 @@ class Bounds:
     @property
     def long_entry_trailing_retracement_pct_1(self): return self._long_entry_trailing_retracement_pct_1
     @property
+    def long_entry_trailing_retracement_we_weight_0(self): return self._long_entry_trailing_retracement_we_weight_0
+    @property
+    def long_entry_trailing_retracement_we_weight_1(self): return self._long_entry_trailing_retracement_we_weight_1
+    @property
+    def long_entry_trailing_retracement_volatility_weight_0(self): return self._long_entry_trailing_retracement_volatility_weight_0
+    @property
+    def long_entry_trailing_retracement_volatility_weight_1(self): return self._long_entry_trailing_retracement_volatility_weight_1
+    @property
     def long_entry_trailing_threshold_pct_0(self): return self._long_entry_trailing_threshold_pct_0
     @property
     def long_entry_trailing_threshold_pct_1(self): return self._long_entry_trailing_threshold_pct_1
     @property
-    def long_filter_log_range_ema_span_0(self): return self._long_filter_log_range_ema_span_0
+    def long_entry_trailing_threshold_we_weight_0(self): return self._long_entry_trailing_threshold_we_weight_0
     @property
-    def long_filter_log_range_ema_span_1(self): return self._long_filter_log_range_ema_span_1
+    def long_entry_trailing_threshold_we_weight_1(self): return self._long_entry_trailing_threshold_we_weight_1
+    @property
+    def long_entry_trailing_threshold_volatility_weight_0(self): return self._long_entry_trailing_threshold_volatility_weight_0
+    @property
+    def long_entry_trailing_threshold_volatility_weight_1(self): return self._long_entry_trailing_threshold_volatility_weight_1
+    @property
+    def long_filter_volatility_ema_span_0(self): return self._long_filter_volatility_ema_span_0
+    @property
+    def long_filter_volatility_ema_span_1(self): return self._long_filter_volatility_ema_span_1
     @property
     def long_filter_volume_drop_pct_0(self): return self._long_filter_volume_drop_pct_0
     @property
     def long_filter_volume_drop_pct_1(self): return self._long_filter_volume_drop_pct_1
+    @property
+    def long_filter_volatility_drop_pct_0(self): return self._long_filter_volatility_drop_pct_0
+    @property
+    def long_filter_volatility_drop_pct_1(self): return self._long_filter_volatility_drop_pct_1
     @property
     def long_filter_volume_ema_span_0(self): return self._long_filter_volume_ema_span_0
     @property
@@ -2769,13 +3410,13 @@ class Bounds:
     @property
     def short_entry_grid_double_down_factor_1(self): return self._short_entry_grid_double_down_factor_1
     @property
-    def short_entry_grid_spacing_log_span_hours_0(self): return self._short_entry_grid_spacing_log_span_hours_0
+    def short_entry_volatility_ema_span_hours_0(self): return self._short_entry_volatility_ema_span_hours_0
     @property
-    def short_entry_grid_spacing_log_span_hours_1(self): return self._short_entry_grid_spacing_log_span_hours_1
+    def short_entry_volatility_ema_span_hours_1(self): return self._short_entry_volatility_ema_span_hours_1
     @property
-    def short_entry_grid_spacing_log_weight_0(self): return self._short_entry_grid_spacing_log_weight_0
+    def short_entry_grid_spacing_volatility_weight_0(self): return self._short_entry_grid_spacing_volatility_weight_0
     @property
-    def short_entry_grid_spacing_log_weight_1(self): return self._short_entry_grid_spacing_log_weight_1
+    def short_entry_grid_spacing_volatility_weight_1(self): return self._short_entry_grid_spacing_volatility_weight_1
     @property
     def short_entry_grid_spacing_pct_0(self): return self._short_entry_grid_spacing_pct_0
     @property
@@ -2805,17 +3446,37 @@ class Bounds:
     @property
     def short_entry_trailing_retracement_pct_1(self): return self._short_entry_trailing_retracement_pct_1
     @property
+    def short_entry_trailing_retracement_we_weight_0(self): return self._short_entry_trailing_retracement_we_weight_0
+    @property
+    def short_entry_trailing_retracement_we_weight_1(self): return self._short_entry_trailing_retracement_we_weight_1
+    @property
+    def short_entry_trailing_retracement_volatility_weight_0(self): return self._short_entry_trailing_retracement_volatility_weight_0
+    @property
+    def short_entry_trailing_retracement_volatility_weight_1(self): return self._short_entry_trailing_retracement_volatility_weight_1
+    @property
     def short_entry_trailing_threshold_pct_0(self): return self._short_entry_trailing_threshold_pct_0
     @property
     def short_entry_trailing_threshold_pct_1(self): return self._short_entry_trailing_threshold_pct_1
     @property
-    def short_filter_log_range_ema_span_0(self): return self._short_filter_log_range_ema_span_0
+    def short_entry_trailing_threshold_we_weight_0(self): return self._short_entry_trailing_threshold_we_weight_0
     @property
-    def short_filter_log_range_ema_span_1(self): return self._short_filter_log_range_ema_span_1
+    def short_entry_trailing_threshold_we_weight_1(self): return self._short_entry_trailing_threshold_we_weight_1
+    @property
+    def short_entry_trailing_threshold_volatility_weight_0(self): return self._short_entry_trailing_threshold_volatility_weight_0
+    @property
+    def short_entry_trailing_threshold_volatility_weight_1(self): return self._short_entry_trailing_threshold_volatility_weight_1
+    @property
+    def short_filter_volatility_ema_span_0(self): return self._short_filter_volatility_ema_span_0
+    @property
+    def short_filter_volatility_ema_span_1(self): return self._short_filter_volatility_ema_span_1
     @property
     def short_filter_volume_drop_pct_0(self): return self._short_filter_volume_drop_pct_0
     @property
     def short_filter_volume_drop_pct_1(self): return self._short_filter_volume_drop_pct_1
+    @property
+    def short_filter_volatility_drop_pct_0(self): return self._short_filter_volatility_drop_pct_0
+    @property
+    def short_filter_volatility_drop_pct_1(self): return self._short_filter_volatility_drop_pct_1
     @property
     def short_filter_volume_ema_span_0(self): return self._short_filter_volume_ema_span_0
     @property
@@ -2844,6 +3505,30 @@ class Bounds:
     def short_unstuck_threshold_0(self): return self._short_unstuck_threshold_0
     @property
     def short_unstuck_threshold_1(self): return self._short_unstuck_threshold_1
+    @property
+    def long_risk_wel_enforcer_threshold_0(self): return self._long_risk_wel_enforcer_threshold_0
+    @property
+    def long_risk_wel_enforcer_threshold_1(self): return self._long_risk_wel_enforcer_threshold_1
+    @property
+    def long_risk_we_excess_allowance_pct_0(self): return self._long_risk_we_excess_allowance_pct_0
+    @property
+    def long_risk_we_excess_allowance_pct_1(self): return self._long_risk_we_excess_allowance_pct_1
+    @property
+    def long_risk_twel_enforcer_threshold_0(self): return self._long_risk_twel_enforcer_threshold_0
+    @property
+    def long_risk_twel_enforcer_threshold_1(self): return self._long_risk_twel_enforcer_threshold_1
+    @property
+    def short_risk_wel_enforcer_threshold_0(self): return self._short_risk_wel_enforcer_threshold_0
+    @property
+    def short_risk_wel_enforcer_threshold_1(self): return self._short_risk_wel_enforcer_threshold_1
+    @property
+    def short_risk_we_excess_allowance_pct_0(self): return self._short_risk_we_excess_allowance_pct_0
+    @property
+    def short_risk_we_excess_allowance_pct_1(self): return self._short_risk_we_excess_allowance_pct_1
+    @property
+    def short_risk_twel_enforcer_threshold_0(self): return self._short_risk_twel_enforcer_threshold_0
+    @property
+    def short_risk_twel_enforcer_threshold_1(self): return self._short_risk_twel_enforcer_threshold_1
 
     # Long setters
     # @long_close_grid_markup_range_0.setter
@@ -2942,22 +3627,22 @@ class Bounds:
     def long_entry_grid_double_down_factor_1(self, new_value):
         self._long_entry_grid_double_down_factor_1 = new_value
         self._bounds["long_entry_grid_double_down_factor"][1] = new_value
-    @long_entry_grid_spacing_log_span_hours_0.setter
-    def long_entry_grid_spacing_log_span_hours_0(self, new_value):
-        self._long_entry_grid_spacing_log_span_hours_0 = new_value
-        self._bounds["long_entry_grid_spacing_log_span_hours"][0] = new_value
-    @long_entry_grid_spacing_log_span_hours_1.setter
-    def long_entry_grid_spacing_log_span_hours_1(self, new_value):
-        self._long_entry_grid_spacing_log_span_hours_1 = new_value
-        self._bounds["long_entry_grid_spacing_log_span_hours"][1] = new_value
-    @long_entry_grid_spacing_log_weight_0.setter
-    def long_entry_grid_spacing_log_weight_0(self, new_value):
-        self._long_entry_grid_spacing_log_weight_0 = new_value
-        self._bounds["long_entry_grid_spacing_log_weight"][0] = new_value
-    @long_entry_grid_spacing_log_weight_1.setter
-    def long_entry_grid_spacing_log_weight_1(self, new_value):
-        self._long_entry_grid_spacing_log_weight_1 = new_value
-        self._bounds["long_entry_grid_spacing_log_weight"][1] = new_value
+    @long_entry_volatility_ema_span_hours_0.setter
+    def long_entry_volatility_ema_span_hours_0(self, new_value):
+        self._long_entry_volatility_ema_span_hours_0 = new_value
+        self._bounds["long_entry_volatility_ema_span_hours"][0] = new_value
+    @long_entry_volatility_ema_span_hours_1.setter
+    def long_entry_volatility_ema_span_hours_1(self, new_value):
+        self._long_entry_volatility_ema_span_hours_1 = new_value
+        self._bounds["long_entry_volatility_ema_span_hours"][1] = new_value
+    @long_entry_grid_spacing_volatility_weight_0.setter
+    def long_entry_grid_spacing_volatility_weight_0(self, new_value):
+        self._long_entry_grid_spacing_volatility_weight_0 = new_value
+        self._bounds["long_entry_grid_spacing_volatility_weight"][0] = new_value
+    @long_entry_grid_spacing_volatility_weight_1.setter
+    def long_entry_grid_spacing_volatility_weight_1(self, new_value):
+        self._long_entry_grid_spacing_volatility_weight_1 = new_value
+        self._bounds["long_entry_grid_spacing_volatility_weight"][1] = new_value
     @long_entry_grid_spacing_pct_0.setter
     def long_entry_grid_spacing_pct_0(self, new_value):
         self._long_entry_grid_spacing_pct_0 = new_value
@@ -3014,6 +3699,22 @@ class Bounds:
     def long_entry_trailing_retracement_pct_1(self, new_value):
         self._long_entry_trailing_retracement_pct_1 = new_value
         self._bounds["long_entry_trailing_retracement_pct"][1] = new_value
+    @long_entry_trailing_retracement_we_weight_0.setter
+    def long_entry_trailing_retracement_we_weight_0(self, new_value):
+        self._long_entry_trailing_retracement_we_weight_0 = new_value
+        self._bounds["long_entry_trailing_retracement_we_weight"][0] = new_value
+    @long_entry_trailing_retracement_we_weight_1.setter
+    def long_entry_trailing_retracement_we_weight_1(self, new_value):
+        self._long_entry_trailing_retracement_we_weight_1 = new_value
+        self._bounds["long_entry_trailing_retracement_we_weight"][1] = new_value
+    @long_entry_trailing_retracement_volatility_weight_0.setter
+    def long_entry_trailing_retracement_volatility_weight_0(self, new_value):
+        self._long_entry_trailing_retracement_volatility_weight_0 = new_value
+        self._bounds["long_entry_trailing_retracement_volatility_weight"][0] = new_value
+    @long_entry_trailing_retracement_volatility_weight_1.setter
+    def long_entry_trailing_retracement_volatility_weight_1(self, new_value):
+        self._long_entry_trailing_retracement_volatility_weight_1 = new_value
+        self._bounds["long_entry_trailing_retracement_volatility_weight"][1] = new_value
     @long_entry_trailing_threshold_pct_0.setter
     def long_entry_trailing_threshold_pct_0(self, new_value):
         self._long_entry_trailing_threshold_pct_0 = new_value
@@ -3022,14 +3723,30 @@ class Bounds:
     def long_entry_trailing_threshold_pct_1(self, new_value):
         self._long_entry_trailing_threshold_pct_1 = new_value
         self._bounds["long_entry_trailing_threshold_pct"][1] = new_value
-    @long_filter_log_range_ema_span_0.setter
-    def long_filter_log_range_ema_span_0(self, new_value):
-        self._long_filter_log_range_ema_span_0 = new_value
-        self._bounds["long_filter_log_range_ema_span"][0] = new_value
-    @long_filter_log_range_ema_span_1.setter
-    def long_filter_log_range_ema_span_1(self, new_value):
-        self._long_filter_log_range_ema_span_1 = new_value
-        self._bounds["long_filter_log_range_ema_span"][1] = new_value
+    @long_entry_trailing_threshold_we_weight_0.setter
+    def long_entry_trailing_threshold_we_weight_0(self, new_value):
+        self._long_entry_trailing_threshold_we_weight_0 = new_value
+        self._bounds["long_entry_trailing_threshold_we_weight"][0] = new_value
+    @long_entry_trailing_threshold_we_weight_1.setter
+    def long_entry_trailing_threshold_we_weight_1(self, new_value):
+        self._long_entry_trailing_threshold_we_weight_1 = new_value
+        self._bounds["long_entry_trailing_threshold_we_weight"][1] = new_value
+    @long_entry_trailing_threshold_volatility_weight_0.setter
+    def long_entry_trailing_threshold_volatility_weight_0(self, new_value):
+        self._long_entry_trailing_threshold_volatility_weight_0 = new_value
+        self._bounds["long_entry_trailing_threshold_volatility_weight"][0] = new_value
+    @long_entry_trailing_threshold_volatility_weight_1.setter
+    def long_entry_trailing_threshold_volatility_weight_1(self, new_value):
+        self._long_entry_trailing_threshold_volatility_weight_1 = new_value
+        self._bounds["long_entry_trailing_threshold_volatility_weight"][1] = new_value
+    @long_filter_volatility_ema_span_0.setter
+    def long_filter_volatility_ema_span_0(self, new_value):
+        self._long_filter_volatility_ema_span_0 = new_value
+        self._bounds["long_filter_volatility_ema_span"][0] = new_value
+    @long_filter_volatility_ema_span_1.setter
+    def long_filter_volatility_ema_span_1(self, new_value):
+        self._long_filter_volatility_ema_span_1 = new_value
+        self._bounds["long_filter_volatility_ema_span"][1] = new_value
     @long_filter_volume_drop_pct_0.setter
     def long_filter_volume_drop_pct_0(self, new_value):
         self._long_filter_volume_drop_pct_0 = new_value
@@ -3038,6 +3755,14 @@ class Bounds:
     def long_filter_volume_drop_pct_1(self, new_value):
         self._long_filter_volume_drop_pct_1 = new_value
         self._bounds["long_filter_volume_drop_pct"][1] = new_value
+    @long_filter_volatility_drop_pct_0.setter
+    def long_filter_volatility_drop_pct_0(self, new_value):
+        self._long_filter_volatility_drop_pct_0 = new_value
+        self._bounds["long_filter_volatility_drop_pct"][0] = new_value
+    @long_filter_volatility_drop_pct_1.setter
+    def long_filter_volatility_drop_pct_1(self, new_value):
+        self._long_filter_volatility_drop_pct_1 = new_value
+        self._bounds["long_filter_volatility_drop_pct"][1] = new_value
     @long_filter_volume_ema_span_0.setter
     def long_filter_volume_ema_span_0(self, new_value):
         self._long_filter_volume_ema_span_0 = new_value
@@ -3192,22 +3917,22 @@ class Bounds:
     def short_entry_grid_double_down_factor_1(self, new_value):
         self._short_entry_grid_double_down_factor_1 = new_value
         self._bounds["short_entry_grid_double_down_factor"][1] = new_value
-    @short_entry_grid_spacing_log_span_hours_0.setter
-    def short_entry_grid_spacing_log_span_hours_0(self, new_value):
-        self._short_entry_grid_spacing_log_span_hours_0 = new_value
-        self._bounds["short_entry_grid_spacing_log_span_hours"][0] = new_value
-    @short_entry_grid_spacing_log_span_hours_1.setter
-    def short_entry_grid_spacing_log_span_hours_1(self, new_value):
-        self._short_entry_grid_spacing_log_span_hours_1 = new_value
-        self._bounds["short_entry_grid_spacing_log_span_hours"][1] = new_value
-    @short_entry_grid_spacing_log_weight_0.setter
-    def short_entry_grid_spacing_log_weight_0(self, new_value):
-        self._short_entry_grid_spacing_log_weight_0 = new_value
-        self._bounds["short_entry_grid_spacing_log_weight"][0] = new_value
-    @short_entry_grid_spacing_log_weight_1.setter
-    def short_entry_grid_spacing_log_weight_1(self, new_value):
-        self._short_entry_grid_spacing_log_weight_1 = new_value
-        self._bounds["short_entry_grid_spacing_log_weight"][1] = new_value
+    @short_entry_volatility_ema_span_hours_0.setter
+    def short_entry_volatility_ema_span_hours_0(self, new_value):
+        self._short_entry_volatility_ema_span_hours_0 = new_value
+        self._bounds["short_entry_volatility_ema_span_hours"][0] = new_value
+    @short_entry_volatility_ema_span_hours_1.setter
+    def short_entry_volatility_ema_span_hours_1(self, new_value):
+        self._short_entry_volatility_ema_span_hours_1 = new_value
+        self._bounds["short_entry_volatility_ema_span_hours"][1] = new_value
+    @short_entry_grid_spacing_volatility_weight_0.setter
+    def short_entry_grid_spacing_volatility_weight_0(self, new_value):
+        self._short_entry_grid_spacing_volatility_weight_0 = new_value
+        self._bounds["short_entry_grid_spacing_volatility_weight"][0] = new_value
+    @short_entry_grid_spacing_volatility_weight_1.setter
+    def short_entry_grid_spacing_volatility_weight_1(self, new_value):
+        self._short_entry_grid_spacing_volatility_weight_1 = new_value
+        self._bounds["short_entry_grid_spacing_volatility_weight"][1] = new_value
     @short_entry_grid_spacing_pct_0.setter
     def short_entry_grid_spacing_pct_0(self, new_value):
         self._short_entry_grid_spacing_pct_0 = new_value
@@ -3264,6 +3989,22 @@ class Bounds:
     def short_entry_trailing_retracement_pct_1(self, new_value):
         self._short_entry_trailing_retracement_pct_1 = new_value
         self._bounds["short_entry_trailing_retracement_pct"][1] = new_value
+    @short_entry_trailing_retracement_we_weight_0.setter
+    def short_entry_trailing_retracement_we_weight_0(self, new_value):
+        self._short_entry_trailing_retracement_we_weight_0 = new_value
+        self._bounds["short_entry_trailing_retracement_we_weight"][0] = new_value
+    @short_entry_trailing_retracement_we_weight_1.setter
+    def short_entry_trailing_retracement_we_weight_1(self, new_value):
+        self._short_entry_trailing_retracement_we_weight_1 = new_value
+        self._bounds["short_entry_trailing_retracement_we_weight"][1] = new_value
+    @short_entry_trailing_retracement_volatility_weight_0.setter
+    def short_entry_trailing_retracement_volatility_weight_0(self, new_value):
+        self._short_entry_trailing_retracement_volatility_weight_0 = new_value
+        self._bounds["short_entry_trailing_retracement_volatility_weight"][0] = new_value
+    @short_entry_trailing_retracement_volatility_weight_1.setter
+    def short_entry_trailing_retracement_volatility_weight_1(self, new_value):
+        self._short_entry_trailing_retracement_volatility_weight_1 = new_value
+        self._bounds["short_entry_trailing_retracement_volatility_weight"][1] = new_value
     @short_entry_trailing_threshold_pct_0.setter
     def short_entry_trailing_threshold_pct_0(self, new_value):
         self._short_entry_trailing_threshold_pct_0 = new_value
@@ -3272,14 +4013,30 @@ class Bounds:
     def short_entry_trailing_threshold_pct_1(self, new_value):
         self._short_entry_trailing_threshold_pct_1 = new_value
         self._bounds["short_entry_trailing_threshold_pct"][1] = new_value
-    @short_filter_log_range_ema_span_0.setter
-    def short_filter_log_range_ema_span_0(self, new_value):
-        self._short_filter_log_range_ema_span_0 = new_value
-        self._bounds["short_filter_log_range_ema_span"][0] = new_value
-    @short_filter_log_range_ema_span_1.setter
-    def short_filter_log_range_ema_span_1(self, new_value):
-        self._short_filter_log_range_ema_span_1 = new_value
-        self._bounds["short_filter_log_range_ema_span"][1] = new_value
+    @short_entry_trailing_threshold_we_weight_0.setter
+    def short_entry_trailing_threshold_we_weight_0(self, new_value):
+        self._short_entry_trailing_threshold_we_weight_0 = new_value
+        self._bounds["short_entry_trailing_threshold_we_weight"][0] = new_value
+    @short_entry_trailing_threshold_we_weight_1.setter
+    def short_entry_trailing_threshold_we_weight_1(self, new_value):
+        self._short_entry_trailing_threshold_we_weight_1 = new_value
+        self._bounds["short_entry_trailing_threshold_we_weight"][1] = new_value
+    @short_entry_trailing_threshold_volatility_weight_0.setter
+    def short_entry_trailing_threshold_volatility_weight_0(self, new_value):
+        self._short_entry_trailing_threshold_volatility_weight_0 = new_value
+        self._bounds["short_entry_trailing_threshold_volatility_weight"][0] = new_value
+    @short_entry_trailing_threshold_volatility_weight_1.setter
+    def short_entry_trailing_threshold_volatility_weight_1(self, new_value):
+        self._short_entry_trailing_threshold_volatility_weight_1 = new_value
+        self._bounds["short_entry_trailing_threshold_volatility_weight"][1] = new_value
+    @short_filter_volatility_ema_span_0.setter
+    def short_filter_volatility_ema_span_0(self, new_value):
+        self._short_filter_volatility_ema_span_0 = new_value
+        self._bounds["short_filter_volatility_ema_span"][0] = new_value
+    @short_filter_volatility_ema_span_1.setter
+    def short_filter_volatility_ema_span_1(self, new_value):
+        self._short_filter_volatility_ema_span_1 = new_value
+        self._bounds["short_filter_volatility_ema_span"][1] = new_value
     @short_filter_volume_drop_pct_0.setter
     def short_filter_volume_drop_pct_0(self, new_value):
         self._short_filter_volume_drop_pct_0 = new_value
@@ -3288,6 +4045,14 @@ class Bounds:
     def short_filter_volume_drop_pct_1(self, new_value):
         self._short_filter_volume_drop_pct_1 = new_value
         self._bounds["short_filter_volume_drop_pct"][1] = new_value
+    @short_filter_volatility_drop_pct_0.setter
+    def short_filter_volatility_drop_pct_0(self, new_value):
+        self._short_filter_volatility_drop_pct_0 = new_value
+        self._bounds["short_filter_volatility_drop_pct"][0] = new_value
+    @short_filter_volatility_drop_pct_1.setter
+    def short_filter_volatility_drop_pct_1(self, new_value):
+        self._short_filter_volatility_drop_pct_1 = new_value
+        self._bounds["short_filter_volatility_drop_pct"][1] = new_value
     @short_filter_volume_ema_span_0.setter
     def short_filter_volume_ema_span_0(self, new_value):
         self._short_filter_volume_ema_span_0 = new_value
@@ -3345,6 +4110,60 @@ class Bounds:
         self._short_unstuck_threshold_1 = new_value
         self._bounds["short_unstuck_threshold"][1] = new_value
 
+    @long_risk_wel_enforcer_threshold_0.setter
+    def long_risk_wel_enforcer_threshold_0(self, new_value):
+        self._long_risk_wel_enforcer_threshold_0 = new_value
+        self._bounds["long_risk_wel_enforcer_threshold"][0] = new_value
+    @long_risk_wel_enforcer_threshold_1.setter
+    def long_risk_wel_enforcer_threshold_1(self, new_value):
+        self._long_risk_wel_enforcer_threshold_1 = new_value
+        self._bounds["long_risk_wel_enforcer_threshold"][1] = new_value
+
+    @long_risk_we_excess_allowance_pct_0.setter
+    def long_risk_we_excess_allowance_pct_0(self, new_value):
+        self._long_risk_we_excess_allowance_pct_0 = new_value
+        self._bounds["long_risk_we_excess_allowance_pct"][0] = new_value
+    @long_risk_we_excess_allowance_pct_1.setter
+    def long_risk_we_excess_allowance_pct_1(self, new_value):
+        self._long_risk_we_excess_allowance_pct_1 = new_value
+        self._bounds["long_risk_we_excess_allowance_pct"][1] = new_value
+
+    @long_risk_twel_enforcer_threshold_0.setter
+    def long_risk_twel_enforcer_threshold_0(self, new_value):
+        self._long_risk_twel_enforcer_threshold_0 = new_value
+        self._bounds["long_risk_twel_enforcer_threshold"][0] = new_value
+    @long_risk_twel_enforcer_threshold_1.setter
+    def long_risk_twel_enforcer_threshold_1(self, new_value):
+        self._long_risk_twel_enforcer_threshold_1 = new_value
+        self._bounds["long_risk_twel_enforcer_threshold"][1] = new_value
+
+    @short_risk_wel_enforcer_threshold_0.setter
+    def short_risk_wel_enforcer_threshold_0(self, new_value):
+        self._short_risk_wel_enforcer_threshold_0 = new_value
+        self._bounds["short_risk_wel_enforcer_threshold"][0] = new_value
+    @short_risk_wel_enforcer_threshold_1.setter
+    def short_risk_wel_enforcer_threshold_1(self, new_value):
+        self._short_risk_wel_enforcer_threshold_1 = new_value
+        self._bounds["short_risk_wel_enforcer_threshold"][1] = new_value
+
+    @short_risk_we_excess_allowance_pct_0.setter
+    def short_risk_we_excess_allowance_pct_0(self, new_value):
+        self._short_risk_we_excess_allowance_pct_0 = new_value
+        self._bounds["short_risk_we_excess_allowance_pct"][0] = new_value
+    @short_risk_we_excess_allowance_pct_1.setter
+    def short_risk_we_excess_allowance_pct_1(self, new_value):
+        self._short_risk_we_excess_allowance_pct_1 = new_value
+        self._bounds["short_risk_we_excess_allowance_pct"][1] = new_value
+
+    @short_risk_twel_enforcer_threshold_0.setter
+    def short_risk_twel_enforcer_threshold_0(self, new_value):
+        self._short_risk_twel_enforcer_threshold_0 = new_value
+        self._bounds["short_risk_twel_enforcer_threshold"][0] = new_value
+    @short_risk_twel_enforcer_threshold_1.setter
+    def short_risk_twel_enforcer_threshold_1(self, new_value):
+        self._short_risk_twel_enforcer_threshold_1 = new_value
+        self._bounds["short_risk_twel_enforcer_threshold"][1] = new_value
+
 class PBGui:
     def __init__(self):
         self._version = 0
@@ -3357,7 +4176,6 @@ class PBGui:
         self._dynamic_ignore = False
         self._notices_ignore = False
         self._note = ''
-        self._backtest_div_by = 60
         self._pbgui = {
             "version": self._version,
             "enabled_on": self._enabled_on,
@@ -3369,7 +4187,6 @@ class PBGui:
             "dynamic_ignore": self._dynamic_ignore,
             "notices_ignore": self._notices_ignore,
             "note": self._note,
-            "backtest_div_by": self._backtest_div_by,
         }
     
     def __repr__(self):
@@ -3399,8 +4216,6 @@ class PBGui:
             self.notices_ignore = new_pbgui["notices_ignore"]
         if "note" in new_pbgui:
             self.note = new_pbgui["note"]
-        if "backtest_div_by" in new_pbgui:
-            self.backtest_div_by = new_pbgui["backtest_div_by"]
 
     @property
     def version(self): return self._version
@@ -3422,8 +4237,6 @@ class PBGui:
     def notices_ignore(self): return self._notices_ignore
     @property
     def note(self): return self._note
-    @property
-    def backtest_div_by(self): return self._backtest_div_by
 
     @version.setter
     def version(self, new_version):
@@ -3465,10 +4278,6 @@ class PBGui:
     def note(self, new_note):
         self._note = new_note
         self._pbgui["note"] = self._note
-    @backtest_div_by.setter
-    def backtest_div_by(self, new_backtest_div_by):
-        self._backtest_div_by = new_backtest_div_by
-        self._pbgui["backtest_div_by"] = self._backtest_div_by
 
 class ConfigV7():
     def __init__(self, file_name = None):
@@ -3731,18 +4540,23 @@ class ConfigV7():
             "close_trailing_threshold_pct",
             "ema_span_0",
             "ema_span_1",
-            "enforce_exposure_limit",
             "entry_grid_double_down_factor",
-            "entry_grid_spacing_log_span_hours",
-            "entry_grid_spacing_log_weight",
             "entry_grid_spacing_pct",
+            "entry_grid_spacing_volatility_weight",
             "entry_grid_spacing_we_weight",
             "entry_initial_ema_dist",
             "entry_initial_qty_pct",
             "entry_trailing_double_down_factor",
             "entry_trailing_grid_ratio",
             "entry_trailing_retracement_pct",
+            "entry_trailing_retracement_volatility_weight",
+            "entry_trailing_retracement_we_weight",
             "entry_trailing_threshold_pct",
+            "entry_trailing_threshold_volatility_weight",
+            "entry_trailing_threshold_we_weight",
+            "entry_volatility_ema_span_hours",
+            "risk_we_excess_allowance_pct",
+            "risk_wel_enforcer_threshold",
             "unstuck_close_pct",
             "unstuck_ema_dist",
             "unstuck_threshold",
@@ -3871,10 +4685,7 @@ class ConfigV7():
         with col2:
             st.selectbox("side", ["long", "short"], key="edit_run_v7_co_side")
         with col3:
-            if st.session_state.edit_run_v7_co_parameter == "enforce_exposure_limit":
-                st.selectbox("enforce_exposure_limit", ["true", "false"], key="edit_run_v7_co_value")
-            else:
-                st.number_input("value", format="%.8f", key="edit_run_v7_co_value")
+            st.number_input("value", format="%.8f", key="edit_run_v7_co_value")
         with col4:
             st.button("Add", key="edit_run_v7_co_add_parameter")
 
