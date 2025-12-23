@@ -13,11 +13,11 @@ import multiprocessing
 import pandas as pd
 from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
 from pbgui_purefunc import load_ini, save_ini
-from PBCoinData import CoinData
+from PBCoinData import CoinData, normalize_symbol
 import uuid
 from Base import Base
-from Exchange import Exchange
-from Config import Config, ConfigV7, BalanceCalculator, Logging
+from Exchange import Exchange, V7
+from Config import Config, ConfigV7, BalanceCalculator, Logging, ConfigV7Editor
 from pathlib import Path, PurePath
 from shutil import rmtree, copytree
 import shutil
@@ -109,8 +109,10 @@ class BacktestV7QueueItem():
         
         log = self.load_log()
         if log:
-            # Check for the completion marker
-            if "seconds elapsed for backtest:" in log:
+            # Check for completion markers
+            # Regular backtest: "seconds elapsed for backtest:"
+            # Suite backtest: "Suite ... completed"
+            if "seconds elapsed for backtest:" in log or "Suite" in log and "completed" in log:
                 return True
         return False
 
@@ -118,7 +120,8 @@ class BacktestV7QueueItem():
         log = self.load_log()
         if log:
             # If backtest finished successfully, no error
-            if "seconds elapsed for backtest:" in log:
+            # Check both regular and Suite completion markers
+            if "seconds elapsed for backtest:" in log or ("Suite" in log and "completed" in log):
                 return False
             # If process is still running, not an error yet
             elif self.is_running():
@@ -133,10 +136,11 @@ class BacktestV7QueueItem():
             log = self.load_log()
             if log:
                 # If finished, not backtesting anymore
-                if "seconds elapsed for backtest:" in log:
+                # Check both regular and Suite completion markers
+                if "seconds elapsed for backtest:" in log or ("Suite" in log and "completed" in log):
                     return False
-                # If we see "Backtesting " in the log, we're in backtesting phase
-                elif "Backtesting " in log:
+                # If we see "Backtesting " or "Running scenario" in the log, we're in backtesting phase
+                elif "Backtesting " in log or "Running scenario" in log:
                     return True
         return False
 
@@ -435,7 +439,7 @@ class BacktestV7Queue:
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
 
-class BacktestV7Item:
+class BacktestV7Item(ConfigV7Editor):
     def __init__(self, backtest_path: str = None):
         self.path = backtest_path
         self.config = ConfigV7()
@@ -456,6 +460,12 @@ class BacktestV7Item:
         self.config.backtest.start_date = (datetime.date.today() - datetime.timedelta(days=365*4)).strftime("%Y-%m-%d")
         self.config.backtest.end_date = datetime.date.today().strftime("%Y-%m-%d")
         self.config.optimize.n_cpus = multiprocessing.cpu_count()
+    
+    # ============ ABSTRACT METHOD IMPLEMENTATIONS ============
+    
+    def _get_key_prefix(self):
+        """Return key prefix for streamlit widgets."""
+        return "bt_"
 
     # Exchanges
     @st.fragment
@@ -593,6 +603,65 @@ class BacktestV7Item:
         else:
             st.session_state.edit_bt_v7_compress_cache = self.config.backtest.compress_cache
         st.checkbox("compress_cache", key="edit_bt_v7_compress_cache", help=pbgui_help.compress_cache)
+    
+    # coin_sources
+    @st.fragment
+    def fragment_coin_sources(self):
+        # Collect all scenario coin_sources to prevent conflicts
+        # Like Passivbot's collect_suite_coin_sources(), we need to detect when
+        # a coin is assigned to different exchanges across scenarios
+        all_suite_sources = {}
+        if self.config.backtest.suite:
+            for scenario in self.config.backtest.suite.scenarios:
+                if scenario.coin_sources:
+                    for coin, exchange in scenario.coin_sources.items():
+                        if coin in all_suite_sources and all_suite_sources[coin] != exchange:
+                            # Conflict detected - mark as conflicted by storing None
+                            # This prevents base from adding this coin with ANY exchange
+                            all_suite_sources[coin] = None
+                        elif coin not in all_suite_sources:
+                            all_suite_sources[coin] = exchange
+        
+        self._edit_coin_sources_ui(
+            self.config.backtest.coin_sources,
+            self.config.backtest.exchanges if self.config.backtest.exchanges else V7.list(),
+            key_prefix="bt_",
+            save_callback=lambda cs: setattr(self.config.backtest, 'coin_sources', cs),
+            current_exchanges=self.config.backtest.exchanges if self.config.backtest.exchanges else V7.list(),
+            all_suite_coin_sources=all_suite_sources
+        )
+    
+    def _get_available_symbols(self, exchanges=None):
+        """Get available symbols from coindata for specified exchanges.
+        Returns normalized coin names (without USDT/USDC suffixes).
+        
+        Args:
+            exchanges: List of exchange names. If None, uses config.backtest.exchanges
+        """
+        if exchanges is None:
+            exchanges = self.config.backtest.exchanges
+        
+        symbols = []
+        for exchange in V7.list():
+            if exchange in exchanges and f"coindata_{exchange}" in st.session_state:
+                symbols.extend(st.session_state[f"coindata_{exchange}"].symbols)
+        
+        # Normalize and deduplicate (BTCUSDT + BTCUSDC -> BTC)
+        normalized = [normalize_symbol(s) for s in symbols]
+        return sorted(list(set(normalized)))
+    
+    # All Suite and coin_sources methods are now inherited from ConfigV7Editor:
+    # - fragment_coin_sources()
+    # - _edit_coin_sources_ui()
+    # - _get_exchanges_for_coin()
+    # - _get_override_parameters()
+    # - _get_aggregate_metrics()
+    # - _edit_aggregate_ui()
+    # - _edit_scenario_start_date()
+    # - _edit_scenario_end_date()
+    # - _edit_scenario_ui()
+    # - _add_scenario_ui()
+    # - fragment_suite()
     
     # btc_collateral_cap
     @st.fragment
@@ -869,6 +938,10 @@ class BacktestV7Item:
             self.fragment_compress_cache()
         with col3:
             self.fragment_filter_by_min_effective_cost()
+        # coin_sources (full width)
+        self.fragment_coin_sources()
+        # Suite (multi-scenario)
+        self.fragment_suite()
         # PBGui Filter
         st.markdown("---")
         st.markdown("##### PBGui Filter")
@@ -977,20 +1050,26 @@ class BacktestV7Result:
         self.config.load_config()
         self.backtest_config = self.load_backtest_config()
         self.ed = self.config.backtest.end_date
-        # Support both 'adg' and 'adg_usd' fields (newer JSON files use 'adg_usd')
-        self.adg = self.result.get("adg_usd") or self.result.get("adg", 0)
-        self.drawdown_worst = self.result.get("drawdown_worst", 0)
-        # safe read: prefer numeric value, fallback to None if missing/invalid
-        self.equity_balance_diff_neg_max = None
-        if isinstance(self.result, dict):
-            val = self.result.get("equity_balance_diff_neg_max")
+        # Support both old and new JSON formats
+        # New format has _usd/_btc suffixes, old format has no suffix
+        if self.result:
+            self.adg = self.result.get("adg_usd") or self.result.get("adg", 0)
+            self.drawdown_worst = self.result.get("drawdown_worst_usd") or self.result.get("drawdown_worst", 0)
+            self.sharpe_ratio = self.result.get("sharpe_ratio_usd") or self.result.get("sharpe_ratio", 0)
+            # safe read: prefer numeric value, fallback to None if missing/invalid
+            self.equity_balance_diff_neg_max = None
+            val = self.result.get("equity_balance_diff_neg_max_usd") or self.result.get("equity_balance_diff_neg_max")
             if val not in (None, ""):
                 try:
                     self.equity_balance_diff_neg_max = float(val)
                 except (TypeError, ValueError):
                     # keep None on conversion failure
                     self.equity_balance_diff_neg_max = None
-        self.sharpe_ratio = self.result.get("sharpe_ratio", 0)
+        else:
+            self.adg = 0
+            self.drawdown_worst = 0
+            self.sharpe_ratio = 0
+            self.equity_balance_diff_neg_max = None
         self.starting_balance = self.config.backtest.starting_balance
         self.be = None
         self.final_balance, self.final_balance_btc = self.load_final_balance()
@@ -1777,8 +1856,9 @@ class BacktestV7Results:
                 
                 starting_balance_float = float(result.starting_balance)
                 final_balance_float = float(result.final_balance)
-                if "gain" in result.result:
-                    gain = result.result["gain"]
+                # Support both old and new JSON formats for gain
+                if result.result:
+                    gain = result.result.get("gain_usd") or result.result.get("gain", 0)
                 else:
                     gain = 0
                 # remove archive_path from result_path

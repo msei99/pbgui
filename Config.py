@@ -7,9 +7,127 @@ import traceback
 import multiprocessing
 import datetime
 from Exchange import Exchange, V7
-from PBCoinData import CoinData
+from PBCoinData import CoinData, normalize_symbol
 from time import sleep
 import math
+
+# ============================================================================
+# Metrics Definitions (Centralized)
+# ============================================================================
+
+# Currency metrics that need _usd or _btc suffix
+CURRENCY_METRICS = {
+    "adg", "adg_per_exposure_long", "adg_per_exposure_short", "adg_w",
+    "adg_w_per_exposure_long", "adg_w_per_exposure_short", "calmar_ratio",
+    "calmar_ratio_w", "drawdown_worst", "drawdown_worst_mean_1pct",
+    "equity_balance_diff_neg_max", "equity_balance_diff_neg_mean",
+    "equity_balance_diff_pos_max", "equity_balance_diff_pos_mean",
+    "equity_choppiness", "equity_choppiness_w", "equity_jerkiness",
+    "equity_jerkiness_w", "peak_recovery_hours_equity", "expected_shortfall_1pct",
+    "exponential_fit_error", "exponential_fit_error_w", "gain",
+    "gain_per_exposure_long", "gain_per_exposure_short", "mdg",
+    "mdg_per_exposure_long", "mdg_per_exposure_short", "mdg_w",
+    "mdg_w_per_exposure_long", "mdg_w_per_exposure_short", "omega_ratio",
+    "omega_ratio_w", "sharpe_ratio", "sharpe_ratio_w", "sortino_ratio",
+    "sortino_ratio_w", "sterling_ratio", "sterling_ratio_w",
+}
+
+# Shared metrics (no suffix needed)
+SHARED_METRICS = {
+    "positions_held_per_day", "positions_held_per_day_w",
+    "position_held_hours_mean", "position_held_hours_max",
+    "position_held_hours_median", "position_unchanged_hours_max",
+    "volume_pct_per_day_avg", "volume_pct_per_day_avg_w",
+    "loss_profit_ratio", "loss_profit_ratio_w",
+    "peak_recovery_hours_pnl", "adg_pnl", "adg_pnl_w",
+    "mdg_pnl", "mdg_pnl_w", "sharpe_ratio_pnl", "sharpe_ratio_pnl_w",
+    "sortino_ratio_pnl", "sortino_ratio_pnl_w",
+}
+
+def get_all_metrics_with_currency():
+    """Get all valid metrics including currency suffixes (for limits)."""
+    all_metrics = SHARED_METRICS.copy()
+    for m in CURRENCY_METRICS:
+        all_metrics.add(f"{m}_usd")
+        all_metrics.add(f"{m}_btc")
+    return all_metrics
+
+def get_all_metrics_list():
+    """Get sorted list of base metrics (for UI selection)."""
+    return sorted(list(SHARED_METRICS) + list(CURRENCY_METRICS))
+
+def get_aggregate_metrics():
+    """Get list of metrics commonly used for suite aggregation (with currency suffixes)."""
+    metrics = []
+    # Add currency metrics with both suffixes
+    for m in ["adg", "adg_w", "mdg", "mdg_w", "drawdown_worst", "drawdown_worst_mean_1pct", "gain"]:
+        if m in CURRENCY_METRICS:
+            metrics.extend([f"{m}_usd", f"{m}_btc"])
+    # Add shared metrics that don't need suffixes
+    for m in ["sharpe_ratio", "sharpe_ratio_w", "sortino_ratio", "sortino_ratio_w", 
+              "loss_profit_ratio", "loss_profit_ratio_w", "positions_held_per_day",
+              "position_held_hours_max", "position_held_hours_mean", "position_held_hours_median",
+              "position_unchanged_hours_max", "peak_recovery_hours_pnl"]:
+        if m in SHARED_METRICS:
+            metrics.append(m)
+    # Add ratio metrics with currency suffixes
+    for m in ["calmar_ratio", "calmar_ratio_w", "omega_ratio", "omega_ratio_w", 
+              "sterling_ratio", "sterling_ratio_w", "sharpe_ratio", "sharpe_ratio_w",
+              "sortino_ratio", "sortino_ratio_w"]:
+        if m in CURRENCY_METRICS:
+            metrics.extend([f"{m}_usd", f"{m}_btc"])
+    # Add additional useful metrics
+    for m in ["equity_balance_diff_neg_max", "equity_balance_diff_neg_mean",
+              "equity_balance_diff_pos_max", "equity_balance_diff_pos_mean",
+              "expected_shortfall_1pct", "peak_recovery_hours_equity"]:
+        if m in CURRENCY_METRICS:
+            metrics.extend([f"{m}_usd", f"{m}_btc"])
+        elif m in SHARED_METRICS:
+            metrics.append(m)
+    return sorted(list(set(metrics)))
+
+def is_currency_metric(metric_base):
+    """Check if a metric requires currency suffix (_usd or _btc)."""
+    return metric_base in CURRENCY_METRICS
+
+# ============================================================================
+# Bot Parameter Overrides
+# ============================================================================
+
+# Bot parameters that can be overridden in coin_overrides and scenario overrides
+# Source: pb7/src/config_utils.py get_allowed_modifications()
+ALLOWED_OVERRIDES = [
+    "close_grid_markup_end",
+    "close_grid_markup_start",
+    "close_grid_qty_pct",
+    "close_trailing_grid_ratio",
+    "close_trailing_qty_pct",
+    "close_trailing_retracement_pct",
+    "close_trailing_threshold_pct",
+    "ema_span_0",
+    "ema_span_1",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_pct",
+    "entry_grid_spacing_we_weight",
+    "entry_grid_spacing_volatility_weight",
+    "entry_volatility_ema_span_hours",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_grid_ratio",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_retracement_we_weight",
+    "entry_trailing_retracement_volatility_weight",
+    "entry_trailing_threshold_pct",
+    "entry_trailing_threshold_we_weight",
+    "entry_trailing_threshold_volatility_weight",
+    "risk_we_excess_allowance_pct",
+    "risk_wel_enforcer_threshold",
+    "unstuck_close_pct",
+    "unstuck_ema_dist",
+    "unstuck_threshold",
+    "wallet_exposure_limit",  # Note: pbgui uses total_wallet_exposure_limit internally
+]
 
 class Config:
     def __init__(self, file_name = None, config = None):
@@ -688,6 +806,219 @@ class Logging:
         self._volume_refresh_info_threshold_seconds = new_volume_refresh_info_threshold_seconds
         self._logging["volume_refresh_info_threshold_seconds"] = self._volume_refresh_info_threshold_seconds
 
+
+class Scenario:
+    """
+    A single scenario within a Suite configuration.
+    Each scenario can override coins, dates, exchanges, and bot parameters.
+    """
+    def __init__(self):
+        self._label = ""
+        self._coins = []              # Optional: override approved_coins for this scenario
+        self._ignored_coins = []      # Optional: coins to exclude
+        self._start_date = None       # Optional: override backtest.start_date
+        self._end_date = None         # Optional: override backtest.end_date
+        self._exchanges = None        # Optional: ["binance"] or ["bybit"] or both
+        self._coin_sources = {}       # Optional: {"BTC": "binance", "SOL": "bybit"}
+        self._overrides = {}          # Optional: {"bot.long.n_positions": 3}
+    
+    def __repr__(self):
+        return str(self.scenario)
+    
+    @property
+    def scenario(self):
+        """Returns the scenario as a dict for JSON serialization."""
+        result = {"label": self._label}
+        if self._coins:
+            result["coins"] = self._coins
+        if self._ignored_coins:
+            result["ignored_coins"] = self._ignored_coins
+        if self._start_date is not None:
+            result["start_date"] = self._start_date
+        if self._end_date is not None:
+            result["end_date"] = self._end_date
+        if self._exchanges is not None:
+            result["exchanges"] = self._exchanges
+        if self._coin_sources:
+            result["coin_sources"] = self._coin_sources
+        if self._overrides:
+            result["overrides"] = self._overrides
+        return result
+    
+    @scenario.setter
+    def scenario(self, new_scenario):
+        if isinstance(new_scenario, dict):
+            self._label = new_scenario.get("label", "")
+            self._coins = new_scenario.get("coins", [])
+            self._ignored_coins = new_scenario.get("ignored_coins", [])
+            self._start_date = new_scenario.get("start_date", None)
+            self._end_date = new_scenario.get("end_date", None)
+            self._exchanges = new_scenario.get("exchanges", None)
+            self._coin_sources = new_scenario.get("coin_sources", {})
+            self._overrides = new_scenario.get("overrides", {})
+    
+    @property
+    def label(self): return self._label
+    @label.setter
+    def label(self, new_label):
+        self._label = new_label
+    
+    @property
+    def coins(self): return self._coins
+    @coins.setter
+    def coins(self, new_coins):
+        """Set coins list, automatically normalizing symbols."""
+        if new_coins:
+            # Normalize all coin symbols (remove USDT/USDC suffixes and exchange prefixes)
+            self._coins = [normalize_symbol(coin) for coin in new_coins]
+        else:
+            self._coins = []
+    
+    @property
+    def ignored_coins(self): return self._ignored_coins
+    @ignored_coins.setter
+    def ignored_coins(self, new_ignored_coins):
+        self._ignored_coins = [normalize_symbol(coin) for coin in new_ignored_coins] if new_ignored_coins else []
+    
+    @property
+    def start_date(self): return self._start_date
+    @start_date.setter
+    def start_date(self, new_start_date):
+        self._start_date = new_start_date if new_start_date else None
+    
+    @property
+    def end_date(self): return self._end_date
+    @end_date.setter
+    def end_date(self, new_end_date):
+        self._end_date = new_end_date if new_end_date else None
+    
+    @property
+    def exchanges(self): return self._exchanges
+    @exchanges.setter
+    def exchanges(self, new_exchanges):
+        self._exchanges = new_exchanges if new_exchanges else None
+    
+    @property
+    def coin_sources(self): return self._coin_sources
+    @coin_sources.setter
+    def coin_sources(self, new_coin_sources):
+        self._coin_sources = new_coin_sources if new_coin_sources else {}
+    
+    @property
+    def overrides(self): return self._overrides
+    @overrides.setter
+    def overrides(self, new_overrides):
+        self._overrides = new_overrides if new_overrides else {}
+
+
+class Suite:
+    """
+    Suite configuration for multi-scenario backtesting/optimization.
+    Allows evaluating a config across multiple coin sets, date ranges, and parameter variations.
+    """
+    def __init__(self):
+        self._enabled = False
+        self._include_base_scenario = True
+        self._base_label = "base"
+        self._aggregate = {"default": "mean"}
+        self._scenarios = []  # List of Scenario objects
+    
+    def __repr__(self):
+        return str(self.suite)
+    
+    @property
+    def suite(self):
+        """Returns the suite as a dict for JSON serialization."""
+        return {
+            "enabled": self._enabled,
+            "include_base_scenario": self._include_base_scenario,
+            "base_label": self._base_label,
+            "aggregate": self._aggregate,
+            "scenarios": [s.scenario for s in self._scenarios]
+        }
+    
+    @suite.setter
+    def suite(self, new_suite):
+        if isinstance(new_suite, dict):
+            self._enabled = new_suite.get("enabled", False)
+            self._include_base_scenario = new_suite.get("include_base_scenario", True)
+            self._base_label = new_suite.get("base_label", "base")
+            self._aggregate = new_suite.get("aggregate", {"default": "mean"})
+            # Parse scenarios list
+            self._scenarios = []
+            for scenario_dict in new_suite.get("scenarios", []):
+                scenario = Scenario()
+                scenario.scenario = scenario_dict
+                self._scenarios.append(scenario)
+    
+    @property
+    def enabled(self): return self._enabled
+    @enabled.setter
+    def enabled(self, new_enabled):
+        self._enabled = bool(new_enabled)
+    
+    @property
+    def include_base_scenario(self): return self._include_base_scenario
+    @include_base_scenario.setter
+    def include_base_scenario(self, new_include_base_scenario):
+        self._include_base_scenario = bool(new_include_base_scenario)
+    
+    @property
+    def base_label(self): return self._base_label
+    @base_label.setter
+    def base_label(self, new_base_label):
+        self._base_label = new_base_label if new_base_label else "base"
+    
+    @property
+    def aggregate(self): return self._aggregate
+    @aggregate.setter
+    def aggregate(self, new_aggregate):
+        self._aggregate = new_aggregate if new_aggregate else {"default": "mean"}
+    
+    @property
+    def scenarios(self): return self._scenarios
+    @scenarios.setter
+    def scenarios(self, new_scenarios):
+        """Set scenarios from a list of Scenario objects or dicts."""
+        self._scenarios = []
+        if new_scenarios:
+            for item in new_scenarios:
+                if isinstance(item, Scenario):
+                    self._scenarios.append(item)
+                elif isinstance(item, dict):
+                    scenario = Scenario()
+                    scenario.scenario = item
+                    self._scenarios.append(scenario)
+    
+    def add_scenario(self, scenario):
+        """Add a scenario (Scenario object or dict)."""
+        if isinstance(scenario, Scenario):
+            self._scenarios.append(scenario)
+        elif isinstance(scenario, dict):
+            s = Scenario()
+            s.scenario = scenario
+            self._scenarios.append(s)
+    
+    def remove_scenario(self, index):
+        """Remove a scenario by index."""
+        if 0 <= index < len(self._scenarios):
+            self._scenarios.pop(index)
+    
+    def get_scenario(self, index):
+        """Get a scenario by index."""
+        if 0 <= index < len(self._scenarios):
+            return self._scenarios[index]
+        return None
+    
+    def update_scenario(self, index, scenario):
+        """Update a scenario at the given index."""
+        if 0 <= index < len(self._scenarios):
+            if isinstance(scenario, Scenario):
+                self._scenarios[index] = scenario
+            elif isinstance(scenario, dict):
+                self._scenarios[index].scenario = scenario
+
+
 class Backtest:
     def __init__(self):
         self._balance_sample_divider = 60
@@ -703,6 +1034,8 @@ class Backtest:
         self._btc_collateral_cap = 0.0
         self._btc_collateral_ltv_cap = None
         self._max_warmup_minutes = 0.0
+        self._coin_sources = {}
+        self._suite = Suite()
         self._backtest = {
             "balance_sample_divider": self._balance_sample_divider,
             "base_dir": self._base_dir,
@@ -716,14 +1049,20 @@ class Backtest:
             "starting_balance": self._starting_balance,
             "btc_collateral_cap": self._btc_collateral_cap,
             "btc_collateral_ltv_cap": self._btc_collateral_ltv_cap,
-            "max_warmup_minutes": self._max_warmup_minutes
+            "max_warmup_minutes": self._max_warmup_minutes,
+            "coin_sources": self._coin_sources,
+            "suite": self._suite.suite
         }
     
     def __repr__(self):
-        return str(self._backtest)
+        return str(self.backtest)
     
     @property
-    def backtest(self): return self._backtest
+    def backtest(self):
+        # Dynamically update suite to ensure scenarios are current
+        self._backtest["suite"] = self._suite.suite
+        self._backtest["coin_sources"] = self._coin_sources
+        return self._backtest
     @backtest.setter
     def backtest(self, new_backtest):
         if "balance_sample_divider" in new_backtest:
@@ -758,6 +1097,10 @@ class Backtest:
                 self.btc_collateral_cap = 0.0
         if "max_warmup_minutes" in new_backtest:
             self.max_warmup_minutes = new_backtest["max_warmup_minutes"]
+        if "coin_sources" in new_backtest:
+            self.coin_sources = new_backtest["coin_sources"]
+        if "suite" in new_backtest:
+            self.suite = new_backtest["suite"]
     
     @property
     def balance_sample_divider(self): return self._balance_sample_divider
@@ -788,6 +1131,10 @@ class Backtest:
     def btc_collateral_ltv_cap(self): return self._btc_collateral_ltv_cap
     @property
     def max_warmup_minutes(self): return self._max_warmup_minutes
+    @property
+    def coin_sources(self): return self._coin_sources
+    @property
+    def suite(self): return self._suite
 
     @balance_sample_divider.setter
     def balance_sample_divider(self, new_balance_sample_divider):
@@ -841,6 +1188,17 @@ class Backtest:
     def max_warmup_minutes(self, new_max_warmup_minutes):
         self._max_warmup_minutes = new_max_warmup_minutes
         self._backtest["max_warmup_minutes"] = self._max_warmup_minutes
+    @coin_sources.setter
+    def coin_sources(self, new_coin_sources):
+        self._coin_sources = new_coin_sources if new_coin_sources else {}
+        self._backtest["coin_sources"] = self._coin_sources
+    @suite.setter
+    def suite(self, new_suite):
+        if isinstance(new_suite, Suite):
+            self._suite = new_suite
+        elif isinstance(new_suite, dict):
+            self._suite.suite = new_suite
+        self._backtest["suite"] = self._suite.suite
 
 class Bot:
     def __init__(self):
@@ -2400,40 +2758,8 @@ class Optimize:
         Currency metrics without suffix get _usd appended (like PassivBot canonicalize_metric_name).
         Invalid/unknown metrics are skipped with a warning.
         """
-        # Currency metrics that need _usd or _btc suffix
-        CURRENCY_METRICS = {
-            "adg", "adg_per_exposure_long", "adg_per_exposure_short", "adg_w",
-            "adg_w_per_exposure_long", "adg_w_per_exposure_short", "calmar_ratio",
-            "calmar_ratio_w", "drawdown_worst", "drawdown_worst_mean_1pct",
-            "equity_balance_diff_neg_max", "equity_balance_diff_neg_mean",
-            "equity_balance_diff_pos_max", "equity_balance_diff_pos_mean",
-            "equity_choppiness", "equity_choppiness_w", "equity_jerkiness",
-            "equity_jerkiness_w", "peak_recovery_hours_equity", "expected_shortfall_1pct",
-            "exponential_fit_error", "exponential_fit_error_w", "gain",
-            "gain_per_exposure_long", "gain_per_exposure_short", "mdg",
-            "mdg_per_exposure_long", "mdg_per_exposure_short", "mdg_w",
-            "mdg_w_per_exposure_long", "mdg_w_per_exposure_short", "omega_ratio",
-            "omega_ratio_w", "sharpe_ratio", "sharpe_ratio_w", "sortino_ratio",
-            "sortino_ratio_w", "sterling_ratio", "sterling_ratio_w",
-        }
-        
-        # Shared metrics (no suffix needed)
-        SHARED_METRICS = {
-            "positions_held_per_day", "positions_held_per_day_w",
-            "position_held_hours_mean", "position_held_hours_max",
-            "position_held_hours_median", "position_unchanged_hours_max",
-            "volume_pct_per_day_avg", "volume_pct_per_day_avg_w",
-            "loss_profit_ratio", "loss_profit_ratio_w",
-            "peak_recovery_hours_pnl", "adg_pnl", "adg_pnl_w",
-            "mdg_pnl", "mdg_pnl_w", "sharpe_ratio_pnl", "sharpe_ratio_pnl_w",
-            "sortino_ratio_pnl", "sortino_ratio_pnl_w",
-        }
-        
-        # Build set of all valid metrics
-        ALL_VALID_METRICS = SHARED_METRICS.copy()
-        for m in CURRENCY_METRICS:
-            ALL_VALID_METRICS.add(f"{m}_usd")
-            ALL_VALID_METRICS.add(f"{m}_btc")
+        # Use centralized metrics definitions
+        ALL_VALID_METRICS = get_all_metrics_with_currency()
         
         entries = []
         for key, value in limits_dict.items():
@@ -2474,7 +2800,7 @@ class Optimize:
             # Canonicalize metric name (like PassivBot does)
             # If it's a currency metric without suffix, append _usd
             if metric and not metric.endswith("_usd") and not metric.endswith("_btc"):
-                if metric in CURRENCY_METRICS:
+                if is_currency_metric(metric):
                     metric = f"{metric}_usd"
             
             # Validate metric - skip if not in valid metrics list
@@ -4393,6 +4719,732 @@ class PBGui:
         self._note = new_note
         self._pbgui["note"] = self._note
 
+# ============================================================================
+# ConfigV7Editor - Base class for Suite and coin_sources editing
+# ============================================================================
+
+class ConfigV7Editor:
+    """
+    Base class providing Suite and coin_sources UI editing functionality.
+    Used by BacktestV7Item and OptimizeV7Item for consistent config editing.
+    
+    Requirements for subclasses:
+    - self.config must be a ConfigV7 instance
+    - self._get_available_symbols(exchanges=None) must be implemented
+    - self._get_key_prefix() must be implemented (returns "bt_" or "opt_")
+    """
+    
+    # ============ ABSTRACT METHODS ============
+    
+    def _get_key_prefix(self):
+        """
+        Return key prefix for streamlit widgets.
+        Must be implemented by subclass.
+        
+        Returns:
+            str: "bt_" for BacktestV7, "opt_" for OptimizeV7
+        """
+        raise NotImplementedError("Subclass must implement _get_key_prefix()")
+    
+    def _get_available_symbols(self, exchanges=None):
+        """
+        Get available symbols from coindata for specified exchanges.
+        Must be implemented by subclass.
+        
+        Args:
+            exchanges: List of exchange names. If None, uses config.backtest.exchanges
+            
+        Returns:
+            List of normalized coin names (e.g., ["BTC", "ETH", "SOL"])
+        """
+        raise NotImplementedError("Subclass must implement _get_available_symbols()")
+    
+    # ============ COIN SOURCES ============
+    
+    def _get_exchanges_for_coin(self, coin: str, available_exchanges: list) -> list:
+        """Get list of exchanges that have the specified coin.
+        
+        Args:
+            coin: Coin symbol (e.g., "BTC")
+            available_exchanges: List of exchanges to check
+            
+        Returns:
+            List of exchanges that have this coin
+        """
+        exchanges_with_coin = []
+        for exchange in available_exchanges:
+            if f"coindata_{exchange}" in st.session_state:
+                symbols = st.session_state[f"coindata_{exchange}"].symbols
+                # Normalize and check if coin exists
+                normalized = [normalize_symbol(s) for s in symbols]
+                if coin in normalized:
+                    exchanges_with_coin.append(exchange)
+        return exchanges_with_coin
+    
+    def _edit_coin_sources_ui(self, coin_sources_dict: dict, available_exchanges: list, key_prefix: str = "", save_callback=None, current_exchanges: list = None, all_suite_coin_sources: dict = None):
+        """
+        UI for editing coin_sources with read-only data_editor and add section.
+        
+        Args:
+            coin_sources_dict: {"BTC": "binance", "SOL": "bybit"}
+            available_exchanges: ["binance", "bybit", ...]
+            key_prefix: Unique prefix for widget keys (e.g., "bt_", "scenario_")
+            save_callback: Function to call when changes are made (receives updated dict)
+            current_exchanges: List of currently selected exchanges (for context)
+            all_suite_coin_sources: Merged coin_sources from all scenarios (to prevent conflicts)
+        
+        Returns:
+            Updated coin_sources_dict
+        """
+        if current_exchanges is None:
+            current_exchanges = available_exchanges
+        if all_suite_coin_sources is None:
+            all_suite_coin_sources = {}
+        import pandas as pd
+        
+        # Expander always visible, expanded only if coin_sources configured
+        has_sources = bool(coin_sources_dict)
+        expander_title = f"**Coin Sources** ({len(coin_sources_dict)} configured)" if has_sources else "**Coin Sources**"
+        
+        with st.expander(expander_title, expanded=has_sources):
+            st.caption("Override automatic exchange selection for specific coins")
+            
+            # Display existing mappings in read-only data_editor with delete checkbox
+            if coin_sources_dict:
+                # Build DataFrame from current dict
+                rows = []
+                for coin, exchange in sorted(coin_sources_dict.items()):
+                    rows.append({
+                        "Delete": False,
+                        "Coin": coin,
+                        "Exchange": exchange
+                    })
+                df = pd.DataFrame(rows)
+                
+                # Display as read-only table with only Delete column editable
+                edited_df = st.data_editor(
+                    df,
+                    use_container_width=True,
+                    num_rows="fixed",
+                    hide_index=True,
+                    column_config={
+                        "Delete": st.column_config.CheckboxColumn(
+                            "Delete",
+                            help=pbgui_help.coin_sources_delete,
+                            default=False
+                        ),
+                        "Coin": st.column_config.TextColumn(
+                            "Coin",
+                            disabled=True,
+                            help=pbgui_help.coin_sources_coin
+                        ),
+                        "Exchange": st.column_config.TextColumn(
+                            "Exchange",
+                            disabled=True,
+                            help=pbgui_help.coin_sources_exchange
+                        )
+                    },
+                    key=f"{key_prefix}coin_sources_table"
+                )
+                
+                # Process deletions
+                coins_to_delete = []
+                for _, row in edited_df.iterrows():
+                    if row["Delete"]:
+                        coins_to_delete.append(row["Coin"])
+                
+                if coins_to_delete:
+                    for coin in coins_to_delete:
+                        if coin in coin_sources_dict:
+                            del coin_sources_dict[coin]
+                    if save_callback:
+                        save_callback(coin_sources_dict)
+                    st.rerun()
+                
+            # Add new mapping section
+            st.caption("Add new coin source mapping:")
+            
+            col1, col2, col3 = st.columns([1, 1, 2], vertical_alignment="bottom")
+            
+            with col1:
+                # Step 1: Select exchange - show ALL available exchanges
+                all_exchanges = V7.list()  # Always show all exchanges
+                selected_exchange = st.selectbox(
+                    "Exchange",
+                    options=all_exchanges,
+                    key=f"{key_prefix}new_coin_source_exchange",
+                    help=pbgui_help.coin_sources_select_exchange
+                )
+            
+            with col2:
+                # Step 2: Get coins for selected exchange (filtered)
+                if selected_exchange:
+                    available_coins = self._get_available_symbols([selected_exchange])
+                    # Filter: coins already configured in THIS coin_sources (no duplicates within same context)
+                    available_coins = [c for c in available_coins if c not in coin_sources_dict]
+                    
+                    # CRITICAL: Filter coins that exist in suite with DIFFERENT exchange
+                    # Passivbot merges all coin_sources and rejects conflicts
+                    # Allow coin if: not in suite, OR same exchange
+                    # Conflicted coins (None value) are excluded automatically
+                    if all_suite_coin_sources:
+                        available_coins = [c for c in available_coins 
+                                         if c not in all_suite_coin_sources 
+                                         or all_suite_coin_sources[c] == selected_exchange]
+                    
+                    if available_coins:
+                        selected_coin = st.selectbox(
+                            "Coin",
+                            options=available_coins,
+                            key=f"{key_prefix}new_coin_source_coin",
+                            help=pbgui_help.coin_sources_select_coin
+                        )
+                    else:
+                        st.info(f"All coins from {selected_exchange} are already configured or would conflict with other scenarios")
+                        selected_coin = None
+                else:
+                    st.info("Select exchange first")
+                    selected_coin = None
+            
+            with col3:
+                if st.button("➕", key=f"{key_prefix}add_new_coin_source", 
+                            disabled=not (selected_exchange and selected_coin),
+                            help=pbgui_help.add_coin_source_button):
+                    if selected_coin not in coin_sources_dict:
+                        coin_sources_dict[selected_coin] = selected_exchange
+                        if save_callback:
+                            save_callback(coin_sources_dict)
+                        st.rerun()
+                    else:
+                        st.warning(f"{selected_coin} already mapped")
+        
+        return coin_sources_dict
+    
+    @st.fragment
+    def fragment_coin_sources(self):
+        """Fragment for coin_sources with suite conflict detection."""
+        # Collect all scenario coin_sources to prevent conflicts
+        all_suite_sources = {}
+        if self.config.backtest.suite:
+            for scenario in self.config.backtest.suite.scenarios:
+                if scenario.coin_sources:
+                    for coin, exchange in scenario.coin_sources.items():
+                        if coin in all_suite_sources and all_suite_sources[coin] != exchange:
+                            all_suite_sources[coin] = None
+                        elif coin not in all_suite_sources:
+                            all_suite_sources[coin] = exchange
+        
+        self._edit_coin_sources_ui(
+            self.config.backtest.coin_sources,
+            self.config.backtest.exchanges if self.config.backtest.exchanges else V7.list(),
+            key_prefix=self._get_key_prefix(),
+            save_callback=lambda cs: setattr(self.config.backtest, 'coin_sources', cs),
+            current_exchanges=self.config.backtest.exchanges if self.config.backtest.exchanges else V7.list(),
+            all_suite_coin_sources=all_suite_sources
+        )
+    
+    # ============ SUITE CONFIGURATION ============
+    
+    def _get_override_parameters(self):
+        """Get list of bot parameters that can be overridden in scenarios."""
+        return ALLOWED_OVERRIDES
+    
+    def _get_aggregate_metrics(self):
+        """Get list of metrics that can have custom aggregation."""
+        return get_aggregate_metrics()
+    
+    def _edit_aggregate_ui(self, suite):
+        """UI for editing metric-specific aggregation rules."""
+        aggregate_options = ["mean", "min", "max", "std", "median"]
+        
+        # For aggregation, use base metric names without currency suffix
+        metrics = sorted(list(CURRENCY_METRICS) + list(SHARED_METRICS))
+        
+        # Get current metric-specific aggregations (exclude "default")
+        current_aggregates = {k: v for k, v in suite.aggregate.items() if k != "default"}
+        
+        # Init editor key
+        if "suite_agg_ed_key" not in st.session_state:
+            st.session_state.suite_agg_ed_key = 0
+        
+        if current_aggregates:
+            st.caption("Metric-specific aggregation rules:")
+            # Build display data
+            d_aggregates = []
+            for metric, agg_method in current_aggregates.items():
+                d_aggregates.append({
+                    "metric": metric,
+                    "aggregation": agg_method,
+                    "delete": False
+                })
+            
+            ed_key = st.session_state.suite_agg_ed_key
+            
+            # Handle data_editor events
+            if f'select_aggregates_{ed_key}' in st.session_state:
+                ed = st.session_state[f'select_aggregates_{ed_key}']
+                changes_made = False
+                new_agg = dict(suite.aggregate)
+                
+                # Handle deletions
+                for row in ed.get("edited_rows", {}):
+                    if ed["edited_rows"][row].get("delete"):
+                        metric_to_delete = d_aggregates[row]["metric"]
+                        if metric_to_delete in new_agg:
+                            del new_agg[metric_to_delete]
+                            changes_made = True
+                    # Handle edits
+                    elif "metric" in ed["edited_rows"][row] or "aggregation" in ed["edited_rows"][row]:
+                        old_metric = d_aggregates[row]["metric"]
+                        new_metric = ed["edited_rows"][row].get("metric", old_metric)
+                        new_method = ed["edited_rows"][row].get("aggregation", d_aggregates[row]["aggregation"])
+                        # Remove old key if metric changed
+                        if old_metric != new_metric and old_metric in new_agg:
+                            del new_agg[old_metric]
+                        new_agg[new_metric] = new_method
+                        changes_made = True
+                
+                if changes_made:
+                    suite.aggregate = new_agg
+                    self.config.backtest.suite = suite
+                    st.session_state.suite_agg_ed_key += 1
+                    st.rerun()
+            
+            # Display aggregates table
+            column_config = {
+                "metric": st.column_config.SelectboxColumn("Metric", options=metrics, required=True, width="medium"),
+                "aggregation": st.column_config.SelectboxColumn("Aggregation", options=aggregate_options, required=True),
+                "delete": st.column_config.CheckboxColumn("Del", width="small"),
+            }
+            st.data_editor(d_aggregates, column_config=column_config, hide_index=True, key=f'select_aggregates_{ed_key}', use_container_width=True)
+        
+        # Add new metric-specific aggregation
+        st.subheader("Add Metric")
+        col1, col2, col3 = st.columns([1, 1, 2], vertical_alignment="bottom")
+        with col1:
+            new_metric = st.selectbox("Metric", metrics, key="suite_agg_new_metric", label_visibility="visible", help=pbgui_help.suite_add_metric)
+        with col2:
+            new_agg = st.selectbox("Aggregation", aggregate_options, key="suite_agg_new_method", label_visibility="visible", help=pbgui_help.suite_add_aggregation)
+        with col3:
+            if st.button("➕", key="suite_agg_add", help=pbgui_help.suite_add_button):
+                updated_agg = dict(suite.aggregate)
+                updated_agg[new_metric] = new_agg
+                suite.aggregate = updated_agg
+                self.config.backtest.suite = suite
+                st.session_state.suite_agg_ed_key += 1
+                st.rerun()
+    
+    @st.fragment
+    def _edit_scenario_start_date(self, scenario, suite, idx):
+        """Fragment for editing scenario start date."""
+        # Get fresh scenario reference to ensure we have latest data
+        scenario = suite.get_scenario(idx)
+        if not scenario:
+            return None
+        
+        # Initialize counter for forcing widget refresh
+        if "start_date_counter" not in st.session_state:
+            st.session_state.start_date_counter = 0
+            
+        # Prepare default value
+        if scenario.start_date:
+            try:
+                default_start = datetime.datetime.strptime(scenario.start_date[:10], '%Y-%m-%d').date()
+            except:
+                default_start = None
+        else:
+            default_start = None
+        
+        subcol1, subcol2 = st.columns([4, 1], vertical_alignment="bottom")
+        with subcol1:
+            new_start_date = st.date_input(
+                "Start Date (empty = base config)", 
+                value=default_start, 
+                format="YYYY-MM-DD", 
+                key=f"edit_scenario_start_{st.session_state.start_date_counter}",
+                help=pbgui_help.scenario_start_date
+            )
+        with subcol2:
+            # Always show button, but check the actual scenario data
+            if st.button("🗑️", key="clear_start_date", help=pbgui_help.scenario_clear_date, disabled=(scenario.start_date is None)):
+                scenario.start_date = None
+                suite.update_scenario(idx, scenario)
+                self.config.backtest.suite = suite
+                # Increment counter to force widget recreation
+                st.session_state.start_date_counter += 1
+                st.rerun()
+        
+        return new_start_date
+
+    @st.fragment
+    def _edit_scenario_end_date(self, scenario, suite, idx):
+        """Fragment for editing scenario end date."""
+        # Get fresh scenario reference to ensure we have latest data
+        scenario = suite.get_scenario(idx)
+        if not scenario:
+            return None
+        
+        # Initialize counter for forcing widget refresh
+        if "end_date_counter" not in st.session_state:
+            st.session_state.end_date_counter = 0
+            
+        # Prepare default value
+        if scenario.end_date:
+            try:
+                default_end = datetime.datetime.strptime(scenario.end_date[:10], '%Y-%m-%d').date()
+            except:
+                default_end = None
+        else:
+            default_end = None
+        
+        subcol1, subcol2 = st.columns([4, 1], vertical_alignment="bottom")
+        with subcol1:
+            new_end_date = st.date_input(
+                "End Date (empty = base config)", 
+                value=default_end, 
+                format="YYYY-MM-DD", 
+                key=f"edit_scenario_end_{st.session_state.end_date_counter}",
+                help=pbgui_help.scenario_end_date
+            )
+        with subcol2:
+            # Always show button, but check the actual scenario data
+            if st.button("🗑️", key="clear_end_date", help=pbgui_help.scenario_clear_date, disabled=(scenario.end_date is None)):
+                scenario.end_date = None
+                suite.update_scenario(idx, scenario)
+                self.config.backtest.suite = suite
+                # Increment counter to force widget recreation
+                st.session_state.end_date_counter += 1
+                st.rerun()
+        
+        return new_end_date
+
+    def _edit_scenario_ui(self, suite):
+        """UI for editing an existing scenario."""
+        idx = st.session_state.edit_scenario_idx
+        scenario = suite.get_scenario(idx)
+        if not scenario:
+            st.session_state.edit_scenario_idx = None
+            st.rerun()
+            return
+        
+        st.subheader(f"Edit Scenario: {scenario.label}")
+        
+        # Label, Exchanges, and Date range on one line
+        col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
+        with col1:
+            new_label = st.text_input("Label", value=scenario.label, key="edit_scenario_label", help=pbgui_help.scenario_label)
+        with col2:
+            available_exchanges = V7.list()
+            current_exchanges = scenario.exchanges if scenario.exchanges else []
+            new_exchanges = st.multiselect("Exchanges (leave empty for base)", available_exchanges, default=current_exchanges, key="edit_scenario_exchanges", help=pbgui_help.scenario_exchanges)
+        with col3:
+            new_start_date = self._edit_scenario_start_date(scenario, suite, idx)
+        with col4:
+            new_end_date = self._edit_scenario_end_date(scenario, suite, idx)
+        
+        # Get symbols based on selected exchanges (or base config exchanges if none selected)
+        exchanges_for_symbols = new_exchanges if new_exchanges else None
+        symbols = self._get_available_symbols(exchanges_for_symbols)
+        
+        # Coins - Multi-Select
+        current_coins = scenario.coins if scenario.coins else []
+        # Filter out coins not in symbols list
+        valid_coins = [c for c in current_coins if c in symbols]
+        col1, col2 = st.columns(2)
+        with col1:
+            new_coins = st.multiselect("Coins (leave empty for base)", symbols, default=valid_coins, key="edit_scenario_coins", help=pbgui_help.scenario_coins)
+        with col2:
+            current_ignored = scenario.ignored_coins if scenario.ignored_coins else []
+            valid_ignored = [c for c in current_ignored if c in symbols]
+            new_ignored = st.multiselect("Ignored Coins", symbols, default=valid_ignored, key="edit_scenario_ignored", help=pbgui_help.scenario_ignored_coins)
+        
+        # Coin Sources
+        exchanges_for_sources = new_exchanges if new_exchanges else available_exchanges
+        
+        # Collect all suite coin_sources EXCEPT this scenario to check for conflicts
+        # Like Passivbot's collect_suite_coin_sources(), detect conflicts
+        all_suite_sources = {}
+        # Add base coin_sources
+        if self.config.backtest.coin_sources:
+            all_suite_sources.update(self.config.backtest.coin_sources)
+        # Add all other scenarios' coin_sources (exclude current)
+        for i, s in enumerate(suite.scenarios):
+            if i != idx and s.coin_sources:  # Exclude current scenario
+                for coin, exchange in s.coin_sources.items():
+                    if coin in all_suite_sources and all_suite_sources[coin] != exchange:
+                        # Conflict detected - mark as conflicted
+                        all_suite_sources[coin] = None
+                    elif coin not in all_suite_sources:
+                        all_suite_sources[coin] = exchange
+        
+        self._edit_coin_sources_ui(
+            scenario.coin_sources if scenario.coin_sources else {},
+            exchanges_for_sources,
+            key_prefix="scenario_",
+            save_callback=lambda cs: setattr(scenario, 'coin_sources', cs),
+            current_exchanges=new_exchanges if new_exchanges else available_exchanges,
+            all_suite_coin_sources=all_suite_sources
+        )
+        
+        # Overrides - GUI-based
+        st.write("**Parameter Overrides**")
+        override_params = self._get_override_parameters()
+        sides = ["long", "short"]
+        
+        # Initialize overrides editor key
+        if "edit_scenario_overrides_ed_key" not in st.session_state:
+            st.session_state.edit_scenario_overrides_ed_key = 0
+        
+        # Build display data from scenario overrides
+        d_overrides = []
+        if scenario.overrides:
+            for key, value in scenario.overrides.items():
+                parts = key.split(".")
+                if len(parts) == 3 and parts[0] == "bot" and parts[1] in sides:
+                    d_overrides.append({
+                        "side": parts[1],
+                        "parameter": parts[2],
+                        "value": float(value) if isinstance(value, (int, float)) else 0.0,
+                        "delete": False
+                    })
+        
+        ed_key = st.session_state.edit_scenario_overrides_ed_key
+        
+        if d_overrides:
+            # Handle data_editor events
+            if f'select_overrides_{ed_key}' in st.session_state:
+                ed = st.session_state[f'select_overrides_{ed_key}']
+                changes_made = False
+                new_overrides = {}
+                
+                for row_idx, override_data in enumerate(d_overrides):
+                    # Check if this row was deleted
+                    if row_idx in ed.get("edited_rows", {}) and ed["edited_rows"][row_idx].get("delete"):
+                        changes_made = True
+                        continue
+                    
+                    # Get edited or original values
+                    side = ed.get("edited_rows", {}).get(row_idx, {}).get("side", override_data["side"])
+                    param = ed.get("edited_rows", {}).get(row_idx, {}).get("parameter", override_data["parameter"])
+                    value = ed.get("edited_rows", {}).get(row_idx, {}).get("value", override_data["value"])
+                    
+                    # Check if anything changed
+                    if (side != override_data["side"] or param != override_data["parameter"] or value != override_data["value"]):
+                        changes_made = True
+                    
+                    # Convert to int if whole number
+                    if isinstance(value, float) and value.is_integer():
+                        value = int(value)
+                    key = f"bot.{side}.{param}"
+                    new_overrides[key] = value
+                
+                if changes_made:
+                    scenario.overrides = new_overrides
+                    st.session_state.edit_scenario_overrides_ed_key += 1
+                    st.rerun()
+            
+            # Display overrides table
+            column_config = {
+                "side": st.column_config.SelectboxColumn("Side", options=sides, required=True),
+                "parameter": st.column_config.SelectboxColumn("Parameter", options=override_params, required=True, width="large"),
+                "value": st.column_config.NumberColumn("Value", format="%.6f"),
+                "delete": st.column_config.CheckboxColumn("Del", width="small"),
+            }
+            st.data_editor(d_overrides, column_config=column_config, hide_index=True, key=f'select_overrides_{ed_key}', use_container_width=True)
+        
+        # Add new override with selection
+        col1, col2, col3, col4 = st.columns([2, 4, 1, 1], vertical_alignment="bottom")
+        with col1:
+            new_side = st.selectbox("Side", sides, key="edit_scenario_add_override_side", help=pbgui_help.scenario_override_side)
+        with col2:
+            new_param = st.selectbox("Parameter", override_params, key="edit_scenario_add_override_param", help=pbgui_help.scenario_override_param)
+        with col3:
+            new_value = st.number_input("Value", value=0.0, format="%.6f", key="edit_scenario_add_override_value", help=pbgui_help.scenario_override_value)
+        with col4:
+            if st.button("➕", key="edit_scenario_add_override", help=pbgui_help.add_scenario_override_button):
+                new_overrides = dict(scenario.overrides) if scenario.overrides else {}
+                new_key = f"bot.{new_side}.{new_param}"
+                # Convert to int if whole number
+                if isinstance(new_value, float) and new_value.is_integer():
+                    new_value = int(new_value)
+                new_overrides[new_key] = new_value
+                scenario.overrides = new_overrides
+                st.session_state.edit_scenario_overrides_ed_key += 1
+                st.rerun()
+        
+        # Buttons
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            if st.button("OK", key="edit_scenario_ok"):
+                # Save
+                scenario.label = new_label.strip()
+                scenario.coins = new_coins if new_coins else []
+                scenario.ignored_coins = new_ignored if new_ignored else []
+                scenario.start_date = new_start_date.strftime("%Y-%m-%d") if new_start_date else None
+                scenario.end_date = new_end_date.strftime("%Y-%m-%d") if new_end_date else None
+                scenario.exchanges = new_exchanges if new_exchanges else None
+                # Overrides are already saved in the table editor
+                # Just make sure the suite is updated
+                
+                suite.update_scenario(idx, scenario)
+                # Trigger setter to update _backtest dict (like limits pattern)
+                self.config.backtest.suite = suite
+                # Clean up session state
+                st.session_state.edit_scenario_idx = None
+                st.session_state.suite_ed_key += 1
+                st.rerun()
+        with col2:
+            if st.button("Cancel", key="edit_scenario_cancel"):
+                st.session_state.edit_scenario_idx = None
+                st.rerun()
+        with col3:
+            if st.button("Delete", key="edit_scenario_delete"):
+                suite.remove_scenario(idx)
+                # Trigger setter to update _backtest dict (like limits pattern)
+                self.config.backtest.suite = suite
+                st.session_state.edit_scenario_idx = None
+                st.session_state.suite_ed_key += 1
+                st.rerun()
+
+    def _add_scenario_ui(self, suite):
+        """UI for adding a new scenario."""
+        st.subheader("Add Scenario")
+        
+        col1, col2, col3 = st.columns([1, 2, 1], vertical_alignment="bottom")
+        with col1:
+            new_label = st.text_input("Label", key="add_scenario_label", help=pbgui_help.scenario_label, placeholder="e.g., bull_market_2024")
+        with col2:
+            # Get symbols based on base config exchanges (since no exchanges selected yet in new scenario)
+            symbols = self._get_available_symbols()
+            new_coins = st.multiselect("Coins (optional)", symbols, key="add_scenario_coins", help=pbgui_help.scenario_coins)
+        with col3:
+            if st.button("➕", key="add_scenario_button", help=pbgui_help.add_scenario_button):
+                if new_label.strip():
+                    new_scenario = {
+                        "label": new_label.strip(),
+                        "coins": new_coins if new_coins else []
+                    }
+                    suite.add_scenario(new_scenario)
+                    # Trigger setter to update _backtest dict (like limits pattern)
+                    self.config.backtest.suite = suite
+                    st.session_state.suite_ed_key += 1
+                    # Clear add fields
+                    if "add_scenario_label" in st.session_state:
+                        del st.session_state["add_scenario_label"]
+                    if "add_scenario_coins" in st.session_state:
+                        del st.session_state["add_scenario_coins"]
+                    st.rerun()
+                else:
+                    error_popup("Label is required")
+
+    @st.fragment
+    def fragment_suite(self):
+        """UI for configuring multi-scenario suite for backtesting/optimization."""
+        suite = self.config.backtest.suite
+        has_scenarios = bool(suite.scenarios)
+        
+        with st.expander("Suite Configuration", expanded=suite.enabled or has_scenarios):
+            # Init session state
+            if "suite_ed_key" not in st.session_state:
+                st.session_state.suite_ed_key = 0
+            
+            # Main suite controls
+            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+            with col1:
+                new_enabled = st.checkbox("Enable Suite", value=suite.enabled, key="suite_enabled", help=pbgui_help.suite_enabled)
+                if new_enabled != suite.enabled:
+                    suite.enabled = new_enabled
+                    self.config.backtest.suite = suite
+            with col2:
+                new_include_base = st.checkbox("Include Base Scenario", value=suite.include_base_scenario, key="suite_include_base", help=pbgui_help.suite_include_base_scenario)
+                if new_include_base != suite.include_base_scenario:
+                    suite.include_base_scenario = new_include_base
+                    self.config.backtest.suite = suite
+            with col3:
+                new_base_label = st.text_input("Base Label", value=suite.base_label, key="suite_base_label", help=pbgui_help.suite_base_label)
+                if new_base_label != suite.base_label:
+                    suite.base_label = new_base_label
+                    self.config.backtest.suite = suite
+            with col4:
+                aggregate_options = ["mean", "min", "max", "std", "median"]
+                current_default = suite.aggregate.get("default", "mean")
+                new_default = st.selectbox("Default Aggregate", aggregate_options, index=aggregate_options.index(current_default) if current_default in aggregate_options else 0, key="suite_aggregate_default", help=pbgui_help.suite_aggregate)
+                if new_default != current_default:
+                    new_agg = dict(suite.aggregate)
+                    new_agg["default"] = new_default
+                    suite.aggregate = new_agg
+                    self.config.backtest.suite = suite
+            
+            # Metric-specific aggregation rules
+            self._edit_aggregate_ui(suite)
+            
+            # Scenario editing mode check
+            if st.session_state.get("edit_scenario_idx") is not None:
+                self._edit_scenario_ui(suite)
+                return
+            
+            # Scenarios table
+            st.subheader("Scenarios")
+            if has_scenarios:
+                # Build display data
+                d_scenarios = []
+                for i, scenario in enumerate(suite.scenarios):
+                    coins_display = f"{len(scenario.coins)} coins" if scenario.coins else "base"
+                    dates_display = f"{scenario.start_date or 'base'} → {scenario.end_date or 'base'}"
+                    if scenario.start_date is None and scenario.end_date is None:
+                        dates_display = "base"
+                    exchanges_display = ", ".join(scenario.exchanges) if scenario.exchanges else "base"
+                    coin_sources_display = f"{len(scenario.coin_sources)} sources" if scenario.coin_sources else "-"
+                    overrides_display = f"{len(scenario.overrides)} overrides" if scenario.overrides else "-"
+                    d_scenarios.append({
+                        "label": scenario.label,
+                        "coins": coins_display,
+                        "dates": dates_display,
+                        "exchanges": exchanges_display,
+                        "coin_sources": coin_sources_display,
+                        "overrides": overrides_display,
+                        "edit": False,
+                        "delete": False
+                    })
+                
+                ed_key = st.session_state.suite_ed_key
+                
+                # Handle data_editor events
+                if f'select_scenarios_{ed_key}' in st.session_state:
+                    ed = st.session_state[f'select_scenarios_{ed_key}']
+                    for row in ed.get("edited_rows", {}):
+                        if ed["edited_rows"][row].get("delete"):
+                            suite.remove_scenario(row)
+                            # Trigger setter to update _backtest dict (like limits pattern)
+                            self.config.backtest.suite = suite
+                            st.session_state.suite_ed_key += 1
+                            st.rerun()
+                        if ed["edited_rows"][row].get("edit"):
+                            st.session_state.edit_scenario_idx = row
+                            st.rerun()
+                
+                # Display scenarios table
+                column_config = {
+                    "label": st.column_config.TextColumn("Label", width="medium"),
+                    "coins": st.column_config.TextColumn("Coins", width="small"),
+                    "dates": st.column_config.TextColumn("Date Range", width="medium"),
+                    "exchanges": st.column_config.TextColumn("Exchanges", width="small"),
+                    "coin_sources": st.column_config.TextColumn("Coin Sources", width="small"),
+                    "overrides": st.column_config.TextColumn("Overrides", width="small"),
+                    "edit": st.column_config.CheckboxColumn("Edit", width="small"),
+                    "delete": st.column_config.CheckboxColumn("Del", width="small"),
+                }
+                st.data_editor(d_scenarios, column_config=column_config, hide_index=True, key=f'select_scenarios_{ed_key}', use_container_width=True)
+            else:
+                st.info("No scenarios configured. Add a scenario below to test your config across different coin sets, date ranges, or parameter variations.")
+            
+            # Add new scenario UI
+            self._add_scenario_ui(suite)
+
+# ============================================================================
+# ConfigV7 - Main configuration class
+# ============================================================================
+
 class ConfigV7():
     def __init__(self, file_name = None):
         self._config_file = file_name
@@ -4470,7 +5522,10 @@ class ConfigV7():
         self._config["pbgui"] = self._pbgui.pbgui
 
     @property
-    def config(self): return self._config
+    def config(self):
+        # Dynamically update backtest to ensure suite/scenarios are current
+        self._config["backtest"] = self._backtest.backtest
+        return self._config
     @config.setter
     def config(self, new_value):
         if "logging" in new_value:
@@ -4582,7 +5637,7 @@ class ConfigV7():
             file = Path(f'{self._config_file}')
             file.parent.mkdir(parents=True, exist_ok=True)
             with open(file, "w", encoding='utf-8') as f:
-                json.dump(self._config, f, indent=4)
+                json.dump(self.config, f, indent=4)
 
     def view_coin_overrides(self):
         if self.config["coin_overrides"]:
@@ -4639,43 +5694,14 @@ class ConfigV7():
         #     symbol = symbol[:-4]
         # elif symbol.endswith("USDC"):
         #     symbol = symbol[:-4]
+        
+        # Live parameters that can be overridden per coin
         OVERRIDES_LIVE = [
             "forced_mode_long",
             "forced_mode_short",
             "leverage"
         ]
-        OVERRIDES = [
-            "close_grid_markup_end",
-            "close_grid_markup_start",
-            "close_grid_qty_pct",
-            "close_trailing_grid_ratio",
-            "close_trailing_qty_pct",
-            "close_trailing_retracement_pct",
-            "close_trailing_threshold_pct",
-            "ema_span_0",
-            "ema_span_1",
-            "entry_grid_double_down_factor",
-            "entry_grid_spacing_pct",
-            "entry_grid_spacing_volatility_weight",
-            "entry_grid_spacing_we_weight",
-            "entry_initial_ema_dist",
-            "entry_initial_qty_pct",
-            "entry_trailing_double_down_factor",
-            "entry_trailing_grid_ratio",
-            "entry_trailing_retracement_pct",
-            "entry_trailing_retracement_volatility_weight",
-            "entry_trailing_retracement_we_weight",
-            "entry_trailing_threshold_pct",
-            "entry_trailing_threshold_volatility_weight",
-            "entry_trailing_threshold_we_weight",
-            "entry_volatility_ema_span_hours",
-            "risk_we_excess_allowance_pct",
-            "risk_wel_enforcer_threshold",
-            "unstuck_close_pct",
-            "unstuck_ema_dist",
-            "unstuck_threshold",
-            "wallet_exposure_limit"
-        ]
+        
         MODE = [
             "normal",
             "manual",
@@ -4795,7 +5821,7 @@ class ConfigV7():
         # config.bot parameters
         col1, col2, col3, col4 = st.columns([1,1,1,3], vertical_alignment="bottom")
         with col1:
-            st.selectbox('config.bot override parameter', OVERRIDES, key="edit_run_v7_co_parameter")
+            st.selectbox('config.bot override parameter', ALLOWED_OVERRIDES, key="edit_run_v7_co_parameter")
         with col2:
             st.selectbox("side", ["long", "short"], key="edit_run_v7_co_side")
         with col3:

@@ -4,6 +4,7 @@ from time import sleep
 from requests import Request, Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
+import ast
 import configparser
 from pathlib import Path, PurePath
 from datetime import datetime
@@ -11,9 +12,219 @@ import platform
 import sys
 import os
 import traceback
+import re
 from io import TextIOWrapper
 from Exchange import Exchange, Exchanges
 
+
+def remove_powers_of_ten(text):
+    """
+    Remove any variant of "10", "100", "1000", "10000", etc. from a string.
+    Handles cases like "1000SHIB" -> "SHIB", "1000000BABYDOGE" -> "BABYDOGE".
+    Same logic as passivbot's utils.py.
+    """
+    pattern = r"(?<!\d)1(?:0+)(?!\d)"
+    return re.sub(pattern, "", text)
+
+
+def build_symbol_mappings(symbols):
+    """
+    Build dynamic symbol mappings from exchange symbols.
+    Creates variants like passivbot does:
+    - Original symbol
+    - Without 'k' prefix (kSHIB -> SHIB)
+    - Without powers of ten (1000SHIB -> SHIB)
+    - Combined (k1000SHIB -> SHIB)
+    
+    Args:
+        symbols: List of trading pair symbols (e.g., ["1000SHIBUSDT", "BTCUSDT"])
+    
+    Returns:
+        dict: Mapping of symbol variants to normalized base coin
+    """
+    mappings = {}
+    
+    for symbol in symbols:
+        # Remove quote currency suffixes
+        base = symbol
+        for quote in ["USDT", "USDC", "BUSD", "USD"]:
+            if base.endswith(quote):
+                base = base[:-len(quote)]
+                break
+        
+        # Create variants like passivbot
+        variants = set()
+        variants.add(base)  # Original: 1000SHIB
+        variants.add(base.replace("k", ""))  # Without k: 1000SHIB
+        variants.add(remove_powers_of_ten(base))  # Without 1000: SHIB
+        cleaned = remove_powers_of_ten(base.replace("k", ""))  # Both: SHIB
+        variants.add(cleaned)
+        
+        # Map all variants to the cleaned base coin
+        for variant in variants:
+            if variant:  # Skip empty strings
+                mappings[variant] = cleaned
+    
+    return mappings
+
+
+def normalize_symbol(symbol, symbol_mappings=None):
+    """
+    Normalize a trading symbol to its base coin name.
+    
+    Args:
+        symbol: Trading pair symbol (e.g., "1000SHIBUSDT", "kPEPE", "BTCUSDT")
+        symbol_mappings: Optional pre-built mapping dict from build_symbol_mappings()
+    
+    Returns:
+        str: Normalized base coin (e.g., "SHIB", "PEPE", "BTC")
+    """
+    if not symbol:
+        return ""
+    
+    # Remove quote currency suffixes
+    base = symbol
+    for quote in ["USDT", "USDC", "BUSD", "TUSD", "USD", "EUR", "GBP", "DAI"]:
+        if base.endswith(quote):
+            base = base[:-len(quote)]
+            break
+    
+    # Handle Hyperliquid format: kPEPE -> PEPE
+    if base.startswith('k') and len(base) > 1 and base[1].isupper():
+        base = base[1:]
+    
+    # Use dynamic mappings if provided (already contains all normalization logic)
+    if symbol_mappings and base in symbol_mappings:
+        return symbol_mappings[base]
+    
+    # Fallback to static SYMBOLMAP
+    if base in SYMBOLMAP:
+        return SYMBOLMAP[base]
+    
+    # Dynamic pattern matching for multiplier prefixes (e.g., 1000X, 10000X, 1000000X)
+    # This handles cases like 10000ELON -> ELON, 1000PEPE -> PEPE, etc.
+    import re
+    multiplier_match = re.match(r'^(\d+)([A-Z].*)$', base)
+    if multiplier_match:
+        multiplier, coin = multiplier_match.groups()
+        # Only normalize if multiplier is 1000, 10000, 100000, 1000000, 10000000, etc.
+        if multiplier in ['1000', '10000', '100000', '1000000', '10000000', '1000000000']:
+            return coin
+    
+    # Last resort: return base as-is (should rarely happen if mappings are built correctly)
+    return base
+
+
+def get_normalized_coins(symbols, symbol_mappings=None):
+    """
+    Get unique normalized coin names from a list of trading symbols.
+    Removes duplicates (e.g., BTCUSDT and BTCUSDC both become BTC).
+    
+    Args:
+        symbols: List of trading pair symbols
+        symbol_mappings: Optional pre-built mapping dict
+    
+    Returns:
+        list: Sorted list of unique normalized coin names
+    
+    Examples:
+        ["BTCUSDT", "BTCUSDC", "1000SHIBUSDT", "kPEPE"] -> ["BTC", "PEPE", "SHIB"]
+    """
+    if not symbols:
+        return []
+    
+    coins = set()
+    for symbol in symbols:
+        normalized = normalize_symbol(symbol, symbol_mappings)
+        if normalized:
+            coins.add(normalized)
+    
+    return sorted(list(coins))
+
+
+# Cache for coin_to_symbol mappings
+_COIN_TO_SYMBOL_CACHE = {}
+
+
+def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
+    """
+    Convert normalized coin back to exchange-specific trading symbol.
+    
+    This function performs the reverse operation of normalize_symbol():
+    - BTC + binance.swap → BTCUSDT
+    - PEPE + binance.swap → 1000PEPEUSDT
+    - PEPE + hyperliquid.swap → kPEPEUSDC
+    
+    Args:
+        coin: Normalized coin name (e.g., "BTC", "PEPE", "SHIB")
+        exchange: Exchange key from pbgui.ini (e.g., "binance.swap", "hyperliquid.swap")
+        use_cache: Whether to use cached mappings (default: True)
+    
+    Returns:
+        Trading symbol for the exchange (e.g., "BTCUSDT", "1000PEPEUSDT")
+        Falls back to {coin}USDT if no mapping found.
+    
+    Examples:
+        >>> get_symbol_for_coin("BTC", "binance.swap")
+        "BTCUSDT"
+        >>> get_symbol_for_coin("PEPE", "binance.swap")
+        "1000PEPEUSDT"
+        >>> get_symbol_for_coin("PEPE", "hyperliquid.swap")
+        "kPEPEUSDC"
+    """
+    # Check cache first
+    if use_cache and exchange in _COIN_TO_SYMBOL_CACHE:
+        coin_map = _COIN_TO_SYMBOL_CACHE[exchange]
+        if coin in coin_map:
+            return coin_map[coin]
+    
+    # Load from pbgui.ini
+    config = configparser.ConfigParser()
+    pbgui_dir = Path(__file__).parent
+    ini_path = pbgui_dir / "pbgui.ini"
+    
+    if not ini_path.exists():
+        # Fallback if pbgui.ini not found
+        quote = "USDC" if "hyperliquid" in exchange else "USDT"
+        return f"{coin}{quote}"
+    
+    config.read(ini_path)
+    
+    if exchange not in config['exchanges']:
+        # Fallback if exchange not in config
+        quote = "USDC" if "hyperliquid" in exchange else "USDT"
+        return f"{coin}{quote}"
+    
+    # Build mapping for this exchange
+    symbols_str = config['exchanges'][exchange]
+    try:
+        symbols = ast.literal_eval(symbols_str)
+    except:
+        # Fallback if parsing fails
+        quote = "USDC" if "hyperliquid" in exchange else "USDT"
+        return f"{coin}{quote}"
+    
+    coin_map = {}
+    for symbol in symbols:
+        normalized = normalize_symbol(symbol)
+        # Store only first occurrence (usually USDT variant)
+        if normalized not in coin_map:
+            coin_map[normalized] = symbol
+    
+    # Cache the mapping
+    if use_cache:
+        _COIN_TO_SYMBOL_CACHE[exchange] = coin_map
+    
+    # Return symbol or fallback
+    if coin in coin_map:
+        return coin_map[coin]
+    else:
+        # Fallback: guess quote currency
+        quote = "USDC" if "hyperliquid" in exchange else "USDT"
+        return f"{coin}{quote}"
+
+
+# Static manual mappings (legacy compatibility)
 SYMBOLMAP = {
     #Binance
     "RONIN": "RON",
@@ -116,6 +327,8 @@ class CoinData:
         self._vol_mcap = 10.0
         self._only_cpt = False
         self._notices_ignore = False
+        # Dynamic symbol mappings (built from exchange symbols)
+        self._symbol_mappings = {}
     
     @property
     def api_key(self):
@@ -409,9 +622,7 @@ class CoinData:
         # Create symbols_ids list
         symbols_ids = []
         for symbol in self.symbols_all:
-            sym = symbol[0:-4]
-            if sym in SYMBOLMAP:
-                sym = SYMBOLMAP[sym]
+            sym = normalize_symbol(symbol, self._symbol_mappings)
             for coin in self.data["data"]:
                 if coin["symbol"] == sym:
                     symbols_ids.append(coin["id"])
@@ -545,18 +756,26 @@ class CoinData:
         if self.exchange in ["binance", "bybit", "bitget"]:
             if pb_config.has_option("exchanges", f'{exchange}.cpt'):
                 self._symbols_cpt = eval(pb_config.get("exchanges", f'{exchange}.cpt'))
-                return
-        self._symbols_cpt = self._symbols
+            else:
+                self._symbols_cpt = self._symbols
+        else:
+            self._symbols_cpt = self._symbols
+        
+        # Don't build mappings here - will be built from all exchanges in load_symbols_all()
     
     def load_symbols_all(self):
         self._symbols_all = []
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
+        all_symbols = []
         for exchange in self.exchanges:
             if pb_config.has_option("exchanges", f'{exchange}.swap'):
                 # add symbol from symbols to symbols_all if not already in symbols_all
-                self._symbols_all += eval(pb_config.get("exchanges", f'{exchange}.swap'))
-        self._symbols_all = sorted(list(set(self._symbols_all)))
+                all_symbols += eval(pb_config.get("exchanges", f'{exchange}.swap'))
+        self._symbols_all = sorted(list(set(all_symbols)))
+        
+        # Build comprehensive mappings from all exchanges
+        self._symbol_mappings = build_symbol_mappings(all_symbols)
 
     def list_symbols(self):
         if self.has_new_data():
@@ -580,9 +799,7 @@ class CoinData:
         coin_data = []
         for symbol in self.symbols:
             market_cap = 0
-            sym = symbol[0:-4]
-            if sym in SYMBOLMAP:
-                sym = SYMBOLMAP[sym]
+            sym = normalize_symbol(symbol, self._symbol_mappings)
             for id, coin in enumerate(self.data["data"]):
                 if coin["symbol"] == sym or (sym == "NEIROETH" and coin["id"] == 32461):
                     if coin["quote"]["USD"]["market_cap"]:
@@ -655,9 +872,7 @@ class CoinData:
         approved_coins = []
         self.load_data()
         for symbol in symbols:
-            sym = symbol[0:-4]
-            if sym in SYMBOLMAP:
-                sym = SYMBOLMAP[sym]
+            sym = normalize_symbol(symbol, self._symbol_mappings)
             for coin in self.data["data"]:
                 if coin["symbol"] == sym:
                     if coin["quote"]["USD"]["market_cap"] and coin["quote"]["USD"]["market_cap"] > mc:

@@ -90,7 +90,7 @@ instance_enable = """
 
 opt_iters = """
     ```
-    n optimize iters
+    Number of backtests per optimize session.
     ```"""
 
 opt_today = """
@@ -592,8 +592,7 @@ stuck_threshold = """
 
 unstuck_close_pct = """
     ```
-    percentage of balance * wallet_exposure_limit to close for each unstucking order
-    (default 1% == 0.01)
+    Percentage of full pos size * wallet_exposure_limit to close for each unstucking order.
     ```"""
 
 execution_delay_seconds = """
@@ -953,7 +952,7 @@ limits_stat = """
 
 population_size = """
     ```
-    size of population for genetic optimization algorithm
+    Size of population for genetic optimization algorithm.
     ```"""
 
 offspring_multiplier = """
@@ -965,8 +964,8 @@ offspring_multiplier = """
 
 crossover_probability = """
     ```
-    The probability of performing crossover between two individuals in the genetic algorithm.
-    It determines how often parents will exchange genetic information to create offspring.
+    Probability of performing crossover between two individuals in the genetic algorithm.
+    Determines how often parents exchange genetic information to create offspring.
     ```"""
 
 crossover_eta = """
@@ -977,27 +976,31 @@ crossover_eta = """
 
 mutation_probability = """
     ```
-    The probability of performing crossover between two individuals in the genetic algorithm.
-    It determines how often parents will exchange genetic information to create offspring.
+    Probability of mutating an individual in the genetic algorithm.
+    Determines how often random changes are introduced to maintain diversity.
     ```"""
 
 mutation_eta = """
     ```
-    Probability that each attribute mutates when a mutation is triggered. Set to 0 (default)
-    to auto-scale to 1 / number_of_parameters, or supply an explicit probability between 0 and 1
+    Crowding factor (η) for polynomial mutation. Smaller values (<20) produce heavier-tailed
+    steps that explore more aggressively, while larger values confine mutations near the
+    current value. Default is 20.0.
     ```"""
 
 mutation_indpb = """
     ```
-    Independent probability for each gene to be mutated during mutation operation.
-    Higher values increase exploration by allowing more parameters to change per mutation.
+    Probability that each attribute mutates when a mutation is triggered.
+    Set to 0 (default) to auto-scale to 1 / number_of_parameters,
+    or supply an explicit probability between 0 and 1.
     ```"""
 
 scoring = """
     ```
-    the optimizer uses n objectives and finds the pareto front,
-    finally choosing the optimal candidate based on lowest euclidian distance to ideal point.
-    default values are median daily gain and sharpe ratio
+    The optimizer uses two objectives and finds the Pareto front.
+    Chooses the optimal candidate based on the lowest Euclidean distance to the ideal point.
+    Default values are median daily gain and Sharpe ratio.
+    Uses the NSGA-II algorithm (Non-dominated Sorting Genetic Algorithm II) for multi-objective optimization.
+    The fitness function minimizes both objectives (converted to negative values internally).
     ```"""
 
 close_grid_parameters = """
@@ -1047,9 +1050,9 @@ trailing_parameters = """
 
 entry_grid_double_down_factor = """
     ```
-    quantity of next grid entry is position size times double down factor.
-    E.g. if position size is 1.4 and double_down_factor is 0.9, then next entry quantity is 1.4 * 0.9 == 1.26.
-    also applies to trailing entries.
+    Quantity of the next grid entry is position size times the double down factor.
+    Example: If position size is 1.4 and double_down_factor is 0.9, then the next entry quantity is 1.4 * 0.9 = 1.26.
+    Also applies to trailing entries.
     ```"""
 
 entry_grid_spacing_volatility_weight = """
@@ -1098,12 +1101,15 @@ entry_trailing_retracement_volatility_weight = """
 
 entry_grid_spacing = """
     ```
-    entry_grid_spacing_pct, entry_grid_spacing_weight:
-        grid re-entry prices are determined as follows:
-        next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * modifier)
-        next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * modifier)
-        where modifier = (1 + ratio * entry_grid_spacing_weight)
-        and where ratio = wallet_exposure / wallet_exposure_limithe grid
+    entry_grid_spacing_pct, entry_grid_spacing_we_weight (formerly entry_grid_spacing_weight):
+        Grid re-entry prices are determined as follows:
+        next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)
+        next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)
+        
+        where multiplier = 1 + (wallet_exposure / wallet_exposure_limit) * entry_grid_spacing_we_weight + log_component
+        
+        Setting entry_grid_spacing_we_weight > 0 widens spacing as the position approaches
+        the wallet exposure limit; negative values tighten spacing when exposure is small.
     ```"""
 
 entry_initial_ema_dist = """
@@ -1138,7 +1144,8 @@ filter_volume_drop_pct = """
 
 filter_volatility_drop_pct = """
     ```
-    20% most volatile coins, forcing the selector to choose among the calmer 80%.
+    Volatility clip. Drops the highest-volatility fraction after volume filtering.
+    Example: 0.2 drops the top 20% most volatile coins, forcing the selector to choose among the calmer 80%.
     Log range is computed from 1m OHLCVs as mean(ln(high / low)).
     In forager mode, the bot selects coins with the highest log-range values for opening positions.
     ```"""
@@ -1167,15 +1174,15 @@ filter_volatility_drop_pct = """
 
 n_positions = """
     ```
-    max number of positions to open. Set to zero to disable long/short
+    Maximum number of positions to open. Set to 0 to disable long/short.
     ```"""
 
 total_wallet_exposure_limit = """
     ```
-    maximum exposure allowed.
-    E.g. total_wallet_exposure_limit = 0.75 means 75% of (unleveraged) wallet balance is used.
-    E.g. total_wallet_exposure_limit = 1.6 means 160% of (unleveraged) wallet balance is used.
-    Each position is given equal share of total exposure limit, i.e. wallet_exposure_limit = total_wallet_exposure_limit / n_positions.
+    Maximum exposure allowed.
+    Example: total_wallet_exposure_limit = 0.75 means 75% of (unleveraged) wallet balance is used.
+    Example: total_wallet_exposure_limit = 1.6 means 160% of (unleveraged) wallet balance is used.
+    Each position is given an equal share: wallet_exposure_limit = total_wallet_exposure_limit / n_positions.
     See more: docs/risk_management.md
     ```"""
 
@@ -1188,17 +1195,21 @@ unstuck_ema_dist = """
 
 unstuck_loss_allowance_pct = """
     ```
-    percentage below past peak balance to allow losses.
-    e.g. if past peak balance was $10,000 and unstuck_loss_allowance_pct = 0.02,
-    the bot will stop taking losses when balance reaches $10,000 * (1 - 0.02) == $9,800
+    Weighted percentage below past peak balance to allow losses.
+    loss_allowance = past_peak_balance * (1 - unstuck_loss_allowance_pct * total_wallet_exposure_limit)
+    
+    Example: If past peak balance was $10,000, unstuck_loss_allowance_pct = 0.02,
+    and total_wallet_exposure_limit = 1.5, the bot stops taking losses when balance
+    reaches $10,000 * (1 - 0.02 * 1.5) = $9,700.
     ```"""
 
 unstuck_threshold = """
     ```
-    if a position is bigger than a threshold, consider it stuck and activate unstucking.
+    If a position is larger than the threshold, consider it stuck and activate unstucking.
     if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled
-    e.g. if a position size is $500 and max allowed position size is $1000, then position is 50% full.
-    If unstuck_threshold==0.45, then unstuck the position until its size is $450.
+    
+    Example: If a position size is $500 and max allowed position size is $1000, the position is 50% full.
+    If unstuck_threshold = 0.45, unstuck the position until its size is $450.
     ```"""
 
 minimum_coin_age_days = """
@@ -1250,10 +1261,10 @@ balance_hysteresis_snap_pct = """
 
 max_warmup_minutes = """
     ```
-    Hard ceiling applied to the historical warm-up window for both backtests and 
-    live warm-ups (default: 0 = disabled).
-    Use 0 to disable the cap; otherwise values above 0 clamp the per-symbol 
-    warmup calculated from EMA spans.
+    Hard ceiling applied to the historical warm-up window for both backtests and live warm-ups.
+    Use 0 to disable the cap; otherwise values above 0 clamp the per-symbol warmup
+    calculated from EMA spans.
+    Default: 0 (disabled)
     ```"""
 
 memory_snapshot_interval_minutes = """
@@ -1273,10 +1284,9 @@ volume_refresh_info_threshold_seconds = """
 
 pareto_max_size = """
     ```
-    Maximum size of the Pareto front during optimization (default: 250).
-    Limits the number of non-dominated solutions kept in the population.
-    Higher values preserve more diverse solutions but use more memory and 
-    may slow down convergence.
+    Maximum number of Pareto-optimal configs kept on disk under optimize_results/.../pareto/.
+    Members are pruned by crowding (least diverse removed first, while per-objective
+    extremes are preserved), not by age.
     ```"""
 
 ohlcv_rolling_window = """
@@ -1398,14 +1408,6 @@ gap_tolerance_ohlcvs_minutes = """
     If the gap between two consecutive ohlcvs is greater than this value, the bot will not backtest.
     ```"""
 
-max_warmup_minutes = """
-    ```
-    Per-coin warm-up window (in minutes) derived from warmup_ratio, indicator spans, and the optional
-    backtest.max_warmup_minutes ceiling. This value is used by the backtester and CandlestickManager
-    to skip the earliest candles until indicators are fully primed; adjust warmup_ratio or the spans
-    themselves to change it.
-    ```"""
-
 warmup_ratio = """
     ```
     Multiplier applied to the longest EMA or log-range span (in minutes) across long/short settings
@@ -1442,14 +1444,14 @@ btc_collateral_cap = """
 
 btc_collateral_ltv_cap = """
     ```
-    Optional loan-to-value ceiling (USD debt / equity) enforced when topping up BTC.
-    Leave at 0 (null) to allow unlimited debt, or set to a float (e.g., 0.6) to stop
+    Optional loan-to-value ceiling (USD debt ÷ equity) enforced when topping up BTC.
+    Leave null (default) to allow unlimited debt, or set to a float (e.g., 0.6) to stop
     buying BTC once leverage exceeds that threshold.
     ```"""
 
 compress_results_file = """
     ```
-    If true, will compress optimize output results file to save space.
+    If true, compresses optimize output results file to save space.
     ```"""
 
 write_all_results = """
@@ -1846,3 +1848,241 @@ risk_twel_enforcer_threshold = """
     When aggregate exposure exceeds this threshold the bot queues reduction orders instead of new entries.
     Set >1.0 to allow a grace margin, 1.0 for strict enforcement, or ≤0 to disable.
     ```"""
+
+# ═══════════════════════════════════════════════════════════════════════
+# SUITE CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════
+
+suite_enabled = """
+    ```
+    Enable suite mode for multi-scenario backtesting/optimization.
+    
+    When enabled, the optimizer/backtester evaluates your config across
+    all defined scenarios. Each scenario can test different:
+    - Coin sets (e.g., "Top 10 MarketCap", "High Volatility Coins")
+    - Date ranges (e.g., "Bull Market 2024", "Bear Market 2022")
+    - Exchanges (e.g., only Binance, only Bybit)
+    - Parameter variations (e.g., n_positions=3 vs n_positions=7)
+    
+    Results are aggregated across scenarios using the aggregate setting.
+    This helps find robust configs that work across different market conditions.
+    ```"""
+
+suite_include_base_scenario = """
+    ```
+    Include base scenario in suite evaluation.
+    
+    When enabled, the optimizer prepends an auto-generated "base" scenario
+    that mirrors your main config settings (coins, dates, exchanges).
+    This lets you compare scenario variations against your baseline.
+    ```"""
+
+suite_base_label = """
+    ```
+    Directory name for the auto-generated base scenario.
+    Only used when "Include Base Scenario" is enabled.
+    Default: "base"
+    ```"""
+
+suite_aggregate = """
+    ```
+    How to aggregate metrics across all scenarios for scoring.
+    
+    Default aggregation applies to all metrics unless overridden.
+    You can specify different aggregation methods per metric.
+    
+    Available methods:
+    - mean:   Average of all scenario results (recommended default)
+    - min:    Worst-case result across scenarios  
+    - max:    Best-case result across scenarios
+    - std:    Standard deviation (variability across scenarios)
+    - median: Middle value across scenarios
+    
+    Example: Use "mean" as default, but "max" for drawdown_worst to ensure
+    the optimizer penalizes configs that fail badly in any scenario.
+    
+    The aggregated values feed into optimize.scoring and optimize.limits.
+    ```"""
+
+scenario_label = """
+    ```
+    Unique identifier for this scenario.
+    Used in result directories: backtests/suite_runs/<timestamp>/<label>/
+    
+    Examples: "bull_market_2024", "top10_mcap", "pure_trailing", "n_positions_3"
+    ```"""
+
+scenario_coins = """
+    ```
+    Override approved_coins for this scenario.
+    Comma-separated list of coin symbols.
+    Leave empty to use the base config's approved coins.
+    
+    Examples:
+    - "BTC, ETH, SOL, XRP, ADA" (specific coins)
+    - "BTC/USDT:USDT, ETH/USDT:USDT" (full symbol format)
+    ```"""
+
+scenario_ignored_coins = """
+    ```
+    Coins to exclude from this scenario.
+    Comma-separated list. Applied after the coins filter.
+    ```"""
+
+scenario_exchanges = """
+    ```
+    Restrict which exchanges' data this scenario can see.
+    Leave empty to use all exchanges from the base config.
+    
+    Useful for testing exchange-specific behavior:
+    - Select only "binance" to test Binance-specific coin sets
+    - Select only "bybit" to test Bybit performance
+    ```"""
+
+scenario_overrides = """
+    ```
+    Override bot parameters for this scenario.
+    Format: one override per line as key=value
+    
+    Supports nested keys with dot notation:
+    - bot.long.n_positions=3
+    - bot.long.entry_trailing_grid_ratio=1
+    - bot.short.total_wallet_exposure_limit=0.5
+    
+    Useful for testing parameter sensitivity:
+    - Compare pure_grid (trailing_grid_ratio=0) vs pure_trailing (ratio=1)
+    - Test different n_positions values
+    - Compare different exposure limits
+    ```"""
+
+suite_add_metric = """
+    Select which metric to configure for scenario aggregation.
+    Keys fall back to the default aggregation entry if unspecified.
+    The aggregated values feed into optimize.scoring and optimize.limits."""
+
+suite_add_aggregation = """
+    Choose how to aggregate this metric across all scenarios:
+    - mean:   Average of all scenario results (default)
+    - min:    Worst-case result across scenarios  
+    - max:    Best-case result across scenarios
+    - std:    Standard deviation (variability across scenarios)
+    - median: Middle value across scenarios"""
+
+suite_add_button = """Add metric-specific aggregation rule"""
+
+coin_sources_delete = """Check to delete this coin source"""
+
+coin_sources_coin = """Coin symbol to override"""
+
+coin_sources_exchange = """Target exchange for this coin"""
+
+coin_sources_select_exchange = """
+    Optional mapping of coin → exchange to override automatic selection when combine_ohlcvs is true.
+    You can choose any exchange to force this coin to use specific exchange data."""
+
+coin_sources_select_coin = """
+    Select coin from the chosen exchange.
+    Scenarios may add more overrides; conflicting assignments (same coin to different exchanges) will raise an error."""
+
+scenario_start_date = """
+    Override start date for this scenario only.
+    Leave empty to use base config start date."""
+
+scenario_end_date = """
+    Override end date for this scenario only.
+    Leave empty to use base config end date."""
+
+scenario_clear_date = """Clear date (use base config)"""
+
+stats_aggregation_help = """
+    Aggregation method used across scenarios.
+    Only shown in Aggregated view where scenario results are combined."""
+
+stats_value_help = """Aggregated metric value across all scenarios"""
+
+# Additional OptimizeV7 help texts
+exchanges = """
+    Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing.
+    The template ships with ['binance', 'bybit']; additional exchanges can be wired up
+    manually if you maintain your own archives."""
+
+backtest_start_date = """
+    Start date of backtest.
+    Format: YYYY-MM-DD (e.g., 2024-01-01)"""
+
+backtest_end_date = """
+    End date of backtest.
+    Format: YYYY-MM-DD (e.g., 2024-06-23)
+    Set to 'now' to use today's date as the end date."""
+
+starting_balance = """
+    Starting balance in USD at the beginning of the backtest."""
+
+n_cpus = """
+    Number of CPU cores utilized in parallel during optimization."""
+
+approved_coins_long = """
+    List of coins approved for long positions.
+    If empty, see live.empty_means_all_approved.
+    Backtester and optimizer use live.approved_coins minus live.ignored_coins."""
+
+approved_coins_short = """
+    List of coins approved for short positions.
+    If empty, see live.empty_means_all_approved.
+    Backtester and optimizer use live.approved_coins minus live.ignored_coins."""
+
+limit_currency = """
+    Select currency denomination for this metric.
+    Metrics may be suffixed with _usd or _btc to select denomination.
+    If config.backtest.btc_collateral_cap is 0, BTC values still represent
+    the USD equity translated into BTC terms."""
+
+limit_range_low = """
+    Lower bound of the allowed range for this metric.
+    Used with 'outside_range' or 'inside_range' penalty conditions."""
+
+limit_range_high = """
+    Upper bound of the allowed range for this metric.
+    Used with 'outside_range' or 'inside_range' penalty conditions."""
+
+limit_value = """
+    Threshold value for this metric limit.
+    Used with '<' (less than) or '>' (greater than) penalty conditions."""
+
+scenario_override_side = """
+    Select which side (long or short) this parameter override applies to.
+    Only a subset of config parameters are eligible for overriding master config."""
+
+scenario_override_param = """
+    Select which bot parameter to override for this scenario.
+    Eligible parameters from config.bot.long/short include:
+    close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct,
+    close_trailing_grid_ratio, close_trailing_qty_pct, close_trailing_retracement_pct,
+    close_trailing_threshold_pct, ema_span_0, ema_span_1, entry_grid_double_down_factor,
+    entry_grid_spacing_pct, entry_grid_spacing_we_weight, entry_grid_spacing_volatility_weight,
+    entry_volatility_ema_span_hours, entry_initial_ema_dist, entry_initial_qty_pct,
+    entry_trailing_double_down_factor, entry_trailing_grid_ratio, entry_trailing_retracement_pct,
+    entry_trailing_threshold_pct, unstuck_close_pct, unstuck_ema_dist, unstuck_threshold,
+    wallet_exposure_limit."""
+
+scenario_override_value = """
+    Value for the parameter override.
+    This value will replace the base config value for this scenario."""
+
+# Button help texts
+add_limit_button = """
+    Add this limit to the optimization constraints.
+    The optimizer will penalize configs that violate this limit."""
+
+add_coin_source_button = """
+    Add this coin source override.
+    Maps the selected coin to use data from the selected exchange."""
+
+add_scenario_override_button = """
+    Add this parameter override to the scenario.
+    The override will apply only to this scenario, not to the base config."""
+
+add_scenario_button = """
+    Add new scenario to the suite.
+    Scenarios allow testing the same config across different market conditions."""
+
