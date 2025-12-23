@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.39
+# v1.40
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -289,6 +289,22 @@ Copy the start.bat.example to start.bat
 Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
+# Changelog
+
+## v1.40 (23-12-2025)
+
+**NEW: Suite for Backtest V7 and Optimize V7**
+- Multi-scenario testing now available for Backtests and Optimzer
+- Test your configuration across multiple scenarios simultaneously
+- Each scenario can use different coins, date ranges, exchanges, and parameters
+- Results are automatically aggregated (average, min, max, etc.)
+- Find robust configs that work under different market conditions
+- Works uniformly in both Backtest and Optimizer
+
+**Bugfixes**
+- Fixed display of backtest results (gain, ADG, drawdown, sharpe ratio) for new JSON format
+- Support for both old and new analysis.json formats (_usd/_btc suffixes)
+
 ## v1.39 (20-12-2025)
 - **Optimizer Limits**: Complete rewrite for PassivBot v7.5.x compatibility
   - New list-based limits format replacing the old dict format
@@ -299,6 +315,12 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
   - Currency metrics with _usd/_btc suffix selection (default: usd)
   - Shared metrics (loss_profit_ratio, position_held_hours_max, etc.) without suffix
   - Edit/Delete limits directly from the table view
+- **Suite Configuration**: Multi-scenario backtesting/optimization support
+  - Evaluate configs across different coin sets, date ranges, exchanges, and parameter variations
+  - Each scenario can override coins, dates, exchanges, and bot parameters
+  - Results are aggregated across scenarios (mean, min, max, std)
+  - Helps find robust configs that work across different market conditions
+  - Interactive scenario editor with add/edit/delete functionality
 - **UI Improvements**: Wider and taller help tooltips for better readability
 
 ## v1.38 (20-12-2025)
