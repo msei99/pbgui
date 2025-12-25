@@ -488,6 +488,7 @@ class OptimizeV7Results:
                         'Result Time': datetime.datetime.fromtimestamp(result_time),
                         'view': False,
                         '3d plot': False,
+                        '🎯 explorer': False,
                         'delete' : False,
                         'Result': result,
                         'index': opt,
@@ -496,6 +497,7 @@ class OptimizeV7Results:
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
             "view": st.column_config.CheckboxColumn(label="View Paretos"),
+            "🎯 explorer": st.column_config.CheckboxColumn(label="🎯 Genius Explorer"),
             "Result Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Result": st.column_config.TextColumn(label="Result Directory", width="50px"),
         }
@@ -535,6 +537,10 @@ class OptimizeV7Results:
                     if ed["edited_rows"][row]["3d plot"]:
                         self.run_3d_plot(self.results_d[row]["index"])
                         st.session_state.ed_key += 1
+                if "🎯 explorer" in ed["edited_rows"][row]:
+                    if ed["edited_rows"][row]["🎯 explorer"]:
+                        self.run_pareto_explorer(self.results_d[row]["index"])
+                        st.session_state.ed_key += 1
 
     def load_sort_results(self):
         pb_config = configparser.ConfigParser()
@@ -562,6 +568,20 @@ class OptimizeV7Results:
         else:
             result = subprocess.run(cmd, capture_output=True, cwd=pb7dir(), text=True, start_new_session=True)
         info_popup(f"3D Plot Generated {result.stdout}")
+    
+    def run_pareto_explorer(self, index):
+        """Open Genius Pareto Explorer within PBGui"""
+        results_dir = Path(index).parent
+        
+        # Check if all_results.bin exists
+        all_results_path = results_dir / "all_results.bin"
+        if not all_results_path.exists():
+            error_popup(f"❌ all_results.bin not found in {results_dir}")
+            return
+        
+        # Store path in session state and navigate to explorer
+        st.session_state.pareto_explorer_path = str(results_dir)
+        st.switch_page("navi/v7_pareto_explorer.py")
 
     def load_paretos(self, index):
         self.paretos = []
