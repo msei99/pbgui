@@ -814,6 +814,9 @@ class PBRun():
         self.run_single = []
         self.run_v7 = []
         self.index = 0
+        self.pbgui_branch = "unknown"
+        self.pbgui_commit_short = "unknown"
+        self.pbgui_branches_data = {}
         self.pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -945,8 +948,15 @@ class PBRun():
         pbgui_git = Path(f'{self.pbgdir}/.git')
         if pbgui_git.exists():
             pbgui_git = Path(f'{self.pbgdir}/.git')
+            # Get full commit hash
             pbgui_commit = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
             self.pbgui_commit = pbgui_commit.stdout
+            # Get short commit hash (7 chars)
+            pbgui_commit_short = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%h"], stdout=subprocess.PIPE, text=True)
+            self.pbgui_commit_short = pbgui_commit_short.stdout
+            # Get current branch
+            pbgui_branch = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "rev-parse", "--abbrev-ref", "HEAD"], stdout=subprocess.PIPE, text=True)
+            self.pbgui_branch = pbgui_branch.stdout.strip()
         if self.pbdir:
             pb6_git = Path(f'{self.pbdir}/.git')
             if pb6_git.exists():
@@ -959,6 +969,66 @@ class PBRun():
                 pb7_git = Path(f'{self.pb7dir}/.git')
                 pb7_commit = subprocess.run(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
                 self.pb7_commit = pb7_commit.stdout
+
+    def load_git_branches_history(self):
+        """Load commit history for all branches (last 10 commits per branch)"""
+        pbgui_git = Path(f'{self.pbgdir}/.git')
+        if not pbgui_git.exists():
+            return
+        
+        # Get all branches (local and remote)
+        branches_result = subprocess.run(
+            ["git", "--git-dir", f'{pbgui_git}', "branch", "-a"],
+            stdout=subprocess.PIPE, text=True
+        )
+        
+        branches_data = {}
+        for line in branches_result.stdout.splitlines():
+            # Clean branch name (remove * and whitespace)
+            branch_raw = line.strip().lstrip('* ')
+            if not branch_raw or 'HEAD ->' in branch_raw:
+                continue
+            
+            # For remote branches, use the full remotes/origin/xxx format
+            # For local branches, use as-is
+            if branch_raw.startswith('remotes/origin/'):
+                branch_ref = branch_raw  # Keep full path for git log
+                branch_name = branch_raw.replace('remotes/origin/', '')  # Display name
+            else:
+                branch_ref = branch_raw
+                branch_name = branch_raw
+            
+            # Skip if already processed
+            if branch_name in branches_data:
+                continue
+            
+            # Get last 10 commits for this branch using proper reference
+            commits_result = subprocess.run(
+                ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", "10",
+                 "--pretty=format:%h|%H|%an|%ar|%s"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            )
+            
+            # Skip if git log failed (branch doesn't exist locally)
+            if commits_result.returncode != 0:
+                continue
+            
+            commits = []
+            for commit_line in commits_result.stdout.splitlines():
+                parts = commit_line.split('|', 4)
+                if len(parts) == 5:
+                    commits.append({
+                        'short': parts[0],
+                        'full': parts[1],
+                        'author': parts[2],
+                        'date': parts[3],
+                        'message': parts[4]
+                    })
+            
+            if commits:
+                branches_data[branch_name] = commits
+        
+        self.pbgui_branches_data = branches_data
 
     def load_versions_origin(self):
         """git show origin:README.md and load the versions of pbgui, pb6 and pb7"""
