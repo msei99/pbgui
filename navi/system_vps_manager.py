@@ -803,7 +803,73 @@ def manage_vps():
             st.session_state.view_setup = vps
             del st.session_state.manage_vps
             st.rerun()
+    
+    # Branch Management for VPS
     server = pbremote.find_server(vps.hostname)
+    if server and hasattr(pbremote.local_run, 'pbgui_branches_data') and pbremote.local_run.pbgui_branches_data:
+        with st.expander("🔀 Branch Management"):
+            current_vps_branch = getattr(server, 'pbgui_branch', 'unknown')
+            current_master_branch = getattr(pbremote.local_run, 'pbgui_branch', 'unknown')
+            
+            st.info(f"**Current VPS Branch:** `{current_vps_branch}`\n\n**Master Branch:** `{current_master_branch}`")
+            
+            available_branches = list(pbremote.local_run.pbgui_branches_data.keys())
+            current_index = available_branches.index(current_vps_branch) if current_vps_branch in available_branches else 0
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                selected_branch = st.selectbox(
+                    "Target Branch",
+                    options=available_branches,
+                    index=current_index,
+                    key="vps_pbgui_branch_selector"
+                )
+            
+            with col2:
+                if selected_branch in pbremote.local_run.pbgui_branches_data:
+                    commits = pbremote.local_run.pbgui_branches_data[selected_branch]
+                    commit_labels = []
+                    for commit in commits:
+                        is_current = (commit['full'] == getattr(server, 'pbgui_commit', ''))
+                        prefix = "🔹 CURRENT: " if is_current else ""
+                        label = f"{prefix}{commit['short']} | {commit['message'][:50]} | {commit['date']} | {commit['author']}"
+                        commit_labels.append(label)
+                    
+                    selected_commit_label = st.selectbox(
+                        "Target Commit (optional - leave at HEAD for latest)",
+                        options=["HEAD (latest)"] + commit_labels,
+                        key="vps_pbgui_commit_selector"
+                    )
+                    
+                    if selected_commit_label != "HEAD (latest)":
+                        commit_index = commit_labels.index(selected_commit_label)
+                        selected_commit = commits[commit_index]['full']
+                    else:
+                        selected_commit = ""
+            
+            # Check if already on target
+            is_on_target = (current_vps_branch == selected_branch and 
+                          current_vps_branch != 'unknown' and
+                          (selected_commit == "" or selected_commit == getattr(server, 'pbgui_commit', '')))
+            
+            if is_on_target:
+                st.success(f"✅ VPS is already on branch `{selected_branch}` at the target commit")
+            else:
+                st.warning(f"⚠️ This will switch VPS `{vps.hostname}` from `{current_vps_branch}` to `{selected_branch}`")
+            
+            if st.button("Switch VPS Branch", disabled=is_on_target, type="primary"):
+                extra_vars = {'branch': selected_branch}
+                if selected_commit:
+                    extra_vars['commit'] = selected_commit
+                
+                # Trigger vps-switch-pbgui-branch.yml
+                vps.command = "vps-switch-pbgui-branch"
+                vps.command_text = f"Switch to branch {selected_branch}"
+                vpsmanager.update_vps(vps, debug=st.session_state.setup_debug, extra_vars=extra_vars)
+                st.session_state.view_update = vps
+                del st.session_state.manage_vps
+                st.rerun()
+    
     if server:
         d = []
         boot = datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S")

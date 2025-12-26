@@ -786,7 +786,7 @@ class VPSManager:
             finished_callback=vps.setup_finished
         )
 
-    def update_vps(self, vps : VPS, debug = False):
+    def update_vps(self, vps : VPS, debug = False, extra_vars = None):
         vps.update_status = None
         vps.save()
         vps.remove_update_log()
@@ -797,21 +797,28 @@ class VPSManager:
         else:
             tags = None
             verbosity = 1
+        
+        ansible_extravars = {
+            'hostname': vps.hostname,
+            'user': vps.user,
+            'user_pw': vps.user_pw,
+            'swap_size': vps.swap,
+            'coinmarketcap_api_key': vps.coinmarketcap_api_key,
+            'firewall': vps.firewall,
+            'firewall_ssh_port': vps.firewall_ssh_port,
+            'firewall_ssh_ips': vps.firewall_ssh_ips.split(','),
+            'reboot': vps.reboot,
+            'debug': debug
+        }
+        
+        # Merge extra_vars if provided
+        if extra_vars:
+            ansible_extravars.update(extra_vars)
+        
         ansible_runner.run_async(
             playbook=str(PurePath(f'{PBGDIR}/{vps.command}.yml')),
             inventory=vps.hostname,
-            extravars={
-                'hostname': vps.hostname,
-                'user': vps.user,
-                'user_pw': vps.user_pw,
-                'swap_size': vps.swap,
-                'coinmarketcap_api_key': vps.coinmarketcap_api_key,
-                'firewall': vps.firewall,
-                'firewall_ssh_port': vps.firewall_ssh_port,
-                'firewall_ssh_ips': vps.firewall_ssh_ips.split(','),
-                'reboot': vps.reboot,
-                'debug': debug
-            },
+            extravars=ansible_extravars,
             quiet=True,
             tags=tags,
             verbosity=verbosity,
