@@ -2,9 +2,7 @@ name: PBGui GitHub Telegram Bot
 on:
   push:
     branches:
-      - main
-      - dev
-      - ent
+      - '**'
 jobs:
   notification:
     runs-on: ubuntu-latest
