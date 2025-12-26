@@ -239,6 +239,9 @@ class RemoteServer():
                         self._pbgui_commit = cfg["pbgc"]
                     if "pbgb" in cfg:
                         self._pbgui_branch = cfg["pbgb"]
+                    else:
+                        # Reset to unknown if pbgb not in alive file (old version)
+                        self._pbgui_branch = "unknown"
                     if "pb6v" in cfg:
                         self._pb6_version = cfg["pb6v"]
                     if "pb6c" in cfg:

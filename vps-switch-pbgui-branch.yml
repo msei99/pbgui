@@ -33,19 +33,6 @@
         chdir: "{{ pbgdir }}"
       changed_when: false
 
-    - name: List all remote branches for debugging
-      command: git branch -r
-      args:
-        chdir: "{{ pbgdir }}"
-      register: remote_branches
-      changed_when: false
-      tags: debug,never
-
-    - name: Display remote branches
-      debug:
-        var: remote_branches.stdout_lines
-      tags: debug,never
-
     - name: Check for uncommitted changes (tracked files only)
       shell: git diff --name-only && git diff --cached --name-only
       args:
@@ -57,18 +44,6 @@
       fail:
         msg: "Uncommitted changes detected. Please commit or stash changes before switching branches."
       when: git_status.stdout != ""
-
-    - name: Check if branch exists on remote
-      shell: git ls-remote --heads origin "{{ target_branch }}" | wc -l
-      args:
-        chdir: "{{ pbgdir }}"
-      register: remote_branch_exists
-      changed_when: false
-
-    - name: Fail if branch doesn't exist on remote
-      fail:
-        msg: "Branch '{{ target_branch }}' does not exist on remote 'origin'. Please push the branch first."
-      when: remote_branch_exists.stdout == "0"
 
     - name: Check if branch exists locally
       command: git rev-parse --verify "{{ target_branch }}"
@@ -83,7 +58,6 @@
       args:
         chdir: "{{ pbgdir }}"
       when: branch_exists.rc != 0
-      register: checkout_new
       notify: restart pbgui
 
     - name: Checkout target branch (if already exists locally)
@@ -91,7 +65,6 @@
       args:
         chdir: "{{ pbgdir }}"
       when: branch_exists.rc == 0
-      register: checkout_result
       notify: restart pbgui
 
     - name: Checkout specific commit if provided
@@ -107,16 +80,7 @@
       args:
         chdir: "{{ pbgdir }}"
       when: target_commit == ""
-      register: pull_result
       notify: restart pbgui
-
-    - name: Display checkout result
-      debug:
-        msg: |
-          Branch: {{ target_branch }}
-          Commit: {{ target_commit if target_commit != '' else 'HEAD' }}
-          Status: Switched successfully
-      tags: debug,never
 
   handlers:
     - name: Install pbgui requirements
