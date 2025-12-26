@@ -30,8 +30,8 @@
       when: pbgdir != ""
       changed_when: false
 
-    - name: Check for uncommitted changes
-      command: git status --porcelain
+    - name: Check for uncommitted changes (tracked files only)
+      shell: git diff --name-only && git diff --cached --name-only
       args:
         chdir: "{{ pbgdir }}"
       register: git_status
