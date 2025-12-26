@@ -815,7 +815,6 @@ class PBRun():
         self.run_v7 = []
         self.index = 0
         self.pbgui_branch = "unknown"
-        self.pbgui_commit_short = "unknown"
         self.pbgui_branches_data = {}
         self.pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
@@ -951,9 +950,6 @@ class PBRun():
             # Get full commit hash
             pbgui_commit = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
             self.pbgui_commit = pbgui_commit.stdout
-            # Get short commit hash (7 chars)
-            pbgui_commit_short = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%h"], stdout=subprocess.PIPE, text=True)
-            self.pbgui_commit_short = pbgui_commit_short.stdout
             # Get current branch
             pbgui_branch = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "rev-parse", "--abbrev-ref", "HEAD"], stdout=subprocess.PIPE, text=True)
             self.pbgui_branch = pbgui_branch.stdout.strip()
@@ -1002,10 +998,10 @@ class PBRun():
             if branch_name in branches_data:
                 continue
             
-            # Get last 10 commits for this branch using proper reference
+            # Get last 50 commits for this branch using proper reference
             commits_result = subprocess.run(
-                ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", "10",
-                 "--pretty=format:%h|%H|%an|%ar|%s"],
+                ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", "50",
+                 "--pretty=format:%h|%H|%an|%ar|%B%x00"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
             )
             
@@ -1014,21 +1010,91 @@ class PBRun():
                 continue
             
             commits = []
-            for commit_line in commits_result.stdout.splitlines():
-                parts = commit_line.split('|', 4)
+            # Split by null byte to handle multi-line commit messages
+            for commit_block in commits_result.stdout.split('\x00'):
+                # Strip whitespace before processing
+                commit_block = commit_block.strip()
+                if not commit_block:
+                    continue
+                lines = commit_block.split('\n', 1)
+                if not lines:
+                    continue
+                parts = lines[0].split('|', 4)
                 if len(parts) == 5:
+                    # parts[4] is first line of message, rest is in lines[1] if exists
+                    full_message = parts[4]
+                    if len(lines) > 1:
+                        full_message = full_message + '\n' + lines[1]
                     commits.append({
                         'short': parts[0],
                         'full': parts[1],
                         'author': parts[2],
                         'date': parts[3],
-                        'message': parts[4]
+                        'message': full_message.strip()
                     })
+                else:
+                    # Debug: log parsing failures
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Failed to parse commit block: {len(parts)} parts, first 100 chars: {commit_block[:100]}')
             
             if commits:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for branch {branch_name}')
                 branches_data[branch_name] = commits
         
         self.pbgui_branches_data = branches_data
+
+    def load_more_commits(self, branch_name: str, limit: int):
+        """Load more commits for a specific branch
+        
+        Args:
+            branch_name: Name of the branch to load commits for
+            limit: Total number of commits to load
+        """
+        pbgui_git = Path(f'{self.pbgdir}/.git')
+        if not pbgui_git.exists():
+            return
+        
+        # Determine branch reference
+        if branch_name in self.pbgui_branches_data:
+            # Branch already exists, use appropriate reference
+            branch_ref = f"remotes/origin/{branch_name}" if branch_name != self.pbgui_branch else branch_name
+        else:
+            return
+        
+        # Build git log command
+        cmd = ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", str(limit), "--pretty=format:%h|%H|%an|%ar|%B%x00"]
+        
+        commits_result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        
+        if commits_result.returncode != 0:
+            return
+        
+        commits = []
+        for commit_block in commits_result.stdout.split('\x00'):
+            commit_block = commit_block.strip()
+            if not commit_block:
+                continue
+            lines = commit_block.split('\n', 1)
+            if not lines:
+                continue
+            parts = lines[0].split('|', 4)
+            if len(parts) == 5:
+                full_message = parts[4]
+                if len(lines) > 1:
+                    full_message = full_message + '\n' + lines[1]
+                commits.append({
+                    'short': parts[0],
+                    'full': parts[1],
+                    'author': parts[2],
+                    'date': parts[3],
+                    'message': full_message.strip()
+                })
+        
+        if commits:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for branch {branch_name}')
+            self.pbgui_branches_data[branch_name] = commits
 
     def load_versions_origin(self):
         """git show origin:README.md and load the versions of pbgui, pb6 and pb7"""

@@ -39,11 +39,18 @@
       set_fact:
         install_dir: "{{ ansible_env.HOME + '/software' }}"
 
+    - name: Get current pbgui branch
+      command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ install_dir }}/pbgui"
+      register: current_pbgui_branch
+      changed_when: false
+
     - name: clone pbgui repository
       git:
         repo: https://github.com/msei99/pbgui.git
         dest: "{{ install_dir }}/pbgui"
-        version: main
+        version: "{{ current_pbgui_branch.stdout }}"
         update: yes
         force: yes
       register: pbgui_repo
