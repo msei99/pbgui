@@ -60,6 +60,7 @@ class RemoteServer():
         self._role = None
         self._pbgui_version = "N/A"
         self._pbgui_commit = None
+        self._pbgui_branch = "unknown"
         self._pb6_version = "N/A"
         self._pb6_commit = None
         self._pb7_version = "N/A"
@@ -116,6 +117,8 @@ class RemoteServer():
     def pbgui_version(self): return self._pbgui_version
     @property
     def pbgui_commit(self): return self._pbgui_commit
+    @property
+    def pbgui_branch(self): return self._pbgui_branch
     @property
     def pb6_version(self): return self._pb6_version
     @property
@@ -234,6 +237,8 @@ class RemoteServer():
                         self._pbgui_version = cfg["pbgv"]
                     if "pbgc" in cfg:
                         self._pbgui_commit = cfg["pbgc"]
+                    if "pbgb" in cfg:
+                        self._pbgui_branch = cfg["pbgb"]
                     if "pb6v" in cfg:
                         self._pb6_version = cfg["pb6v"]
                     if "pb6c" in cfg:
@@ -962,6 +967,7 @@ class PBRemote():
             "cmc": self.local_run.coindata.credits_left,
             "pbgv": self.local_run.pbgui_version,
             "pbgc": self.local_run.pbgui_commit,
+            "pbgb": getattr(self.local_run, 'pbgui_branch', 'unknown'),
             "pb6v": self.local_run.pb6_version,
             "pb6c": self.local_run.pb6_commit,
             "pb7v": self.local_run.pb7_version,
