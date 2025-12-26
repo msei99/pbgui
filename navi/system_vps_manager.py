@@ -33,6 +33,9 @@ def list_vps():
             pbremote.local_run.load_versions()
         with st.spinner("Loading local git commits..."):
             pbremote.local_run.load_git_commits()
+        with st.spinner("Loading git branches history..."):
+            if hasattr(pbremote.local_run, 'load_git_branches_history'):
+                pbremote.local_run.load_git_branches_history()
         with st.spinner("Loading local Sever available updates..."):
             pbremote.local_run.has_upgrades()
         with st.spinner("Loading local Server need reboot"):
@@ -125,6 +128,7 @@ def list_vps():
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
         "PBGui": f'{pbremote.pbgui_version}',
+        "PBGui Branch": f'{pbremote.local_run.pbgui_branch} ({pbremote.local_run.pbgui_commit_short})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
@@ -269,6 +273,7 @@ def list_vps():
             "Reboot": reboot,
             "Updates": server.upgrades,
             "PBGui": f'{server.pbgui_version}',
+            "PBGui Branch": f'{getattr(server, "pbgui_branch", "unknown")}',
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,
@@ -348,6 +353,108 @@ def manage_master():
             st.session_state.view_update_master = True
             st.rerun()
 
+    # Branch Management Section (Main Content Area)
+    st.divider()
+    with st.expander("🌿 **PBGui Branch Management**", expanded=False):
+        # Get branch list - with backward compatibility check
+        available_branches = []
+        current_branch = getattr(pbremote.local_run, 'pbgui_branch', 'unknown')
+        current_commit_short = getattr(pbremote.local_run, 'pbgui_commit_short', 'unknown')
+        current_commit_full = getattr(pbremote.local_run, 'pbgui_commit', '')
+        
+        if hasattr(pbremote.local_run, 'pbgui_branches_data') and pbremote.local_run.pbgui_branches_data:
+            available_branches = list(pbremote.local_run.pbgui_branches_data.keys())
+        
+        if available_branches:
+            # Current state display at top
+            st.info(f"📍 **Current:** {current_branch} @ {current_commit_short}")
+            
+            st.divider()
+            
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                # Branch selector
+                try:
+                    current_index = available_branches.index(current_branch)
+                except ValueError:
+                    current_index = 0
+                
+                selected_branch = st.selectbox(
+                    "Select Branch",
+                    available_branches,
+                    index=current_index,
+                    key="pbgui_branch_selector"
+                )
+            
+            with col2:
+                # Commit selector for the selected branch
+                if selected_branch in pbremote.local_run.pbgui_branches_data:
+                    commits = pbremote.local_run.pbgui_branches_data[selected_branch]
+                    
+                    # Find current commit index (only if we're on the selected branch)
+                    if selected_branch == current_branch:
+                        try:
+                            current_commit_index = next(i for i, c in enumerate(commits) if c['full'] == current_commit_full)
+                        except StopIteration:
+                            current_commit_index = 0
+                    else:
+                        # Different branch selected - default to HEAD (first commit)
+                        current_commit_index = 0
+                    
+                    # Create commit labels with full info
+                    commit_options = []
+                    for c in commits:
+                        is_current = (c['full'] == current_commit_full and selected_branch == current_branch)
+                        prefix = "🔹 CURRENT: " if is_current else ""
+                        label = f"{prefix}{c['short']} - {c['message']} ({c['date']} by {c['author']})"
+                        commit_options.append(label)
+                    
+                    selected_commit_label = st.selectbox(
+                        "Select Commit",
+                        commit_options,
+                        index=current_commit_index,
+                        key="pbgui_commit_selector"
+                    )
+                    
+                    # Extract selected commit hash
+                    selected_commit_idx = commit_options.index(selected_commit_label)
+                    selected_commit_hash = commits[selected_commit_idx]['full']
+                    selected_commit_short = commits[selected_commit_idx]['short']
+                    
+                    # Switch button
+                    branch_changed = selected_branch != current_branch
+                    commit_changed = selected_commit_hash != current_commit_full
+                    
+                    st.divider()
+                    
+                    if branch_changed or commit_changed:
+                        col_warn, col_btn = st.columns([3, 1])
+                        with col_warn:
+                            st.warning(f"⚠️ Will switch to: **{selected_branch} @ {selected_commit_short}**")
+                        with col_btn:
+                            if st.button("🔀 Switch Now", type="primary", use_container_width=True):
+                                vpsmanager.command = "master-switch-pbgui-branch"
+                                vpsmanager.command_text = f"Switch to {selected_branch} @ {selected_commit_short}"
+                                # Pass branch and commit to Ansible playbook
+                                extra_vars = {
+                                    'branch': selected_branch,
+                                    'commit': selected_commit_hash
+                                }
+                                vpsmanager.update_master(
+                                    debug=st.session_state.setup_debug,
+                                    extra_vars=extra_vars
+                                )
+                                del st.session_state.manage_master
+                                st.session_state.view_update_master = True
+                                st.rerun()
+                    else:
+                        st.success(f"✓ Already on **{current_branch} @ {current_commit_short}**")
+                else:
+                    st.error(f"No commits found for branch: {selected_branch}")
+        else:
+            st.warning("⚠️ No branch history loaded. Click 🔄 Refresh in sidebar to load branch data.")
+
     # Init Status
     if pbremote.bucket:
         rclone_ok = f' ✅'
@@ -405,6 +512,7 @@ def manage_master():
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
         "PBGui": f'{pbremote.pbgui_version}',
+        "PBGui Branch": f'{pbremote.local_run.pbgui_branch} ({pbremote.local_run.pbgui_commit_short})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
@@ -727,6 +835,7 @@ def manage_vps():
             "Updates": server.upgrades,
             "CMC Credits": server.cmc_credits,
             "PBGui": f'{server.pbgui_version}',
+            "PBGui Branch": f'{getattr(server, "pbgui_branch", "unknown")}',
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,

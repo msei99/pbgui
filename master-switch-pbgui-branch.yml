@@ -1,0 +1,89 @@
+---
+# Switch pbgui branch/commit on localhost
+# Steps:
+# 1. Fetch from origin
+# 2. Check for uncommitted changes (fail if found)
+# 3. Checkout specified branch
+# 4. Optionally checkout specific commit (detached HEAD)
+# 5. Pull if on branch HEAD (not detached)
+# 6. Restart pbgui services
+
+- hosts: localhost
+  gather_facts: "{{ debug }}"
+
+  vars:
+    user: "{{ user }}"
+    pbgdir: "{{ pbgdir }}"
+    target_branch: "{{ branch }}"
+    target_commit: "{{ commit | default('') }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: Fetch from origin
+      command: git fetch origin
+      args:
+        chdir: "{{ pbgdir }}"
+      when: pbgdir != ""
+      changed_when: false
+
+    - name: Check for uncommitted changes (tracked files only)
+      shell: git diff --name-only && git diff --cached --name-only
+      args:
+        chdir: "{{ pbgdir }}"
+      register: git_status
+      changed_when: false
+
+    - name: Fail if uncommitted changes exist
+      fail:
+        msg: "Uncommitted changes detected. Please commit or stash changes before switching branches."
+      when: git_status.stdout != ""
+
+    - name: Checkout target branch
+      command: git checkout "{{ target_branch }}"
+      args:
+        chdir: "{{ pbgdir }}"
+      register: checkout_result
+      notify: restart pbgui
+
+    - name: Checkout specific commit if provided
+      command: git checkout "{{ target_commit }}"
+      args:
+        chdir: "{{ pbgdir }}"
+      when: target_commit != ""
+      register: commit_checkout
+      notify: restart pbgui
+
+    - name: Pull latest changes (only if on branch HEAD, not detached)
+      command: git pull
+      args:
+        chdir: "{{ pbgdir }}"
+      when: target_commit == ""
+      register: pull_result
+      notify: restart pbgui
+
+    - name: Display checkout result
+      debug:
+        msg: |
+          Branch: {{ target_branch }}
+          Commit: {{ target_commit if target_commit != '' else 'HEAD' }}
+          Status: Switched successfully
+      tags: debug,never
+
+  handlers:
+    - name: Install pbgui requirements
+      pip:
+        requirements: "{{ pbgdir }}/requirements.txt"
+        extra_args: --upgrade
+      listen: "restart pbgui"
+
+    - name: Restart PBRun, PBRemote and PBCoinData
+      shell: |
+        python "{{ pbgdir }}/starter.py" -r PBRun PBRemote PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ pbgdir }}"
+      listen: "restart pbgui"
