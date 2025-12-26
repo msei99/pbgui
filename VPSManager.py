@@ -851,7 +851,7 @@ class VPSManager:
             finished_callback=vps.fetch_log_finished
         )
 
-    def update_master(self, debug = False, sudo_pw = None):
+    def update_master(self, debug = False, sudo_pw = None, extra_vars = None):
         self.update_status = None
         self.privat_data_dir = Path(f'{PBGDIR}/data/vpsmanager/tmp')
         self.privat_data_dir.mkdir(parents=True, exist_ok=True)
@@ -863,16 +863,24 @@ class VPSManager:
         else:
             tags = None
             verbosity = 1
+        
+        # Build extravars - start with defaults
+        ansible_extravars = {
+            'pbgdir': str(PBGDIR),
+            'pb6dir': str(PBDIR),
+            'pb7dir': str(PB7DIR),
+            'pb7venv': str(PurePath(PB7VENV).parents[1]),
+            'user_pw': sudo_pw,
+            'debug': debug
+        }
+        
+        # Merge in any additional extra_vars
+        if extra_vars:
+            ansible_extravars.update(extra_vars)
+        
         ansible_runner.run_async(
             playbook=str(PurePath(f'{PBGDIR}/{self.command}.yml')),
-            extravars={
-                'pbgdir': str(PBGDIR),
-                'pb6dir': str(PBDIR),
-                'pb7dir': str(PB7DIR),
-                'pb7venv': str(PurePath(PB7VENV).parents[1]),
-                'user_pw': sudo_pw,
-                'debug': debug
-            },
+            extravars=ansible_extravars,
             quiet=True,
             tags=tags,
             verbosity=verbosity,
