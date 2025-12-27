@@ -82,11 +82,18 @@
         var: pb6_repo
       tags: debug,never
 
+    - name: Get current pb7 branch
+      command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ install_dir }}/pb7"
+      register: current_pb7_branch
+      changed_when: false
+
     - name: clone passivbot repository for pb7
       git:
         repo: https://github.com/enarjord/passivbot.git
         dest: "{{ install_dir }}/pb7"
-        version: master
+        version: "{{ current_pb7_branch.stdout }}"
         update: yes
         force: yes
       register: pb7_repo

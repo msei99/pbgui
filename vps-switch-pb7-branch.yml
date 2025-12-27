@@ -1,0 +1,101 @@
+---
+# Switch pb7 branch/commit on VPS
+# Steps:
+# 1. Fetch from origin
+# 2. Check for uncommitted changes (fail if found)
+# 3. Checkout specified branch
+# 4. Optionally checkout specific commit (detached HEAD)
+# 5. Pull if on branch HEAD (not detached)
+# 6. Restart pbgui services
+
+- hosts: "{{ hostname }}"
+  gather_facts: yes
+
+  vars:
+    user: "{{ user }}"
+    target_branch: "{{ pb7_branch }}"
+    target_commit: "{{ pb7_commit | default('') }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: get install_dir
+      set_fact:
+        install_dir: "{{ ansible_env.HOME + '/software' }}"
+        pbgdir: "{{ ansible_env.HOME + '/software/pbgui' }}"
+        pb7dir: "{{ ansible_env.HOME + '/software/pb7' }}"
+
+    - name: Fetch from origin
+      command: git fetch origin
+      args:
+        chdir: "{{ pb7dir }}"
+      changed_when: false
+
+    - name: Check for uncommitted changes (tracked files only)
+      shell: git diff --name-only && git diff --cached --name-only
+      args:
+        chdir: "{{ pb7dir }}"
+      register: git_status
+      changed_when: false
+
+    - name: Fail if uncommitted changes exist
+      fail:
+        msg: "Uncommitted changes detected in PB7. Please commit or stash changes before switching branches."
+      when: git_status.stdout != ""
+
+    - name: Check if branch exists locally
+      command: git rev-parse --verify "{{ target_branch }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      register: branch_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Create and checkout local branch from remote if it doesn't exist
+      command: git checkout -b "{{ target_branch }}" --track "origin/{{ target_branch }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      when: branch_exists.rc != 0
+      notify: restart pb7
+
+    - name: Checkout target branch (if already exists locally)
+      command: git checkout "{{ target_branch }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      when: branch_exists.rc == 0
+      notify: restart pb7
+
+    - name: Checkout specific commit if provided
+      command: git checkout "{{ target_commit }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      when: target_commit != ""
+      register: commit_checkout
+      notify: restart pb7
+
+    - name: Pull latest changes (only if on branch HEAD, not detached)
+      command: git pull
+      args:
+        chdir: "{{ pb7dir }}"
+      when: target_commit == ""
+      notify: restart pb7
+
+  handlers:
+    - name: Install pb7 requirements
+      pip:
+        virtualenv: "{{ install_dir }}/venv_pb7"
+        requirements: "{{ install_dir }}/pb7/requirements.txt"
+        extra_args: --upgrade pip
+      listen: "restart pb7"
+
+    - name: Restart PBRun to reload PB7
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      listen: "restart pb7"
