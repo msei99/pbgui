@@ -4,8 +4,8 @@
 # 1. Fetch from origin
 # 2. Check for uncommitted changes (fail if found)
 # 3. Checkout specified branch
-# 4. Optionally checkout specific commit (detached HEAD)
-# 5. Pull if on branch HEAD (not detached)
+# 4. Optionally reset to specific commit (stays on branch)
+# 5. Pull if on branch HEAD (no specific commit)
 # 6. Restart pbgui services
 
 - hosts: localhost
@@ -49,15 +49,15 @@
       register: checkout_result
       notify: restart pbgui
 
-    - name: Checkout specific commit if provided
-      command: git checkout "{{ target_commit }}"
+    - name: Reset to specific commit if provided (stays on branch)
+      command: git reset --hard "{{ target_commit }}"
       args:
         chdir: "{{ pbgdir }}"
       when: target_commit != ""
-      register: commit_checkout
+      register: commit_reset
       notify: restart pbgui
 
-    - name: Pull latest changes (only if on branch HEAD, not detached)
+    - name: Pull latest changes (only if no specific commit provided)
       command: git pull
       args:
         chdir: "{{ pbgdir }}"
