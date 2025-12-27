@@ -742,15 +742,18 @@ def manage_master():
                     # Status text and button in one row
                     status_col, btn_col = st.columns([3, 1])
                     
+                    # Calculate commits_behind if needed
+                    commits_behind = 0
+                    if is_behind_origin:
+                        for i, c in enumerate(pbremote.local_run.pbgui_branches_data[selected_branch]):
+                            if c['full'] == current_commit_full:
+                                commits_behind = i
+                                break
+                    
                     with status_col:
                         if is_on_target:
                             st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                         elif is_behind_origin:
-                            commits_behind = 0
-                            for i, c in enumerate(pbremote.local_run.pbgui_branches_data[selected_branch]):
-                                if c['full'] == current_commit_full:
-                                    commits_behind = i
-                                    break
                             if commits_behind > 0:
                                 st.warning(f"⚠️ Local `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
                             else:
@@ -762,7 +765,9 @@ def manage_master():
                                 st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
                     
                     with btn_col:
-                        if st.button(button_text, disabled=is_on_target, type="primary"):
+                        # Disable button if on target OR if behind origin but commits_behind = 0
+                        button_disabled = is_on_target or (is_behind_origin and commits_behind == 0)
+                        if st.button(button_text, disabled=button_disabled, type="primary"):
                             vpsmanager.command = "master-switch-pbgui-branch"
                             vpsmanager.command_text = f"Switch to {selected_branch}"
                             if selected_commit_label != "HEAD (latest)":
@@ -943,15 +948,18 @@ def manage_master():
                         # Status text and button in one row
                         status_col, btn_col = st.columns([3, 1])
                         
+                        # Calculate commits_behind if needed
+                        commits_behind = 0
+                        if is_behind_origin:
+                            for i, c in enumerate(pbremote.local_run.pb7_branches_data[selected_branch]):
+                                if c['full'] == current_commit_full:
+                                    commits_behind = i
+                                    break
+                        
                         with status_col:
                             if is_on_target:
                                 st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                             elif is_behind_origin:
-                                commits_behind = 0
-                                for i, c in enumerate(pbremote.local_run.pb7_branches_data[selected_branch]):
-                                    if c['full'] == current_commit_full:
-                                        commits_behind = i
-                                        break
                                 if commits_behind > 0:
                                     st.warning(f"⚠️ Local `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
                                 else:
@@ -963,7 +971,8 @@ def manage_master():
                                     st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
                         
                         with btn_col:
-                            if st.button(button_text, disabled=is_on_target, type="primary", key="switch_pb7_branch_master"):
+                            button_disabled = is_on_target or (is_behind_origin and commits_behind == 0)
+                            if st.button(button_text, disabled=button_disabled, type="primary", key="switch_pb7_branch_master"):
                                 vpsmanager.command = "master-switch-pb7-branch"
                                 vpsmanager.command_text = f"Switch PB7 to {selected_branch}"
                                 if selected_commit_label != "HEAD (latest)":
@@ -1450,15 +1459,18 @@ def manage_vps():
                     # Status text and button in one row
                     status_col, btn_col = st.columns([3, 1])
                     
+                    # Calculate commits_behind if needed
+                    commits_behind = 0
+                    if is_behind_origin:
+                        for i, c in enumerate(pbremote.local_run.pbgui_branches_data[selected_branch]):
+                            if c['full'] == current_vps_commit:
+                                commits_behind = i
+                                break
+                    
                     with status_col:
                         if is_on_target:
                             st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                         elif is_behind_origin:
-                            commits_behind = 0
-                            for i, c in enumerate(pbremote.local_run.pbgui_branches_data[selected_branch]):
-                                if c['full'] == current_vps_commit:
-                                    commits_behind = i
-                                    break
                             if commits_behind > 0:
                                 st.warning(f"⚠️ VPS `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
                             else:
@@ -1470,7 +1482,8 @@ def manage_vps():
                                 st.warning(f"⚠️ This will switch to commit `{selected_commit[:7]}`")
                     
                     with btn_col:
-                        if st.button(button_text, disabled=is_on_target, type="primary"):
+                        button_disabled = is_on_target or (is_behind_origin and commits_behind == 0)
+                        if st.button(button_text, disabled=button_disabled, type="primary"):
                             extra_vars = {'branch': selected_branch}
                             if selected_commit:
                                 extra_vars['commit'] = selected_commit
@@ -1725,15 +1738,18 @@ def manage_vps():
                             # Status text and button in one row
                             status_col, btn_col = st.columns([3, 1])
                             
+                            # Calculate commits_behind if needed
+                            commits_behind = 0
+                            if is_behind_origin:
+                                for i, c in enumerate(pbremote.local_run.pb7_branches_data[selected_branch]):
+                                    if c['full'] == current_commit_full:
+                                        commits_behind = i
+                                        break
+                            
                             with status_col:
                                 if is_on_target:
                                     st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                                 elif is_behind_origin:
-                                    commits_behind = 0
-                                    for i, c in enumerate(pbremote.local_run.pb7_branches_data[selected_branch]):
-                                        if c['full'] == current_commit_full:
-                                            commits_behind = i
-                                            break
                                     if commits_behind > 0:
                                         st.warning(f"⚠️ VPS `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
                                     else:
@@ -1745,7 +1761,8 @@ def manage_vps():
                                         st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
                             
                             with btn_col:
-                                if st.button(button_text, disabled=is_on_target, type="primary", key="switch_pb7_branch_vps"):
+                                button_disabled = is_on_target or (is_behind_origin and commits_behind == 0)
+                                if st.button(button_text, disabled=button_disabled, type="primary", key="switch_pb7_branch_vps"):
                                     vpsmanager.command = "vps-switch-pb7-branch"
                                     vpsmanager.command_text = f"Switch PB7 to {selected_branch}"
                                     if selected_commit_label != "HEAD (latest)":
