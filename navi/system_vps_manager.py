@@ -611,7 +611,8 @@ def manage_master():
                     try:
                         current_index = available_branches.index(current_branch)
                     except ValueError:
-                        current_index = 0
+                        # If current branch not found, default to 'main' (or first branch if main doesn't exist)
+                        current_index = available_branches.index('main') if 'main' in available_branches else 0
                     
                     selected_branch = st.selectbox(
                         "Target Branch",
@@ -818,7 +819,8 @@ def manage_master():
                         try:
                             current_index = available_branches.index(current_branch)
                         except ValueError:
-                            current_index = 0
+                            # If current branch not found, default to 'master' (or first branch if master doesn't exist)
+                            current_index = available_branches.index('master') if 'master' in available_branches else 0
                         
                         selected_branch = st.selectbox(
                             "Target Branch",
@@ -1318,7 +1320,13 @@ def manage_vps():
                 st.info(f"📍 **Current VPS:** {current_vps_branch} @ {current_vps_commit[:7] if current_vps_commit else 'unknown'}")
                 
                 available_branches = list(pbremote.local_run.pbgui_branches_data.keys())
-                current_index = available_branches.index(current_vps_branch) if current_vps_branch in available_branches else 0
+                # Default to 'main' if current branch is unknown or not found
+                if current_vps_branch in available_branches:
+                    current_index = available_branches.index(current_vps_branch)
+                elif 'main' in available_branches:
+                    current_index = available_branches.index('main')
+                else:
+                    current_index = 0
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -1606,7 +1614,8 @@ def manage_vps():
                             try:
                                 current_index = available_branches.index(current_branch)
                             except ValueError:
-                                current_index = 0
+                                # If current branch not found, default to 'master' (or first branch if master doesn't exist)
+                                current_index = available_branches.index('master') if 'master' in available_branches else 0
                             
                             selected_branch = st.selectbox(
                                 "Target Branch",
