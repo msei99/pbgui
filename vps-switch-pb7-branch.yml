@@ -9,7 +9,7 @@
 # 6. Restart pbgui services
 
 - hosts: "{{ hostname }}"
-  gather_facts: "{{ debug }}"
+  gather_facts: yes
 
   vars:
     user: "{{ user }}"
@@ -107,6 +107,7 @@
 
     - name: Make sure PBRun ist running
       shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
         python "{{ pbgdir }}/starter.py" -s PBRun
       args:
         executable: /bin/bash
