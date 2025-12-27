@@ -751,7 +751,10 @@ def manage_master():
                                 if c['full'] == current_commit_full:
                                     commits_behind = i
                                     break
-                            st.warning(f"⚠️ Local `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                            if commits_behind > 0:
+                                st.warning(f"⚠️ Local `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                            else:
+                                st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                         else:
                             if branch_changed:
                                 st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
@@ -949,7 +952,10 @@ def manage_master():
                                     if c['full'] == current_commit_full:
                                         commits_behind = i
                                         break
-                                st.warning(f"⚠️ Local `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                                if commits_behind > 0:
+                                    st.warning(f"⚠️ Local `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                                else:
+                                    st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                             else:
                                 if branch_changed:
                                     st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
@@ -1453,7 +1459,10 @@ def manage_vps():
                                 if c['full'] == current_vps_commit:
                                     commits_behind = i
                                     break
-                            st.warning(f"⚠️ VPS `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                            if commits_behind > 0:
+                                st.warning(f"⚠️ VPS `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                            else:
+                                st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                         else:
                             if current_vps_branch != selected_branch:
                                 st.warning(f"⚠️ This will switch from `{current_vps_branch}` to `{selected_branch}`")
@@ -1725,7 +1734,10 @@ def manage_vps():
                                         if c['full'] == current_commit_full:
                                             commits_behind = i
                                             break
-                                    st.warning(f"⚠️ VPS `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                                    if commits_behind > 0:
+                                        st.warning(f"⚠️ VPS `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
+                                    else:
+                                        st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
                                 else:
                                     if branch_changed:
                                         st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
