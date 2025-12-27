@@ -1140,6 +1140,56 @@ class PBRun():
             print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for branch {branch_name}')
             self.pbgui_branches_data[branch_name] = commits
 
+    def get_current_pb7_status(self):
+        """Get current PB7 branch and commit directly from git (live query)"""
+        if not self.pb7dir:
+            return None, None
+        
+        pb7_git = Path(f'{self.pb7dir}/.git')
+        if not pb7_git.exists():
+            return None, None
+        
+        # Get current commit
+        commit_result = subprocess.run(
+            ["git", "--git-dir", f'{pb7_git}', "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_commit = commit_result.stdout.strip() if commit_result.returncode == 0 else ""
+        
+        # Get current branch (works reliably since we use git reset --hard)
+        branch_result = subprocess.run(
+            ["git", "--git-dir", f'{pb7_git}', "symbolic-ref", "--short", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
+        
+        return current_branch, current_commit
+
+    def get_current_pbgui_status(self):
+        """Get current PBGui branch and commit directly from git (live query)"""
+        if not self.pbgdir:
+            return None, None
+            
+        pbgui_git = Path(f'{self.pbgdir}/.git')
+        if not pbgui_git.exists():
+            return None, None
+        
+        # Get current commit
+        commit_result = subprocess.run(
+            ["git", "--git-dir", f'{pbgui_git}', "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_commit = commit_result.stdout.strip() if commit_result.returncode == 0 else ""
+        
+        # Get current branch (works reliably since we use git reset --hard)
+        branch_result = subprocess.run(
+            ["git", "--git-dir", f'{pbgui_git}', "symbolic-ref", "--short", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
+        
+        return current_branch, current_commit
+
     def load_pb7_branches_history(self):
         """Load commit history for all PB7 branches (last 50 commits per branch)"""
         if not self.pb7dir:

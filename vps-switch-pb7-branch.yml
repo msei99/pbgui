@@ -9,7 +9,7 @@
 # 6. Restart pbgui services
 
 - hosts: "{{ hostname }}"
-  gather_facts: yes
+  gather_facts: "{{ debug }}"
 
   vars:
     user: "{{ user }}"
@@ -68,15 +68,15 @@
       when: branch_exists.rc == 0
       notify: restart pb7
 
-    - name: Checkout specific commit if provided
-      command: git checkout "{{ target_commit }}"
+    - name: Reset to specific commit if provided (stays on branch)
+      command: git reset --hard "{{ target_commit }}"
       args:
         chdir: "{{ pb7dir }}"
       when: target_commit != ""
-      register: commit_checkout
+      register: commit_reset
       notify: restart pb7
 
-    - name: Pull latest changes (only if on branch HEAD, not detached)
+    - name: Pull latest changes (only if no specific commit provided)
       command: git pull
       args:
         chdir: "{{ pb7dir }}"
@@ -91,11 +91,24 @@
         extra_args: --upgrade pip
       listen: "restart pb7"
 
-    - name: Restart PBRun to reload PB7
+    - name: Build passivbot-rust with maturin
       shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBRun
+        source "{{ install_dir }}/venv_pb7/bin/activate"
+        maturin develop --release
+      args:
+        chdir: "{{ install_dir }}/pb7/passivbot-rust"
+        executable: /bin/bash
+      listen: "restart pb7"
+
+    - name: kill all pb7 processes
+      shell: "kill $(ps -ef | grep {{ pb7dir }}/src/main.py | grep -v grep | awk '{print $2}')"
+      listen: "restart pb7"
+      ignore_errors: yes
+
+    - name: Make sure PBRun ist running
+      shell: |
+        python "{{ pbgdir }}/starter.py" -s PBRun
       args:
         executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+        chdir: "{{ pbgdir }}"
       listen: "restart pb7"

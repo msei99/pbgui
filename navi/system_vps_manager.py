@@ -112,7 +112,12 @@ def list_vps():
         reboot = "✅"
     
     # Branch-aware comparison for Master PBGui
-    master_branch = pbremote.local_run.pbgui_branch
+    # Branch-aware comparison for PBGui - get LIVE status
+    master_branch, master_commit = pbremote.local_run.get_current_pbgui_status()
+    if not master_branch:
+        master_branch = "unknown"
+    if not master_commit:
+        master_commit = pbremote.local_run.pbgui_commit if hasattr(pbremote.local_run, 'pbgui_commit') else ""
     
     # Get origin version/commit for the master's branch
     if master_branch != "unknown" and hasattr(pbremote.local_run, 'pbgui_branches_data'):
@@ -121,7 +126,7 @@ def list_vps():
             branch_commits = pbremote.local_run.pbgui_branches_data[master_branch]
             if branch_commits:
                 origin_commit_for_branch = branch_commits[0]['full']  # First commit is HEAD
-                if pbremote.local_run.pbgui_commit == origin_commit_for_branch:
+                if master_commit == origin_commit_for_branch:
                     pbgui = "✅"
                 else:
                     pbgui = f"❌ {pbremote.local_run.pbgui_version} (..{origin_commit_for_branch[-5:]})"
@@ -133,7 +138,7 @@ def list_vps():
             pbgui = f"⚠️ {pbremote.local_run.pbgui_version}"
     elif master_branch == "main":
         # For main branch, use the traditional origin comparison
-        if pbremote.local_run.pbgui_version == pbremote.local_run.pbgui_version_origin and pbremote.local_run.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
+        if pbremote.local_run.pbgui_version == pbremote.local_run.pbgui_version_origin and master_commit == pbremote.local_run.pbgui_commit_origin:
             pbgui = "✅"
         else:
             pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
@@ -146,13 +151,18 @@ def list_vps():
     else:
         pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
     
-    # Branch-aware comparison for PB7
-    master_pb7_branch = pbremote.local_run.pb7_branch
+    # Branch-aware comparison for PB7 - get LIVE status
+    master_pb7_branch, master_pb7_commit = pbremote.local_run.get_current_pb7_status()
+    if not master_pb7_branch:
+        master_pb7_branch = "unknown"
+    if not master_pb7_commit:
+        master_pb7_commit = pbremote.local_run.pb7_commit if hasattr(pbremote.local_run, 'pb7_commit') else ""
+    
     pb7_branches_data = pbremote.local_run.pb7_branches_data
     if master_pb7_branch in pb7_branches_data and pb7_branches_data[master_pb7_branch]:
         # Compare with HEAD of the actual branch
         origin_commit = pb7_branches_data[master_pb7_branch][0]['full']
-        if pbremote.local_run.pb7_commit == origin_commit:
+        if master_pb7_commit == origin_commit:
             pb7 = "✅"
         else:
             pb7 = f"❌ {pbremote.pb7_version} (..{origin_commit[-5:]})"
@@ -174,12 +184,12 @@ def list_vps():
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
         "PBGui": f'{pbremote.pbgui_version}',
-        "PBGui Branch": f'{master_branch} ({pbremote.local_run.pbgui_commit[:7]})',
+        "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
         "PB7": f'{pbremote.pb7_version}',
-        "PB7 Branch": f'{master_pb7_branch} ({pbremote.local_run.pb7_commit[:7]})',
+        "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7,
         "API Sync": "✅"
     })
@@ -394,6 +404,31 @@ def manage_master():
     if "monitor" not in st.session_state:
         st.session_state.monitor = Monitor()
     monitor = st.session_state.monitor
+    
+    # Create stable placeholder for messages to prevent expander reset
+    message_placeholder = st.empty()
+    
+    # Auto-reload branches after successful branch switch
+    if 'pbgui_branch_switched' in st.session_state:
+        st.session_state.pbgui_expander_open = True
+        if hasattr(pbremote.local_run, 'load_git_branches_history'):
+            with message_placeholder:
+                with st.spinner("Reloading PBGui branch history..."):
+                    pbremote.local_run.load_git_branches_history()
+        del st.session_state.pbgui_branch_switched
+    
+    if 'pb7_branch_switched' in st.session_state:
+        st.session_state.pb7_expander_open = True
+        if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
+            with message_placeholder:
+                with st.spinner("Reloading PB7 branch history..."):
+                    pbremote.local_run.load_pb7_branches_history()
+        del st.session_state.pb7_branch_switched
+    
+    # Check if expanders should be open (only once after switch)
+    pbgui_expander_should_expand = st.session_state.pop('pbgui_expander_open', False)
+    pb7_expander_should_expand = st.session_state.pop('pb7_expander_open', False)
+    
     # Navigation
     with st.sidebar:
         col1, col2, col3 = st.columns([1, 1, 2])
@@ -517,6 +552,20 @@ def manage_master():
         reboot = "❌"
     else:
         reboot = "✅"
+    
+    # Get current branch status (live)
+    master_branch, master_commit = pbremote.local_run.get_current_pbgui_status()
+    if not master_branch:
+        master_branch = "unknown"
+    if not master_commit:
+        master_commit = pbremote.local_run.pbgui_commit if hasattr(pbremote.local_run, 'pbgui_commit') else ""
+    
+    master_pb7_branch, master_pb7_commit = pbremote.local_run.get_current_pb7_status()
+    if not master_pb7_branch:
+        master_pb7_branch = "unknown"
+    if not master_pb7_commit:
+        master_pb7_commit = pbremote.local_run.pb7_commit if hasattr(pbremote.local_run, 'pb7_commit') else ""
+    
     d.append({
         "Name": pbremote.name,
         "Online": online,
@@ -524,20 +573,32 @@ def manage_master():
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
         "PBGui": f'{pbremote.pbgui_version}',
-        "PBGui Branch": f'{pbremote.local_run.pbgui_branch} ({pbremote.local_run.pbgui_commit[:7]})',
+        "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
         "PB7": f'{pbremote.pb7_version}',
+        "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7
     })
     
     # Branch Management Section - directly above table
-    with st.expander("🔀 **Local PBGui Branch Management**", expanded=False):
+    # Stable placeholder to prevent expander reset when DOM changes above
+    pbgui_expander_anchor = st.empty()
+    with pbgui_expander_anchor:
+        pass  # Anchor point - keeps DOM position stable
+    
+    with st.expander("🔀 **Local PBGui Branch Management**", expanded=pbgui_expander_should_expand):
         # Get branch list - with backward compatibility check
         available_branches = []
-        current_branch = getattr(pbremote.local_run, 'pbgui_branch', 'unknown')
-        current_commit_full = getattr(pbremote.local_run, 'pbgui_commit', '')
+        
+        # Get LIVE current status from git (not cached)
+        if hasattr(pbremote.local_run, 'get_current_pbgui_status'):
+            current_branch, current_commit_full = pbremote.local_run.get_current_pbgui_status()
+        else:
+            # Fallback to cached values
+            current_branch = getattr(pbremote.local_run, 'pbgui_branch', 'unknown')
+            current_commit_full = getattr(pbremote.local_run, 'pbgui_commit', '')
         
         if hasattr(pbremote.local_run, 'pbgui_branches_data') and pbremote.local_run.pbgui_branches_data:
             available_branches = list(pbremote.local_run.pbgui_branches_data.keys())
@@ -711,6 +772,7 @@ def manage_master():
                                 debug=st.session_state.setup_debug,
                                 extra_vars=extra_vars
                             )
+                            st.session_state.pbgui_branch_switched = True
                             del st.session_state.manage_master
                             st.session_state.view_update_master = True
                             st.rerun()
@@ -721,18 +783,29 @@ def manage_master():
     
     # PB7 Branch Management Section - directly above table
     if pbremote.local_run.pb7dir:
-        with st.expander("🔀 **Local PB7 Branch Management**", expanded=False):
+        # Stable placeholder to prevent expander reset when DOM changes above
+        pb7_expander_anchor = st.empty()
+        with pb7_expander_anchor:
+            pass  # Anchor point - keeps DOM position stable
+        
+        with st.expander("🔀 **Local PB7 Branch Management**", expanded=pb7_expander_should_expand):
             # Get branch list - with backward compatibility check
             available_branches = []
-            current_branch = getattr(pbremote.local_run, 'pb7_branch', 'unknown')
-            current_commit_full = getattr(pbremote.local_run, 'pb7_commit', '')
+            
+            # Get LIVE current status from git (not cached)
+            if hasattr(pbremote.local_run, 'get_current_pb7_status'):
+                current_branch, current_commit_full = pbremote.local_run.get_current_pb7_status()
+            else:
+                # Fallback to cached values
+                current_branch = getattr(pbremote.local_run, 'pb7_branch', 'unknown')
+                current_commit_full = getattr(pbremote.local_run, 'pb7_commit', '')
             
             if hasattr(pbremote.local_run, 'pb7_branches_data') and pbremote.local_run.pb7_branches_data:
                 available_branches = list(pbremote.local_run.pb7_branches_data.keys())
             
             if available_branches:
                 # Current state display
-                st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7]}")
+                st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
                 
                 col1, col2 = st.columns(2)
                 
@@ -897,6 +970,10 @@ def manage_master():
                                     debug=st.session_state.setup_debug,
                                     extra_vars=extra_vars
                                 )
+                                # Clear cached branch data to force reload after update
+                                if 'master_pb7_commits_loaded' in st.session_state:
+                                    del st.session_state.master_pb7_commits_loaded
+                                st.session_state.pb7_branch_switched = True
                                 del st.session_state.manage_master
                                 st.session_state.view_update_master = True
                                 st.rerun()
@@ -929,6 +1006,31 @@ def manage_vps():
                 st.session_state.monitor.d_multi = []
                 st.session_state.monitor.d_single = []
     vps = st.session_state.manage_vps
+    
+    # Create stable placeholder for messages to prevent expander reset
+    vps_message_placeholder = st.empty()
+    
+    # Auto-reload branches after successful branch switch for VPS
+    vps_pbgui_expander_should_expand = False
+    if 'pbgui_branch_switched_vps' in st.session_state:
+        if st.session_state.pbgui_branch_switched_vps == vps.hostname:
+            vps_pbgui_expander_should_expand = True
+            with vps_message_placeholder:
+                with st.spinner("Reloading PBGui branch history..."):
+                    if hasattr(pbremote.local_run, 'load_git_branches_history'):
+                        pbremote.local_run.load_git_branches_history()
+        del st.session_state.pbgui_branch_switched_vps
+    
+    vps_pb7_expander_should_expand = False
+    if 'pb7_branch_switched_vps' in st.session_state:
+        if st.session_state.pb7_branch_switched_vps == vps.hostname:
+            vps_pb7_expander_should_expand = True
+            with vps_message_placeholder:
+                with st.spinner("Reloading PB7 branch history..."):
+                    if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
+                        pbremote.local_run.load_pb7_branches_history()
+        del st.session_state.pb7_branch_switched_vps
+    
     # Init PBRemote
     pbremote = st.session_state.pbremote
     vps.bucket = pbremote.bucket
@@ -1193,7 +1295,12 @@ def manage_vps():
     # Branch Management for VPS
     server = pbremote.find_server(vps.hostname)
     if server and hasattr(pbremote.local_run, 'pbgui_branches_data') and pbremote.local_run.pbgui_branches_data:
-        with st.expander("🔀 **VPS PBGui Branch Management**"):
+        # Stable placeholder to prevent expander reset
+        vps_pbgui_expander_anchor = st.empty()
+        with vps_pbgui_expander_anchor:
+            pass  # Anchor point
+        
+        with st.expander("🔀 **VPS PBGui Branch Management**", expanded=vps_pbgui_expander_should_expand):
             current_vps_branch = getattr(server, 'pbgui_branch', 'unknown')
             current_vps_commit = getattr(server, 'pbgui_commit', '')
             current_master_branch = getattr(pbremote.local_run, 'pbgui_branch', 'unknown')
@@ -1363,6 +1470,7 @@ def manage_vps():
                             vps.command = "vps-switch-pbgui-branch"
                             vps.command_text = f"Switch to branch {selected_branch}"
                             vpsmanager.update_vps(vps, debug=st.session_state.setup_debug, extra_vars=extra_vars)
+                            st.session_state.pbgui_branch_switched_vps = vps.hostname
                             st.session_state.view_update = vps
                             del st.session_state.manage_vps
                             st.rerun()
@@ -1451,18 +1559,29 @@ def manage_vps():
         
         # PB7 Branch Management Section for VPS - directly above table
         if server.is_online() and pbremote.local_run.pb7dir:
-            with st.expander("🔀 **VPS PB7 Branch Management**"):
+            # Stable placeholder to prevent expander reset
+            vps_pb7_expander_anchor = st.empty()
+            with vps_pb7_expander_anchor:
+                pass  # Anchor point
+            
+            with st.expander("🔀 **VPS PB7 Branch Management**", expanded=vps_pb7_expander_should_expand):
                 # Get branch list
                 available_branches = []
-                current_branch = getattr(server, 'pb7_branch', 'unknown')
-                current_commit_full = getattr(server, 'pb7_commit', '')
+                
+                # Get LIVE current status from git (not cached)
+                if hasattr(server, 'get_current_pb7_status'):
+                    current_branch, current_commit_full = server.get_current_pb7_status()
+                else:
+                    # Fallback to cached values
+                    current_branch = getattr(server, 'pb7_branch', 'unknown')
+                    current_commit_full = getattr(server, 'pb7_commit', '')
                 
                 if hasattr(pbremote.local_run, 'pb7_branches_data') and pbremote.local_run.pb7_branches_data:
                     available_branches = list(pbremote.local_run.pb7_branches_data.keys())
                 
                 if available_branches:
                     # Current state display
-                    st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7]}")
+                    st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
                     
                     col1, col2 = st.columns(2)
                     
@@ -1628,6 +1747,10 @@ def manage_vps():
                                         debug=st.session_state.setup_debug,
                                         extra_vars=extra_vars
                                     )
+                                    # Clear cached branch data to force reload after update
+                                    if 'vps_pb7_commits_loaded' in st.session_state:
+                                        del st.session_state.vps_pb7_commits_loaded
+                                    st.session_state.pb7_branch_switched_vps = vps.hostname
                                     st.session_state.view_update = vps
                                     del st.session_state.manage_vps
                                     st.rerun()
@@ -1851,6 +1974,10 @@ def view_update_master():
         if st.button(":material/refresh:"):
             st.rerun()
         if st.button(":material/home:"):
+            del st.session_state.view_update_master
+            st.rerun()
+        if st.button("Manage Master"):
+            st.session_state.manage_master = True
             del st.session_state.view_update_master
             st.rerun()
     st.header(vpsmanager.command_text + " " + st.session_state.pbname)
