@@ -1312,9 +1312,11 @@ def manage_vps():
     if server and hasattr(pbremote.local_run, 'pbgui_branches_data') and pbremote.local_run.pbgui_branches_data:
         @st.fragment
         def vps_pbgui_branch_management():
+            # Get fresh server data at fragment execution time
+            current_server = pbremote.find_server(vps.hostname)
             with st.expander("🔀 **VPS PBGui Branch Management**", expanded=vps_pbgui_expander_should_expand):
-                current_vps_branch = getattr(server, 'pbgui_branch', 'unknown')
-                current_vps_commit = getattr(server, 'pbgui_commit', '')
+                current_vps_branch = getattr(current_server, 'pbgui_branch', 'unknown') if current_server else 'unknown'
+                current_vps_commit = getattr(current_server, 'pbgui_commit', '') if current_server else ''
                 current_master_branch = getattr(pbremote.local_run, 'pbgui_branch', 'unknown')
                 
                 st.info(f"📍 **Current VPS:** {current_vps_branch} @ {current_vps_commit[:7] if current_vps_commit else 'unknown'}")
@@ -1342,6 +1344,8 @@ def manage_vps():
                     with col_btn1:
                         if st.button("🔄 Reload", key="reload_vps_branches", use_container_width=True):
                             with st.spinner("Reloading..."):
+                                # Update VPS current status
+                                pbremote.update_remote_servers()
                                 if hasattr(pbremote.local_run, 'load_git_branches_history'):
                                     pbremote.local_run.load_git_branches_history()
                                 if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
@@ -1373,7 +1377,7 @@ def manage_vps():
                         
                         commit_labels = []
                         for commit in commits:
-                            is_current = (commit['full'] == getattr(server, 'pbgui_commit', ''))
+                            is_current = (commit['full'] == getattr(current_server, 'pbgui_commit', ''))
                             prefix = "🔹 CURRENT: " if is_current else ""
                             # Use first line only for selectbox display, shorten to 50 chars
                             # Replace newlines with space to prevent selectbox breaking
@@ -1588,17 +1592,19 @@ def manage_vps():
         if server.is_online() and pbremote.local_run.pb7dir:
             @st.fragment
             def vps_pb7_branch_management():
+                # Get fresh server data at fragment execution time
+                current_server = pbremote.find_server(vps.hostname)
                 with st.expander("🔀 **VPS PB7 Branch Management**", expanded=vps_pb7_expander_should_expand):
                     # Get branch list
                     available_branches = []
                     
                     # Get LIVE current status from git (not cached)
-                    if hasattr(server, 'get_current_pb7_status'):
-                        current_branch, current_commit_full = server.get_current_pb7_status()
+                    if current_server and hasattr(current_server, 'get_current_pb7_status'):
+                        current_branch, current_commit_full = current_server.get_current_pb7_status()
                     else:
                         # Fallback to cached values
-                        current_branch = getattr(server, 'pb7_branch', 'unknown')
-                        current_commit_full = getattr(server, 'pb7_commit', '')
+                        current_branch = getattr(current_server, 'pb7_branch', 'unknown') if current_server else 'unknown'
+                        current_commit_full = getattr(current_server, 'pb7_commit', '') if current_server else ''
                     
                     if hasattr(pbremote.local_run, 'pb7_branches_data') and pbremote.local_run.pb7_branches_data:
                         available_branches = list(pbremote.local_run.pb7_branches_data.keys())
@@ -1629,6 +1635,8 @@ def manage_vps():
                             with col_btn1:
                                 if st.button("🔄 Reload", key="reload_vps_pb7_branches", use_container_width=True):
                                     with st.spinner("Reloading..."):
+                                        # Update VPS current status
+                                        pbremote.update_remote_servers()
                                         if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
                                             pbremote.local_run.load_pb7_branches_history()
                                         # Reset commit counters for all branches
@@ -1769,10 +1777,10 @@ def manage_vps():
                                     # If behind origin, button should be enabled regardless of commits_behind
                                     button_disabled = is_on_target
                                     if st.button(button_text, disabled=button_disabled, type="primary", key="switch_pb7_branch_vps"):
-                                        vpsmanager.command = "vps-switch-pb7-branch"
-                                        vpsmanager.command_text = f"Switch PB7 to {selected_branch}"
+                                        vps.command = "vps-switch-pb7-branch"
+                                        vps.command_text = f"Switch PB7 to {selected_branch}"
                                         if selected_commit_label != "HEAD (latest)":
-                                            vpsmanager.command_text += f" @ {selected_commit_hash[:7]}"
+                                            vps.command_text += f" @ {selected_commit_hash[:7]}"
                                         # Pass branch and commit to Ansible playbook
                                         extra_vars = {'pb7_branch': selected_branch}
                                         if selected_commit_label != "HEAD (latest)":
