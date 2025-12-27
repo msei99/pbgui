@@ -129,7 +129,7 @@ def list_vps():
                 if master_commit == origin_commit_for_branch:
                     pbgui = "✅"
                 else:
-                    pbgui = f"❌ {pbremote.local_run.pbgui_version} (..{origin_commit_for_branch[-5:]})"
+                    pbgui = f"❌ {pbremote.local_run.pbgui_version} ({origin_commit_for_branch[:7]})"
             else:
                 # No commits found for branch
                 pbgui = f"⚠️ {pbremote.local_run.pbgui_version}"
@@ -141,7 +141,7 @@ def list_vps():
         if pbremote.local_run.pbgui_version == pbremote.local_run.pbgui_version_origin and master_commit == pbremote.local_run.pbgui_commit_origin:
             pbgui = "✅"
         else:
-            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
+            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin[:7]})"
     else:
         # Unknown branch
         pbgui = f"⚠️ {pbremote.local_run.pbgui_version}"
@@ -149,7 +149,7 @@ def list_vps():
     if pbremote.local_run.pb6_version == pbremote.local_run.pb6_version_origin and pbremote.local_run.pb6_commit == pbremote.local_run.pb6_commit_origin:
         pb6 = "✅"
     else:
-        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
+        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin[:7]})"
     
     # Branch-aware comparison for PB7 - get LIVE status
     master_pb7_branch, master_pb7_commit = pbremote.local_run.get_current_pb7_status()
@@ -165,13 +165,13 @@ def list_vps():
         if master_pb7_commit == origin_commit:
             pb7 = "✅"
         else:
-            pb7 = f"❌ {pbremote.pb7_version} (..{origin_commit[-5:]})"
+            pb7 = f"❌ {pbremote.pb7_version} ({origin_commit[:7]})"
     elif master_pb7_branch == "master":
         # Fallback to origin/master comparison for master branch
         if pbremote.local_run.pb7_version == pbremote.local_run.pb7_version_origin and pbremote.local_run.pb7_commit == pbremote.local_run.pb7_commit_origin:
             pb7 = "✅"
         else:
-            pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
+            pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin[:7]})"
     else:
         # Unknown branch or no branch data
         pb7 = "⚠️ version"
@@ -184,12 +184,12 @@ def list_vps():
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
         "PBGui": f'{pbremote.pbgui_version}',
-        "PBGui Branch": f'{master_branch} (..{master_commit[-5:]})',
+        "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
         "PB7": f'{pbremote.pb7_version}',
-        "PB7 Branch": f'{master_pb7_branch} (..{master_pb7_commit[-5:]})',
+        "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7,
         "API Sync": "✅"
     })
@@ -304,7 +304,7 @@ def list_vps():
         
         # Branch-aware comparison for PBGui
         server_branch = getattr(server, "pbgui_branch", "unknown")
-        server_commit_short = f"..{server.pbgui_commit[-5:]}" if server.pbgui_commit else "unknown"
+        server_commit_short = f"{server.pbgui_commit[:7]}" if server.pbgui_commit else "unknown"
         
         # Get origin version/commit for the server's branch
         if server_branch != "unknown" and hasattr(pbremote.local_run, 'pbgui_branches_data'):
@@ -316,7 +316,7 @@ def list_vps():
                     if server.pbgui_commit == origin_commit_for_branch:
                         pbgui = "✅"
                     else:
-                        pbgui = f"❌ {server.pbgui_version} (..{origin_commit_for_branch[-5:]})"
+                        pbgui = f"❌ {server.pbgui_version} ({origin_commit_for_branch[:7]})"
                 else:
                     # No commits found for branch
                     pbgui = f"⚠️ {server.pbgui_version}"
@@ -328,7 +328,7 @@ def list_vps():
             if server.pbgui_version == pbremote.local_run.pbgui_version_origin and server.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
                 pbgui = "✅"
             else:
-                pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
+                pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin[:7]})"
         else:
             # Unknown branch
             pbgui = f"⚠️ {server.pbgui_version}"
@@ -336,11 +336,11 @@ def list_vps():
         if server.pb6_version == pbremote.local_run.pb6_version_origin and server.pb6_commit == pbremote.local_run.pb6_commit_origin:
             pb6 = "✅"
         else:
-            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
+            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin[:7]})"
         
         # Branch-aware comparison for PB7
         server_pb7_branch = getattr(server, "pb7_branch", "unknown")
-        server_pb7_commit_short = f"..{server.pb7_commit[-5:]}" if server.pb7_commit else "unknown"
+        server_pb7_commit_short = f"{server.pb7_commit[:7]}" if server.pb7_commit else "unknown"
         
         if server_pb7_branch != "unknown" and hasattr(pbremote.local_run, 'pb7_branches_data'):
             if server_pb7_branch in pbremote.local_run.pb7_branches_data:
@@ -350,7 +350,7 @@ def list_vps():
                     if server.pb7_commit == origin_commit_for_branch:
                         pb7 = "✅"
                     else:
-                        pb7 = f"❌ {server.pb7_version} (..{origin_commit_for_branch[-5:]})"
+                        pb7 = f"❌ {server.pb7_version} ({origin_commit_for_branch[:7]})"
                 else:
                     pb7 = f"⚠️ {server.pb7_version}"
             else:
@@ -359,7 +359,7 @@ def list_vps():
             if server.pb7_version == pbremote.local_run.pb7_version_origin and server.pb7_commit == pbremote.local_run.pb7_commit_origin:
                 pb7 = "✅"
             else:
-                pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
+                pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin[:7]})"
         else:
             pb7 = f"⚠️ {server.pb7_version}"
         
@@ -530,24 +530,24 @@ def manage_master():
         if pbremote.pbgui_commit == origin_commit:
             pbgui = "✅"
         else:
-            pbgui = f"❌ {pbremote.pbgui_version} (..{origin_commit[-5:]})"
+            pbgui = f"❌ {pbremote.pbgui_version} ({origin_commit[:7]})"
     elif master_branch == "main":
         # Fallback to origin/main comparison for main branch
         if pbremote.pbgui_version == pbremote.local_run.pbgui_version_origin and pbremote.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
             pbgui = "✅"
         else:
-            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
+            pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin[:7]})"
     else:
         # Unknown branch or no branch data
         pbgui = "⚠️ version"
     if pbremote.pb6_version == pbremote.local_run.pb6_version_origin and pbremote.pb6_commit == pbremote.local_run.pb6_commit_origin:
         pb6 = "✅"
     else:
-        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
+        pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin[:7]})"
     if pbremote.pb7_version == pbremote.local_run.pb7_version_origin and pbremote.pb7_commit == pbremote.local_run.pb7_commit_origin:
         pb7 = "✅"
     else:
-        pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
+        pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin[:7]})"
     if pbremote.local_run.reboot:
         reboot = "❌"
     else:
@@ -573,12 +573,12 @@ def manage_master():
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
         "PBGui": f'{pbremote.pbgui_version}',
-        "PBGui Branch": f'{master_branch} (..{master_commit[-5:]})',
+        "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
         "PB7": f'{pbremote.pb7_version}',
-        "PB7 Branch": f'{master_pb7_branch} (..{master_pb7_commit[-5:]})',
+        "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7
     })
     
@@ -602,7 +602,7 @@ def manage_master():
             
             if available_branches:
                 # Current state display
-                st.info(f"📍 **Current:** {current_branch} @ ..{current_commit_full[-5:]}")
+                st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7]}")
                 
                 col1, col2 = st.columns(2)
                 
@@ -759,7 +759,7 @@ def manage_master():
                                 if branch_changed:
                                     st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
                                 elif commit_changed:
-                                    st.warning(f"⚠️ This will switch to commit `..{selected_commit_hash[-5:]}`")
+                                    st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
                         
                         with btn_col:
                             # Disable button if on target OR if behind origin but commits_behind = 0
@@ -768,7 +768,7 @@ def manage_master():
                                 vpsmanager.command = "master-switch-pbgui-branch"
                                 vpsmanager.command_text = f"Switch to {selected_branch}"
                                 if selected_commit_label != "HEAD (latest)":
-                                    vpsmanager.command_text += f" @ ..{selected_commit_hash[-5:]}"
+                                    vpsmanager.command_text += f" @ {selected_commit_hash[:7]}"
                                 # Pass branch and commit to Ansible playbook
                                 extra_vars = {'branch': selected_branch}
                                 if selected_commit_label != "HEAD (latest)":
@@ -809,7 +809,7 @@ def manage_master():
                 
                 if available_branches:
                     # Current state display
-                    st.info(f"📍 **Current:** {current_branch} @ ..{current_commit_full[-5:] if current_commit_full else 'unknown'}")
+                    st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
                     
                     col1, col2 = st.columns(2)
                     
@@ -964,7 +964,7 @@ def manage_master():
                                     if branch_changed:
                                         st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
                                     elif commit_changed:
-                                        st.warning(f"⚠️ This will switch to commit `..{selected_commit_hash[-5:]}`")
+                                        st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
                             
                             with btn_col:
                                 button_disabled = is_on_target or (is_behind_origin and commits_behind == 0)
@@ -972,7 +972,7 @@ def manage_master():
                                     vpsmanager.command = "master-switch-pb7-branch"
                                     vpsmanager.command_text = f"Switch PB7 to {selected_branch}"
                                     if selected_commit_label != "HEAD (latest)":
-                                        vpsmanager.command_text += f" @ ..{selected_commit_hash[-5:]}"
+                                        vpsmanager.command_text += f" @ {selected_commit_hash[:7]}"
                                     # Pass branch and commit to Ansible playbook
                                     extra_vars = {'pb7_branch': selected_branch}
                                     if selected_commit_label != "HEAD (latest)":
@@ -1315,7 +1315,7 @@ def manage_vps():
                 current_vps_commit = getattr(server, 'pbgui_commit', '')
                 current_master_branch = getattr(pbremote.local_run, 'pbgui_branch', 'unknown')
                 
-                st.info(f"📍 **Current VPS:** {current_vps_branch} @ ..{current_vps_commit[-5:] if current_vps_commit else 'unknown'}")
+                st.info(f"📍 **Current VPS:** {current_vps_branch} @ {current_vps_commit[:7] if current_vps_commit else 'unknown'}")
                 
                 available_branches = list(pbremote.local_run.pbgui_branches_data.keys())
                 current_index = available_branches.index(current_vps_branch) if current_vps_branch in available_branches else 0
@@ -1474,7 +1474,7 @@ def manage_vps():
                                 if current_vps_branch != selected_branch:
                                     st.warning(f"⚠️ This will switch from `{current_vps_branch}` to `{selected_branch}`")
                                 elif selected_commit:
-                                    st.warning(f"⚠️ This will switch to commit `..{selected_commit[-5:]}`")
+                                    st.warning(f"⚠️ This will switch to commit `{selected_commit[:7]}`")
                         
                         with btn_col:
                             button_disabled = is_on_target or (is_behind_origin and commits_behind == 0)
@@ -1513,7 +1513,7 @@ def manage_vps():
                     if server.pbgui_commit == origin_commit_for_branch:
                         pbgui = "✅"
                     else:
-                        pbgui = f"❌ {server.pbgui_version} (..{origin_commit_for_branch[-5:]})"
+                        pbgui = f"❌ {server.pbgui_version} ({origin_commit_for_branch[:7]})"
                 else:
                     pbgui = f"⚠️ {server.pbgui_version}"
             else:
@@ -1522,14 +1522,14 @@ def manage_vps():
             if server.pbgui_version == pbremote.local_run.pbgui_version_origin and server.pbgui_commit == pbremote.local_run.pbgui_commit_origin:
                 pbgui = "✅"
             else:
-                pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} (..{pbremote.local_run.pbgui_commit_origin[-5:]})"
+                pbgui = f"❌ {pbremote.local_run.pbgui_version_origin} ({pbremote.local_run.pbgui_commit_origin[:7]})"
         else:
             pbgui = f"⚠️ {server.pbgui_version}"
         
         if server.pb6_version == pbremote.local_run.pb6_version_origin and server.pb6_commit == pbremote.local_run.pb6_commit_origin:
             pb6 = "✅"
         else:
-            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} (..{pbremote.local_run.pb6_commit_origin[-5:]})"
+            pb6 = f"❌ {pbremote.local_run.pb6_version_origin} ({pbremote.local_run.pb6_commit_origin[:7]})"
         
         # Branch-aware comparison for PB7
         server_pb7_branch = getattr(server, "pb7_branch", "unknown")
@@ -1542,7 +1542,7 @@ def manage_vps():
                     if server.pb7_commit == origin_commit_for_branch:
                         pb7 = "✅"
                     else:
-                        pb7 = f"❌ {server.pb7_version} (..{origin_commit_for_branch[-5:]})"
+                        pb7 = f"❌ {server.pb7_version} ({origin_commit_for_branch[:7]})"
                 else:
                     pb7 = f"⚠️ {server.pb7_version}"
             else:
@@ -1551,7 +1551,7 @@ def manage_vps():
             if server.pb7_version == pbremote.local_run.pb7_version_origin and server.pb7_commit == pbremote.local_run.pb7_commit_origin:
                 pb7 = "✅"
             else:
-                pb7 = f"❌ {pbremote.local_run.pb7_version_origin} (..{pbremote.local_run.pb7_commit_origin[-5:]})"
+                pb7 = f"❌ {pbremote.local_run.pb7_version_origin} ({pbremote.local_run.pb7_commit_origin[:7]})"
         else:
             pb7 = f"⚠️ {server.pb7_version}"
         
@@ -1572,7 +1572,7 @@ def manage_vps():
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,
             "PB7": f'{server.pb7_version}',
-            "PB7 Branch": f'{server_pb7_branch} (..{server.pb7_commit[-5:] if server.pb7_commit else "unknown"})',
+            "PB7 Branch": f'{server_pb7_branch} ({server.pb7_commit[:7] if server.pb7_commit else "unknown"})',
             "PB7 github": pb7
         })
         
@@ -1597,7 +1597,7 @@ def manage_vps():
                     
                     if available_branches:
                         # Current state display
-                        st.info(f"📍 **Current:** {current_branch} @ ..{current_commit_full[-5:] if current_commit_full else 'unknown'}")
+                        st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
                         
                         col1, col2 = st.columns(2)
                         
@@ -1753,7 +1753,7 @@ def manage_vps():
                                         if branch_changed:
                                             st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
                                         elif commit_changed:
-                                            st.warning(f"⚠️ This will switch to commit `..{selected_commit_hash[-5:]}`")
+                                            st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
                                 
                                 with btn_col:
                                     # Button should be disabled only when already on target
@@ -1763,7 +1763,7 @@ def manage_vps():
                                         vpsmanager.command = "vps-switch-pb7-branch"
                                         vpsmanager.command_text = f"Switch PB7 to {selected_branch}"
                                         if selected_commit_label != "HEAD (latest)":
-                                            vpsmanager.command_text += f" @ ..{selected_commit_hash[-5:]}"
+                                            vpsmanager.command_text += f" @ {selected_commit_hash[:7]}"
                                         # Pass branch and commit to Ansible playbook
                                         extra_vars = {'pb7_branch': selected_branch}
                                         if selected_commit_label != "HEAD (latest)":
