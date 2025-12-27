@@ -1,0 +1,89 @@
+---
+# Switch pb7 branch/commit on localhost
+# Steps:
+# 1. Fetch from origin
+# 2. Check for uncommitted changes (fail if found)
+# 3. Checkout specified branch
+# 4. Optionally checkout specific commit (detached HEAD)
+# 5. Pull if on branch HEAD (not detached)
+# 6. Restart pbgui services
+
+- hosts: localhost
+  gather_facts: "{{ debug }}"
+
+  vars:
+    user: "{{ user }}"
+    pb7dir: "{{ pb7dir }}"
+    target_branch: "{{ pb7_branch }}"
+    target_commit: "{{ pb7_commit | default('') }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: Fetch from origin
+      command: git fetch origin
+      args:
+        chdir: "{{ pb7dir }}"
+      when: pb7dir != ""
+      changed_when: false
+
+    - name: Check for uncommitted changes (tracked files only)
+      shell: git diff --name-only && git diff --cached --name-only
+      args:
+        chdir: "{{ pb7dir }}"
+      register: git_status
+      changed_when: false
+
+    - name: Fail if uncommitted changes exist
+      fail:
+        msg: "Uncommitted changes detected in PB7. Please commit or stash changes before switching branches."
+      when: git_status.stdout != ""
+
+    - name: Checkout target branch
+      command: git checkout "{{ target_branch }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      register: checkout_result
+      notify: restart pb7
+
+    - name: Checkout specific commit if provided
+      command: git checkout "{{ target_commit }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      when: target_commit != ""
+      register: commit_checkout
+      notify: restart pb7
+
+    - name: Pull latest changes (only if on branch HEAD, not detached)
+      command: git pull
+      args:
+        chdir: "{{ pb7dir }}"
+      when: target_commit == ""
+      register: pull_result
+      notify: restart pb7
+
+    - name: Display checkout result
+      debug:
+        msg: |
+          PB7 Branch: {{ target_branch }}
+          PB7 Commit: {{ target_commit if target_commit != '' else 'HEAD' }}
+          Status: Switched successfully
+      tags: debug,never
+
+  handlers:
+    - name: Install pb7 requirements
+      pip:
+        requirements: "{{ pb7dir }}/requirements.txt"
+        extra_args: --upgrade
+      listen: "restart pb7"
+
+    - name: Restart PBRun to reload PB7
+      shell: |
+        python "{{ pbgdir }}/starter.py" -r PBRun
+      args:
+        executable: /bin/bash
+        chdir: "{{ pbgdir }}"
+      listen: "restart pb7"
