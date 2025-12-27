@@ -1020,6 +1020,9 @@ def manage_vps():
                 st.session_state.monitor.d_single = []
     vps = st.session_state.manage_vps
     
+    # Init PBRemote (must be before branch reload logic)
+    pbremote = st.session_state.pbremote
+    
     # Create stable placeholder for messages to prevent expander reset
     vps_message_placeholder = st.empty()
     
@@ -1043,9 +1046,6 @@ def manage_vps():
                     if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
                         pbremote.local_run.load_pb7_branches_history()
         del st.session_state.pb7_branch_switched_vps
-    
-    # Init PBRemote
-    pbremote = st.session_state.pbremote
     vps.bucket = pbremote.bucket
     # Init Monitor
     if "monitor" not in st.session_state:
