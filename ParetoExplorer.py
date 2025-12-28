@@ -637,7 +637,9 @@ class ParetoExplorer:
             
             available_metrics = list(self.loader.configs[0].suite_metrics.keys()) if self.loader.configs else []
             
-            if viz_type in ["2D Scatter", "3D Scatter"]:
+            # Separate handling for 2D and 3D
+            if viz_type == "2D Scatter":
+                # 2D Scatter - Original preset logic
                 # Preset configurations for common analysis patterns
                 st.markdown("---")
                 
@@ -863,10 +865,156 @@ class ParetoExplorer:
                                            index=y_index, 
                                            key='y_metric')
                 
-                if viz_type == "3D Scatter":
-                    z_metric = st.selectbox("Z-Axis:", available_metrics, index=min(2, len(available_metrics)-1), key='z_metric')
-                
                 color_metric = st.selectbox("Color by:", ["None"] + available_metrics, key='color_metric')
+                color_metric = None if color_metric == "None" else color_metric
+                
+            elif viz_type == "3D Scatter":
+                # 3D Scatter - Separate preset logic
+                st.markdown("---")
+                
+                # Toggles for 3D metric selection
+                col_toggle1, col_toggle2 = st.columns(2)
+                with col_toggle1:
+                    use_weighted = st.toggle("Use Weighted (_w) Metrics", value=True, 
+                                            help="Weighted metrics emphasize recent performance (recency-biased)", 
+                                            key='use_weighted_3d')
+                with col_toggle2:
+                    use_btc = st.toggle("Use BTC instead of USD", value=False,
+                                       help="Switch between USD and BTC denominated metrics",
+                                       key='use_btc_3d')
+                
+                # Define metric helper for 3D
+                suffix = "_w" if use_weighted else ""
+                currency = "btc" if use_btc else "usd"
+                
+                def metric(base):
+                    """Build full metric name with suffix and currency if needed"""
+                    if base in CURRENCY_METRICS:
+                        has_w_suffix = base.endswith('_w') or '_w_per_exposure_' in base
+                        
+                        if use_weighted and not has_w_suffix:
+                            base_with_w = f"{base}_w"
+                            if base_with_w in CURRENCY_METRICS:
+                                return f"{base_with_w}_{currency}"
+                            else:
+                                return f"{base}_{currency}"
+                        elif not use_weighted and has_w_suffix:
+                            if base.endswith('_w'):
+                                base_without_w = base[:-2]
+                            else:
+                                base_without_w = base.replace('_w_per_exposure_', '_per_exposure_')
+                            return f"{base_without_w}_{currency}"
+                        else:
+                            return f"{base}_{currency}"
+                    elif base in SHARED_METRICS:
+                        return base
+                    else:
+                        return f"{base}{suffix}_{currency}"
+                
+                exposure_metric = 'adg_w_per_exposure_long' if use_weighted else 'adg_per_exposure_long'
+                
+                # 3D Presets - Expanded logic similar to 2D presets
+                preset_3d_options = [
+                    "Custom...",
+                    "**Risk-Reward Triangle**",
+                    "**Recovery Performance**",
+                    "**Trading Efficiency**",
+                    "**Risk Spectrum**",
+                    "**Stability Analysis**",
+                    "**Trading Activity**",
+                    "**Stress Test**"
+                ]
+                
+                preset_3d_help = {
+                    preset_3d_options[0]: "Choose your own X, Y and Z axis metrics for custom 3D analysis",
+                    preset_3d_options[1]: f"🎯 **Risk-Reward Triangle**: {metric('adg')} vs {metric('drawdown_worst')} vs {metric('equity_jerkiness')}\n\nThe ultimate 3D view showing the raw ingredients: Profit × Max Risk × Volatility. Find configs with high returns, low drawdowns AND smooth equity curves. Uses equity jerkiness (rate of change volatility) instead of Sharpe Ratio to avoid mathematical dependencies.",
+                    preset_3d_options[2]: f"⏱️ **Recovery Performance**: {metric('adg')} vs {metric('peak_recovery_hours_equity')} vs {metric('drawdown_worst')}\n\nProfit × Recovery Speed × Max Risk. Find configs that not only make money but recover quickly from losses. Critical for trading psychology: 'Deep & Fast' (deep drawdowns, quick recovery) vs 'Shallow & Slow'.",
+                    preset_3d_options[3]: f"💡 **Trading Efficiency**: {metric('adg')} vs {metric(exposure_metric)} vs total_wallet_exposure_mean\n\nProfit × Capital Efficiency × Average Usage. Discover configs that generate maximum return with minimal capital at risk. Filter out strategies that lock up your entire wallet.",
+                    preset_3d_options[4]: f"⚖️ **Risk Spectrum**: {metric('sharpe_ratio')} vs {metric('sortino_ratio')} vs {metric('calmar_ratio')}\n\nCompare three major risk-adjusted metrics: Sharpe (total risk), Sortino (downside only), Calmar (drawdown adjusted). Find configs that excel at ALL three, or discover which ones only look good under specific risk definitions.",
+                    preset_3d_options[5]: f"📈 **Stability Analysis**: {metric('adg')} vs {metric('equity_choppiness')} vs {metric('loss_profit_ratio')}\n\nProfit × Smoothness × Win/Loss Balance. Find configs with steady, consistent growth patterns - the 'staircase to heaven' instead of a roller coaster. Shows if stability comes from high winrate (many small wins) or from smooth equity despite volatile trades.",
+                    preset_3d_options[6]: f"🔄 **Trading Activity**: {metric('adg')} vs positions_held_per_day vs position_held_hours_mean\n\nProfit × Trade Frequency × Hold Duration. The 'strategy fingerprint' - instantly see clusters: Scalpers (many trades, short duration) vs Swing Traders (few trades, long hold). Perfect for diversification: pick one from each cluster.",
+                    preset_3d_options[7]: f"🧪 **Stress Test**: {metric('drawdown_worst')} vs {metric('expected_shortfall_1pct')} vs {metric('loss_profit_ratio')}\n\nMax Drawdown × Expected Shortfall (VaR 1%) × Loss/Profit Ratio. Shows worst past event, statistical tail risk (1% worst case), and loss balance. Find configs that handle extreme events gracefully and maintain good win/loss structure."
+                }
+                
+                # Show preset selection with help icon (same layout as 2D)
+                col_radio, col_help = st.columns([4, 1])
+                with col_radio:
+                    preset_3d_choice = st.radio("Quick Views:", preset_3d_options, key='preset_3d_view', label_visibility="visible")
+                with col_help:
+                    st.write("")  # Spacing
+                    st.write("")  # Spacing
+                    with st.popover("📖 Guide"):
+                        for preset, help_text in preset_3d_help.items():
+                            if preset == "Custom...":
+                                st.markdown(f"**{preset}**\n\n{help_text}")
+                            else:
+                                st.markdown(f"{help_text}")
+                            st.markdown("---")
+                        st.markdown("💡 **Tip**: Use mouse to rotate the 3D view. Hover over points for details.")
+                
+                st.markdown("---")
+                
+                # Map 3D presets to metrics
+                preset_3d_map = {
+                    preset_3d_options[1]: (metric('adg'), metric('drawdown_worst'), metric('equity_jerkiness')),
+                    preset_3d_options[2]: (metric('adg'), metric('peak_recovery_hours_equity'), metric('drawdown_worst')),
+                    preset_3d_options[3]: (metric('adg'), metric(exposure_metric), "total_wallet_exposure_mean"),
+                    preset_3d_options[4]: (metric('sharpe_ratio'), metric('sortino_ratio'), metric('calmar_ratio')),
+                    preset_3d_options[5]: (metric('adg'), metric('equity_choppiness'), metric('loss_profit_ratio')),
+                    preset_3d_options[6]: (metric('adg'), "positions_held_per_day", "position_held_hours_mean"),
+                    preset_3d_options[7]: (metric('drawdown_worst'), metric('expected_shortfall_1pct'), metric('loss_profit_ratio'))
+                }
+                
+                if preset_3d_choice != "Custom..." and preset_3d_choice in preset_3d_map:
+                    x_metric, y_metric, z_metric = preset_3d_map[preset_3d_choice]
+                    
+                    # Clear custom selectbox state
+                    if 'z_metric' in st.session_state:
+                        del st.session_state['z_metric']
+                    
+                    # Verify metrics exist
+                    if x_metric not in available_metrics:
+                        st.warning(f"⚠️ X-Metric `{x_metric}` not found. Using fallback.")
+                        x_metric = available_metrics[0] if available_metrics else metric('adg')
+                    if y_metric not in available_metrics:
+                        st.warning(f"⚠️ Y-Metric `{y_metric}` not found. Using fallback.")
+                        y_metric = available_metrics[min(1, len(available_metrics)-1)] if len(available_metrics) > 1 else x_metric
+                    if z_metric not in available_metrics:
+                        st.warning(f"⚠️ Z-Metric `{z_metric}` not found. Using fallback.")
+                        z_metric = available_metrics[min(2, len(available_metrics)-1)] if len(available_metrics) > 2 else y_metric
+                    
+                    st.caption(f"**X-Axis:** {x_metric}")
+                    st.caption(f"**Y-Axis:** {y_metric}")
+                    st.caption(f"**Z-Axis:** {z_metric}")
+                else:
+                    # Custom: show X, Y, Z dropdowns
+                    st.markdown("**Custom 3D Metric Selection**")
+                    
+                    # Filter metrics by currency if needed
+                    filtered_metrics = available_metrics
+                    if not use_btc:
+                        filtered_metrics = [m for m in filtered_metrics if not m.endswith('_btc')]
+                    
+                    # Find indices for defaults
+                    default_x = metric('adg')
+                    default_y = metric('drawdown_worst')
+                    default_z = metric('sharpe_ratio')
+                    
+                    x_index = filtered_metrics.index(default_x) if default_x in filtered_metrics else 0
+                    y_index = filtered_metrics.index(default_y) if default_y in filtered_metrics else min(1, len(filtered_metrics)-1)
+                    z_index = filtered_metrics.index(default_z) if default_z in filtered_metrics else min(2, len(filtered_metrics)-1)
+                    
+                    x_metric = st.selectbox("X-Axis:", filtered_metrics, 
+                                           index=x_index, 
+                                           key='x_metric_3d')
+                    y_metric = st.selectbox("Y-Axis:", filtered_metrics, 
+                                           index=y_index, 
+                                           key='y_metric_3d')
+                    z_metric = st.selectbox("Z-Axis:", filtered_metrics, 
+                                           index=z_index, 
+                                           key='z_metric_3d')
+                
+                color_metric = st.selectbox("Color by:", ["None"] + available_metrics, key='color_metric_3d')
                 color_metric = None if color_metric == "None" else color_metric
             
             elif viz_type == "Radar Chart":
