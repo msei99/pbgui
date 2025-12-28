@@ -2,6 +2,7 @@ import streamlit as st
 from bokeh.plotting import figure
 from bokeh.palettes import Category20_20, Category20b_20, Category20c_20
 from bokeh.models import NumeralTickFormatter, HoverTool
+from streamlit_bokeh import streamlit_bokeh
 import pbgui_help
 import json
 import psutil
@@ -1111,7 +1112,7 @@ class BacktestMultiResult:
             mode='mouse'
         )
         self.be = figure(
-            plot_height=800,
+            height=200,
             x_axis_label='date',
             y_axis_label='USDT',
             x_axis_type='datetime',
@@ -1125,7 +1126,7 @@ class BacktestMultiResult:
         self.be.legend.location = "top_left"
         self.be.legend.click_policy="hide"
         self.be.yaxis.formatter = NumeralTickFormatter(format="$ 0,0")
-        st.bokeh_chart(self.be, use_container_width=True)
+        streamlit_bokeh(self.be)
 
     def create_chart_sym(self, symbols: dict):
         hover = HoverTool(
@@ -1143,7 +1144,7 @@ class BacktestMultiResult:
         self.sym_color = 0
         # self.sym = None
         self.sym = figure(
-            plot_height=800,
+            height=200,
             x_axis_label='date',
             y_axis_label='USDT',
             x_axis_type='datetime',
@@ -1161,7 +1162,7 @@ class BacktestMultiResult:
         self.sym.legend.location = "top_left"
         self.sym.legend.click_policy="hide"
         self.sym.yaxis.formatter = NumeralTickFormatter(format="$ 0,0")
-        st.bokeh_chart(self.sym, use_container_width=True)
+        streamlit_bokeh(self.sym)
 
 
 class BacktestsMulti:

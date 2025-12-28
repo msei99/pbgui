@@ -1521,6 +1521,14 @@ class Long:
             self.entry_trailing_retracement_pct = new_long["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_long:
             self.entry_trailing_threshold_pct = new_long["entry_trailing_threshold_pct"]
+        if "entry_trailing_threshold_we_weight" in new_long:
+            self.entry_trailing_threshold_we_weight = new_long["entry_trailing_threshold_we_weight"]
+        if "entry_trailing_threshold_volatility_weight" in new_long:
+            self.entry_trailing_threshold_volatility_weight = new_long["entry_trailing_threshold_volatility_weight"]
+        if "entry_trailing_retracement_we_weight" in new_long:
+            self.entry_trailing_retracement_we_weight = new_long["entry_trailing_retracement_we_weight"]
+        if "entry_trailing_retracement_volatility_weight" in new_long:
+            self.entry_trailing_retracement_volatility_weight = new_long["entry_trailing_retracement_volatility_weight"]
         if "entry_volatility_ema_span_hours" in new_long:
             self.entry_volatility_ema_span_hours = new_long["entry_volatility_ema_span_hours"]
         # Fix for old configs
@@ -1946,6 +1954,14 @@ class Short:
             self.entry_trailing_retracement_pct = new_short["entry_trailing_retracement_pct"]
         if "entry_trailing_threshold_pct" in new_short:
             self.entry_trailing_threshold_pct = new_short["entry_trailing_threshold_pct"]
+        if "entry_trailing_threshold_we_weight" in new_short:
+            self.entry_trailing_threshold_we_weight = new_short["entry_trailing_threshold_we_weight"]
+        if "entry_trailing_threshold_volatility_weight" in new_short:
+            self.entry_trailing_threshold_volatility_weight = new_short["entry_trailing_threshold_volatility_weight"]
+        if "entry_trailing_retracement_we_weight" in new_short:
+            self.entry_trailing_retracement_we_weight = new_short["entry_trailing_retracement_we_weight"]
+        if "entry_trailing_retracement_volatility_weight" in new_short:
+            self.entry_trailing_retracement_volatility_weight = new_short["entry_trailing_retracement_volatility_weight"]
         if "entry_volatility_ema_span_hours" in new_short:
             self.entry_volatility_ema_span_hours = new_short["entry_volatility_ema_span_hours"]
         # Fix for old configs
@@ -4824,7 +4840,7 @@ class ConfigV7Editor:
                 # Display as read-only table with only Delete column editable
                 edited_df = st.data_editor(
                     df,
-                    use_container_width=True,
+                    width="stretch",
                     num_rows="fixed",
                     hide_index=True,
                     column_config={
@@ -5016,7 +5032,7 @@ class ConfigV7Editor:
                 "aggregation": st.column_config.SelectboxColumn("Aggregation", options=aggregate_options, required=True),
                 "delete": st.column_config.CheckboxColumn("Del", width="small"),
             }
-            st.data_editor(d_aggregates, column_config=column_config, hide_index=True, key=f'select_aggregates_{ed_key}', use_container_width=True)
+            st.data_editor(d_aggregates, column_config=column_config, hide_index=True, key=f'select_aggregates_{ed_key}', width="stretch")
         
         # Add new metric-specific aggregation
         st.subheader("Add Metric")
@@ -5250,7 +5266,7 @@ class ConfigV7Editor:
                 "value": st.column_config.NumberColumn("Value", format="%.6f"),
                 "delete": st.column_config.CheckboxColumn("Del", width="small"),
             }
-            st.data_editor(d_overrides, column_config=column_config, hide_index=True, key=f'select_overrides_{ed_key}', use_container_width=True)
+            st.data_editor(d_overrides, column_config=column_config, hide_index=True, key=f'select_overrides_{ed_key}', width="stretch")
         
         # Add new override with selection
         col1, col2, col3, col4 = st.columns([2, 4, 1, 1], vertical_alignment="bottom")
@@ -5434,7 +5450,7 @@ class ConfigV7Editor:
                     "edit": st.column_config.CheckboxColumn("Edit", width="small"),
                     "delete": st.column_config.CheckboxColumn("Del", width="small"),
                 }
-                st.data_editor(d_scenarios, column_config=column_config, hide_index=True, key=f'select_scenarios_{ed_key}', use_container_width=True)
+                st.data_editor(d_scenarios, column_config=column_config, hide_index=True, key=f'select_scenarios_{ed_key}', width="stretch")
             else:
                 st.info("No scenarios configured. Add a scenario below to test your config across different coin sets, date ranges, or parameter variations.")
             

@@ -650,7 +650,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
     )
 
     # Render the figure using Streamlit
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Display warnings
     if warnings:

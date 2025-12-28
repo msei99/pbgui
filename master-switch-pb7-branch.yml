@@ -86,6 +86,7 @@
 
     - name: Build passivbot-rust with maturin
       shell: |
+        source ~/.profile || source ~/.bashrc || true
         source "{{ pb7venv }}/bin/activate"
         maturin develop --release
       args:
