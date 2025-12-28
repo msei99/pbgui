@@ -1344,8 +1344,11 @@ def manage_vps():
                     with col_btn1:
                         if st.button("🔄 Reload", key="reload_vps_branches", use_container_width=True):
                             with st.spinner("Reloading..."):
-                                # Update VPS current status
-                                pbremote.update_remote_servers()
+                                # Reload VPS current status from alive file
+                                temp_server = pbremote.find_server(vps.hostname)
+                                if temp_server:
+                                    temp_server.load()
+                                # Reload branch history
                                 if hasattr(pbremote.local_run, 'load_git_branches_history'):
                                     pbremote.local_run.load_git_branches_history()
                                 if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
@@ -1635,8 +1638,11 @@ def manage_vps():
                             with col_btn1:
                                 if st.button("🔄 Reload", key="reload_vps_pb7_branches", use_container_width=True):
                                     with st.spinner("Reloading..."):
-                                        # Update VPS current status
-                                        pbremote.update_remote_servers()
+                                        # Reload VPS current status from alive file
+                                        temp_server = pbremote.find_server(vps.hostname)
+                                        if temp_server:
+                                            temp_server.load()
+                                        # Reload branch history
                                         if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
                                             pbremote.local_run.load_pb7_branches_history()
                                         # Reset commit counters for all branches
