@@ -17,11 +17,19 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: Get current branch
+      command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ pbgdir }}"
+      register: current_branch
+      changed_when: false
+      when: pbgdir != ""
+
     - name: clone pbgui repository
       git:
         repo: https://github.com/msei99/pbgui.git
         dest: "{{ pbgdir }}"
-        version: main
+        version: "{{ current_branch.stdout }}"
         update: yes
         force: yes
       when: pbgdir != ""
