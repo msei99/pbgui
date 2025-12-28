@@ -1,4 +1,4 @@
-streamlit==1.52.0
+streamlit==1.52.2
 streamlit-scrollable-textbox==0.0.3
 streamlit-autorefresh==1.0.1
 streamlit-bokeh==3.8.1
@@ -9,6 +9,7 @@ contourpy>=1.2
 numpy==1.24.4
 numba==0.59.1
 hjson==3.1.0
+msgpack==1.0.8
 ccxt==4.4.85
 ansible==8.7.0
 ansible-runner==2.4.0
