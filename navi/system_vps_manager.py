@@ -54,6 +54,9 @@ def list_vps():
             vpsmanager.vpss = []
             vpsmanager.find_vps()
             pbremote.systemts = 0
+            # Force reload of PB7 branches data to reflect latest git state
+            if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
+                pbremote.local_run.load_pb7_branches_history()
             pbremote.update_remote_servers()
             st.rerun()
         if st.button(":material/add_box:"):
