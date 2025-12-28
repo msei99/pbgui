@@ -60,10 +60,12 @@ class RemoteServer():
         self._role = None
         self._pbgui_version = "N/A"
         self._pbgui_commit = None
+        self._pbgui_branch = "unknown"
         self._pb6_version = "N/A"
         self._pb6_commit = None
         self._pb7_version = "N/A"
         self._pb7_commit = None
+        self._pb7_branch = "unknown"
         self.pbname = None
         self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()
@@ -117,6 +119,8 @@ class RemoteServer():
     @property
     def pbgui_commit(self): return self._pbgui_commit
     @property
+    def pbgui_branch(self): return self._pbgui_branch
+    @property
     def pb6_version(self): return self._pb6_version
     @property
     def pb6_commit(self): return self._pb6_commit
@@ -124,6 +128,8 @@ class RemoteServer():
     def pb7_version(self): return self._pb7_version
     @property
     def pb7_commit(self): return self._pb7_commit
+    @property
+    def pb7_branch(self): return self._pb7_branch
 
     @name.setter
     def name(self, new_name):
@@ -234,6 +240,11 @@ class RemoteServer():
                         self._pbgui_version = cfg["pbgv"]
                     if "pbgc" in cfg:
                         self._pbgui_commit = cfg["pbgc"]
+                    if "pbgb" in cfg:
+                        self._pbgui_branch = cfg["pbgb"]
+                    else:
+                        # Reset to unknown if pbgb not in alive file (old version)
+                        self._pbgui_branch = "unknown"
                     if "pb6v" in cfg:
                         self._pb6_version = cfg["pb6v"]
                     if "pb6c" in cfg:
@@ -242,6 +253,11 @@ class RemoteServer():
                         self._pb7_version = cfg["pb7v"]
                     if "pb7c" in cfg:
                         self._pb7_commit = cfg["pb7c"]
+                    if "pb7b" in cfg:
+                        self._pb7_branch = cfg["pb7b"]
+                    else:
+                        # Reset to unknown if pb7b not in alive file (old version)
+                        self._pb7_branch = "unknown"
                     return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
@@ -962,10 +978,12 @@ class PBRemote():
             "cmc": self.local_run.coindata.credits_left,
             "pbgv": self.local_run.pbgui_version,
             "pbgc": self.local_run.pbgui_commit,
+            "pbgb": getattr(self.local_run, 'pbgui_branch', 'unknown'),
             "pb6v": self.local_run.pb6_version,
             "pb6c": self.local_run.pb6_commit,
             "pb7v": self.local_run.pb7_version,
             "pb7c": self.local_run.pb7_commit,
+            "pb7b": getattr(self.local_run, 'pb7_branch', 'unknown'),
             })
         # Save the JSON data as a gzip file
         cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd.gz')
