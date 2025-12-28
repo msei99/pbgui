@@ -28,17 +28,17 @@
       tags: debug,never
 
     - name: remove stable toolchain if exists
-      shell: rustup toolchain uninstall stable 1.78.0
-      environment:
-        PATH: "{{ ansible_env.HOME }}/.cargo/bin:{{ ansible_env.PATH }}"
+      shell: |
+        source ~/.profile || source ~/.bashrc || true
+        rustup toolchain uninstall stable 1.78.0
       args:
         executable: /bin/bash
       ignore_errors: yes
 
     - name: Update rust
-      shell: rustup update 1.90.0
-      environment:
-        PATH: "{{ ansible_env.HOME }}/.cargo/bin:{{ ansible_env.PATH }}"
+      shell: |
+        source ~/.profile || source ~/.bashrc || true
+        rustup update 1.90.0
       args:
         executable: /bin/bash
       register: update_rust
