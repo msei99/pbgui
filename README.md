@@ -140,7 +140,9 @@ curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.s
 Clone pbgui and passivbot v6 and v7
 ```
 git clone https://github.com/msei99/pbgui.git
-git clone https://github.com/enarjord/passivbot.git's
+git clone https://github.com/enarjord/passivbot.git
+```
+Create virtual environments
 ```
 python3.10 -m venv venv_pbgui
 python3.10 -m venv venv_pb6
