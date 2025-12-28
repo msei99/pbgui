@@ -815,8 +815,9 @@ class PBRun():
         self.run_v7 = []
         self.index = 0
         self.pbgui_branch = "unknown"
-        self.pbgui_commit_short = "unknown"
         self.pbgui_branches_data = {}
+        self.pb7_branch = "unknown"
+        self.pb7_branches_data = {}
         self.pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -951,9 +952,6 @@ class PBRun():
             # Get full commit hash
             pbgui_commit = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
             self.pbgui_commit = pbgui_commit.stdout
-            # Get short commit hash (7 chars)
-            pbgui_commit_short = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%h"], stdout=subprocess.PIPE, text=True)
-            self.pbgui_commit_short = pbgui_commit_short.stdout
             # Get current branch
             pbgui_branch = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "rev-parse", "--abbrev-ref", "HEAD"], stdout=subprocess.PIPE, text=True)
             self.pbgui_branch = pbgui_branch.stdout.strip()
@@ -969,12 +967,21 @@ class PBRun():
                 pb7_git = Path(f'{self.pb7dir}/.git')
                 pb7_commit = subprocess.run(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
                 self.pb7_commit = pb7_commit.stdout
+                # Get current branch
+                pb7_branch = subprocess.run(["git", "--git-dir", f'{pb7_git}', "rev-parse", "--abbrev-ref", "HEAD"], stdout=subprocess.PIPE, text=True)
+                self.pb7_branch = pb7_branch.stdout.strip()
 
     def load_git_branches_history(self):
         """Load commit history for all branches (last 10 commits per branch)"""
         pbgui_git = Path(f'{self.pbgdir}/.git')
         if not pbgui_git.exists():
             return
+        
+        # Fetch latest changes from remote first
+        subprocess.run(
+            ["git", "--git-dir", f'{pbgui_git}', "fetch", "origin"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         
         # Get all branches (local and remote)
         branches_result = subprocess.run(
@@ -983,6 +990,15 @@ class PBRun():
         )
         
         branches_data = {}
+        # First pass: collect remote branch names to prioritize them
+        remote_branches = set()
+        for line in branches_result.stdout.splitlines():
+            branch_raw = line.strip().lstrip('* ')
+            if branch_raw.startswith('remotes/origin/') and 'HEAD ->' not in branch_raw:
+                branch_name = branch_raw.replace('remotes/origin/', '')
+                remote_branches.add(branch_name)
+        
+        # Second pass: process branches, preferring remote over local
         for line in branches_result.stdout.splitlines():
             # Clean branch name (remove * and whitespace)
             branch_raw = line.strip().lstrip('* ')
@@ -990,22 +1006,25 @@ class PBRun():
                 continue
             
             # For remote branches, use the full remotes/origin/xxx format
-            # For local branches, use as-is
+            # For local branches, use as-is BUT skip if remote exists
             if branch_raw.startswith('remotes/origin/'):
                 branch_ref = branch_raw  # Keep full path for git log
                 branch_name = branch_raw.replace('remotes/origin/', '')  # Display name
             else:
-                branch_ref = branch_raw
                 branch_name = branch_raw
+                # Skip local branch if remote version exists (remote is more current after fetch)
+                if branch_name in remote_branches:
+                    continue
+                branch_ref = branch_raw
             
             # Skip if already processed
             if branch_name in branches_data:
                 continue
             
-            # Get last 10 commits for this branch using proper reference
+            # Get last 50 commits for this branch using proper reference
             commits_result = subprocess.run(
-                ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", "10",
-                 "--pretty=format:%h|%H|%an|%ar|%s"],
+                ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", "50",
+                 "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
             )
             
@@ -1014,21 +1033,363 @@ class PBRun():
                 continue
             
             commits = []
-            for commit_line in commits_result.stdout.splitlines():
-                parts = commit_line.split('|', 4)
-                if len(parts) == 5:
+            latest_commit_timestamp = None
+            # Split by null byte to handle multi-line commit messages
+            for commit_block in commits_result.stdout.split('\x00'):
+                # Strip whitespace before processing
+                commit_block = commit_block.strip()
+                if not commit_block:
+                    continue
+                lines = commit_block.split('\n', 1)
+                if not lines:
+                    continue
+                parts = lines[0].split('|', 5)
+                if len(parts) == 6:
+                    # parts[5] is first line of message, rest is in lines[1] if exists
+                    full_message = parts[5]
+                    if len(lines) > 1:
+                        full_message = full_message + '\n' + lines[1]
                     commits.append({
                         'short': parts[0],
                         'full': parts[1],
                         'author': parts[2],
                         'date': parts[3],
-                        'message': parts[4]
+                        'timestamp': int(parts[4]),
+                        'message': full_message.strip()
                     })
+                    # Track latest timestamp (first commit)
+                    if latest_commit_timestamp is None:
+                        latest_commit_timestamp = int(parts[4])
+                else:
+                    # Debug: log parsing failures
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Failed to parse commit block: {len(parts)} parts, first 100 chars: {commit_block[:100]}')
             
             if commits:
-                branches_data[branch_name] = commits
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for branch {branch_name}')
+                branches_data[branch_name] = {
+                    'commits': commits,
+                    'latest_timestamp': latest_commit_timestamp
+                }
         
-        self.pbgui_branches_data = branches_data
+        # Sort branches by latest commit timestamp (newest first)
+        sorted_branches = dict(sorted(branches_data.items(), 
+                                     key=lambda x: x[1]['latest_timestamp'] if x[1]['latest_timestamp'] else 0, 
+                                     reverse=True))
+        
+        # Convert back to simple format (just commits list) for backward compatibility
+        self.pbgui_branches_data = {name: data['commits'] for name, data in sorted_branches.items()}
+
+    def load_more_commits(self, branch_name: str, limit: int):
+        """Load more commits for a specific branch
+        
+        Args:
+            branch_name: Name of the branch to load commits for
+            limit: Total number of commits to load
+        """
+        pbgui_git = Path(f'{self.pbgdir}/.git')
+        if not pbgui_git.exists():
+            return
+        
+        # Fetch latest changes from remote first
+        subprocess.run(
+            ["git", "--git-dir", f'{pbgui_git}', "fetch", "origin"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        
+        # Determine branch reference
+        if branch_name in self.pbgui_branches_data:
+            # Branch already exists, use appropriate reference
+            branch_ref = f"remotes/origin/{branch_name}" if branch_name != self.pbgui_branch else branch_name
+        else:
+            return
+        
+        # Build git log command
+        cmd = ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", str(limit), "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"]
+        
+        commits_result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        
+        if commits_result.returncode != 0:
+            return
+        
+        commits = []
+        for commit_block in commits_result.stdout.split('\x00'):
+            commit_block = commit_block.strip()
+            if not commit_block:
+                continue
+            lines = commit_block.split('\n', 1)
+            if not lines:
+                continue
+            parts = lines[0].split('|', 5)
+            if len(parts) == 6:
+                full_message = parts[5]
+                if len(lines) > 1:
+                    full_message = full_message + '\n' + lines[1]
+                commits.append({
+                    'short': parts[0],
+                    'full': parts[1],
+                    'author': parts[2],
+                    'date': parts[3],
+                    'timestamp': int(parts[4]),
+                    'message': full_message.strip()
+                })
+        
+        if commits:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for branch {branch_name}')
+            self.pbgui_branches_data[branch_name] = commits
+
+    def get_current_pb7_status(self):
+        """Get current PB7 branch and commit directly from git (live query)"""
+        if not self.pb7dir:
+            return None, None
+        
+        pb7_git = Path(f'{self.pb7dir}/.git')
+        if not pb7_git.exists():
+            return None, None
+        
+        # Get current commit
+        commit_result = subprocess.run(
+            ["git", "--git-dir", f'{pb7_git}', "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_commit = commit_result.stdout.strip() if commit_result.returncode == 0 else ""
+        
+        # Get current branch (works reliably since we use git reset --hard)
+        branch_result = subprocess.run(
+            ["git", "--git-dir", f'{pb7_git}', "symbolic-ref", "--short", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
+        
+        return current_branch, current_commit
+
+    def get_current_pbgui_status(self):
+        """Get current PBGui branch and commit directly from git (live query)"""
+        if not self.pbgdir:
+            return None, None
+            
+        pbgui_git = Path(f'{self.pbgdir}/.git')
+        if not pbgui_git.exists():
+            return None, None
+        
+        # Get current commit
+        commit_result = subprocess.run(
+            ["git", "--git-dir", f'{pbgui_git}', "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_commit = commit_result.stdout.strip() if commit_result.returncode == 0 else ""
+        
+        # Get current branch (works reliably since we use git reset --hard)
+        branch_result = subprocess.run(
+            ["git", "--git-dir", f'{pbgui_git}', "symbolic-ref", "--short", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
+        
+        return current_branch, current_commit
+
+    def load_pb7_branches_history(self):
+        """Load commit history for all PB7 branches (last 50 commits per branch)"""
+        if not self.pb7dir:
+            return
+        
+        pb7_git = Path(f'{self.pb7dir}/.git')
+        if not pb7_git.exists():
+            return
+        
+        # Fetch latest changes from remote first
+        subprocess.run(
+            ["git", "--git-dir", f'{pb7_git}', "fetch", "origin"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        
+        # Get all branches (local and remote)
+        branches_result = subprocess.run(
+            ["git", "--git-dir", f'{pb7_git}', "branch", "-a"],
+            stdout=subprocess.PIPE, text=True
+        )
+        
+        branches_data = {}
+        # First pass: collect remote branch names to prioritize them
+        remote_branches = set()
+        for line in branches_result.stdout.splitlines():
+            branch_raw = line.strip().lstrip('* ')
+            if branch_raw.startswith('remotes/origin/') and 'HEAD ->' not in branch_raw:
+                branch_name = branch_raw.replace('remotes/origin/', '')
+                remote_branches.add(branch_name)
+        
+        # Second pass: process branches, preferring remote over local
+        for line in branches_result.stdout.splitlines():
+            # Clean branch name (remove * and whitespace)
+            branch_raw = line.strip().lstrip('* ')
+            if not branch_raw or 'HEAD ->' in branch_raw:
+                continue
+            
+            # For remote branches, use the full remotes/origin/xxx format
+            # For local branches, use as-is BUT skip if remote exists
+            if branch_raw.startswith('remotes/origin/'):
+                branch_ref = branch_raw  # Keep full path for git log
+                branch_name = branch_raw.replace('remotes/origin/', '')  # Display name
+            else:
+                branch_name = branch_raw
+                # Skip local branch if remote version exists (remote is more current after fetch)
+                if branch_name in remote_branches:
+                    continue
+                branch_ref = branch_raw
+            
+            # Skip if already processed
+            if branch_name in branches_data:
+                continue
+            
+            # Filter: Only include v7 relevant branches
+            # Strategy: Include master and v7.x branches always
+            # For other branches: check commit date (v7.0.0 was released around mid-2023)
+            # Skip old version branches explicitly (v6, v5, v4, v3, v2, v1, v0)
+            skip_patterns = ['v6.', 'v5.', 'v4.', 'v3.', 'v2.', 'v1.', 'v0.', 'release/v6', 'release/v1', 'release/v0']
+            if any(branch_name.startswith(pattern) for pattern in skip_patterns):
+                continue
+            
+            # Include master and v7 branches always
+            include_always = (branch_name == 'master' or 
+                            branch_name.startswith('v7.') or 
+                            branch_name.startswith('v7-'))
+            
+            # Get last 50 commits for this branch using proper reference
+            commits_result = subprocess.run(
+                ["git", "--git-dir", f'{pb7_git}', "log", branch_ref, "-n", "50",
+                 "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            )
+            
+            # Skip if git log failed (branch doesn't exist locally)
+            if commits_result.returncode != 0:
+                continue
+            
+            commits = []
+            latest_commit_timestamp = None
+            
+            # Split by null byte to handle multi-line commit messages
+            for commit_block in commits_result.stdout.split('\x00'):
+                # Strip whitespace before processing
+                commit_block = commit_block.strip()
+                if not commit_block:
+                    continue
+                lines = commit_block.split('\n', 1)
+                if not lines:
+                    continue
+                parts = lines[0].split('|', 5)
+                if len(parts) == 6:
+                    # parts[0]=short, [1]=full, [2]=author, [3]=date, [4]=timestamp, [5]=message
+                    full_message = parts[5]
+                    if len(lines) > 1:
+                        full_message = full_message + '\n' + lines[1]
+                    
+                    commit_data = {
+                        'short': parts[0],
+                        'full': parts[1],
+                        'author': parts[2],
+                        'date': parts[3],
+                        'timestamp': int(parts[4]),
+                        'message': full_message.strip()
+                    }
+                    commits.append(commit_data)
+                    
+                    # Track latest commit timestamp (first commit is most recent)
+                    if latest_commit_timestamp is None:
+                        latest_commit_timestamp = commit_data['timestamp']
+                else:
+                    # Debug: log parsing failures
+                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Failed to parse PB7 commit block: {len(parts)} parts, first 100 chars: {commit_block[:100]}')
+            
+            # Filter by date: v7.0.0 was released around June 2023 (timestamp ~1686000000)
+            # Only include branches if: master/v7.x OR latest commit is after June 2023
+            v7_release_timestamp = 1686000000  # ~June 2023
+            if not include_always:
+                if not latest_commit_timestamp or latest_commit_timestamp < v7_release_timestamp:
+                    # Branch is too old, skip it
+                    continue
+            
+            if commits:
+                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for PB7 branch {branch_name}')
+                # Store commits with branch metadata (latest timestamp for sorting)
+                branches_data[branch_name] = {
+                    'commits': commits,
+                    'latest_timestamp': latest_commit_timestamp
+                }
+        
+        # Sort branches by latest commit timestamp (newest first)
+        sorted_branches = dict(sorted(branches_data.items(), 
+                                     key=lambda x: x[1]['latest_timestamp'] if x[1]['latest_timestamp'] else 0, 
+                                     reverse=True))
+        
+        # Convert back to simple format (just commits list)
+        self.pb7_branches_data = {name: data['commits'] for name, data in sorted_branches.items()}
+
+    def load_more_pb7_commits(self, branch_name: str, limit: int):
+        """Load more commits for a specific PB7 branch
+        
+        Args:
+            branch_name: Name of the branch to load commits for
+            limit: Total number of commits to load
+        """
+        if not self.pb7dir:
+            return
+            
+        pb7_git = Path(f'{self.pb7dir}/.git')
+        if not pb7_git.exists():
+            return
+        
+        # Fetch latest changes from remote first
+        subprocess.run(
+            ["git", "--git-dir", f'{pb7_git}', "fetch", "origin"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        
+        # Determine branch reference
+        if branch_name in self.pb7_branches_data:
+            # Branch already exists, use appropriate reference
+            branch_ref = f"remotes/origin/{branch_name}" if branch_name != self.pb7_branch else branch_name
+        else:
+            return
+        
+        # Build git log command (include timestamp for consistency)
+        cmd = ["git", "--git-dir", f'{pb7_git}', "log", branch_ref, "-n", str(limit), "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"]
+        
+        commits_result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+        
+        if commits_result.returncode != 0:
+            return
+        
+        commits = []
+        for commit_block in commits_result.stdout.split('\x00'):
+            commit_block = commit_block.strip()
+            if not commit_block:
+                continue
+            lines = commit_block.split('\n', 1)
+            if not lines:
+                continue
+            parts = lines[0].split('|', 5)
+            if len(parts) == 6:
+                full_message = parts[5]
+                if len(lines) > 1:
+                    full_message = full_message + '\n' + lines[1]
+                commits.append({
+                    'short': parts[0],
+                    'full': parts[1],
+                    'author': parts[2],
+                    'date': parts[3],
+                    'timestamp': int(parts[4]),
+                    'message': full_message.strip()
+                })
+        
+        if commits:
+            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for PB7 branch {branch_name}')
+            self.pb7_branches_data[branch_name] = commits
 
     def load_versions_origin(self):
         """git show origin:README.md and load the versions of pbgui, pb6 and pb7"""

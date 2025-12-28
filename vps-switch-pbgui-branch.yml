@@ -1,5 +1,5 @@
 ---
-# Switch pbgui branch/commit on localhost
+# Switch pbgui branch/commit on VPS
 # Steps:
 # 1. Fetch from origin
 # 2. Check for uncommitted changes (fail if found)
@@ -8,12 +8,11 @@
 # 5. Pull if on branch HEAD (no specific commit)
 # 6. Restart pbgui services
 
-- hosts: localhost
-  gather_facts: "{{ debug }}"
+- hosts: "{{ hostname }}"
+  gather_facts: yes
 
   vars:
     user: "{{ user }}"
-    pbgdir: "{{ pbgdir }}"
     target_branch: "{{ branch }}"
     target_commit: "{{ commit | default('') }}"
 
@@ -23,11 +22,15 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: get install_dir
+      set_fact:
+        install_dir: "{{ ansible_env.HOME + '/software' }}"
+        pbgdir: "{{ ansible_env.HOME + '/software/pbgui' }}"
+
     - name: Fetch from origin
       command: git fetch origin
       args:
         chdir: "{{ pbgdir }}"
-      when: pbgdir != ""
       changed_when: false
 
     - name: Check for uncommitted changes (tracked files only)
@@ -42,11 +45,26 @@
         msg: "Uncommitted changes detected. Please commit or stash changes before switching branches."
       when: git_status.stdout != ""
 
-    - name: Checkout target branch
+    - name: Check if branch exists locally
+      command: git rev-parse --verify "{{ target_branch }}"
+      args:
+        chdir: "{{ pbgdir }}"
+      register: branch_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Create and checkout local branch from remote if it doesn't exist
+      command: git checkout -b "{{ target_branch }}" --track "origin/{{ target_branch }}"
+      args:
+        chdir: "{{ pbgdir }}"
+      when: branch_exists.rc != 0
+      notify: restart pbgui
+
+    - name: Checkout target branch (if already exists locally)
       command: git checkout "{{ target_branch }}"
       args:
         chdir: "{{ pbgdir }}"
-      register: checkout_result
+      when: branch_exists.rc == 0
       notify: restart pbgui
 
     - name: Reset to specific commit if provided (stays on branch)
@@ -62,28 +80,21 @@
       args:
         chdir: "{{ pbgdir }}"
       when: target_commit == ""
-      register: pull_result
       notify: restart pbgui
-
-    - name: Display checkout result
-      debug:
-        msg: |
-          Branch: {{ target_branch }}
-          Commit: {{ target_commit if target_commit != '' else 'HEAD' }}
-          Status: Switched successfully
-      tags: debug,never
 
   handlers:
     - name: Install pbgui requirements
       pip:
-        requirements: "{{ pbgdir }}/requirements.txt"
-        extra_args: --upgrade
+        virtualenv: "{{ install_dir }}/venv_pbgui"
+        requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
+        extra_args: --upgrade pip
       listen: "restart pbgui"
 
     - name: Restart PBRun, PBRemote and PBCoinData
       shell: |
-        python "{{ pbgdir }}/starter.py" -r PBRun PBRemote PBCoinData
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote PBCoinData
       args:
         executable: /bin/bash
-        chdir: "{{ pbgdir }}"
+        chdir: "{{ install_dir }}/pbgui"
       listen: "restart pbgui"
