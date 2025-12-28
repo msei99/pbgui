@@ -699,7 +699,7 @@ class Instance(Base):
             legend = f'close: {str(order["price"])} qty: {str(qty)}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(qty)}'
             p.line(x=self._ohlcv_df["timestamp"], y=order["price"], color=color, line_width=2, line_dash="dotted", legend_label=legend)
         p.legend.location = "bottom_left"
-        st.bokeh_chart(p, use_container_width=True)
+        st.bokeh_chart(p, width="stretch")
 
     def view_grid(self, sb: float = None):
         if self._config.type != "recursive_grid" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
@@ -802,7 +802,7 @@ class Instance(Base):
                 # print(entry[1])
                 p.line(x=self._ohlcv_df["timestamp"], y=entry[1], color="green", line_width=2, line_dash="dotted", legend_label=f"{entry[1]}: {entry[0]}")
         p.legend.location = "bottom_left"
-        st.bokeh_chart(p, use_container_width=True)
+        st.bokeh_chart(p, width="stretch")
 
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):

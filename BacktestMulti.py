@@ -1125,7 +1125,7 @@ class BacktestMultiResult:
         self.be.legend.location = "top_left"
         self.be.legend.click_policy="hide"
         self.be.yaxis.formatter = NumeralTickFormatter(format="$ 0,0")
-        st.bokeh_chart(self.be, use_container_width=True)
+        st.bokeh_chart(self.be, width="stretch")
 
     def create_chart_sym(self, symbols: dict):
         hover = HoverTool(
@@ -1161,7 +1161,7 @@ class BacktestMultiResult:
         self.sym.legend.location = "top_left"
         self.sym.legend.click_policy="hide"
         self.sym.yaxis.formatter = NumeralTickFormatter(format="$ 0,0")
-        st.bokeh_chart(self.sym, use_container_width=True)
+        st.bokeh_chart(self.sym, width="stretch")
 
 
 class BacktestsMulti:

@@ -1233,11 +1233,11 @@ class BacktestV7Result:
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
         balance_and_equity_btc = Path(f'{self.result_path}/balance_and_equity_btc.png')
         if balance_and_equity.exists():
-            st.image(str(balance_and_equity), use_container_width=True)
+            st.image(str(balance_and_equity), width="stretch")
         else:
             st.warning("No balance and equity plot found")
         if balance_and_equity_btc.exists():
-            st.image(str(balance_and_equity_btc), use_container_width=True)
+            st.image(str(balance_and_equity_btc), width="stretch")
 
     def view_fills(self):
         # Fills are always shown; liquidation banner shown above charts
@@ -1245,7 +1245,7 @@ class BacktestV7Result:
         fills = glob.glob(p)
         if fills:
             for fill in fills:
-                st.image(fill, use_container_width=True)
+                st.image(fill, width="stretch")
         else:
             st.warning("No fills plot found")
 
