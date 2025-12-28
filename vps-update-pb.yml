@@ -25,10 +25,14 @@
 
     - name: remove stable toolchain if exists
       shell: rustup toolchain uninstall stable 1.78.0
+      args:
+        executable: /bin/bash
       ignore_errors: yes
 
     - name: Update rust
       shell: rustup update 1.90.0
+      args:
+        executable: /bin/bash
       register: update_rust
 
     - name: print update_rust
