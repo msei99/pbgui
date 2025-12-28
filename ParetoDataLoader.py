@@ -433,13 +433,19 @@ class ParetoDataLoader:
         objectives = metrics_block.get('objectives', {})
         constraint_violation = metrics_block.get('constraint_violation', 0.0)
         
-        # Extract suite metrics
-        suite_metrics_block = config_data.get('suite_metrics', {})
-        metrics_dict = suite_metrics_block.get('metrics', {})
-        
-        # Store scenario labels (first time only)
-        if not self.scenario_labels:
-            self.scenario_labels = suite_metrics_block.get('scenario_labels', [])
+        # Extract suite metrics - support both suite and non-suite formats
+        # Suite format: {"suite_metrics": {"metrics": {...}}}
+        # Non-suite format: {"metrics": {"stats": {...}, "objectives": {...}}}
+        if 'suite_metrics' in config_data:
+            suite_metrics_block = config_data.get('suite_metrics', {})
+            metrics_dict = suite_metrics_block.get('metrics', {})
+            # Store scenario labels (first time only)
+            if not self.scenario_labels:
+                self.scenario_labels = suite_metrics_block.get('scenario_labels', [])
+        else:
+            # Non-suite format: metrics.stats contains the actual metrics
+            metrics_block = config_data.get('metrics', {})
+            metrics_dict = metrics_block.get('stats', {})
         
         # Extract scoring metrics from optimize config (first time only)
         if not self.scoring_metrics and 'optimize' in config_data:
@@ -466,16 +472,23 @@ class ParetoDataLoader:
         
         for metric_name, metric_data in metrics_dict.items():
             if isinstance(metric_data, dict):
-                # Aggregated value
-                aggregated = metric_data.get('aggregated', 0.0)
+                # Try to get aggregated value, fallback to mean if not present
+                aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
                 suite_metrics[metric_name] = aggregated
                 
-                # Stats for robustness calculation AND later analysis
-                stats = metric_data.get('stats', {})
-                std = stats.get('std', 0.0)
-                mean = stats.get('mean', 0.0)
-                min_val = stats.get('min', 0.0)
-                max_val = stats.get('max', 0.0)
+                # Stats - either from nested 'stats' dict or direct dict values
+                if 'stats' in metric_data:
+                    stats = metric_data.get('stats', {})
+                    std = stats.get('std', 0.0)
+                    mean = stats.get('mean', 0.0)
+                    min_val = stats.get('min', 0.0)
+                    max_val = stats.get('max', 0.0)
+                else:
+                    # Direct format: {"mean": X, "std": Y, ...}
+                    std = metric_data.get('std', 0.0)
+                    mean = metric_data.get('mean', 0.0)
+                    min_val = metric_data.get('min', 0.0)
+                    max_val = metric_data.get('max', 0.0)
                 
                 # Store full stats
                 metric_stats[metric_name] = {

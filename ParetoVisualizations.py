@@ -62,6 +62,21 @@ class ParetoVisualizations:
         if df.empty:
             return go.Figure().add_annotation(text="No data available", showarrow=False)
         
+        # Check if required metrics exist in DataFrame
+        import streamlit as st
+        missing_metrics = []
+        for metric in [x_metric, y_metric, color_metric, size_metric]:
+            if metric and metric not in df.columns:
+                missing_metrics.append(metric)
+        
+        if missing_metrics:
+            st.error(f"❌ Metrics not found: {', '.join(missing_metrics)}")
+            st.info(f"Available metrics: {', '.join([c for c in df.columns if c not in ['config_index', 'is_pareto']])}")
+            return go.Figure().add_annotation(
+                text=f"Metrics not available: {', '.join(missing_metrics)}", 
+                showarrow=False
+            )
+        
         # Prepare data
         hover_data = ['config_index', x_metric, y_metric]
         if color_metric:
