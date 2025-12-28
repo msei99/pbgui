@@ -469,22 +469,36 @@ class ParetoExplorer:
                 
                 with col1:
                     st.markdown("**📊 Performance**")
-                    for metric in scoring_metrics[:3]:
-                        if metric in config.suite_metrics:
-                            val = config.suite_metrics[metric]
-                            st.metric(metric.replace('_', ' ').title(), f"{val:.6f}")
+                    
+                    # Adg W Usd
+                    if 'adg_w_usd' in config.suite_metrics:
+                        val = config.suite_metrics['adg_w_usd']
+                        st.metric("Adg W Usd", f"{val:.6f}", help="Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure")
+                    
+                    # Sharpe Ratio Usd
+                    if 'sharpe_ratio_usd' in config.suite_metrics:
+                        val = config.suite_metrics['sharpe_ratio_usd']
+                        st.metric("Sharpe Ratio Usd", f"{val:.6f}", help="Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk")
+                    
+                    # Gain Usd
+                    if 'gain_usd' in config.suite_metrics:
+                        val = config.suite_metrics['gain_usd']
+                        st.metric("Gain Usd", f"{val:.6f}", help="Total profit multiplier - How many times the initial balance was gained")
                 
                 with col2:
                     st.markdown("**🛡️ Risk Profile**")
                     risk_scores = self.loader.compute_risk_profile_score(config)
-                    st.metric("Overall Risk Score", f"{risk_scores['overall']:.1f}/10")
-                    st.metric("Drawdown Score", f"{risk_scores['drawdown']:.1f}/10")
+                    st.metric("Overall Risk Score", f"{risk_scores['overall']:.1f}/10", 
+                             help="Combined risk assessment - Lower score = safer strategy. Based on drawdown, volatility, and recovery metrics")
+                    st.metric("Drawdown Score", f"{risk_scores['drawdown']:.1f}/10",
+                             help="Maximum portfolio decline score - Lower = smaller drawdowns. Measures worst-case equity drop")
                 
                 with col3:
                     st.markdown("**💪 Robustness**")
                     overall_robust = self.loader.compute_overall_robustness(config)
                     stars = "⭐" * int(overall_robust * 5)
-                    st.metric("Robustness", f"{overall_robust:.2f}")
+                    st.metric("Robustness", f"{overall_robust:.2f}",
+                             help="Consistency score (0-1) - Higher = more stable across scenarios. Calculated as 1/(1+CV) where CV is coefficient of variation")
                     st.markdown(f"**{stars}**")
                 
                 # Scenario breakdown
