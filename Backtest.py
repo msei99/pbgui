@@ -788,13 +788,13 @@ class BacktestResults:
             we.add_tools(hover_we)
             be.legend.location = "top_left"
             be.legend.click_policy="hide"
-            st.bokeh_chart(be, use_container_width=True)
+            st.bokeh_chart(be, width="stretch")
         if we.legend:
             we_leg = we.legend[0]
             we.add_layout(we_leg,'above')
             we.legend.location = "top_left"
             we.legend.click_policy="hide"
-            st.bokeh_chart(we, use_container_width=True)
+            st.bokeh_chart(we, width="stretch")
 
         idx = 0
         col_r1, col_r2 = st.columns([1,1]) 

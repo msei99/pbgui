@@ -624,7 +624,7 @@ def manage_master():
                     # Reload and Load More buttons below branch selector
                     col_btn1, col_btn2, col_btn3 = st.columns(3)
                     with col_btn1:
-                        if st.button("🔄 Reload", key="reload_master_branches", use_container_width=True):
+                        if st.button("🔄 Reload", key="reload_master_branches", width="stretch"):
                             with st.spinner("Reloading..."):
                                 if hasattr(pbremote.local_run, 'load_git_branches_history'):
                                     pbremote.local_run.load_git_branches_history()
@@ -635,7 +635,7 @@ def manage_master():
                                     del st.session_state.master_commits_loaded
                             st.rerun(scope="fragment")
                     with col_btn2:
-                        if st.button("🔽 +50", key="load_more_top_master", use_container_width=True):
+                        if st.button("🔽 +50", key="load_more_top_master", width="stretch"):
                             if 'master_commits_loaded' not in st.session_state:
                                 st.session_state.master_commits_loaded = {}
                             current_count = st.session_state.master_commits_loaded.get(selected_branch, 50)
@@ -644,7 +644,7 @@ def manage_master():
                             pbremote.local_run.load_more_commits(selected_branch, new_count)
                             st.rerun(scope="fragment")
                     with col_btn3:
-                        if st.button("🔽 All", key="load_all_top_master", use_container_width=True):
+                        if st.button("🔽 All", key="load_all_top_master", width="stretch"):
                             if 'master_commits_loaded' not in st.session_state:
                                 st.session_state.master_commits_loaded = {}
                             st.session_state.master_commits_loaded[selected_branch] = 999999
@@ -832,7 +832,7 @@ def manage_master():
                         # Reload and Load More buttons below branch selector
                         col_btn1, col_btn2, col_btn3 = st.columns(3)
                         with col_btn1:
-                            if st.button("🔄 Reload", key="reload_master_pb7_branches", use_container_width=True):
+                            if st.button("🔄 Reload", key="reload_master_pb7_branches", width="stretch"):
                                 with st.spinner("Reloading..."):
                                     if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
                                         pbremote.local_run.load_pb7_branches_history()
@@ -841,7 +841,7 @@ def manage_master():
                                         del st.session_state.master_pb7_commits_loaded
                                 st.rerun(scope="fragment")
                         with col_btn2:
-                            if st.button("🔽 +50", key="load_more_top_master_pb7", use_container_width=True):
+                            if st.button("🔽 +50", key="load_more_top_master_pb7", width="stretch"):
                                 if 'master_pb7_commits_loaded' not in st.session_state:
                                     st.session_state.master_pb7_commits_loaded = {}
                                 current_count = st.session_state.master_pb7_commits_loaded.get(selected_branch, 50)
@@ -850,7 +850,7 @@ def manage_master():
                                 pbremote.local_run.load_more_pb7_commits(selected_branch, new_count)
                                 st.rerun(scope="fragment")
                         with col_btn3:
-                            if st.button("🔽 All", key="load_all_top_master_pb7", use_container_width=True):
+                            if st.button("🔽 All", key="load_all_top_master_pb7", width="stretch"):
                                 if 'master_pb7_commits_loaded' not in st.session_state:
                                     st.session_state.master_pb7_commits_loaded = {}
                                 st.session_state.master_pb7_commits_loaded[selected_branch] = 999999
@@ -1342,7 +1342,7 @@ def manage_vps():
                     # Reload and Load More buttons below branch selector
                     col_btn1, col_btn2, col_btn3 = st.columns(3)
                     with col_btn1:
-                        if st.button("🔄 Reload", key="reload_vps_branches", use_container_width=True):
+                        if st.button("🔄 Reload", key="reload_vps_branches", width="stretch"):
                             with st.spinner("Reloading..."):
                                 # Reload VPS current status from alive file
                                 temp_server = pbremote.find_server(vps.hostname)
@@ -1358,7 +1358,7 @@ def manage_vps():
                                     del st.session_state.vps_commits_loaded
                             st.rerun(scope="fragment")
                     with col_btn2:
-                        if st.button("🔽 +50", key="load_more_top_vps", use_container_width=True):
+                        if st.button("🔽 +50", key="load_more_top_vps", width="stretch"):
                             if 'vps_commits_loaded' not in st.session_state:
                                 st.session_state.vps_commits_loaded = {}
                             current_count = st.session_state.vps_commits_loaded.get(selected_branch, 50)
@@ -1367,7 +1367,7 @@ def manage_vps():
                             pbremote.local_run.load_more_commits(selected_branch, new_count)
                             st.rerun(scope="fragment")
                     with col_btn3:
-                        if st.button("🔽 All", key="load_all_top_vps", use_container_width=True):
+                        if st.button("🔽 All", key="load_all_top_vps", width="stretch"):
                             if 'vps_commits_loaded' not in st.session_state:
                                 st.session_state.vps_commits_loaded = {}
                             st.session_state.vps_commits_loaded[selected_branch] = 999999
@@ -1636,7 +1636,7 @@ def manage_vps():
                             # Reload and Load More buttons below branch selector
                             col_btn1, col_btn2, col_btn3 = st.columns(3)
                             with col_btn1:
-                                if st.button("🔄 Reload", key="reload_vps_pb7_branches", use_container_width=True):
+                                if st.button("🔄 Reload", key="reload_vps_pb7_branches", width="stretch"):
                                     with st.spinner("Reloading..."):
                                         # Reload VPS current status from alive file
                                         temp_server = pbremote.find_server(vps.hostname)
@@ -1650,7 +1650,7 @@ def manage_vps():
                                             del st.session_state.vps_pb7_commits_loaded
                                     st.rerun(scope="fragment")
                             with col_btn2:
-                                if st.button("🔽 +50", key="load_more_top_vps_pb7", use_container_width=True):
+                                if st.button("🔽 +50", key="load_more_top_vps_pb7", width="stretch"):
                                     if 'vps_pb7_commits_loaded' not in st.session_state:
                                         st.session_state.vps_pb7_commits_loaded = {}
                                     current_count = st.session_state.vps_pb7_commits_loaded.get(selected_branch, 50)
@@ -1659,7 +1659,7 @@ def manage_vps():
                                     pbremote.local_run.load_more_pb7_commits(selected_branch, new_count)
                                     st.rerun(scope="fragment")
                             with col_btn3:
-                                if st.button("🔽 All", key="load_all_top_vps_pb7", use_container_width=True):
+                                if st.button("🔽 All", key="load_all_top_vps_pb7", width="stretch"):
                                     if 'vps_pb7_commits_loaded' not in st.session_state:
                                         st.session_state.vps_pb7_commits_loaded = {}
                                     st.session_state.vps_pb7_commits_loaded[selected_branch] = 999999
