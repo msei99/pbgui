@@ -1,10 +1,11 @@
-streamlit==1.50.0
+streamlit==1.52.0
 streamlit-scrollable-textbox==0.0.3
 streamlit-autorefresh==1.0.1
-bokeh==2.4.3
+streamlit-bokeh==3.8.1
+bokeh==3.8.1
 psutil==5.9.4
 plotly==6.0.1
-contourpy==1.1.1
+contourpy>=1.2
 numpy==1.24.4
 numba==0.59.1
 hjson==3.1.0

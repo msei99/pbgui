@@ -242,10 +242,11 @@
       become: yes
 
     - name: remove stable toolchain if exists
-      command: rustup toolchain uninstall stable 1.78.0
+      shell: rustup toolchain uninstall stable 1.78.0
+      ignore_errors: yes
 
-    - name: update rust
-      command: rustup update 1.90.0
+    - name: Update rust
+      shell: rustup update 1.90.0
 
     - name: clone pbgui repository
       git:

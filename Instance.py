@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime
 from time import sleep
 from bokeh.plotting import figure
+from streamlit_bokeh import streamlit_bokeh
 import numpy as np
 from shutil import rmtree
 import sys
@@ -645,6 +646,7 @@ class Instance(Base):
         self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
         w = (self._ohlcv_df["timestamp"][1] - self._ohlcv_df["timestamp"][0]) * 0.8
         p = figure(
+            height=200,
             x_axis_label='date',
             y_axis_label='USDT',
             x_axis_type='datetime',
@@ -699,7 +701,7 @@ class Instance(Base):
             legend = f'close: {str(order["price"])} qty: {str(qty)}' if order["side"] == "sell" else f'open: {str(order["price"])} qty: {str(qty)}'
             p.line(x=self._ohlcv_df["timestamp"], y=order["price"], color=color, line_width=2, line_dash="dotted", legend_label=legend)
         p.legend.location = "bottom_left"
-        st.bokeh_chart(p, use_container_width=True)
+        streamlit_bokeh(p)
 
     def view_grid(self, sb: float = None):
         if self._config.type != "recursive_grid" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
@@ -711,6 +713,7 @@ class Instance(Base):
         self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
         w = (self._ohlcv_df["timestamp"][1] - self._ohlcv_df["timestamp"][0]) * 0.8
         p = figure(
+            height=200,
             x_axis_label='date',
             y_axis_label='USDT',
             x_axis_type='datetime',
@@ -802,7 +805,7 @@ class Instance(Base):
                 # print(entry[1])
                 p.line(x=self._ohlcv_df["timestamp"], y=entry[1], color="green", line_width=2, line_dash="dotted", legend_label=f"{entry[1]}: {entry[0]}")
         p.legend.location = "bottom_left"
-        st.bokeh_chart(p, use_container_width=True)
+        streamlit_bokeh(p)
 
     def compare_history(self):
         if not isinstance(self._trades, pd.DataFrame):

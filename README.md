@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.41
+# v1.42
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -25,7 +25,7 @@ It has the following functions:
 
 ### Requirements
 - Python 3.10
-- Streamlit 1.50.0
+- Streamlit 1.52.0
 - Linux
 
 ### Recommendation
@@ -292,6 +292,27 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.42 (28-12-2025)
+
+**Updated to Streamlit 1.52.0**
+- Migrated from deprecated `st.bokeh_chart` to `streamlit-bokeh` custom component
+- Updated dependencies (bokeh 3.8.1, contourpy >=1.2) for Streamlit 1.52.0 compatibility
+- Optimized chart heights (200px) for better screen utilization
+- Note: Bokeh charts are only used in legacy PB6 single/multi backtest views
+
+**Bugfixes & Improvements**
+- Fixed missing Config.py setters for proper configuration management
+- Fixed double reload issue on refresh button in VPS branch management
+- Fixed force reload of PB7 branches data on refresh button
+- Fixed Ansible playbooks PATH issues for rustup/maturin commands
+- Improved VPS branch management stability and reload behavior
+
+**Dependency Updates**
+- streamlit 1.52.0 (updated from 1.50.0)
+- streamlit-bokeh 3.8.1 (new - for legacy PB6 charts)
+- bokeh 3.8.1 (updated from 2.4.3)
+- contourpy >=1.2 (updated from 1.1.1)
 
 ## v1.41 (28-12-2025)
 

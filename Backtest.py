@@ -2,6 +2,7 @@ import streamlit as st
 from bokeh.plotting import figure
 from bokeh.palettes import Category20_20
 from bokeh.models import NumeralTickFormatter, HoverTool
+from streamlit_bokeh import streamlit_bokeh
 import json
 import psutil
 import sys
@@ -734,6 +735,7 @@ class BacktestResults:
             mode='mouse'
         )
         be = figure(
+            height=200,
             x_axis_label='date',
             y_axis_label='USDT',
             x_axis_type='datetime',
@@ -741,6 +743,7 @@ class BacktestResults:
             active_scroll="wheel_zoom")
 
         we = figure(
+            height=200,
             x_axis_label='time',
             y_axis_label='WE',
             x_axis_type='datetime',
@@ -788,13 +791,13 @@ class BacktestResults:
             we.add_tools(hover_we)
             be.legend.location = "top_left"
             be.legend.click_policy="hide"
-            st.bokeh_chart(be, use_container_width=True)
+            streamlit_bokeh(be)
         if we.legend:
             we_leg = we.legend[0]
             we.add_layout(we_leg,'above')
             we.legend.location = "top_left"
             we.legend.click_policy="hide"
-            st.bokeh_chart(we, use_container_width=True)
+            streamlit_bokeh(we)
 
         idx = 0
         col_r1, col_r2 = st.columns([1,1]) 
