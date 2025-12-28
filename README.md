@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.40
+# v1.41
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -290,6 +290,16 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.41 (28-12-2025)
+
+**VPS Branch Management**
+- Interactive branch switching for PBGui and PB7 on Master and VPS servers
+- View git branch history with commit details (author, date, message)
+- Switch to specific commits or stay on branch HEAD for automatic updates
+- Load more commits on demand (+50 or All)
+- Real-time status showing current branch, commit hash, and commits behind origin
+- Reload button updates VPS status directly from alive files without closing expanders
 
 ## v1.40 (23-12-2025)
 
