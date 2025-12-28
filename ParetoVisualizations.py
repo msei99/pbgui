@@ -196,7 +196,7 @@ class ParetoVisualizations:
                 z=non_pareto_df[z_metric],
                 mode='markers',
                 marker=dict(
-                    size=4,
+                    size=3,
                     color=color_values,
                     colorscale='Viridis',
                     opacity=0.3,
@@ -216,11 +216,11 @@ class ParetoVisualizations:
                 z=pareto_df[z_metric],
                 mode='markers',
                 marker=dict(
-                    size=8,
+                    size=6,
                     color=color_values if color_metric else 'red',
                     colorscale='Viridis' if color_metric else None,
-                    symbol='diamond',
-                    line=dict(width=2, color='white'),
+                    symbol='circle',  # Changed from 'diamond' to 'circle' for better 3D visualization
+                    line=dict(width=1, color='white'),
                     opacity=0.9
                 ),
                 name='Pareto Front',
@@ -240,8 +240,8 @@ class ParetoVisualizations:
                     marker=dict(
                         size=15,
                         color='lime',
-                        symbol='diamond',
-                        line=dict(width=4, color='darkgreen'),
+                        symbol='circle',  # Changed from 'diamond' for consistency
+                        line=dict(width=3, color='darkgreen'),
                         opacity=1.0
                     ),
                     name='🎯 Best Match',
