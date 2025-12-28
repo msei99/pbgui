@@ -710,15 +710,28 @@ class ParetoExplorer:
                 
                 preset_options = [
                     "Custom...",
-                    f"Profit vs Risk ({metric('adg')} vs {metric('drawdown_worst')})",
-                    f"Risk-Adjusted ({metric('sharpe_ratio')} vs {metric('sortino_ratio')})",
-                    f"Profit vs Quality ({metric('adg')} vs {metric('equity_choppiness')})",
-                    f"Efficiency ({metric('adg')} vs {metric(exposure_metric)})",
-                    f"Multi-Risk ({metric('drawdown_worst')} vs {metric('expected_shortfall_1pct')})",
-                    f"Profit vs Recovery ({metric('adg')} vs {metric('peak_recovery_hours_equity')})",
-                    f"Performance Ratios ({metric('calmar_ratio')} vs {metric('omega_ratio')})",
-                    f"Exposure Analysis ({metric('adg')} vs total_wallet_exposure_mean)"
+                    "**Profit vs Risk**",
+                    "**Risk-Adjusted**",
+                    "**Profit vs Quality**",
+                    "**Efficiency**",
+                    "**Multi-Risk**",
+                    "**Profit vs Recovery**",
+                    "**Performance Ratios**",
+                    "**Exposure Analysis**"
                 ]
+                
+                # Help texts for each preset with metric details
+                preset_help = {
+                    preset_options[0]: "Choose your own X and Y axis metrics for custom analysis",
+                    preset_options[1]: f"📈 **Profit vs Risk**: {metric('adg')} vs {metric('drawdown_worst')}\n\nBalance daily gains against maximum drawdown. Ideal for finding high-return configs with acceptable risk levels.",
+                    preset_options[2]: f"⚖️ **Risk-Adjusted**: {metric('sharpe_ratio')} vs {metric('sortino_ratio')}\n\nCompare Sharpe (total risk adjustment) vs Sortino (downside risk only). Shows which configs deliver best returns per unit of risk.",
+                    preset_options[3]: f"🎯 **Profit vs Quality**: {metric('adg')} vs {metric('equity_choppiness')}\n\nDaily gains vs equity curve smoothness. Low choppiness = steadier growth with fewer ups and downs.",
+                    preset_options[4]: f"💡 **Efficiency**: {metric('adg')} vs {metric(exposure_metric)}\n\nProfit per unit of capital exposure. Shows which configs generate most return with least capital at risk.",
+                    preset_options[5]: f"🛡️ **Multi-Risk**: {metric('drawdown_worst')} vs {metric('expected_shortfall_1pct')}\n\nWorst drawdown vs extreme loss scenarios (1% VaR). Identifies configs that handle both typical and extreme losses well.",
+                    preset_options[6]: f"⏱️ **Profit vs Recovery**: {metric('adg')} vs {metric('peak_recovery_hours_equity')}\n\nDaily gains vs time needed to recover from drawdowns. Fast recovery = capital back to work sooner.",
+                    preset_options[7]: f"📊 **Performance Ratios**: {metric('calmar_ratio')} vs {metric('omega_ratio')}\n\nCalmar (return/drawdown) vs Omega (gains/losses). Advanced risk-adjusted metrics for sophisticated analysis.",
+                    preset_options[8]: f"💰 **Exposure Analysis**: {metric('adg')} vs total_wallet_exposure_mean\n\nProfit vs average capital usage. Lower exposure = more capital available for other strategies."
+                }
                 
                 # Store preset_options for next iteration
                 st.session_state['prev_preset_options'] = preset_options
@@ -732,7 +745,20 @@ class ParetoExplorer:
                         # First load - use default
                         st.session_state['preset_view'] = preset_options[1]  # Profit vs Risk
                 
-                preset_choice = st.radio("Quick Views:", preset_options, key='preset_view')
+                # Show preset selection with help icon
+                col_radio, col_help = st.columns([4, 1])
+                with col_radio:
+                    preset_choice = st.radio("Quick Views:", preset_options, key='preset_view', label_visibility="visible")
+                with col_help:
+                    st.write("")  # Spacing
+                    st.write("")  # Spacing
+                    with st.popover("📖 Guide"):
+                        for preset, help_text in preset_help.items():
+                            if preset == "Custom...":
+                                st.markdown(f"**{preset}**\n\n{help_text}")
+                            else:
+                                st.markdown(f"{help_text}")
+                            st.markdown("---")
                 
                 # Map preset to actual metrics using helper function
                 preset_map = {
