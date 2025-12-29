@@ -9,6 +9,9 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
+import json
+import glob
+from pathlib import Path, PurePath
 
 
 @dataclass
@@ -313,6 +316,72 @@ class ParetoDataLoader:
         
         return selected_configs
     
+    def load_pareto_jsons_only(self) -> bool:
+        """
+        Fast load: Load only Pareto configs from pareto/*.json files
+        This is much faster than loading all_results.bin for large optimizations.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not os.path.exists(self.pareto_dir):
+            return False
+        
+        # Find all JSON files in pareto directory
+        json_pattern = os.path.join(self.pareto_dir, "*.json")
+        json_files = glob.glob(json_pattern)
+        
+        if not json_files:
+            return False
+        
+        # Parse each JSON file
+        parsed_count = 0
+        for json_file in json_files:
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+                    
+                    # Create ConfigMetrics from JSON
+                    metrics = self._parse_json_config(config_data, parsed_count)
+                    if metrics:
+                        metrics.is_pareto = True  # All configs in pareto/ are Pareto-optimal
+                        self.configs.append(metrics)
+                        parsed_count += 1
+            except Exception as e:
+                if parsed_count < 3:  # Show first 3 errors
+                    import traceback
+                    print(f"Error parsing {json_file}:")
+                    traceback.print_exc()
+                continue
+        
+        if parsed_count == 0:
+            return False
+        
+        # Extract scenario labels and scoring metrics from first config
+        # NOTE: Use optimize.scoring, not all suite_metrics, for consistency with all_results.bin mode
+        if self.configs:
+            first_config = self.configs[0]
+            if first_config.scenario_metrics:
+                self.scenario_labels = list(first_config.scenario_metrics.keys())
+            # scoring_metrics are already set by _parse_json_config from optimize.scoring
+            # Fallback: if not set, use first few metrics from suite_metrics
+            if not self.scoring_metrics and first_config.suite_metrics:
+                # Use first 3 metrics as default
+                self.scoring_metrics = list(first_config.suite_metrics.keys())[:3]
+        
+        # Store stats
+        self.load_stats = {
+            'total_parsed': parsed_count,
+            'selected_configs': parsed_count,
+            'pareto_configs': parsed_count,  # All are Pareto
+            'scenarios': self.scenario_labels,
+            'scoring_metrics': self.scoring_metrics,
+            'load_strategy': ['pareto_only'],
+            'max_configs': parsed_count
+        }
+        
+        return True
+    
     def _compute_pareto_front_fast(self):
         """
         Fast Pareto-optimal computation using sorting
@@ -561,6 +630,150 @@ class ParetoDataLoader:
             metric_stats=metric_stats,
             is_pareto=is_pareto
         )
+    
+    def _parse_json_config(self, config_data: Dict, idx: int) -> Optional[ConfigMetrics]:
+        """
+        Parse a single config from pareto/*.json file
+        Similar to _parse_config but adapted for JSON format
+        """
+        try:
+            # Extract objectives
+            metrics_block = config_data.get('metrics', {})
+            objectives = metrics_block.get('objectives', {})
+            constraint_violation = metrics_block.get('constraint_violation', 0.0)
+            
+            # Extract suite metrics - support both suite and non-suite formats
+            if 'suite_metrics' in config_data:
+                suite_metrics_block = config_data.get('suite_metrics', {})
+                metrics_dict = suite_metrics_block.get('metrics', {})
+                # Store scenario labels (first time only)
+                if not self.scenario_labels:
+                    self.scenario_labels = suite_metrics_block.get('scenario_labels', [])
+            else:
+                # Non-suite format
+                metrics_dict = metrics_block.get('stats', {})
+            
+            # Extract scoring metrics (first time only)
+            if not self.scoring_metrics and 'optimize' in config_data:
+                optimize_config = config_data['optimize']
+                self.scoring_metrics = optimize_config.get('scoring', [])
+                
+                # Extract global optimize settings
+                if not self.optimize_bounds:
+                    self.optimize_bounds = optimize_config.get('bounds', {})
+                    self.optimize_limits = optimize_config.get('limits', [])
+            
+            # Extract backtest scenarios (first time only)
+            if not self.backtest_scenarios and 'backtest' in config_data:
+                backtest_config = config_data['backtest']
+                suite_config = backtest_config.get('suite', {})
+                if suite_config.get('enabled'):
+                    self.backtest_scenarios = suite_config.get('scenarios', [])
+            
+            # Parse metrics (same logic as _parse_config)
+            suite_metrics = {}
+            scenario_metrics = {}
+            robustness_scores = {}
+            metric_stats = {}
+            
+            for metric_name, metric_data in metrics_dict.items():
+                if isinstance(metric_data, dict):
+                    aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
+                    suite_metrics[metric_name] = aggregated
+                    
+                    # Stats
+                    if 'stats' in metric_data:
+                        stats = metric_data.get('stats', {})
+                        std = stats.get('std', 0.0)
+                        mean = stats.get('mean', 0.0)
+                        min_val = stats.get('min', 0.0)
+                        max_val = stats.get('max', 0.0)
+                    else:
+                        # Fallback: use direct dict values
+                        std = metric_data.get('std', 0.0)
+                        mean = metric_data.get('mean', aggregated)
+                        min_val = metric_data.get('min', aggregated)
+                        max_val = metric_data.get('max', aggregated)
+                    
+                    metric_stats[metric_name] = {
+                        'mean': mean,
+                        'std': std,
+                        'min': min_val,
+                        'max': max_val
+                    }
+                    
+                    # Robustness score: 1/(1+CV) normalized to [0,1]
+                    # Higher score = more consistent across scenarios
+                    if std > 0 and abs(mean) > 1e-10:
+                        cv = abs(std / mean)
+                        robustness_scores[metric_name] = 1.0 / (1.0 + cv)
+                    else:
+                        robustness_scores[metric_name] = 1.0  # Perfect consistency
+                        robustness_scores[metric_name] = 1.0  # Perfect consistency
+                    
+                    # Scenario-specific metrics
+                    scenarios = metric_data.get('scenarios', {})
+                    for scenario_name, scenario_value in scenarios.items():
+                        if scenario_name not in scenario_metrics:
+                            scenario_metrics[scenario_name] = {}
+                        scenario_metrics[scenario_name][metric_name] = scenario_value
+                else:
+                    # Simple value
+                    suite_metrics[metric_name] = metric_data
+            
+            # Extract bot parameters
+            bot_params = {}
+            bot_config = config_data.get('bot', {})
+            if 'long' in bot_config:
+                for param, value in bot_config['long'].items():
+                    bot_params[f'long_{param}'] = value
+            if 'short' in bot_config:
+                for param, value in bot_config['short'].items():
+                    bot_params[f'short_{param}'] = value
+            
+            # Extract optimize settings
+            optimize_settings = {}
+            if 'optimize' in config_data:
+                opt = config_data['optimize']
+                optimize_settings = {
+                    'scoring': opt.get('scoring', []),
+                    'limits': opt.get('limits', []),
+                    'iters': opt.get('iters', 0),
+                    'population_size': opt.get('population_size', 0),
+                    'pareto_max_size': opt.get('pareto_max_size', 0),
+                }
+            
+            # Extract scenario details
+            scenario_details = None
+            if 'backtest' in config_data:
+                suite_config = config_data['backtest'].get('suite', {})
+                if suite_config.get('enabled'):
+                    scenario_details = suite_config.get('scenarios', [])
+            
+            # Compute config hash
+            config_hash = self._compute_config_hash(config_data)
+            
+            return ConfigMetrics(
+                config_index=idx,
+                config_hash=config_hash,
+                objectives=objectives,
+                constraint_violation=constraint_violation,
+                suite_metrics=suite_metrics,
+                scenario_metrics=scenario_metrics,
+                robustness_scores=robustness_scores,
+                bot_params=bot_params,
+                bounds=self.optimize_bounds,
+                optimize_settings=optimize_settings,
+                scenario_details=scenario_details,
+                metric_stats=metric_stats,
+                is_pareto=True  # All JSON configs are Pareto
+            )
+        
+        except Exception as e:
+            import traceback
+            print(f"Error parsing JSON config at index {idx}:")
+            traceback.print_exc()
+            return None
     
     def get_pareto_configs(self) -> List[ConfigMetrics]:
         """Get only Pareto-optimal configs"""

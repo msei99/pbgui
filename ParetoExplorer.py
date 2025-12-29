@@ -77,13 +77,20 @@ class ParetoExplorer:
             else:
                 st.session_state['max_configs'] = 2000
         
+        # Initialize two-stage loading state
+        if 'all_results_loaded' not in st.session_state:
+            st.session_state['all_results_loaded'] = False
+        
         # Get load strategy and max_configs from session state (convert to tuple for caching)
         load_strategy = st.session_state.get('load_strategy', ['performance', 'robustness', 'sharpe'])
         max_configs = st.session_state.get('max_configs', 2000)
         load_strategy_tuple = tuple(sorted(load_strategy))  # Sorted tuple for stable cache key
+        all_results_loaded = st.session_state.get('all_results_loaded', False)
         
-        # Load data (with caching)
-        data = ParetoExplorer._load_data(self.results_path, load_strategy_tuple, max_configs)
+        # Load data (with caching and two-stage approach)
+        # Stage 1: Always load Pareto JSONs (fast)
+        # Stage 2: Optionally load all_results.bin (slow)
+        data = ParetoExplorer._load_data(self.results_path, load_strategy_tuple, max_configs, all_results_loaded)
         if data is None:
             st.error("❌ Failed to load data")
             st.info(f"**Results Path:** `{self.results_path}`")
@@ -123,26 +130,54 @@ class ParetoExplorer:
             self._show_whatif_sandbox()
     
     @st.cache_resource
-    def _load_data(results_path: str, load_strategy: tuple, max_configs: int):
-        """Load and cache data (uses @st.cache_resource with results_path as key)"""
+    def _load_data(results_path: str, load_strategy: tuple, max_configs: int, all_results_loaded: bool):
+        """
+        Two-stage data loading (uses @st.cache_resource)
+        
+        Stage 1 (Default): Load only Pareto configs from pareto/*.json (fast, ~0.5s)
+        Stage 2 (Optional): Load all_results.bin with all configs (slow, ~10-30s)
+        
+        Args:
+            results_path: Path to optimization results
+            load_strategy: Tuple of strategy names (for cache key)
+            max_configs: Max configs to load from all_results.bin
+            all_results_loaded: If True, load all_results.bin; else only pareto JSONs
+        
+        Returns:
+            Tuple of (loader, viz, load_stats) or None on error
+        """
         try:
-            with st.spinner("🔄 Loading all_results.bin..."):
-                loader = ParetoDataLoader(results_path)
-                # Convert tuple back to list
-                strategy_list = list(load_strategy) if load_strategy else ['performance']
-                success = loader.load(load_strategy=strategy_list, max_configs=max_configs)
-                
-                if not success:
-                    st.error("❌ ParetoDataLoader.load() returned False")
-                    return None
-                
-                viz = ParetoVisualizations(loader)
-                
-                # Get load statistics from loader
-                load_stats = loader.load_stats
-                
-                # Return tuple (loader, viz, stats)
-                return (loader, viz, load_stats)
+            loader = ParetoDataLoader(results_path)
+            
+            if not all_results_loaded:
+                # STAGE 1: Fast mode - Load only Pareto configs from JSON
+                with st.spinner("⚡ Loading Pareto configs from JSON..."):
+                    success = loader.load_pareto_jsons_only()
+                    
+                    if not success:
+                        # Fallback: Try all_results.bin if no pareto JSONs found
+                        st.warning("⚠️ No pareto/*.json files found. Loading all_results.bin...")
+                        strategy_list = list(load_strategy) if load_strategy else ['performance']
+                        success = loader.load(load_strategy=strategy_list, max_configs=max_configs)
+                        
+                        if not success:
+                            st.error("❌ Failed to load data from both pareto JSONs and all_results.bin")
+                            return None
+            else:
+                # STAGE 2: Full mode - Load all configs from all_results.bin
+                with st.spinner("🔄 Loading all configs from all_results.bin... this may take 10-30 seconds"):
+                    strategy_list = list(load_strategy) if load_strategy else ['performance']
+                    success = loader.load(load_strategy=strategy_list, max_configs=max_configs)
+                    
+                    if not success:
+                        st.error("❌ Failed to load all_results.bin")
+                        return None
+            
+            viz = ParetoVisualizations(loader)
+            load_stats = loader.load_stats
+            
+            return (loader, viz, load_stats)
+            
         except Exception as e:
             st.error(f"❌ Exception during data loading:")
             st.exception(e)
@@ -156,17 +191,58 @@ class ParetoExplorer:
         with st.sidebar:
             st.title("🎯 Genius Pareto Explorer")
             
+            # === DATA SOURCE SECTION ===
+            st.markdown("### 📊 Data Source")
+            
+            all_results_loaded = st.session_state.get('all_results_loaded', False)
+            
+            if not all_results_loaded:
+                # FAST MODE: Showing Pareto only
+                num_pareto = load_stats.get('pareto_configs', 0)
+                st.success(f"✅ Loaded **{num_pareto} Pareto configs** from JSON")
+                st.info("💡 **Fast mode:** Showing best configs only")
+                
+                # Button to load all results
+                if st.button("🔄 Load More from all_results.bin", 
+                           help="Load all optimization results to compare with non-Pareto configs. This may take 10-30 seconds.",
+                           use_container_width=True):
+                    st.session_state['all_results_loaded'] = True
+                    st.rerun()
+            else:
+                # FULL MODE: All results loaded
+                num_total = load_stats.get('selected_configs', 0)
+                num_pareto = load_stats.get('pareto_configs', 0)
+                num_non_pareto = num_total - num_pareto
+                
+                st.success(f"✅ Loaded **{num_total:,} total configs**")
+                st.caption(f"📋 {num_pareto} Pareto + {num_non_pareto:,} others")
+                
+                # Button to switch back to fast mode
+                if st.button("⚡ Switch to Fast Mode", 
+                           help="Show only Pareto configs for faster performance",
+                           use_container_width=True):
+                    st.session_state['all_results_loaded'] = False
+                    st.rerun()
+            
+            st.markdown("---")
+            
             # Stats overview
             if self.loader:
-                st.metric("Total Configs", f"{load_stats['selected_configs']:,}")
+                if all_results_loaded:
+                    st.metric("Total Configs", f"{load_stats['selected_configs']:,}")
                 st.metric("Pareto Front", load_stats['pareto_configs'])
                 st.metric("Scenarios", len(load_stats['scenarios']))
                 
                 # Load info expander - NOW WITH DETAILED INFO
                 with st.expander("📊 Load Details", expanded=False):
-                    st.markdown(f"**✅ Loaded:** {load_stats['total_parsed']:,} configs from all_results.bin")
-                    st.markdown(f"**⏳ Strategy:** {', '.join(load_stats['load_strategy'])}")
-                    st.markdown(f"**✅ Selected:** {load_stats['selected_configs']:,} configs")
+                    if all_results_loaded:
+                        st.markdown(f"**✅ Loaded:** {load_stats['total_parsed']:,} configs from all_results.bin")
+                        st.markdown(f"**⏳ Strategy:** {', '.join(load_stats['load_strategy'])}")
+                        st.markdown(f"**✅ Selected:** {load_stats['selected_configs']:,} configs")
+                    else:
+                        st.markdown(f"**⚡ Fast Mode:** Loaded {load_stats['pareto_configs']} Pareto configs from JSON")
+                        st.markdown(f"**📂 Source:** pareto/*.json")
+                    
                     st.markdown(f"**📋 Pareto:** {load_stats['pareto_configs']} configs")
                     
                     st.markdown("---")
@@ -631,7 +707,15 @@ class ParetoExplorer:
             
             # Show "Show all configs" checkbox only for Scatter plots, not for Radar Chart
             if viz_type in ["2D Scatter", "3D Scatter"]:
-                show_all = st.checkbox("Show all configs", value=False, key='show_all_playground')
+                all_results_loaded = st.session_state.get('all_results_loaded', False)
+                
+                if all_results_loaded:
+                    show_all = st.checkbox("Show all configs", value=False, 
+                                         key='show_all_playground',
+                                         help="Show non-Pareto configs in grey for comparison")
+                else:
+                    show_all = False
+                    st.caption("ℹ️ Load all_results.bin to compare with non-Pareto configs")
             else:
                 show_all = False  # Radar Chart always shows only top configs
             
