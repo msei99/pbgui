@@ -211,13 +211,40 @@ class ParetoExplorer:
                             return None
             else:
                 # STAGE 2: Full mode - Load all configs from all_results.bin
-                with st.spinner("🔄 Loading all configs from all_results.bin... this may take 10-30 seconds"):
-                    strategy_list = list(load_strategy) if load_strategy else ['performance']
-                    success = loader.load(load_strategy=strategy_list, max_configs=max_configs)
+                # Show file size
+                all_results_path = os.path.join(results_path, "all_results.bin")
+                if os.path.exists(all_results_path):
+                    file_size_mb = os.path.getsize(all_results_path) / (1024 * 1024)
                     
-                    if not success:
-                        st.error("❌ Failed to load all_results.bin")
-                        return None
+                    # Show progress in sidebar to avoid conflict with "Running..." text
+                    with st.sidebar:
+                        st.markdown("---")
+                        status_text = st.empty()
+                        progress_bar = st.progress(0)
+                    
+                    # Progress callback for loader
+                    def update_progress(current, total, message):
+                        progress = current / total if total > 0 else 0
+                        status_text.markdown(f"**🔄 {message}**")
+                        progress_bar.progress(progress)
+                    
+                    # Initial message
+                    update_progress(0, 1, f"Preparing to load {file_size_mb:.1f} MB...")
+                    
+                    strategy_list = list(load_strategy) if load_strategy else ['performance']
+                    success = loader.load(load_strategy=strategy_list, max_configs=max_configs, progress_callback=update_progress)
+                    
+                    # Clear progress indicators from sidebar
+                    status_text.empty()
+                    progress_bar.empty()
+                else:
+                    with st.spinner("🔄 Loading all configs from all_results.bin..."):
+                        strategy_list = list(load_strategy) if load_strategy else ['performance']
+                        success = loader.load(load_strategy=strategy_list, max_configs=max_configs)
+                    
+                if not success:
+                    st.error("❌ Failed to load all_results.bin")
+                    return None
             
             viz = ParetoVisualizations(loader)
             load_stats = loader.load_stats
@@ -238,8 +265,6 @@ class ParetoExplorer:
             st.session_state['all_results_loaded'] = value
 
         with st.sidebar:
-            st.title("🎯 Pareto Explorer")
-            
             # === DATA SOURCE SECTION ===
             st.markdown("### 📊 Data Source")
             

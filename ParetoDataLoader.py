@@ -79,7 +79,7 @@ class ParetoDataLoader:
         self.optimize_limits: List[Dict] = []
         self.backtest_scenarios: List[Dict] = []
         
-    def load(self, load_strategy: List[str] = None, max_configs: int = 2000) -> bool:
+    def load(self, load_strategy: List[str] = None, max_configs: int = 2000, progress_callback=None) -> bool:
         """
         Load all_results.bin and parse all configs
         
@@ -89,6 +89,7 @@ class ParetoDataLoader:
                                  'calmar', 'sortino', 'omega', 'volatility', 'recovery'
                          Default: ['performance'] (Passivbot official)
             max_configs: Maximum number of configs to keep (default: 2000)
+            progress_callback: Optional callback(current, total, message) for progress updates
         
         Returns:
             True if successful, False otherwise
@@ -103,8 +104,11 @@ class ParetoDataLoader:
         self._load_pareto_hashes()
         
         # Load all configs from binary file
+        if progress_callback:
+            progress_callback(0, 100, "Loading binary file...")
+        
         try:
-            configs_data = self._load_binary_file()
+            configs_data = self._load_binary_file(progress_callback=progress_callback)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -112,6 +116,7 @@ class ParetoDataLoader:
         
         # Parse each config
         parsed_count = 0
+        total_configs = len(configs_data)
         
         # Parse ALL configs first (we need to find the best ones)
         for idx, config_data in enumerate(configs_data):
@@ -119,6 +124,10 @@ class ParetoDataLoader:
                 metrics = self._parse_config(idx, config_data)
                 self.configs.append(metrics)
                 parsed_count += 1
+                
+                # Report progress every 100 configs
+                if progress_callback and (parsed_count % 100 == 0 or parsed_count == total_configs):
+                    progress_callback(parsed_count, total_configs, f"Parsing configs: {parsed_count}/{total_configs}")
             except Exception as e:
                 if idx < 3:  # Show details for first 3 errors
                     import traceback
@@ -476,14 +485,33 @@ class ParetoDataLoader:
                 if config.constraint_violation <= threshold:
                     config.is_pareto = True
     
-    def _load_binary_file(self) -> List[Dict]:
-        """Load msgpack binary file (handles multiple packed objects)"""
+    def _load_binary_file(self, progress_callback=None) -> List[Dict]:
+        """
+        Load msgpack binary file (handles multiple packed objects)
+        
+        Args:
+            progress_callback: Optional callback for progress updates
+        """
         configs = []
+        
+        # Get file size for progress tracking
+        file_size = os.path.getsize(self.all_results_path)
         
         with open(self.all_results_path, 'rb') as f:
             unpacker = msgpack.Unpacker(f, raw=False, strict_map_key=False)
+            
             for obj in unpacker:
                 configs.append(obj)
+                
+                # Report progress every 100 configs
+                if progress_callback and len(configs) % 100 == 0:
+                    # Estimate progress based on file position
+                    progress = f.tell() / file_size
+                    progress_callback(f.tell(), file_size, f"Loading binary file: {len(configs)} configs ({progress*100:.0f}%)")
+        
+        # Final update
+        if progress_callback:
+            progress_callback(file_size, file_size, f"Loaded {len(configs)} configs from binary file")
         
         return configs
     
