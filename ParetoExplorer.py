@@ -272,9 +272,19 @@ class ParetoExplorer:
             # Remove emoji for session state key
             stage_keys = [s.split(' ', 1)[1] for s in stages]
             
+            # Get current stage from session state
+            current_stage = st.session_state.get('stage', 'Command Center')
+            
+            # Find index of current stage
+            try:
+                current_index = stage_keys.index(current_stage)
+            except ValueError:
+                current_index = 0  # Default to Command Center
+            
             selected = st.radio(
                 "Choose Stage:",
                 stages,
+                index=current_index,
                 key='stage_selector',
                 label_visibility='collapsed'
             )
@@ -593,10 +603,26 @@ class ParetoExplorer:
         st.subheader("💡 GENIUS INSIGHTS")
         
         insights = self._generate_insights()
+        bounds_info = self.loader.get_parameters_at_bounds(tolerance=0.1)
         
         for insight_type, insight_text in insights:
             if insight_type == "warning":
-                st.warning(f"⚠️ {insight_text}")
+                # Check if this is the bounds warning
+                if "parameters are near bounds" in insight_text:
+                    st.warning(f"⚠️ {insight_text}")
+                    # Add expander with details
+                    with st.expander("🔍 Show parameters near bounds"):
+                        if bounds_info['at_lower']:
+                            st.markdown("**At Lower Bound:**")
+                            for param, info in bounds_info['at_lower'].items():
+                                st.markdown(f"- `{param}`: {info['value']:.4f} (bound: {info['bound']:.4f})")
+                        
+                        if bounds_info['at_upper']:
+                            st.markdown("**At Upper Bound:**")
+                            for param, info in bounds_info['at_upper'].items():
+                                st.markdown(f"- `{param}`: {info['value']:.4f} (bound: {info['bound']:.4f})")
+                else:
+                    st.warning(f"⚠️ {insight_text}")
             elif insight_type == "success":
                 st.success(f"✅ {insight_text}")
             elif insight_type == "info":
@@ -1735,10 +1761,19 @@ class ParetoExplorer:
             robustness_scores = [self.loader.compute_overall_robustness(c) for c in pareto_configs]
             avg_robust = np.mean(robustness_scores)
             
+            # Check if we have scenarios (suite mode) or single backtest (non-suite)
+            has_scenarios = self.loader.scenario_labels and len(self.loader.scenario_labels) > 1
+            
             if avg_robust > 0.85:
-                insights.append(("success", f"Excellent robustness across scenarios (avg: {avg_robust:.2f})!"))
+                if has_scenarios:
+                    insights.append(("success", f"Excellent robustness across scenarios (avg: {avg_robust:.2f})!"))
+                else:
+                    insights.append(("success", f"Excellent consistency in metrics (robustness: {avg_robust:.2f})!"))
             elif avg_robust < 0.70:
-                insights.append(("warning", f"Configs show high variability across scenarios (avg robustness: {avg_robust:.2f})"))
+                if has_scenarios:
+                    insights.append(("warning", f"Configs show high variability across scenarios (avg robustness: {avg_robust:.2f})"))
+                else:
+                    insights.append(("warning", f"Configs show high variability in metrics (robustness: {avg_robust:.2f})"))
         
         # Check scenario performance
         if self.loader.scenario_labels and len(self.loader.scenario_labels) > 1:

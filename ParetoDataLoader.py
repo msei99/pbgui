@@ -933,28 +933,70 @@ class ParetoDataLoader:
         distances.sort(key=lambda x: x[1])
         return distances[:n]
     
-    def get_parameters_at_bounds(self, tolerance: float = 0.05) -> Dict[str, List[str]]:
+    def get_parameters_at_bounds(self, tolerance: float = 0.05, top_n: int = 10) -> Dict[str, Dict]:
         """
-        Find parameters that are at or near bounds limits
+        Find parameters that are at or near bounds limits in TOP performing configs
         
         Args:
             tolerance: How close to bounds (0.05 = within 5% of limit)
+            top_n: Only check top N configs by composite score (default: 10)
         
         Returns:
-            Dict with 'at_lower', 'at_upper', 'within_range' lists
+            Dict with 'at_lower', 'at_upper' dicts containing param info
+            Example: {'at_lower': {'param_name': {'value': 0.01, 'bound': 0.01}}, ...}
         """
-        at_lower = []
-        at_upper = []
+        at_lower = {}
+        at_upper = {}
         within_range = []
         
+        # Get top N Pareto configs by composite score (performance × robustness)
+        pareto_configs = self.get_pareto_configs()
+        if not pareto_configs:
+            return {'at_lower': {}, 'at_upper': {}, 'within_range': []}
+        
+        # Sort by composite score
+        primary_metric = self.scoring_metrics[0] if self.scoring_metrics else 'adg_w_usd'
+        scored_configs = [
+            (c, c.suite_metrics.get(primary_metric, 0) * self.compute_overall_robustness(c))
+            for c in pareto_configs
+        ]
+        scored_configs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Take only top N
+        top_configs = [c for c, score in scored_configs[:top_n]]
+        
+        # Check if long/short are enabled by looking at key parameters
+        long_enabled = (
+            self.optimize_bounds.get('long_n_positions', (0, 0))[1] > 0 or
+            self.optimize_bounds.get('long_total_wallet_exposure_limit', (0, 0))[1] > 0
+        )
+        short_enabled = (
+            self.optimize_bounds.get('short_n_positions', (0, 0))[1] > 0 or
+            self.optimize_bounds.get('short_total_wallet_exposure_limit', (0, 0))[1] > 0
+        )
+        
         for param_name, (lower, upper) in self.optimize_bounds.items():
+            # Skip disabled side (long/short)
+            if param_name.startswith('long_') and not long_enabled:
+                continue
+            if param_name.startswith('short_') and not short_enabled:
+                continue
+            
+            # Skip parameters where bounds are both 0 (disabled)
+            if lower == 0 and upper == 0:
+                continue
+            
             param_range = upper - lower
+            
+            # Skip if range is too small (essentially disabled)
+            if param_range < 1e-10:
+                continue
+            
             threshold_lower = lower + (param_range * tolerance)
             threshold_upper = upper - (param_range * tolerance)
             
-            # Check Pareto configs
-            pareto_configs = self.get_pareto_configs()
-            values = [c.bot_params.get(param_name, 0) for c in pareto_configs if param_name in c.bot_params]
+            # Check TOP configs only
+            values = [c.bot_params.get(param_name, 0) for c in top_configs if param_name in c.bot_params]
             
             if not values:
                 continue
@@ -963,9 +1005,9 @@ class ParetoDataLoader:
             max_val = max(values)
             
             if min_val <= threshold_lower:
-                at_lower.append(param_name)
+                at_lower[param_name] = {'value': min_val, 'bound': lower}
             elif max_val >= threshold_upper:
-                at_upper.append(param_name)
+                at_upper[param_name] = {'value': max_val, 'bound': upper}
             else:
                 within_range.append(param_name)
         
