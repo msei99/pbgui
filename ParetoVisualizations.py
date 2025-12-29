@@ -452,6 +452,7 @@ class ParetoVisualizations:
         robustness = []
         labels = []
         colors = []
+        config_indices = []
         
         for config in configs:
             perf = config.suite_metrics.get(performance_metric, 0)
@@ -461,6 +462,7 @@ class ParetoVisualizations:
             robustness.append(robust)
             labels.append(f"Config #{config.config_index}")
             colors.append('red' if config.is_pareto else 'blue')
+            config_indices.append(config.config_index)
         
         fig = go.Figure()
         
@@ -474,6 +476,7 @@ class ParetoVisualizations:
                 line=dict(width=1, color='white')
             ),
             text=labels,
+            customdata=config_indices,
             hovertemplate='<b>%{text}</b><br>Performance: %{x:.6f}<br>Robustness: %{y:.3f}<extra></extra>'
         ))
         

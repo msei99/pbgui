@@ -783,6 +783,10 @@ class ParetoDataLoader:
         """Get all configs"""
         return self.configs
     
+    def get_config_by_index(self, config_index: int) -> Optional[ConfigMetrics]:
+        """Get a config by its config_index"""
+        return next((c for c in self.configs if c.config_index == config_index), None)
+    
     def to_dataframe(self, pareto_only: bool = False) -> pd.DataFrame:
         """
         Convert configs to pandas DataFrame for easy analysis
