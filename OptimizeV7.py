@@ -497,7 +497,7 @@ class OptimizeV7Results:
             "id": None,
             "edit": st.column_config.CheckboxColumn(label="Edit"),
             "view": st.column_config.CheckboxColumn(label="View Paretos"),
-            "🎯 explorer": st.column_config.CheckboxColumn(label="🎯 Genius Explorer"),
+            "🎯 explorer": st.column_config.CheckboxColumn(label="🎯 Pareto Explorer"),
             "Result Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
             "Result": st.column_config.TextColumn(label="Result Directory", width="50px"),
         }
@@ -570,7 +570,7 @@ class OptimizeV7Results:
         info_popup(f"3D Plot Generated {result.stdout}")
     
     def run_pareto_explorer(self, index):
-        """Open Genius Pareto Explorer within PBGui"""
+        """Open Pareto Explorer within PBGui"""
         results_dir = Path(index).parent
         
         # Check if all_results.bin exists

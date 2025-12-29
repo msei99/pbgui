@@ -1,5 +1,5 @@
 """
-ParetoVisualizations - All Plotly visualization functions for the Genius Pareto Explorer
+ParetoVisualizations - All Plotly visualization functions for the Pareto Explorer
 Provides interactive charts for multi-dimensional config analysis
 """
 
@@ -41,7 +41,7 @@ class ParetoVisualizations:
             y_metric: Metric for y-axis
             color_metric: Optional metric for color coding
             size_metric: Optional metric for marker size
-            show_all: If True, show all configs (limited to 1000); if False, only Pareto
+            show_all: If True, show all configs; if False, only Pareto
             best_match_config: Optional ConfigMetrics to highlight as best match
             title_prefix: Prefix for plot title (e.g., "Profit vs Risk")
         
@@ -49,13 +49,12 @@ class ParetoVisualizations:
             Plotly figure
         """
         if show_all:
-            # Limit to 1000 configs for performance
-            configs_to_show = self.loader.configs[:1000]
+            # Show all loaded configs (respects display range filter)
             df = pd.DataFrame([{
                 'config_index': c.config_index,
                 'is_pareto': c.is_pareto,
                 **c.suite_metrics
-            } for c in configs_to_show])
+            } for c in self.loader.configs])
         else:
             df = self.loader.to_dataframe(pareto_only=True)
         
@@ -136,6 +135,10 @@ class ParetoVisualizations:
             selector=dict(mode='markers')
         )
         
+        # Add annotation showing point counts
+        pareto_count = len(df[df['is_pareto'] == True])
+        total_count = len(df)
+        
         fig.update_layout(
             height=600,
             hovermode='closest',
@@ -152,7 +155,8 @@ class ParetoVisualizations:
                                z_metric: str,
                                color_metric: Optional[str] = None,
                                show_all: bool = False,
-                               best_match_config = None) -> go.Figure:
+                               best_match_config = None,
+                               configs_list = None) -> go.Figure:
         """
         Interactive 3D scatter plot
         
@@ -161,22 +165,26 @@ class ParetoVisualizations:
             y_metric: Metric for y-axis
             z_metric: Metric for z-axis
             color_metric: Optional metric for color coding
-            show_all: If True, show all configs (limited to 1000)
+            show_all: If True, show all configs; if False, only Pareto
             best_match_config: Optional ConfigMetrics to highlight as best match
+            configs_list: Optional list of configs to use (for consistent ordering)
         
         Returns:
             Plotly figure
         """
-        if show_all:
-            # Limit to 1000 configs for performance
-            configs_to_show = self.loader.configs[:1000]
-            df = pd.DataFrame([{
-                'config_index': c.config_index,
-                'is_pareto': c.is_pareto,
-                **c.suite_metrics
-            } for c in configs_to_show])
+        # Use provided configs_list for consistent ordering, or fall back to loader
+        if configs_list is not None:
+            configs_to_use = configs_list
+        elif show_all:
+            configs_to_use = self.loader.configs
         else:
-            df = self.loader.to_dataframe(pareto_only=True)
+            configs_to_use = self.loader.get_pareto_configs()
+        
+        df = pd.DataFrame([{
+            'config_index': c.config_index,
+            'is_pareto': c.is_pareto,
+            **c.suite_metrics
+        } for c in configs_to_use])
         
         if df.empty:
             return go.Figure().add_annotation(text="No data available", showarrow=False)
@@ -196,10 +204,10 @@ class ParetoVisualizations:
                 z=non_pareto_df[z_metric],
                 mode='markers',
                 marker=dict(
-                    size=3,
+                    size=6,
                     color=color_values,
                     colorscale='Viridis',
-                    opacity=0.3,
+                    opacity=0.4,
                     colorbar=dict(title=color_metric) if color_metric else None
                 ),
                 name='All Configs',
@@ -216,11 +224,11 @@ class ParetoVisualizations:
                 z=pareto_df[z_metric],
                 mode='markers',
                 marker=dict(
-                    size=6,
+                    size=10,
                     color=color_values if color_metric else 'red',
                     colorscale='Viridis' if color_metric else None,
                     symbol='circle',  # Changed from 'diamond' to 'circle' for better 3D visualization
-                    line=dict(width=1, color='white'),
+                    line=dict(width=2, color='white'),
                     opacity=0.9
                 ),
                 name='Pareto Front',
@@ -238,10 +246,10 @@ class ParetoVisualizations:
                     z=best_match_df[z_metric],
                     mode='markers',
                     marker=dict(
-                        size=15,
+                        size=18,
                         color='lime',
                         symbol='circle',  # Changed from 'diamond' for consistency
-                        line=dict(width=3, color='darkgreen'),
+                        line=dict(width=4, color='darkgreen'),
                         opacity=1.0
                     ),
                     name='🎯 Best Match',
@@ -256,8 +264,10 @@ class ParetoVisualizations:
                 yaxis_title=y_metric.replace('_', ' ').title(),
                 zaxis_title=z_metric.replace('_', ' ').title()
             ),
-            height=700,
-            template='plotly_white'
+            height=1080,
+            template='plotly_white',
+            clickmode='event+select',  # Enable click events
+            dragmode='orbit'  # Set default drag mode for better 3D interaction
         )
         
         return fig
@@ -443,7 +453,8 @@ class ParetoVisualizations:
         Returns:
             Plotly figure
         """
-        configs = self.loader.get_all_configs() if show_all else self.loader.get_pareto_configs()
+        # Use loader.configs directly (respects view filtering)
+        configs = self.loader.configs if show_all else self.loader.get_pareto_configs()
         
         if not configs:
             return go.Figure().add_annotation(text="No data available", showarrow=False)
@@ -497,6 +508,8 @@ class ParetoVisualizations:
                           text="🛡️ Stable but Slow", showarrow=False, font=dict(size=12, color="blue"))
         fig.add_annotation(x=max_perf * 0.9, y=mean_robust * 0.3,
                           text="🎲 High Risk", showarrow=False, font=dict(size=12, color="orange"))
+        
+        # Point count removed - displayed outside chart in Streamlit
         
         fig.update_layout(
             title=f"Robustness vs Performance: {performance_metric.replace('_', ' ').title()}",

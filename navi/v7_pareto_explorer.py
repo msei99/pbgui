@@ -9,7 +9,7 @@ if is_session_state_not_initialized() or not is_authenticted():
 # Check if we have a path to analyze
 if "pareto_explorer_path" not in st.session_state:
     st.error("❌ No optimization result selected")
-    st.info("Please go to **PBv7 → Optimize → Results** and click the **🎯 Genius Explorer** button")
+    st.info("Please go to **PBv7 → Optimize → Results** and click the **🎯 Pareto Explorer** button")
     if st.button("← Back to Optimize"):
         st.session_state.view = "optimize"
         st.rerun()
@@ -17,7 +17,7 @@ if "pareto_explorer_path" not in st.session_state:
 
 # Navigation sidebar
 with st.sidebar:
-    st.title("🎯 Genius Pareto Explorer")
+    st.title("🎯 Pareto Explorer")
     
     if st.button("← Back to Optimize Results", use_container_width=True):
         if "pareto_explorer_path" in st.session_state:
