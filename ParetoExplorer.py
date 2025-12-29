@@ -313,6 +313,103 @@ class ParetoExplorer:
                         width='stretch'
                     )
     
+    def _show_config_details(self, config_index):
+        """Show detailed config view with backtest option in a modal dialog"""
+        
+        config = self.loader.get_config_by_index(config_index)
+        if not config:
+            st.error(f"❌ Config #{config_index} not found")
+            return
+        
+        st.subheader(f"📋 Configuration #{config_index}")
+        
+        # Metrics overview
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**📊 Performance**")
+            for metric in self.loader.scoring_metrics[:3]:
+                if metric in config.suite_metrics:
+                    st.metric(metric.replace('_', ' ').title(), f"{config.suite_metrics[metric]:.6f}")
+        
+        with col2:
+            st.markdown("**🎯 Trading Style**")
+            style = self.loader.compute_trading_style(config)
+            st.markdown(f"**{style}**")
+        
+        with col3:
+            st.markdown("**💪 Robustness**")
+            robust = self.loader.compute_overall_robustness(config)
+            stars = "⭐" * int(robust * 5)
+            st.metric("Score", f"{robust:.2f}")
+            st.markdown(f"**{stars}**")
+        
+        st.markdown("---")
+        
+        # Full config
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            with st.expander("📋 Full Configuration", expanded=True):
+                try:
+                    full_config_data = self.loader.get_full_config(config.config_index)
+                    if full_config_data:
+                        st.json(full_config_data)
+                    else:
+                        st.warning("⚠️ Full config not available - showing bot params only")
+                        st.json(config.bot_params)
+                except Exception as e:
+                    st.error(f"❌ Error loading config: {str(e)}")
+                    st.json(config.bot_params)
+        
+        with col_right:
+            with st.expander("📊 All Metrics", expanded=True):
+                metrics_df = []
+                for metric, value in sorted(config.suite_metrics.items()):
+                    metrics_df.append({"Metric": metric, "Value": f"{value:.6f}"})
+                st.dataframe(metrics_df, height=400, hide_index=True)
+        
+        # Backtest button
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🚀 Run Backtest", width='stretch', type="primary", key=f"bt_modal_{config_index}"):
+                try:
+                    import BacktestV7
+                    from pbgui_func import get_navi_paths, pb7dir
+                    from pathlib import Path
+                    import json
+                    import time
+                    
+                    full_config_data = self.loader.get_full_config(config.config_index)
+                    if not full_config_data:
+                        st.error("❌ Full config data not available")
+                        st.stop()
+                    
+                    config_dir = Path(f'{pb7dir()}/configs/pareto_selected')
+                    config_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    timestamp = int(time.time())
+                    config_filename = f"pareto_config_{config.config_index}_{timestamp}.json"
+                    config_path = config_dir / config_filename
+                    
+                    with open(config_path, 'w') as f:
+                        json.dump(full_config_data, f, indent=2)
+                    
+                    # Cleanup backtest session state
+                    for key in ["bt_v7_queue", "bt_v7_results", "bt_v7_edit_symbol", 
+                               "config_v7_archives", "config_v7_config_archive"]:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    
+                    st.session_state.bt_v7 = BacktestV7.BacktestV7Item(str(config_path))
+                    st.switch_page(get_navi_paths()["V7_BACKTEST"])
+                    
+                except Exception as e:
+                    st.error(f"❌ Error preparing backtest: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
+    
     def _show_command_center(self):
         """Stage 1: Command Center - Overview and Top Performers"""
         
@@ -596,6 +693,77 @@ class ParetoExplorer:
                             if scenario in config.scenario_metrics:
                                 perf = config.scenario_metrics[scenario].get(primary_metric, 0)
                                 st.metric(scenario.title(), f"{perf:.6f}")
+                
+                st.markdown("---")
+                
+                # Action buttons
+                col_action1, col_action2 = st.columns(2)
+                
+                with col_action1:
+                    # Load full config for display and backtest
+                    full_config_data = None
+                    if st.button(f"📋 Show Full Config ##{i}_config", key=f"show_config_champ_{i}", width='stretch'):
+                        try:
+                            full_config_data = self.loader.get_full_config(config.config_index)
+                            if full_config_data:
+                                with st.expander(f"Full Configuration #{config.config_index}", expanded=True):
+                                    st.json(full_config_data)
+                            else:
+                                st.warning("⚠️ Could not load full config - showing bot params only")
+                                st.json(config.bot_params)
+                        except Exception as e:
+                            st.error(f"❌ Error loading config: {str(e)}")
+                
+                with col_action2:
+                    if st.button(f"🚀 Run Backtest ##{i}_bt", key=f"run_bt_champ_{i}", width='stretch', type="primary"):
+                        try:
+                            import BacktestV7
+                            from pbgui_func import get_navi_paths, pb7dir
+                            from pathlib import Path
+                            import json
+                            import time
+                            
+                            # Load full config if not already loaded
+                            if not full_config_data:
+                                full_config_data = self.loader.get_full_config(config.config_index)
+                            
+                            if not full_config_data:
+                                st.error("❌ Full config data not available")
+                                st.stop()
+                            
+                            # Create config directory
+                            config_dir = Path(f'{pb7dir()}/configs/pareto_selected')
+                            config_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            # Generate unique filename
+                            timestamp = int(time.time())
+                            config_filename = f"pareto_champ_{config.config_index}_{timestamp}.json"
+                            config_path = config_dir / config_filename
+                            
+                            # Save the full config
+                            with open(config_path, 'w') as f:
+                                json.dump(full_config_data, f, indent=2)
+                            
+                            # Cleanup backtest session state
+                            if "bt_v7_queue" in st.session_state:
+                                del st.session_state.bt_v7_queue
+                            if "bt_v7_results" in st.session_state:
+                                del st.session_state.bt_v7_results
+                            if "bt_v7_edit_symbol" in st.session_state:
+                                del st.session_state.bt_v7_edit_symbol
+                            if "config_v7_archives" in st.session_state:
+                                del st.session_state.config_v7_archives
+                            if "config_v7_config_archive" in st.session_state:
+                                del st.session_state.config_v7_config_archive
+                            
+                            # Create BacktestV7Item and switch to backtest page
+                            st.session_state.bt_v7 = BacktestV7.BacktestV7Item(str(config_path))
+                            st.switch_page(get_navi_paths()["V7_BACKTEST"])
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error preparing backtest: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
         
         st.markdown("---")
         
@@ -632,6 +800,7 @@ class ParetoExplorer:
         
         # Quick Visualization
         st.subheader("📈 PARETO FRONT PREVIEW")
+        st.caption("💡 Click on any point to view config details or start a backtest")
         
         col1, col2 = st.columns(2)
         
@@ -644,7 +813,48 @@ class ParetoExplorer:
                     color_metric='drawdown_worst_usd' if 'drawdown_worst_usd' in self.loader.configs[0].suite_metrics else None,
                     show_all=True
                 )
-                st.plotly_chart(fig, width='stretch')
+                event = st.plotly_chart(fig, width='stretch', on_select="rerun", key='preview_2d')
+                
+                # Handle click event
+                if event and hasattr(event, 'selection') and event.selection:
+                    try:
+                        points = event.selection.get('points', [])
+                        if points:
+                            point_data = points[0]
+                            clicked_config_index = None
+                            
+                            # Try different ways to get config_index
+                            if 'customdata' in point_data and point_data['customdata'] is not None:
+                                customdata = point_data['customdata']
+                                
+                                # Handle different customdata formats
+                                if isinstance(customdata, dict):
+                                    clicked_config_index = int(customdata.get('0', customdata.get(0)))
+                                elif isinstance(customdata, (list, tuple)) and len(customdata) > 0:
+                                    clicked_config_index = int(customdata[0])
+                                elif isinstance(customdata, (int, float)):
+                                    clicked_config_index = int(customdata)
+                            
+                            # Fallback: use point_index
+                            if clicked_config_index is None and 'point_index' in point_data:
+                                idx = point_data['point_index']
+                                configs = self.loader.configs[:1000]
+                                if 0 <= idx < len(configs):
+                                    clicked_config_index = configs[idx].config_index
+                            
+                            # Show config details and backtest button in expander
+                            if clicked_config_index is not None:
+                                config = self.loader.get_config_by_index(clicked_config_index)
+                                if config:
+                                    with st.expander(f"📋 Config #{clicked_config_index} Details", expanded=True):
+                                        self._show_config_details(clicked_config_index)
+                                        
+                                        # Backtest button
+                                        if st.button(f"🚀 Start Backtest for Config #{clicked_config_index}", 
+                                                   key=f'bt_preview_2d_{clicked_config_index}'):
+                                            self._start_backtest(config)
+                    except Exception as e:
+                        st.warning(f"⚠️ Click handling error: {e}")
         
         with col2:
             # Robustness Quadrant
@@ -652,7 +862,48 @@ class ParetoExplorer:
                 performance_metric=primary_metric,
                 show_all=False
             )
-            st.plotly_chart(fig, width='stretch')
+            event = st.plotly_chart(fig, width='stretch', on_select="rerun", key='preview_robustness')
+            
+            # Handle click event
+            if event and hasattr(event, 'selection') and event.selection:
+                try:
+                    points = event.selection.get('points', [])
+                    if points:
+                        point_data = points[0]
+                        clicked_config_index = None
+                        
+                        # Try different ways to get config_index
+                        if 'customdata' in point_data and point_data['customdata'] is not None:
+                            customdata = point_data['customdata']
+                            
+                            # Handle different customdata formats
+                            if isinstance(customdata, dict):
+                                clicked_config_index = int(customdata.get('0', customdata.get(0)))
+                            elif isinstance(customdata, (list, tuple)) and len(customdata) > 0:
+                                clicked_config_index = int(customdata[0])
+                            elif isinstance(customdata, (int, float)):
+                                clicked_config_index = int(customdata)
+                        
+                        # Fallback: use point_index
+                        if clicked_config_index is None and 'point_index' in point_data:
+                            idx = point_data['point_index']
+                            pareto_configs = self.loader.get_pareto_configs()
+                            if 0 <= idx < len(pareto_configs):
+                                clicked_config_index = pareto_configs[idx].config_index
+                        
+                        # Show config details and backtest button in expander
+                        if clicked_config_index is not None:
+                            config = self.loader.get_config_by_index(clicked_config_index)
+                            if config:
+                                with st.expander(f"📋 Config #{clicked_config_index} Details", expanded=True):
+                                    self._show_config_details(clicked_config_index)
+                                    
+                                    # Backtest button
+                                    if st.button(f"🚀 Start Backtest for Config #{clicked_config_index}", 
+                                               key=f'bt_preview_rob_{clicked_config_index}'):
+                                        self._start_backtest(config)
+                except Exception as e:
+                    st.warning(f"⚠️ Click handling error: {e}")
     
     def _show_pareto_playground(self):
         """Stage 2: Pareto Playground - Interactive Exploration"""
