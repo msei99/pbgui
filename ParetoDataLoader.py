@@ -316,6 +316,81 @@ class ParetoDataLoader:
         
         return selected_configs
     
+    def get_view_slice(self, start_rank: int, end_rank: int) -> List[ConfigMetrics]:
+        """
+        Get configs in rank range and compute Pareto front for this slice
+        
+        Args:
+            start_rank: First rank to include (0-indexed)
+            end_rank: Last rank to include (exclusive, like Python slicing)
+        
+        Returns:
+            List of configs in range with Pareto front computed for this slice
+        """
+        # Use _full_configs if available (prevents corruption from repeated filtering)
+        source_configs = getattr(self, '_full_configs', self.configs)
+        
+        # Get slice (already sorted by load strategy)
+        start_idx = max(0, start_rank)
+        end_idx = min(len(source_configs), end_rank)
+        
+        if start_idx >= end_idx:
+            return []
+        
+        view_configs = source_configs[start_idx:end_idx]
+        
+        # Reset all Pareto flags in the slice
+        for c in view_configs:
+            c.is_pareto = False
+        
+        # Compute Pareto front for this view only
+        self._compute_pareto_front_for_configs(view_configs)
+        
+        return view_configs
+    
+    def _compute_pareto_front_for_configs(self, configs: List[ConfigMetrics]):
+        """
+        Compute Pareto front for given config list (modifies is_pareto flag in-place)
+        
+        Args:
+            configs: List of configs to compute Pareto front for
+        """
+        if not configs:
+            return
+        
+        if len(configs) == 1:
+            configs[0].is_pareto = True
+            return
+        
+        # Extract objectives (minimize all)
+        objective_keys = sorted(configs[0].objectives.keys())
+        objectives = np.array([[c.objectives[key] for key in objective_keys] for c in configs])
+        
+        # Find Pareto front - a point is Pareto optimal if no other point dominates it
+        # Point j dominates point i if: obj_j <= obj_i for all objectives AND obj_j < obj_i for at least one
+        is_pareto = np.ones(len(configs), dtype=bool)
+        
+        for i in range(len(configs)):
+            if not is_pareto[i]:
+                continue  # Already marked as dominated
+                
+            # Check if any point dominates point i
+            for j in range(len(configs)):
+                if i == j or not is_pareto[j]:
+                    continue
+                    
+                # Check if j dominates i (j is better or equal in all, and strictly better in at least one)
+                better_equal = np.all(objectives[j] <= objectives[i])
+                strictly_better = np.any(objectives[j] < objectives[i])
+                
+                if better_equal and strictly_better:
+                    is_pareto[i] = False
+                    break
+        
+        # Mark Pareto configs
+        for i, config in enumerate(configs):
+            config.is_pareto = bool(is_pareto[i])
+    
     def load_pareto_jsons_only(self) -> bool:
         """
         Fast load: Load only Pareto configs from pareto/*.json files

@@ -28,7 +28,7 @@ from Config import CURRENCY_METRICS, SHARED_METRICS
 
 
 class ParetoExplorer:
-    """The Genius Pareto Explorer - Main Application"""
+    """Pareto Explorer - Main Application"""
     
     def __init__(self, results_path: str):
         """
@@ -81,6 +81,10 @@ class ParetoExplorer:
         if 'all_results_loaded' not in st.session_state:
             st.session_state['all_results_loaded'] = False
         
+        # Initialize viz_type early to preserve across reruns (especially after loading all_results)
+        if 'viz_type' not in st.session_state:
+            st.session_state['viz_type'] = "2D Scatter"
+        
         # Get load strategy and max_configs from session state (convert to tuple for caching)
         load_strategy = st.session_state.get('load_strategy', ['performance', 'robustness', 'sharpe'])
         max_configs = st.session_state.get('max_configs', 2000)
@@ -110,8 +114,28 @@ class ParetoExplorer:
         # Unpack cached data
         self.loader, self.viz, load_stats = data
         
-        # Sidebar navigation
+        # IMPORTANT: Store original configs in loader to prevent filtering corruption
+        # Subsequent get_view_slice() calls will use this original list
+        if not hasattr(self.loader, '_full_configs'):
+            self.loader._full_configs = self.loader.configs.copy()
+        
+        # Store reference in explorer too
+        self._original_configs = self.loader._full_configs
+        
+        # Render sidebar FIRST (includes display range slider)
+        # This must happen before _get_view_configs() so the slider state is available
         self._render_sidebar(load_stats)
+        
+        # Get view slice AFTER sidebar is rendered (uses slider state)
+        self.view_configs = self._get_view_configs()
+        
+        # Temporarily replace loader.configs with view for visualizations
+        # This will be used by all visualization methods
+        self.loader.configs = self.view_configs
+        
+        # IMPORTANT: Reinitialize visualizations AFTER filtering to ensure they use the correct data
+        from ParetoVisualizations import ParetoVisualizations
+        self.viz = ParetoVisualizations(self.loader)
         
         # Main content area
         stage = st.session_state.get('stage', 'Command Center')
@@ -128,6 +152,28 @@ class ParetoExplorer:
             self._show_portfolio_architect()
         elif stage == 'What-If Sandbox':
             self._show_whatif_sandbox()
+    
+    def _get_view_configs(self) -> List:
+        """
+        Get currently visible configs based on view_range filter
+        
+        Returns:
+            List of configs to display (filtered by view_range if in full mode)
+        """
+        all_results_loaded = st.session_state.get('all_results_loaded', False)
+        
+        # In fast mode, show all (Pareto only anyway)
+        if not all_results_loaded:
+            return self.loader.configs
+        
+        # In full mode, check if view_range_slider is set
+        if 'view_range_slider' in st.session_state:
+            start, end = st.session_state.view_range_slider
+            view_configs = self.loader.get_view_slice(start, end)
+            return view_configs
+        else:
+            # No filter set, show all
+            return self.loader.configs
     
     @st.cache_resource
     def _load_data(results_path: str, load_strategy: tuple, max_configs: int, all_results_loaded: bool):
@@ -188,8 +234,11 @@ class ParetoExplorer:
     def _render_sidebar(self, load_stats: Dict):
         """Render sidebar with navigation and info"""
         
+        def _set_all_results_loaded(value: bool):
+            st.session_state['all_results_loaded'] = value
+
         with st.sidebar:
-            st.title("🎯 Genius Pareto Explorer")
+            st.title("🎯 Pareto Explorer")
             
             # === DATA SOURCE SECTION ===
             st.markdown("### 📊 Data Source")
@@ -203,11 +252,13 @@ class ParetoExplorer:
                 st.info("💡 **Fast mode:** Showing best configs only")
                 
                 # Button to load all results
-                if st.button("🔄 Load More from all_results.bin", 
-                           help="Load all optimization results to compare with non-Pareto configs. This may take 10-30 seconds.",
-                           use_container_width=True):
-                    st.session_state['all_results_loaded'] = True
-                    st.rerun()
+                st.button(
+                    "🔄 Load all_results.bin",
+                    help="Load all optimization results to compare with non-Pareto configs. This may take 10-30 seconds.",
+                    use_container_width=True,
+                    on_click=_set_all_results_loaded,
+                    args=(True,),
+                )
             else:
                 # FULL MODE: All results loaded
                 num_total = load_stats.get('selected_configs', 0)
@@ -218,11 +269,13 @@ class ParetoExplorer:
                 st.caption(f"📋 {num_pareto} Pareto + {num_non_pareto:,} others")
                 
                 # Button to switch back to fast mode
-                if st.button("⚡ Switch to Fast Mode", 
-                           help="Show only Pareto configs for faster performance",
-                           use_container_width=True):
-                    st.session_state['all_results_loaded'] = False
-                    st.rerun()
+                st.button(
+                    "⚡ Switch to Fast Mode",
+                    help="Show only Pareto configs for faster performance",
+                    use_container_width=True,
+                    on_click=_set_all_results_loaded,
+                    args=(False,),
+                )
             
             st.markdown("---")
             
@@ -254,6 +307,44 @@ class ParetoExplorer:
                     st.markdown("**Scenarios:**")
                     for scenario in load_stats['scenarios']:
                         st.markdown(f"  • {scenario}")
+                
+                st.markdown("---")
+            
+            # Display Range Filter (only in full mode)
+            if all_results_loaded and self.loader and hasattr(self, '_original_configs') and len(self._original_configs) > 0:
+                st.subheader("📊 Display Range")
+                
+                max_configs = len(self._original_configs)  # Use original count, not filtered!
+                st.caption(f"**Loaded:** {max_configs:,} configs total")
+                
+                # Initialize or validate slider value
+                if 'view_range_slider' not in st.session_state:
+                    st.session_state.view_range_slider = (0, min(500, max_configs))
+                else:
+                    # Ensure current value doesn't exceed max_configs
+                    current_start, current_end = st.session_state.view_range_slider
+                    if current_end > max_configs:
+                        st.session_state.view_range_slider = (
+                            min(current_start, max_configs),
+                            max_configs
+                        )
+                
+                # Range slider - use current session state value
+                current_value = st.session_state.view_range_slider
+                
+                view_range = st.slider(
+                    "Show rank range",
+                    min_value=0,
+                    max_value=max_configs,
+                    value=current_value,
+                    step=10,
+                    help="Filter which configs to display. Pareto front is computed only for visible range.",
+                    key='view_range_slider'
+                )
+                
+                # Show info
+                num_showing = view_range[1] - view_range[0]
+                st.info(f"📍 Showing **{num_showing:,}** configs (Rank {view_range[0]+1}-{view_range[1]})")
                 
                 st.markdown("---")
             
@@ -329,20 +420,46 @@ class ParetoExplorer:
         with col1:
             st.markdown("**📊 Performance**")
             
+            # Get weighted toggle state
+            use_weighted = st.session_state.get('use_weighted_metrics', True)
+            
             # Define help texts for common metrics
             metric_helps = {
                 'adg_w_usd': "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure",
+                'adg_usd': "Average Daily Gain in USD - Daily profit rate",
                 'sharpe_ratio_usd': "Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk",
                 'sharpe_ratio_w_usd': "Weighted Sharpe Ratio - Risk-adjusted return accounting for wallet exposure",
                 'gain_usd': "Total profit multiplier - How many times the initial balance was gained",
                 'calmar_ratio_usd': "Return vs maximum drawdown - Higher is better. Measures profit relative to worst loss",
+                'calmar_ratio_w_usd': "Weighted Calmar Ratio - Return vs maximum drawdown accounting for wallet exposure",
                 'sortino_ratio_usd': "Downside risk-adjusted return - Like Sharpe but only penalizes downside volatility",
+                'sortino_ratio_w_usd': "Weighted Sortino Ratio - Downside risk-adjusted return accounting for wallet exposure",
                 'omega_ratio_usd': "Probability-weighted ratio of gains vs losses - Higher is better",
+                'omega_ratio_w_usd': "Weighted Omega Ratio - Probability-weighted ratio accounting for wallet exposure",
                 'sterling_ratio_usd': "Return vs average drawdown - Consistency of returns relative to typical losses",
+                'sterling_ratio_w_usd': "Weighted Sterling Ratio - Return vs average drawdown accounting for wallet exposure",
                 'drawdown_worst_usd': "Maximum portfolio decline - Lower is better. Worst equity drop from peak",
             }
             
+            # Convert scoring metrics to weighted/unweighted versions
+            display_metrics = []
             for metric in self.loader.scoring_metrics[:3]:
+                if use_weighted:
+                    # Try to use weighted version if available
+                    weighted_metric = metric.replace('_usd', '_w_usd') if '_w_' not in metric else metric
+                    if weighted_metric in config.suite_metrics:
+                        display_metrics.append(weighted_metric)
+                    elif metric in config.suite_metrics:
+                        display_metrics.append(metric)
+                else:
+                    # Use unweighted version
+                    unweighted_metric = metric.replace('_w_usd', '_usd')
+                    if unweighted_metric in config.suite_metrics:
+                        display_metrics.append(unweighted_metric)
+                    elif metric in config.suite_metrics:
+                        display_metrics.append(metric)
+            
+            for metric in display_metrics:
                 if metric in config.suite_metrics:
                     help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
                     st.metric(
@@ -571,14 +688,27 @@ class ParetoExplorer:
         # Optimization Summary
         col1, col2, col3, col4 = st.columns(4)
         
-        total_configs = len(self.loader.configs)
-        pareto_count = sum(1 for c in self.loader.configs if c.is_pareto)
-        convergence = min(100, (pareto_count / max(total_configs * 0.001, 1)) * 100)
+        # Get original total (before view filter)
+        all_results_loaded = st.session_state.get('all_results_loaded', False)
+        if all_results_loaded and hasattr(self, '_original_configs'):
+            total_loaded = len(self._original_configs)
+            total_showing = len(self.view_configs)
+        else:
+            total_loaded = len(self.loader.configs)
+            total_showing = len(self.view_configs)
+        
+        pareto_count = sum(1 for c in self.view_configs if c.is_pareto)
+        convergence = min(100, (pareto_count / max(total_showing * 0.001, 1)) * 100)
         
         with col1:
-            st.metric("🔢 Total Configs", f"{total_configs:,}")
+            if total_loaded != total_showing:
+                st.metric("📊 Showing", f"{total_showing:,}", 
+                         help=f"Displaying {total_showing:,} of {total_loaded:,} loaded configs")
+            else:
+                st.metric("🔢 Total Configs", f"{total_loaded:,}")
         with col2:
-            st.metric("⭐ Pareto Optimal", pareto_count)
+            st.metric("⭐ Pareto Optimal", pareto_count,
+                     help=f"Pareto front computed for visible {total_showing:,} configs")
         with col3:
             st.metric("📈 Convergence", f"{convergence:.0f}%")
         with col4:
@@ -687,17 +817,26 @@ class ParetoExplorer:
                 with col1:
                     st.markdown("**📊 Performance**")
                     
-                    # Adg W Usd
-                    if 'adg_w_usd' in config.suite_metrics:
-                        val = config.suite_metrics['adg_w_usd']
-                        st.metric("Adg W Usd", f"{val:.6f}", help="Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure")
+                    # Get weighted toggle state
+                    use_weighted = st.session_state.get('use_weighted_metrics', True)
                     
-                    # Sharpe Ratio Usd
-                    if 'sharpe_ratio_usd' in config.suite_metrics:
-                        val = config.suite_metrics['sharpe_ratio_usd']
-                        st.metric("Sharpe Ratio Usd", f"{val:.6f}", help="Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk")
+                    # Adg metric (weighted or not)
+                    adg_metric = 'adg_w_usd' if use_weighted else 'adg_usd'
+                    if adg_metric in config.suite_metrics:
+                        val = config.suite_metrics[adg_metric]
+                        metric_label = "Adg W Usd" if use_weighted else "Adg Usd"
+                        help_text = "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure" if use_weighted else "Average Daily Gain in USD - Daily profit rate"
+                        st.metric(metric_label, f"{val:.6f}", help=help_text)
                     
-                    # Gain Usd
+                    # Sharpe Ratio metric (weighted or not)
+                    sharpe_metric = 'sharpe_ratio_w_usd' if use_weighted else 'sharpe_ratio_usd'
+                    if sharpe_metric in config.suite_metrics:
+                        val = config.suite_metrics[sharpe_metric]
+                        metric_label = "Sharpe Ratio W Usd" if use_weighted else "Sharpe Ratio Usd"
+                        help_text = "Risk-adjusted return (weighted) - Accounts for wallet exposure" if use_weighted else "Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk"
+                        st.metric(metric_label, f"{val:.6f}", help=help_text)
+                    
+                    # Gain Usd (same for both)
                     if 'gain_usd' in config.suite_metrics:
                         val = config.suite_metrics['gain_usd']
                         st.metric("Gain Usd", f"{val:.6f}", help="Total profit multiplier - How many times the initial balance was gained")
@@ -802,7 +941,7 @@ class ParetoExplorer:
         st.markdown("---")
         
         # Smart Insights
-        st.subheader("💡 GENIUS INSIGHTS")
+        st.subheader("💡 INSIGHTS")
         
         insights = self._generate_insights()
         bounds_info = self.loader.get_parameters_at_bounds(tolerance=0.1)
@@ -834,16 +973,80 @@ class ParetoExplorer:
         
         # Quick Visualization
         st.subheader("📈 PARETO FRONT PREVIEW")
+        
         st.caption("💡 Click on any point to view config details or start a backtest")
+        
+        # Config counts for charts
+        pareto_in_view = sum(1 for c in self.view_configs if c.is_pareto)
+        
+        # Metric weight toggle (session state)
+        if 'use_weighted_metrics' not in st.session_state:
+            st.session_state.use_weighted_metrics = True
+        
+        # Toggle in header
+        col_toggle, col_spacer = st.columns([1, 5])
+        with col_toggle:
+            use_weighted = st.toggle("Use weighted (_w) metrics", value=st.session_state.use_weighted_metrics, 
+                                    help="Weighted metrics account for wallet exposure and are generally more accurate",
+                                    key='weighted_toggle')
+            st.session_state.use_weighted_metrics = use_weighted
+        
+        # Adjust scoring metrics based on toggle
+        if use_weighted:
+            # Try to use weighted versions
+            display_metrics = []
+            for metric in scoring_metrics:
+                if '_w_' not in metric and not metric.endswith('_w'):
+                    # Try to find weighted version
+                    weighted_metric = metric.replace('_usd', '_w_usd').replace('_btc', '_w_btc')
+                    if weighted_metric in self.loader.configs[0].suite_metrics:
+                        display_metrics.append(weighted_metric)
+                    else:
+                        display_metrics.append(metric)  # Fallback to unweighted
+                else:
+                    display_metrics.append(metric)
+        else:
+            # Use unweighted versions
+            display_metrics = []
+            for metric in scoring_metrics:
+                if '_w_' in metric or metric.endswith('_w_usd') or metric.endswith('_w_btc'):
+                    # Remove _w
+                    unweighted_metric = metric.replace('_w_', '_').replace('_w_usd', '_usd').replace('_w_btc', '_btc')
+                    display_metrics.append(unweighted_metric)
+                else:
+                    display_metrics.append(metric)
         
         col1, col2 = st.columns(2)
         
         with col1:
+            col_title, col_help = st.columns([3, 1])
+            with col_title:
+                st.markdown(f"**Pareto Analysis** - Showing {len(self.view_configs):,} configs | {pareto_in_view} Pareto ⭐")
+            with col_help:
+                with st.popover("ℹ️ Chart Guide", use_container_width=True):
+                    st.markdown("""
+                    **How to read this chart:**
+                    
+                    **Points:**
+                    - **⭐ White stars**: Pareto-optimal configs (no other config is strictly better in all metrics)
+                    - **Colored dots**: Non-Pareto configs (color shows drawdown - lighter = better)
+                    
+                    **Pareto Front:**
+                    The upper-right boundary of points forms the Pareto front. These configs represent 
+                    the best trade-offs between the two metrics - you can't improve one without 
+                    worsening the other.
+                    
+                    **Strategy:**
+                    - Look for stars (⭐) on the Pareto front in the upper-right
+                    - Lighter colors = lower drawdown (safer)
+                    - Click any point to see full config details and start a backtest
+                    """)
+            
             # 2D Scatter
-            if len(scoring_metrics) >= 2:
+            if len(display_metrics) >= 2:
                 fig = self.viz.plot_pareto_scatter_2d(
-                    x_metric=scoring_metrics[0],
-                    y_metric=scoring_metrics[1],
+                    x_metric=display_metrics[0],
+                    y_metric=display_metrics[1],
                     color_metric='drawdown_worst_usd' if 'drawdown_worst_usd' in self.loader.configs[0].suite_metrics else None,
                     show_all=True
                 )
@@ -891,10 +1094,34 @@ class ParetoExplorer:
                         st.warning(f"⚠️ Click handling error: {e}")
         
         with col2:
+            col_title, col_help = st.columns([3, 1])
+            with col_title:
+                st.markdown(f"**Robustness vs Performance** - Showing {len(self.view_configs):,} configs | {pareto_in_view} Pareto ⭐")
+            with col_help:
+                with st.popover("ℹ️ Chart Guide", use_container_width=True):
+                    st.markdown("""
+                    **How to read this chart:**
+                    
+                    **Quadrants:**
+                    - **Top-Right (🏆 Best of Both)**: High performance + High robustness = IDEAL
+                    - **Top-Left (🛡️ Stable but Slow)**: Low performance but very consistent
+                    - **Bottom-Right (⚠️ High Risk)**: High performance but unstable = RISKY
+                    - **Bottom-Left**: Low performance + Low robustness = Avoid
+                    
+                    **Lines:**
+                    - **Vertical dashed**: Median performance (splits configs into above/below average)
+                    - **Horizontal dashed**: Median robustness (splits configs into stable/unstable)
+                    
+                    **Strategy:**
+                    Look for configs in the top-right quadrant (Best of Both) - they offer the best 
+                    balance of high returns and consistent performance across market conditions.
+                    """)
+            
             # Robustness Quadrant
+            primary_display_metric = display_metrics[0] if display_metrics else primary_metric
             fig = self.viz.plot_robustness_quadrant(
-                performance_metric=primary_metric,
-                show_all=False
+                performance_metric=primary_display_metric,
+                show_all=True
             )
             event = st.plotly_chart(fig, width='stretch', on_select="rerun", key='preview_robustness')
             
@@ -939,6 +1166,221 @@ class ParetoExplorer:
                 except Exception as e:
                     st.warning(f"⚠️ Click handling error: {e}")
     
+    @st.fragment
+    def _show_config_details_fragment(self):
+        """Fragment: Config details section - only reloads this part on selection change"""
+        
+        # Config selector
+        st.subheader("🔍 SELECTED CONFIG DETAILS")
+        
+        # Get all configs (not just Pareto)
+        all_configs = self.view_configs
+        
+        if not all_configs:
+            st.warning("⚠️ No configs available")
+            st.stop()
+        
+        all_indices = [c.config_index for c in all_configs]
+        pareto_configs = [c for c in all_configs if c.is_pareto]
+        pareto_count = len(pareto_configs)
+        
+        # Initialize session state for selected config if not exists
+        if 'pareto_selected_config' not in st.session_state:
+            st.session_state.pareto_selected_config = all_indices[0]
+        
+        # Ensure selected config is in the list
+        if st.session_state.pareto_selected_config not in all_indices:
+            st.session_state.pareto_selected_config = all_indices[0]
+        
+        # Create labels with Pareto indicator
+        config_labels = []
+        label_to_index = {}  # Map label to config_index
+        for c in all_configs:
+            label = f"Config #{c.config_index}"
+            if c.is_pareto:
+                label += " ⭐"
+            config_labels.append(label)
+            label_to_index[label] = c.config_index
+        
+        # Calculate the index for the selectbox based on current selection
+        default_index = 0
+        try:
+            selected_config_idx = st.session_state.pareto_selected_config
+            for i, c in enumerate(all_configs):
+                if c.config_index == selected_config_idx:
+                    default_index = i
+                    break
+        except (ValueError, TypeError, AttributeError):
+            default_index = 0
+        
+        # Ensure default_index is valid
+        default_index = max(0, min(default_index, len(config_labels) - 1))
+        
+        # Selectbox without key - use index parameter directly
+        selected_label = st.selectbox(
+            "🎯 Select Config:", 
+            config_labels, 
+            index=default_index,
+            help=f"Choose from {len(all_configs)} configs ({pareto_count} Pareto-optimal ⭐)"
+        )
+        
+        # Extract config_index from selected label
+        selected_config_index = label_to_index[selected_label]
+        
+        # Update our tracking variable
+        st.session_state.pareto_selected_config = selected_config_index
+        
+        # Find the config with this config_index
+        config = next((c for c in all_configs if c.config_index == selected_config_index), None)
+        
+        if config is None:
+            st.error(f"❌ Config #{selected_config_index} not found in loaded configs")
+            st.stop()
+        
+        # Show config details
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**📊 Metrics**")
+            
+            # Show first 5 scoring metrics with helpful tooltips
+            metric_helps = {
+                'adg_w_usd': "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure",
+                'sharpe_ratio_usd': "Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk",
+                'sharpe_ratio_w_usd': "Weighted Sharpe Ratio - Risk-adjusted return accounting for wallet exposure",
+                'gain_usd': "Total profit multiplier - How many times the initial balance was gained",
+                'calmar_ratio_usd': "Return vs maximum drawdown - Higher is better. Measures profit relative to worst loss",
+                'sortino_ratio_usd': "Downside risk-adjusted return - Like Sharpe but only penalizes downside volatility",
+                'omega_ratio_usd': "Probability-weighted ratio of gains vs losses - Higher is better",
+                'sterling_ratio_usd': "Return vs average drawdown - Consistency of returns relative to typical losses",
+                'drawdown_worst_usd': "Maximum portfolio decline - Lower is better. Worst equity drop from peak",
+            }
+            
+            for metric in self.loader.scoring_metrics[:5]:
+                if metric in config.suite_metrics:
+                    help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
+                    st.metric(
+                        metric.replace('_', ' ').title(), 
+                        f"{config.suite_metrics[metric]:.6f}",
+                        help=help_text
+                    )
+        
+        with col2:
+            st.markdown("**🎯 Trading Style**")
+            style = self.loader.compute_trading_style(config)
+            st.markdown(f"**{style}**")
+            st.metric("Positions/Day", f"{config.suite_metrics.get('positions_held_per_day', 0):.2f}",
+                     help="Average number of positions opened per day - Higher = more active trading")
+            st.metric("Avg Hold Hours", f"{config.suite_metrics.get('position_held_hours_mean', 0):.1f}",
+                     help="Average time positions are held open - Lower = faster turnover, scalping style")
+        
+        with col3:
+            st.markdown("**💪 Robustness**")
+            robust = self.loader.compute_overall_robustness(config)
+            st.metric("Overall Score", f"{robust:.3f}",
+                     help="Consistency score (0-1) - Higher = more stable across scenarios. Calculated as 1/(1+CV)")
+            
+            if config.metric_stats and 'adg_w_usd' in config.metric_stats:
+                stats = config.metric_stats['adg_w_usd']
+                st.metric("Std Dev", f"{stats['std']:.6f}",
+                         help="Standard deviation of daily gains - Lower = more predictable performance")
+        
+        st.markdown("---")
+        
+        # Load full config once for both display and backtest
+        # Use loader's get_full_config method (loads Pareto JSON template + merges optimized params)
+        full_config_data = None
+        try:
+            full_config_data = self.loader.get_full_config(config.config_index)
+            if not full_config_data:
+                st.warning("⚠️ Could not load full config - Pareto directory may be empty")
+        except Exception as e:
+            st.warning(f"⚠️ Could not load full config: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+        
+        # Detailed views in expanders
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            with st.expander("📋 Full Configuration", expanded=False):
+                if full_config_data:
+                    st.json(full_config_data)
+                else:
+                    st.warning("Full config not available - showing bot params only")
+                    st.json(config.bot_params)
+        
+        with col_right:
+            with st.expander("📊 All Metrics & Statistics", expanded=False):
+                # Show all suite metrics
+                st.markdown("**Suite Metrics:**")
+                metrics_df = []
+                for metric, value in sorted(config.suite_metrics.items()):
+                    metrics_df.append({"Metric": metric, "Value": f"{value:.6f}"})
+                st.dataframe(metrics_df, width='stretch', hide_index=True)
+                
+                # Show metric statistics if available
+                if config.metric_stats:
+                    st.markdown("---")
+                    st.markdown("**Metric Statistics (across scenarios):**")
+                    for metric, stats in list(config.metric_stats.items())[:10]:
+                        st.markdown(f"**{metric}:**")
+                        st.text(f"  Mean: {stats.get('mean', 0):.6f}")
+                        st.text(f"  Std:  {stats.get('std', 0):.6f}")
+                        st.text(f"  Min:  {stats.get('min', 0):.6f}")
+                        st.text(f"  Max:  {stats.get('max', 0):.6f}")
+        
+        # Backtest button
+        st.markdown("---")
+        col_bt1, col_bt2, col_bt3 = st.columns([1, 2, 1])
+        with col_bt2:
+            if st.button("🚀 Run Backtest with this Config", use_container_width=True, type="primary"):
+                try:
+                    import BacktestV7
+                    from pbgui_func import get_navi_paths, pb7dir
+                    from pathlib import Path
+                    import json
+                    import time
+                    
+                    # Use already loaded full_config_data
+                    if not full_config_data:
+                        st.error("❌ Full config data not available")
+                        st.stop()
+                    
+                    # Create config directory if not exists
+                    config_dir = Path(f'{pb7dir()}/configs/pareto_selected')
+                    config_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Generate unique filename
+                    timestamp = int(time.time())
+                    config_filename = f"pareto_config_{config.config_index}_{timestamp}.json"
+                    config_path = config_dir / config_filename
+                    
+                    # Save the full config (has backtest, bot, optimize, live sections)
+                    with open(config_path, 'w') as f:
+                        json.dump(full_config_data, f, indent=2)
+                    
+                    # Cleanup backtest session state (like in OptimizeV7)
+                    if "bt_v7_queue" in st.session_state:
+                        del st.session_state.bt_v7_queue
+                    if "bt_v7_results" in st.session_state:
+                        del st.session_state.bt_v7_results
+                    if "bt_v7_edit_symbol" in st.session_state:
+                        del st.session_state.bt_v7_edit_symbol
+                    if "config_v7_archives" in st.session_state:
+                        del st.session_state.config_v7_archives
+                    if "config_v7_config_archive" in st.session_state:
+                        del st.session_state.config_v7_config_archive
+                    
+                    # Create BacktestV7Item and switch to backtest page
+                    st.session_state.bt_v7 = BacktestV7.BacktestV7Item(str(config_path))
+                    st.switch_page(get_navi_paths()["V7_BACKTEST"])
+                    
+                except Exception as e:
+                    st.error(f"❌ Error preparing backtest: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
+    
     def _show_pareto_playground(self):
         """Stage 2: Pareto Playground - Interactive Exploration"""
         
@@ -953,11 +1395,26 @@ class ParetoExplorer:
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            perf_weight = st.slider("Performance Priority", 0, 100, 80, 5, key='perf_weight')
+            perf_weight = st.slider(
+                "Performance Priority", 
+                0, 100, 80, 5, 
+                key='perf_weight',
+                help="How much you prioritize profit and returns. Higher values favor configs with better daily gains and overall performance metrics."
+            )
         with col2:
-            risk_weight = st.slider("Risk Aversion", 0, 100, 60, 5, key='risk_weight')
+            risk_weight = st.slider(
+                "Risk Aversion", 
+                0, 100, 60, 5, 
+                key='risk_weight',
+                help="How much you want to avoid losses. Higher values favor configs with lower maximum drawdowns and better risk management."
+            )
         with col3:
-            robust_weight = st.slider("Robustness Importance", 0, 100, 70, 5, key='robust_weight')
+            robust_weight = st.slider(
+                "Robustness Importance", 
+                0, 100, 70, 5, 
+                key='robust_weight',
+                help="How much you value consistency across different market scenarios. Higher values favor configs with stable, predictable performance."
+            )
         
         # Track previous slider values to detect changes
         current_weights = (perf_weight, risk_weight, robust_weight)
@@ -965,6 +1422,13 @@ class ParetoExplorer:
             st.session_state['prev_slider_weights'] = current_weights
         
         sliders_changed = st.session_state['prev_slider_weights'] != current_weights
+        
+        # Track all_results_loaded state to detect when it changes
+        current_all_results_loaded = st.session_state.get('all_results_loaded', False)
+        if 'prev_all_results_loaded' not in st.session_state:
+            st.session_state['prev_all_results_loaded'] = current_all_results_loaded
+        
+        all_results_just_loaded = (not st.session_state['prev_all_results_loaded']) and current_all_results_loaded
         
         # Compute weighted score for Pareto configs
         pareto_configs = self.loader.get_pareto_configs()
@@ -996,11 +1460,12 @@ class ParetoExplorer:
                 best_match = config
         
         # Auto-select best match in session state
-        # Update when: 1) first load, 2) sliders changed
-        if 'pareto_selected_config' not in st.session_state or sliders_changed:
+        # Update when: 1) first load, 2) sliders changed, 3) all_results just loaded
+        if 'pareto_selected_config' not in st.session_state or sliders_changed or all_results_just_loaded:
             st.session_state['pareto_selected_config'] = best_match.config_index
             st.session_state['pareto_selectbox_key'] = best_match.config_index
             st.session_state['prev_slider_weights'] = current_weights
+            st.session_state['prev_all_results_loaded'] = current_all_results_loaded
         
         st.success(f"🎯 **Best Match for Your Preferences:** Config #{best_match.config_index} (Score: {best_score:.3f})")
         
@@ -1014,7 +1479,14 @@ class ParetoExplorer:
         with col2:
             st.markdown("**Chart Settings**")
             
-            viz_type = st.radio("Visualization:", ["2D Scatter", "3D Scatter", "Radar Chart"], key='viz_type')
+            viz_type_options = ["2D Scatter", "3D Scatter", "Radar Chart"]
+            viz_type = st.radio(
+                "Visualization:",
+                viz_type_options,
+                key='viz_type',
+            )
+            # Defensive: ensure downstream logic uses the same value the widget is bound to
+            viz_type = st.session_state.get('viz_type', viz_type)
             
             # Show "Show all configs" checkbox only for Scatter plots, not for Radar Chart
             if viz_type in ["2D Scatter", "3D Scatter"]:
@@ -1106,7 +1578,6 @@ class ParetoExplorer:
                 exposure_metric = 'adg_w_per_exposure_long' if use_weighted else 'adg_per_exposure_long'
                 
                 preset_options = [
-                    "Custom...",
                     "**Profit vs Risk**",
                     "**Risk-Adjusted**",
                     "**Profit vs Quality**",
@@ -1114,20 +1585,21 @@ class ParetoExplorer:
                     "**Multi-Risk**",
                     "**Profit vs Recovery**",
                     "**Performance Ratios**",
-                    "**Exposure Analysis**"
+                    "**Exposure Analysis**",
+                    "Custom..."
                 ]
                 
                 # Help texts for each preset with metric details
                 preset_help = {
-                    preset_options[0]: "Choose your own X and Y axis metrics for custom analysis",
-                    preset_options[1]: f"📈 **Profit vs Risk**: {metric('adg')} vs {metric('drawdown_worst')}\n\nBalance daily gains against maximum drawdown. Ideal for finding high-return configs with acceptable risk levels.",
-                    preset_options[2]: f"⚖️ **Risk-Adjusted**: {metric('sharpe_ratio')} vs {metric('sortino_ratio')}\n\nCompare Sharpe (total risk adjustment) vs Sortino (downside risk only). Shows which configs deliver best returns per unit of risk.",
-                    preset_options[3]: f"🎯 **Profit vs Quality**: {metric('adg')} vs {metric('equity_choppiness')}\n\nDaily gains vs equity curve smoothness. Low choppiness = steadier growth with fewer ups and downs.",
-                    preset_options[4]: f"💡 **Efficiency**: {metric('adg')} vs {metric(exposure_metric)}\n\nProfit per unit of capital exposure. Shows which configs generate most return with least capital at risk.",
-                    preset_options[5]: f"🛡️ **Multi-Risk**: {metric('drawdown_worst')} vs {metric('expected_shortfall_1pct')}\n\nWorst drawdown vs extreme loss scenarios (1% VaR). Identifies configs that handle both typical and extreme losses well.",
-                    preset_options[6]: f"⏱️ **Profit vs Recovery**: {metric('adg')} vs {metric('peak_recovery_hours_equity')}\n\nDaily gains vs time needed to recover from drawdowns. Fast recovery = capital back to work sooner.",
-                    preset_options[7]: f"📊 **Performance Ratios**: {metric('calmar_ratio')} vs {metric('omega_ratio')}\n\nCalmar (return/drawdown) vs Omega (gains/losses). Advanced risk-adjusted metrics for sophisticated analysis.",
-                    preset_options[8]: f"💰 **Exposure Analysis**: {metric('adg')} vs total_wallet_exposure_mean\n\nProfit vs average capital usage. Lower exposure = more capital available for other strategies."
+                    preset_options[0]: f"📈 **Profit vs Risk**: {metric('adg')} vs {metric('drawdown_worst')}\n\nBalance daily gains against maximum drawdown. Ideal for finding high-return configs with acceptable risk levels.",
+                    preset_options[1]: f"⚖️ **Risk-Adjusted**: {metric('sharpe_ratio')} vs {metric('sortino_ratio')}\n\nCompare Sharpe (total risk adjustment) vs Sortino (downside risk only). Shows which configs deliver best returns per unit of risk.",
+                    preset_options[2]: f"🎯 **Profit vs Quality**: {metric('adg')} vs {metric('equity_choppiness')}\n\nDaily gains vs equity curve smoothness. Low choppiness = steadier growth with fewer ups and downs.",
+                    preset_options[3]: f"💡 **Efficiency**: {metric('adg')} vs {metric(exposure_metric)}\n\nProfit per unit of capital exposure. Shows which configs generate most return with least capital at risk.",
+                    preset_options[4]: f"🛡️ **Multi-Risk**: {metric('drawdown_worst')} vs {metric('expected_shortfall_1pct')}\n\nWorst drawdown vs extreme loss scenarios (1% VaR). Identifies configs that handle both typical and extreme losses well.",
+                    preset_options[5]: f"⏱️ **Profit vs Recovery**: {metric('adg')} vs {metric('peak_recovery_hours_equity')}\n\nDaily gains vs time needed to recover from drawdowns. Fast recovery = capital back to work sooner.",
+                    preset_options[6]: f"📊 **Performance Ratios**: {metric('calmar_ratio')} vs {metric('omega_ratio')}\n\nCalmar (return/drawdown) vs Omega (gains/losses). Advanced risk-adjusted metrics for sophisticated analysis.",
+                    preset_options[7]: f"💰 **Exposure Analysis**: {metric('adg')} vs total_wallet_exposure_mean\n\nProfit vs average capital usage. Lower exposure = more capital available for other strategies.",
+                    preset_options[8]: "Choose your own X and Y axis metrics for custom analysis"
                 }
                 
                 # Store preset_options for next iteration
@@ -1140,7 +1612,7 @@ class ParetoExplorer:
                         st.session_state['preset_view'] = preset_options[prev_preset_index]
                     else:
                         # First load - use default
-                        st.session_state['preset_view'] = preset_options[1]  # Profit vs Risk
+                        st.session_state['preset_view'] = preset_options[0]  # Profit vs Risk
                 
                 # Show preset selection with help icon
                 col_radio, col_help = st.columns([4, 1])
@@ -1159,14 +1631,14 @@ class ParetoExplorer:
                 
                 # Map preset to actual metrics using helper function
                 preset_map = {
-                    preset_options[1]: (metric('adg'), metric('drawdown_worst')),
-                    preset_options[2]: (metric('sharpe_ratio'), metric('sortino_ratio')),
-                    preset_options[3]: (metric('adg'), metric('equity_choppiness')),
-                    preset_options[4]: (metric('adg'), metric(exposure_metric)),
-                    preset_options[5]: (metric('drawdown_worst'), metric('expected_shortfall_1pct')),
-                    preset_options[6]: (metric('adg'), metric('peak_recovery_hours_equity')),
-                    preset_options[7]: (metric('calmar_ratio'), metric('omega_ratio')),
-                    preset_options[8]: (metric('adg'), "total_wallet_exposure_mean")
+                    preset_options[0]: (metric('adg'), metric('drawdown_worst')),
+                    preset_options[1]: (metric('sharpe_ratio'), metric('sortino_ratio')),
+                    preset_options[2]: (metric('adg'), metric('equity_choppiness')),
+                    preset_options[3]: (metric('adg'), metric(exposure_metric)),
+                    preset_options[4]: (metric('drawdown_worst'), metric('expected_shortfall_1pct')),
+                    preset_options[5]: (metric('adg'), metric('peak_recovery_hours_equity')),
+                    preset_options[6]: (metric('calmar_ratio'), metric('omega_ratio')),
+                    preset_options[7]: (metric('adg'), "total_wallet_exposure_mean")
                 }
                 
                 st.markdown("---")
@@ -1175,7 +1647,7 @@ class ParetoExplorer:
                 # Match preset by index instead of string to handle toggle state changes
                 preset_index = preset_options.index(preset_choice) if preset_choice in preset_options else 0
                 
-                if preset_index > 0:  # Not "Custom..." (which is at index 0)
+                if preset_index < len(preset_options) - 1:  # Not "Custom..." (which is at last index)
                     # Use the preset mapping based on index
                     selected_preset_option = preset_options[preset_index]
                     
@@ -1310,31 +1782,31 @@ class ParetoExplorer:
                 
                 # 3D Presets - Expanded logic similar to 2D presets
                 preset_3d_options = [
-                    "Custom...",
                     "**Risk-Reward Triangle**",
                     "**Recovery Performance**",
                     "**Trading Efficiency**",
                     "**Risk Spectrum**",
                     "**Stability Analysis**",
                     "**Trading Activity**",
-                    "**Stress Test**"
+                    "**Stress Test**",
+                    "Custom..."
                 ]
                 
                 preset_3d_help = {
-                    preset_3d_options[0]: "Choose your own X, Y and Z axis metrics for custom 3D analysis",
-                    preset_3d_options[1]: f"🎯 **Risk-Reward Triangle**: {metric('adg')} vs {metric('drawdown_worst')} vs {metric('equity_jerkiness')}\n\nThe ultimate 3D view showing the raw ingredients: Profit × Max Risk × Volatility. Find configs with high returns, low drawdowns AND smooth equity curves. Uses equity jerkiness (rate of change volatility) instead of Sharpe Ratio to avoid mathematical dependencies.",
-                    preset_3d_options[2]: f"⏱️ **Recovery Performance**: {metric('adg')} vs {metric('peak_recovery_hours_equity')} vs {metric('drawdown_worst')}\n\nProfit × Recovery Speed × Max Risk. Find configs that not only make money but recover quickly from losses. Critical for trading psychology: 'Deep & Fast' (deep drawdowns, quick recovery) vs 'Shallow & Slow'.",
-                    preset_3d_options[3]: f"💡 **Trading Efficiency**: {metric('adg')} vs {metric(exposure_metric)} vs total_wallet_exposure_mean\n\nProfit × Capital Efficiency × Average Usage. Discover configs that generate maximum return with minimal capital at risk. Filter out strategies that lock up your entire wallet.",
-                    preset_3d_options[4]: f"⚖️ **Risk Spectrum**: {metric('sharpe_ratio')} vs {metric('sortino_ratio')} vs {metric('calmar_ratio')}\n\nCompare three major risk-adjusted metrics: Sharpe (total risk), Sortino (downside only), Calmar (drawdown adjusted). Find configs that excel at ALL three, or discover which ones only look good under specific risk definitions.",
-                    preset_3d_options[5]: f"📈 **Stability Analysis**: {metric('adg')} vs {metric('equity_choppiness')} vs {metric('loss_profit_ratio')}\n\nProfit × Smoothness × Win/Loss Balance. Find configs with steady, consistent growth patterns - the 'staircase to heaven' instead of a roller coaster. Shows if stability comes from high winrate (many small wins) or from smooth equity despite volatile trades.",
-                    preset_3d_options[6]: f"🔄 **Trading Activity**: {metric('adg')} vs positions_held_per_day vs position_held_hours_mean\n\nProfit × Trade Frequency × Hold Duration. The 'strategy fingerprint' - instantly see clusters: Scalpers (many trades, short duration) vs Swing Traders (few trades, long hold). Perfect for diversification: pick one from each cluster.",
-                    preset_3d_options[7]: f"🧪 **Stress Test**: {metric('drawdown_worst')} vs {metric('expected_shortfall_1pct')} vs {metric('loss_profit_ratio')}\n\nMax Drawdown × Expected Shortfall (VaR 1%) × Loss/Profit Ratio. Shows worst past event, statistical tail risk (1% worst case), and loss balance. Find configs that handle extreme events gracefully and maintain good win/loss structure."
+                    preset_3d_options[0]: f"🎯 **Risk-Reward Triangle**: {metric('adg')} vs {metric('drawdown_worst')} vs {metric('equity_jerkiness')}\n\nThe ultimate 3D view showing the raw ingredients: Profit × Max Risk × Volatility. Find configs with high returns, low drawdowns AND smooth equity curves. Uses equity jerkiness (rate of change volatility) instead of Sharpe Ratio to avoid mathematical dependencies.",
+                    preset_3d_options[1]: f"⏱️ **Recovery Performance**: {metric('adg')} vs {metric('peak_recovery_hours_equity')} vs {metric('drawdown_worst')}\n\nProfit × Recovery Speed × Max Risk. Find configs that not only make money but recover quickly from losses. Critical for trading psychology: 'Deep & Fast' (deep drawdowns, quick recovery) vs 'Shallow & Slow'.",
+                    preset_3d_options[2]: f"💡 **Trading Efficiency**: {metric('adg')} vs {metric(exposure_metric)} vs total_wallet_exposure_mean\n\nProfit × Capital Efficiency × Average Usage. Discover configs that generate maximum return with minimal capital at risk. Filter out strategies that lock up your entire wallet.",
+                    preset_3d_options[3]: f"⚖️ **Risk Spectrum**: {metric('sharpe_ratio')} vs {metric('sortino_ratio')} vs {metric('calmar_ratio')}\n\nCompare three major risk-adjusted metrics: Sharpe (total risk), Sortino (downside only), Calmar (drawdown adjusted). Find configs that excel at ALL three, or discover which ones only look good under specific risk definitions.",
+                    preset_3d_options[4]: f"📈 **Stability Analysis**: {metric('adg')} vs {metric('equity_choppiness')} vs {metric('loss_profit_ratio')}\n\nProfit × Smoothness × Win/Loss Balance. Find configs with steady, consistent growth patterns - the 'staircase to heaven' instead of a roller coaster. Shows if stability comes from high winrate (many small wins) or from smooth equity despite volatile trades.",
+                    preset_3d_options[5]: f"🔄 **Trading Activity**: {metric('adg')} vs positions_held_per_day vs position_held_hours_mean\n\nProfit × Trade Frequency × Hold Duration. The 'strategy fingerprint' - instantly see clusters: Scalpers (many trades, short duration) vs Swing Traders (few trades, long hold). Perfect for diversification: pick one from each cluster.",
+                    preset_3d_options[6]: f"🧪 **Stress Test**: {metric('drawdown_worst')} vs {metric('expected_shortfall_1pct')} vs {metric('loss_profit_ratio')}\n\nMax Drawdown × Expected Shortfall (VaR 1%) × Loss/Profit Ratio. Shows worst past event, statistical tail risk (1% worst case), and loss balance. Find configs that handle extreme events gracefully and maintain good win/loss structure.",
+                    preset_3d_options[7]: "Choose your own X, Y and Z axis metrics for custom 3D analysis"
                 }
                 
                 # Show preset selection with help icon (same layout as 2D)
                 col_radio, col_help = st.columns([4, 1])
                 with col_radio:
-                    preset_3d_choice = st.radio("Quick Views:", preset_3d_options, key='preset_3d_view', label_visibility="visible")
+                    preset_3d_choice = st.radio("Quick Views:", preset_3d_options, key='preset_3d_view', label_visibility="visible", index=0)
                 with col_help:
                     st.write("")  # Spacing
                     st.write("")  # Spacing
@@ -1351,13 +1823,13 @@ class ParetoExplorer:
                 
                 # Map 3D presets to metrics
                 preset_3d_map = {
-                    preset_3d_options[1]: (metric('adg'), metric('drawdown_worst'), metric('equity_jerkiness')),
-                    preset_3d_options[2]: (metric('adg'), metric('peak_recovery_hours_equity'), metric('drawdown_worst')),
-                    preset_3d_options[3]: (metric('adg'), metric(exposure_metric), "total_wallet_exposure_mean"),
-                    preset_3d_options[4]: (metric('sharpe_ratio'), metric('sortino_ratio'), metric('calmar_ratio')),
-                    preset_3d_options[5]: (metric('adg'), metric('equity_choppiness'), metric('loss_profit_ratio')),
-                    preset_3d_options[6]: (metric('adg'), "positions_held_per_day", "position_held_hours_mean"),
-                    preset_3d_options[7]: (metric('drawdown_worst'), metric('expected_shortfall_1pct'), metric('loss_profit_ratio'))
+                    preset_3d_options[0]: (metric('adg'), metric('drawdown_worst'), metric('equity_jerkiness')),
+                    preset_3d_options[1]: (metric('adg'), metric('peak_recovery_hours_equity'), metric('drawdown_worst')),
+                    preset_3d_options[2]: (metric('adg'), metric(exposure_metric), "total_wallet_exposure_mean"),
+                    preset_3d_options[3]: (metric('sharpe_ratio'), metric('sortino_ratio'), metric('calmar_ratio')),
+                    preset_3d_options[4]: (metric('adg'), metric('equity_choppiness'), metric('loss_profit_ratio')),
+                    preset_3d_options[5]: (metric('adg'), "positions_held_per_day", "position_held_hours_mean"),
+                    preset_3d_options[6]: (metric('drawdown_worst'), metric('expected_shortfall_1pct'), metric('loss_profit_ratio'))
                 }
                 
                 if preset_3d_choice != "Custom..." and preset_3d_choice in preset_3d_map:
@@ -1416,8 +1888,10 @@ class ParetoExplorer:
                 # Radar chart doesn't need axis selectors
                 st.info("📊 Radar chart compares Best Match (⭐) against top 5 Pareto configs. Click markers to select.")
         
+        # === CHART RENDERING (col1) ===
         with col1:
             if viz_type == "2D Scatter":
+                # Variables are set in the 2D block above: x_metric, y_metric, preset_name
                 fig = self.viz.plot_pareto_scatter_2d(
                     x_metric=x_metric,
                     y_metric=y_metric,
@@ -1461,23 +1935,152 @@ class ParetoExplorer:
                                 current_selection = st.session_state.get('pareto_selected_config')
                                 if current_selection != clicked_config_index:
                                     st.session_state.pareto_selected_config = clicked_config_index
-                                    # Also update the selectbox key so it shows the new selection
-                                    st.session_state.pareto_selectbox_key = clicked_config_index
                     except Exception as e:
                         st.warning(f"⚠️ Click handling error: {e}")
             
             elif viz_type == "3D Scatter":
+                # Determine which configs to pass to the chart
+                if show_all:
+                    chart_configs = self.view_configs
+                else:
+                    chart_configs = [c for c in self.view_configs if c.is_pareto]
+                
                 fig = self.viz.plot_pareto_scatter_3d(
                     x_metric=x_metric,
                     y_metric=y_metric,
                     z_metric=z_metric,
                     color_metric=color_metric,
                     show_all=show_all,
-                    best_match_config=best_match
+                    best_match_config=best_match,
+                    configs_list=chart_configs
                 )
-                event = st.plotly_chart(fig, width='stretch', on_select="rerun", key='chart_3d')
                 
-                # Handle click event
+                # Render the chart with selection enabled
+                event = st.plotly_chart(fig, key='chart_3d', on_select="rerun")
+                
+                # Inject JavaScript to forward plotly_click to plotly_selected
+                # This is a workaround for scatter_3d not triggering plotly_selected events
+                # See: https://github.com/streamlit/streamlit/issues/9001
+                # Include preset in HTML comment to force re-execution on preset change
+                preset_key = preset_3d_choice.replace("*", "").replace(" ", "_")
+                js_code = f"""
+                <!-- Preset: {preset_key} -->
+                <script>
+                    (function() {{
+                        console.log('=== 3D CLICK HANDLER INIT [{preset_key}] ===');
+                        
+                        var parentDoc = window.parent.document;
+                        var installedCharts = new WeakSet(); // Track which charts already have handlers
+                        
+                        function installClickHandlerOnElement(element, index) {{
+                            // Skip if already installed
+                            if (installedCharts.has(element)) {{
+                                return false;
+                            }}
+                            
+                            // Check if this is a 3D scatter (has 'scene' in layout)
+                            if (element && element.layout && element.layout.scene && element.on) {{
+                                console.log('✅ Installing handler on 3D chart', index);
+                                
+                                // Remove existing listener (just in case)
+                                if (element.removeAllListeners) {{
+                                    element.removeAllListeners('plotly_click');
+                                }}
+                                
+                                // Install click handler
+                                element.on('plotly_click', function(eventData) {{
+                                    console.log('🎯 3D CLICK - Config:', eventData.points[0].customdata);
+                                    
+                                    if (eventData && eventData.points && eventData.points.length > 0) {{
+                                        try {{
+                                            element.emit('plotly_selected', {{ 
+                                                points: eventData.points 
+                                            }});
+                                            console.log('✅ plotly_selected emitted');
+                                        }} catch (err) {{
+                                            console.error('❌ Error emitting plotly_selected:', err);
+                                        }}
+                                    }}
+                                }});
+                                
+                                // Mark as installed
+                                installedCharts.add(element);
+                                console.log('✅ Handler installed on chart', index);
+                                return true;
+                            }}
+                            return false;
+                        }}
+                        
+                        function scanAndInstall() {{
+                            var elements = parentDoc.querySelectorAll('.js-plotly-plot');
+                            var newInstalls = 0;
+                            
+                            elements.forEach(function(element, index) {{
+                                if (installClickHandlerOnElement(element, index)) {{
+                                    newInstalls++;
+                                }}
+                            }});
+                            
+                            if (newInstalls > 0) {{
+                                console.log('📊 Installed handlers on', newInstalls, 'new chart(s)');
+                            }}
+                        }}
+                        
+                        // Initial scan with retries (for initial page load)
+                        var initialAttempts = 0;
+                        var maxInitialAttempts = 10;
+                        
+                        function initialScan() {{
+                            initialAttempts++;
+                            var elements = parentDoc.querySelectorAll('.js-plotly-plot');
+                            
+                            if (elements.length === 0 && initialAttempts < maxInitialAttempts) {{
+                                setTimeout(initialScan, 500);
+                                return;
+                            }}
+                            
+                            scanAndInstall();
+                            
+                            // After initial scan, set up continuous monitoring
+                            setupContinuousMonitoring();
+                        }}
+                        
+                        function setupContinuousMonitoring() {{
+                            // Re-scan periodically to catch chart updates from rotation/zoom
+                            setInterval(scanAndInstall, 1000);
+                            
+                            // Also use MutationObserver to catch DOM changes immediately
+                            var observer = new MutationObserver(function(mutations) {{
+                                var shouldScan = false;
+                                mutations.forEach(function(mutation) {{
+                                    if (mutation.addedNodes.length > 0 || mutation.attributeName === 'class') {{
+                                        shouldScan = true;
+                                    }}
+                                }});
+                                if (shouldScan) {{
+                                    scanAndInstall();
+                                }}
+                            }});
+                            
+                            // Observe the entire document for changes
+                            observer.observe(parentDoc.body, {{
+                                childList: true,
+                                subtree: true,
+                                attributes: true,
+                                attributeFilter: ['class']
+                            }});
+                            
+                            console.log('🔄 Continuous monitoring active');
+                        }}
+                        
+                        // Start
+                        initialScan();
+                    }})();
+                </script>
+                """
+                st.components.v1.html(js_code, height=0)
+                
+                # Handle click event - extract config_index from clicked point
                 if event and hasattr(event, 'selection') and event.selection:
                     try:
                         points = event.selection.get('points', [])
@@ -1485,32 +2088,38 @@ class ParetoExplorer:
                             point_data = points[0]
                             clicked_config_index = None
                             
-                            # Try different ways to get config_index
+                            # PRIORITY: Use customdata which contains the actual config_index
+                            # This is reliable even when multiple traces exist (show_all=True creates 3 traces)
                             if 'customdata' in point_data and point_data['customdata'] is not None:
                                 customdata = point_data['customdata']
-                                
-                                # Handle different customdata formats
                                 if isinstance(customdata, dict):
-                                    clicked_config_index = int(customdata.get('0', customdata.get(0)))
+                                    val = customdata.get('0', customdata.get(0))
+                                    if val is not None:
+                                        clicked_config_index = int(val)
                                 elif isinstance(customdata, (list, tuple)) and len(customdata) > 0:
                                     clicked_config_index = int(customdata[0])
                                 elif isinstance(customdata, (int, float)):
                                     clicked_config_index = int(customdata)
                             
-                            # Fallback: use point_index
-                            if clicked_config_index is None and 'point_index' in point_data:
-                                idx = point_data['point_index']
-                                configs = self.loader.get_pareto_configs() if not show_all else self.loader.configs[:1000]
-                                if 0 <= idx < len(configs):
-                                    clicked_config_index = configs[idx].config_index
+                            # FALLBACK: If customdata failed, try point_number (only reliable for single trace)
+                            if clicked_config_index is None:
+                                point_number = point_data.get('point_number')
+                                if point_number is not None:
+                                    # Use the SAME configs list as passed to the chart
+                                    if show_all:
+                                        configs = self.view_configs
+                                    else:
+                                        configs = [c for c in self.view_configs if c.is_pareto]
+                                    
+                                    # point_number is the index in the configs list
+                                    if 0 <= point_number < len(configs):
+                                        clicked_config_index = configs[point_number].config_index
                             
-                            # Update session state (on_select="rerun" will trigger the rerun)
+                            # Update session state if we found a config
                             if clicked_config_index is not None:
                                 current_selection = st.session_state.get('pareto_selected_config')
                                 if current_selection != clicked_config_index:
                                     st.session_state.pareto_selected_config = clicked_config_index
-                                    # Also update the selectbox key so it shows the new selection
-                                    st.session_state.pareto_selectbox_key = clicked_config_index
                     except Exception as e:
                         st.warning(f"⚠️ Click handling error: {e}")
             
@@ -1557,205 +2166,11 @@ class ParetoExplorer:
                                 current_selection = st.session_state.get('pareto_selected_config')
                                 if current_selection != clicked_config_index:
                                     st.session_state.pareto_selected_config = clicked_config_index
-                                    st.session_state.pareto_selectbox_key = clicked_config_index
                     except Exception as e:
                         st.warning(f"⚠️ Click handling error: {e}")
         
-        st.markdown("---")
-        
-        # Config selector
-        st.subheader("🔍 SELECTED CONFIG DETAILS")
-        
-        pareto_configs = self.loader.get_pareto_configs()
-        
-        if not pareto_configs:
-            st.warning("⚠️ No Pareto configs available")
-            st.stop()
-        
-        pareto_indices = [c.config_index for c in pareto_configs]
-        
-        # Initialize session state for selected config if not exists
-        if 'pareto_selected_config' not in st.session_state:
-            st.session_state.pareto_selected_config = pareto_indices[0]
-        
-        # Ensure selected config is in the list (important after click events)
-        if st.session_state.pareto_selected_config not in pareto_indices:
-            st.warning(f"⚠️ Selected config {st.session_state.pareto_selected_config} is not in Pareto front")
-            st.session_state.pareto_selected_config = pareto_indices[0]
-        
-        # Calculate the index for the selectbox based on current selection
-        try:
-            default_index = pareto_indices.index(st.session_state.pareto_selected_config)
-        except ValueError:
-            default_index = 0
-            st.session_state.pareto_selected_config = pareto_indices[0]
-        
-        # Selectbox with key - Streamlit manages the state automatically
-        st.selectbox(
-            "🎯 Select Config Index:", 
-            pareto_indices, 
-            index=default_index,
-            key='pareto_selectbox_key',
-            help=f"Choose from {len(pareto_indices)} Pareto-optimal configs"
-        )
-        
-        # Read the value from session_state (set by the widget)
-        selected_config_index = st.session_state.pareto_selectbox_key
-        
-        # Update our tracking variable
-        st.session_state.pareto_selected_config = selected_config_index
-        
-        # Find the config with this config_index
-        config = next((c for c in self.loader.configs if c.config_index == selected_config_index), None)
-        
-        if config is None:
-            st.error(f"❌ Config {selected_idx} not found in loaded configs")
-            st.info(f"Available config_indices: {[c.config_index for c in self.loader.configs[:10]]}...")
-            st.stop()
-        
-        # Show config details
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("**📊 Metrics**")
-            
-            # Show first 5 scoring metrics with helpful tooltips
-            metric_helps = {
-                'adg_w_usd': "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure",
-                'sharpe_ratio_usd': "Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk",
-                'sharpe_ratio_w_usd': "Weighted Sharpe Ratio - Risk-adjusted return accounting for wallet exposure",
-                'gain_usd': "Total profit multiplier - How many times the initial balance was gained",
-                'calmar_ratio_usd': "Return vs maximum drawdown - Higher is better. Measures profit relative to worst loss",
-                'sortino_ratio_usd': "Downside risk-adjusted return - Like Sharpe but only penalizes downside volatility",
-                'omega_ratio_usd': "Probability-weighted ratio of gains vs losses - Higher is better",
-                'sterling_ratio_usd': "Return vs average drawdown - Consistency of returns relative to typical losses",
-                'drawdown_worst_usd': "Maximum portfolio decline - Lower is better. Worst equity drop from peak",
-            }
-            
-            for metric in self.loader.scoring_metrics[:5]:
-                if metric in config.suite_metrics:
-                    help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
-                    st.metric(
-                        metric.replace('_', ' ').title(), 
-                        f"{config.suite_metrics[metric]:.6f}",
-                        help=help_text
-                    )
-        
-        with col2:
-            st.markdown("**🎯 Trading Style**")
-            style = self.loader.compute_trading_style(config)
-            st.markdown(f"**{style}**")
-            st.metric("Positions/Day", f"{config.suite_metrics.get('positions_held_per_day', 0):.2f}",
-                     help="Average number of positions opened per day - Higher = more active trading")
-            st.metric("Avg Hold Hours", f"{config.suite_metrics.get('position_held_hours_mean', 0):.1f}",
-                     help="Average time positions are held open - Lower = faster turnover, scalping style")
-        
-        with col3:
-            st.markdown("**💪 Robustness**")
-            robust = self.loader.compute_overall_robustness(config)
-            st.metric("Overall Score", f"{robust:.3f}",
-                     help="Consistency score (0-1) - Higher = more stable across scenarios. Calculated as 1/(1+CV)")
-            
-            if config.metric_stats and 'adg_w_usd' in config.metric_stats:
-                stats = config.metric_stats['adg_w_usd']
-                st.metric("Std Dev", f"{stats['std']:.6f}",
-                         help="Standard deviation of daily gains - Lower = more predictable performance")
-        
-        st.markdown("---")
-        
-        # Load full config once for both display and backtest
-        # Use loader's get_full_config method (loads Pareto JSON template + merges optimized params)
-        full_config_data = None
-        try:
-            full_config_data = self.loader.get_full_config(config.config_index)
-            if not full_config_data:
-                st.warning("⚠️ Could not load full config - Pareto directory may be empty")
-        except Exception as e:
-            st.warning(f"⚠️ Could not load full config: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc())
-        
-        # Detailed views in expanders
-        col_left, col_right = st.columns(2)
-        
-        with col_left:
-            with st.expander("📋 Full Configuration", expanded=False):
-                if full_config_data:
-                    st.json(full_config_data)
-                else:
-                    st.warning("Full config not available - showing bot params only")
-                    st.json(config.bot_params)
-        
-        with col_right:
-            with st.expander("📊 All Metrics & Statistics", expanded=False):
-                # Show all suite metrics
-                st.markdown("**Suite Metrics:**")
-                metrics_df = []
-                for metric, value in sorted(config.suite_metrics.items()):
-                    metrics_df.append({"Metric": metric, "Value": f"{value:.6f}"})
-                st.dataframe(metrics_df, width='stretch', hide_index=True)
-                
-                # Show metric statistics if available
-                if config.metric_stats:
-                    st.markdown("---")
-                    st.markdown("**Metric Statistics (across scenarios):**")
-                    for metric, stats in list(config.metric_stats.items())[:10]:
-                        st.markdown(f"**{metric}:**")
-                        st.text(f"  Mean: {stats.get('mean', 0):.6f}")
-                        st.text(f"  Std:  {stats.get('std', 0):.6f}")
-                        st.text(f"  Min:  {stats.get('min', 0):.6f}")
-                        st.text(f"  Max:  {stats.get('max', 0):.6f}")
-        
-        # Backtest button
-        st.markdown("---")
-        col_bt1, col_bt2, col_bt3 = st.columns([1, 2, 1])
-        with col_bt2:
-            if st.button("🚀 Run Backtest with this Config", width='stretch', type="primary"):
-                try:
-                    import BacktestV7
-                    from pbgui_func import get_navi_paths, pb7dir
-                    from pathlib import Path
-                    import json
-                    import time
-                    
-                    # Use already loaded full_config_data
-                    if not full_config_data:
-                        st.error("❌ Full config data not available")
-                        st.stop()
-                    
-                    # Create config directory if not exists
-                    config_dir = Path(f'{pb7dir()}/configs/pareto_selected')
-                    config_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # Generate unique filename
-                    timestamp = int(time.time())
-                    config_filename = f"pareto_config_{config.config_index}_{timestamp}.json"
-                    config_path = config_dir / config_filename
-                    
-                    # Save the full config (has backtest, bot, optimize, live sections)
-                    with open(config_path, 'w') as f:
-                        json.dump(full_config_data, f, indent=2)
-                    
-                    # Cleanup backtest session state (like in OptimizeV7)
-                    if "bt_v7_queue" in st.session_state:
-                        del st.session_state.bt_v7_queue
-                    if "bt_v7_results" in st.session_state:
-                        del st.session_state.bt_v7_results
-                    if "bt_v7_edit_symbol" in st.session_state:
-                        del st.session_state.bt_v7_edit_symbol
-                    if "config_v7_archives" in st.session_state:
-                        del st.session_state.config_v7_archives
-                    if "config_v7_config_archive" in st.session_state:
-                        del st.session_state.config_v7_config_archive
-                    
-                    # Create BacktestV7Item and switch to backtest page
-                    st.session_state.bt_v7 = BacktestV7.BacktestV7Item(str(config_path))
-                    st.switch_page(get_navi_paths()["V7_BACKTEST"])
-                    
-                except Exception as e:
-                    st.error(f"❌ Error preparing backtest: {str(e)}")
-                    import traceback
-                    st.code(traceback.format_exc())
+        # Call the config details fragment (will only reload this section)
+        self._show_config_details_fragment()
     
     def _show_deep_intelligence(self):
         """Stage 3: Deep Intelligence - Parameter & Market Analysis"""
