@@ -2,6 +2,16 @@ import streamlit as st
 from pbgui_func import is_session_state_not_initialized, is_authenticted
 from ParetoExplorer import ParetoExplorer
 
+# Reduce top padding
+st.markdown("""
+<style>
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Authentication check
 if is_session_state_not_initialized() or not is_authenticted():
     st.switch_page("navi/system_login.py")
