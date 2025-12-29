@@ -328,21 +328,55 @@ class ParetoExplorer:
         
         with col1:
             st.markdown("**📊 Performance**")
+            
+            # Define help texts for common metrics
+            metric_helps = {
+                'adg_w_usd': "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure",
+                'sharpe_ratio_usd': "Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk",
+                'sharpe_ratio_w_usd': "Weighted Sharpe Ratio - Risk-adjusted return accounting for wallet exposure",
+                'gain_usd': "Total profit multiplier - How many times the initial balance was gained",
+                'calmar_ratio_usd': "Return vs maximum drawdown - Higher is better. Measures profit relative to worst loss",
+                'sortino_ratio_usd': "Downside risk-adjusted return - Like Sharpe but only penalizes downside volatility",
+                'omega_ratio_usd': "Probability-weighted ratio of gains vs losses - Higher is better",
+                'sterling_ratio_usd': "Return vs average drawdown - Consistency of returns relative to typical losses",
+                'drawdown_worst_usd': "Maximum portfolio decline - Lower is better. Worst equity drop from peak",
+            }
+            
             for metric in self.loader.scoring_metrics[:3]:
                 if metric in config.suite_metrics:
-                    st.metric(metric.replace('_', ' ').title(), f"{config.suite_metrics[metric]:.6f}")
+                    help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
+                    st.metric(
+                        metric.replace('_', ' ').title(), 
+                        f"{config.suite_metrics[metric]:.6f}",
+                        help=help_text
+                    )
         
         with col2:
             st.markdown("**🎯 Trading Style**")
             style = self.loader.compute_trading_style(config)
             st.markdown(f"**{style}**")
+            
+            if 'positions_held_per_day' in config.suite_metrics:
+                st.metric("Positions/Day", f"{config.suite_metrics['positions_held_per_day']:.2f}",
+                         help="Average number of positions opened per day - Higher = more active trading")
+            
+            if 'position_held_hours_mean' in config.suite_metrics:
+                st.metric("Avg Hold Hours", f"{config.suite_metrics['position_held_hours_mean']:.1f}",
+                         help="Average time positions are held open - Lower = faster turnover, scalping style")
         
         with col3:
             st.markdown("**💪 Robustness**")
             robust = self.loader.compute_overall_robustness(config)
             stars = "⭐" * int(robust * 5)
-            st.metric("Score", f"{robust:.2f}")
+            st.metric("Overall Score", f"{robust:.2f}",
+                     help="Consistency score (0-1) - Higher = more stable across scenarios. Calculated as 1/(1+CV)")
             st.markdown(f"**{stars}**")
+            
+            # Show risk score if available
+            risk_scores = self.loader.compute_risk_profile_score(config)
+            if risk_scores:
+                st.metric("Risk Score", f"{risk_scores['overall']:.1f}/10",
+                         help="Combined risk assessment - Lower score = safer strategy. Based on drawdown, volatility, and recovery metrics")
         
         st.markdown("---")
         
