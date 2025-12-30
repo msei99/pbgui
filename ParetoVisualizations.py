@@ -524,28 +524,56 @@ class ParetoVisualizations:
         if not params or not metrics:
             return go.Figure().add_annotation(text="Insufficient data for correlation", showarrow=False)
         
+        # Correlations can become NaN for sparse/constant parameters (few non-null values,
+        # or not enough variance). Those NaNs show up as black gaps/lines in the heatmap.
+        # Filter out problematic parameters/metrics before computing correlation.
+        df_corr = df[params + metrics].apply(pd.to_numeric, errors='coerce')
+
+        min_non_null = max(10, int(len(df_corr) * 0.01))
+
+        def _is_usable_series(series: pd.Series) -> bool:
+            series = series.dropna()
+            return len(series) >= min_non_null and series.nunique() >= 2
+
+        params = [p for p in params if _is_usable_series(df_corr[p])]
+        metrics = [m for m in metrics if _is_usable_series(df_corr[m])]
+
+        if not params or not metrics:
+            return go.Figure().add_annotation(text="Insufficient data for correlation", showarrow=False)
+
         # Compute correlation matrix
-        corr_matrix = df[params + metrics].corr().loc[params, metrics]
+        corr_matrix = df_corr[params + metrics].corr().loc[params, metrics]
+
+        z = corr_matrix.to_numpy(dtype=float)
+        z_nan = np.isnan(z)
+        z_clean = np.where(z_nan, 0.0, z)
+        text = np.where(z_nan, "", np.round(z_clean, 2))
         
         # Create heatmap
         fig = go.Figure(data=go.Heatmap(
-            z=corr_matrix.values,
+            z=z_clean,
             x=[m.replace('_', ' ').title() for m in metrics],
             y=[p.replace('_', ' ').replace('long ', '').replace('short ', '') for p in params],
             colorscale='RdBu',
             zmid=0,
-            text=np.round(corr_matrix.values, 2),
+            text=text,
             texttemplate='%{text}',
-            textfont={"size": 10},
-            colorbar=dict(title="Correlation")
+            textfont={"size": 14},
+            colorbar=dict(
+                title=dict(text="Correlation", font=dict(size=15)),
+                tickfont=dict(size=13)
+            )
         ))
         
         fig.update_layout(
             title="Parameter Influence Heatmap (Correlation Analysis)",
             xaxis_title="Metrics",
             yaxis_title="Parameters",
-            height=max(400, len(params) * 25),
-            template='plotly_white'
+            height=max(600, len(params) * 30),
+            template='plotly_white',
+            font=dict(size=15),
+            xaxis=dict(tickfont=dict(size=14), automargin=True),
+            yaxis=dict(tickfont=dict(size=17), automargin=True)
         )
         
         return fig
@@ -583,9 +611,12 @@ class ParetoVisualizations:
             title=f"Scenario Comparison: {metric.replace('_', ' ').title()}",
             yaxis_title=metric.replace('_', ' ').title(),
             xaxis_title="Scenario",
-            height=500,
+            height=600,
             template='plotly_white',
-            showlegend=False
+            showlegend=False,
+            font=dict(size=15),
+            xaxis=dict(tickfont=dict(size=14)),
+            yaxis=dict(tickfont=dict(size=14))
         )
         
         return fig
@@ -606,7 +637,12 @@ class ParetoVisualizations:
         if not config_indices:
             return go.Figure().add_annotation(text="No configs selected", showarrow=False)
         
-        configs = [self.loader.configs[i] for i in config_indices if i < len(self.loader.configs)]
+        # Match by config_index attribute (not array index) to handle filtered/sliced configs
+        configs = []
+        for target_idx in config_indices:
+            matching = [c for c in self.loader.configs if c.config_index == target_idx]
+            if matching:
+                configs.append(matching[0])
         
         if not configs:
             return go.Figure().add_annotation(text="Invalid config indices", showarrow=False)
@@ -629,12 +665,19 @@ class ParetoVisualizations:
             
             label = config_labels[i] if config_labels and i < len(config_labels) else f"Config #{config.config_index}"
             
+            # Add customdata with config_index for click events
+            customdata = [[config.config_index]] * len(values)
+            
             fig.add_trace(go.Scatterpolar(
                 r=values,
                 theta=risk_dimensions + [risk_dimensions[0]],
                 fill='toself',
                 name=label,
-                opacity=0.6
+                opacity=0.6,
+                customdata=customdata,
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                             '%{theta}: %{r:.1f}/10<br>' +
+                             '<extra></extra>'
             ))
         
         fig.update_layout(
@@ -646,7 +689,22 @@ class ParetoVisualizations:
             ),
             title="Risk Profile Comparison (Higher = Lower Risk)",
             height=600,
-            template='plotly_white'
+            template='plotly_white',
+            # Make legend clickable
+            legend=dict(
+                itemclick='toggle',
+                itemdoubleclick='toggleothers'
+            ),
+            # Show modebar always with reset button
+            modebar=dict(
+                remove=['lasso2d', 'select2d']
+            )
+        )
+        
+        # Add double-click to reset zoom
+        fig.update_layout(
+            dragmode='zoom',
+            hovermode='closest'
         )
         
         return fig
@@ -757,21 +815,21 @@ class ParetoVisualizations:
             x=df['config_index'],
             y=df[metric],
             mode='markers',
-            marker=dict(size=3, color='lightblue', opacity=0.5),
+            marker=dict(size=5, color='lightblue', opacity=0.5),
             name='All Configs',
-            hovertemplate='Iter: %{x}<br>Value: %{y:.6f}<extra></extra>'
+            hovertemplate='<b>Config #%{x:.0f}</b><br>' + metric.replace('_', ' ').title() + ': %{y:.6f}<br><i>All tested configs</i><extra></extra>'
         ))
         
         # Rolling average
-        if len(df) > window:
-            rolling_mean = df[metric].rolling(window=window, center=True).mean()
+        if len(df) >= window:
+            rolling_mean = df[metric].rolling(window=window, center=False, min_periods=1).mean()
             fig.add_trace(go.Scatter(
                 x=df['config_index'],
                 y=rolling_mean,
                 mode='lines',
                 line=dict(color='blue', width=2),
                 name=f'Rolling Avg ({window})',
-                hovertemplate='Iter: %{x}<br>Avg: %{y:.6f}<extra></extra>'
+                hovertemplate='<b>Iteration %{x:.0f}</b><br>Average: %{y:.6f}<br><i>' + str(window) + '-iteration rolling mean</i><extra></extra>'
             ))
         
         # Highlight Pareto configs
@@ -781,9 +839,10 @@ class ParetoVisualizations:
                 x=pareto_df['config_index'],
                 y=pareto_df[metric],
                 mode='markers',
-                marker=dict(size=10, color='red', symbol='star'),
+                marker=dict(size=10, color='red', symbol='star', line=dict(width=1, color='white')),
                 name='Pareto Configs',
-                hovertemplate='<b>Pareto at Iter %{x}</b><br>Value: %{y:.6f}<extra></extra>'
+                customdata=[[idx] for idx in pareto_df['config_index']],
+                hovertemplate='<b>⭐ Pareto Config #%{customdata[0]:.0f}</b><br>Iteration: %{x:.0f}<br>' + metric.replace('_', ' ').title() + ': %{y:.6f}<br><i>Click to view details</i><extra></extra>'
             ))
         
         fig.update_layout(
@@ -792,7 +851,11 @@ class ParetoVisualizations:
             yaxis_title=metric.replace('_', ' ').title(),
             height=500,
             template='plotly_white',
-            hovermode='x unified'
+            hovermode='closest',  # Same as 2D - needed for proper click handling
+            dragmode='zoom',  # Default to zoom like 2D scatter
+            modebar_remove=['select2d', 'lasso2d'],  # Remove box/lasso select tools
+            xaxis=dict(separatethousands=False),  # Prevent k notation in hover
+            yaxis=dict(separatethousands=False)   # Prevent k notation in hover
         )
         
         return fig
@@ -1148,7 +1211,8 @@ class ParetoVisualizations:
         """
         bounds_info = self.loader.get_parameters_at_bounds(tolerance=0.1)
         
-        at_bounds = bounds_info['at_lower'] + bounds_info['at_upper']
+        # Merge parameter names from both lower and upper bounds
+        at_bounds = list(bounds_info['at_lower'].keys()) + list(bounds_info['at_upper'].keys())
         
         if not at_bounds:
             return go.Figure().add_annotation(text="No parameters at bounds", showarrow=False)
@@ -1199,6 +1263,7 @@ class ParetoVisualizations:
                 marker=dict(color=colors),
                 text=[f"{d:.1f}%" for d in distances],
                 textposition='auto',
+                textfont=dict(size=17),
                 hovertemplate='<b>%{y}</b><br>Distance: %{x:.1f}%<extra></extra>'
             )
         ])
@@ -1207,7 +1272,12 @@ class ParetoVisualizations:
             title="Parameters Near Bounds (< 10% from limit)",
             xaxis_title="Distance from Bound (%)",
             yaxis_title="Parameter",
-            height=max(400, len(param_names) * 30),
+            height=max(500, len(param_names) * 30),
+            font=dict(size=15),
+            xaxis=dict(tickfont=dict(size=14)),
+            yaxis=dict(tickfont=dict(size=17), automargin=True),
+            uniformtext_minsize=15,
+            uniformtext_mode='show',
             template='plotly_white'
         )
         
