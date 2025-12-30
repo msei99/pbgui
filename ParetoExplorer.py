@@ -1504,17 +1504,38 @@ class ParetoExplorer:
         with col2:
             st.markdown("**Chart Settings**")
             
-            viz_type_options = ["2D Scatter", "3D Scatter", "Radar Chart"]
+            # Offer multiple visualization options
+            viz_type_options = [
+                "2D Scatter",
+                "3D Scatter (WebGL)",
+                "3D Projections (2D)",
+                "Radar Chart"
+            ]
+            
             viz_type = st.radio(
                 "Visualization:",
                 viz_type_options,
                 key='viz_type',
+                help="💡 2D/Radar: No WebGL | 3D WebGL: Browser 3D | 3D Projections: Three 2D views (works everywhere)"
             )
+            
+            # Normalize viz_type for backward compatibility
+            if "WebGL" in viz_type:
+                viz_type = "3D Scatter"
+            elif "Projections" in viz_type:
+                viz_type = "3D Projections"
+            
             # Defensive: ensure downstream logic uses the same value the widget is bound to
-            viz_type = st.session_state.get('viz_type', viz_type)
+            viz_type_raw = st.session_state.get('viz_type', viz_type)
+            if "WebGL" in viz_type_raw:
+                viz_type = "3D Scatter"
+            elif "Projections" in viz_type_raw:
+                viz_type = "3D Projections"
+            else:
+                viz_type = viz_type_raw
             
             # Show "Show all configs" checkbox only for Scatter plots, not for Radar Chart
-            if viz_type in ["2D Scatter", "3D Scatter"]:
+            if viz_type in ["2D Scatter", "3D Scatter", "3D Projections"]:
                 all_results_loaded = st.session_state.get('all_results_loaded', False)
                 
                 if all_results_loaded:
@@ -1760,8 +1781,8 @@ class ParetoExplorer:
                 color_metric = st.selectbox("Color by:", ["None"] + available_metrics, key='color_metric')
                 color_metric = None if color_metric == "None" else color_metric
                 
-            elif viz_type == "3D Scatter":
-                # 3D Scatter - Separate preset logic
+            elif viz_type in ["3D Scatter", "3D Projections"]:
+                # 3D Scatter / Projections - Shared preset logic
                 st.markdown("---")
                 
                 # Toggles for 3D metric selection
@@ -2147,6 +2168,102 @@ class ParetoExplorer:
                                     st.session_state.pareto_selected_config = clicked_config_index
                     except Exception as e:
                         st.warning(f"⚠️ Click handling error: {e}")
+            
+            elif viz_type == "3D Projections":
+                # Three 2D projections (XY, XZ, YZ) - works without WebGL
+                st.info("📊 **3D Projections** - Three 2D views showing all dimensions (no WebGL required)")
+                
+                # Determine which configs to pass to the charts
+                if show_all:
+                    chart_configs = self.view_configs
+                else:
+                    chart_configs = [c for c in self.view_configs if c.is_pareto]
+                
+                # Create three columns for the projections
+                col_xy, col_xz, col_yz = st.columns(3)
+                
+                with col_xy:
+                    st.markdown(f"**XY Plane**<br><small>{x_metric} vs {y_metric}</small>", unsafe_allow_html=True)
+                    fig_xy = self.viz.plot_pareto_scatter_2d(
+                        x_metric=x_metric,
+                        y_metric=y_metric,
+                        color_metric=z_metric,  # Color by Z for 3D effect
+                        show_all=show_all,
+                        best_match_config=best_match,
+                        title_prefix=""
+                    )
+                    fig_xy.update_layout(height=400, showlegend=False)
+                    event_xy = st.plotly_chart(fig_xy, key='chart_xy', on_select="rerun", use_container_width=True)
+                
+                with col_xz:
+                    st.markdown(f"**XZ Plane**<br><small>{x_metric} vs {z_metric}</small>", unsafe_allow_html=True)
+                    fig_xz = self.viz.plot_pareto_scatter_2d(
+                        x_metric=x_metric,
+                        y_metric=z_metric,
+                        color_metric=y_metric,  # Color by Y for 3D effect
+                        show_all=show_all,
+                        best_match_config=best_match,
+                        title_prefix=""
+                    )
+                    fig_xz.update_layout(height=400, showlegend=False)
+                    event_xz = st.plotly_chart(fig_xz, key='chart_xz', on_select="rerun", use_container_width=True)
+                
+                with col_yz:
+                    st.markdown(f"**YZ Plane**<br><small>{y_metric} vs {z_metric}</small>", unsafe_allow_html=True)
+                    fig_yz = self.viz.plot_pareto_scatter_2d(
+                        x_metric=y_metric,
+                        y_metric=z_metric,
+                        color_metric=x_metric,  # Color by X for 3D effect
+                        show_all=show_all,
+                        best_match_config=best_match,
+                        title_prefix=""
+                    )
+                    fig_yz.update_layout(height=400, showlegend=False)
+                    event_yz = st.plotly_chart(fig_yz, key='chart_yz', on_select="rerun", use_container_width=True)
+                
+                # Handle click events from any of the three charts
+                for event in [event_xy, event_xz, event_yz]:
+                    if event and hasattr(event, 'selection') and event.selection:
+                        try:
+                            points = event.selection.get('points', [])
+                            if points:
+                                point_data = points[0]
+                                clicked_config_index = None
+                                
+                                # PRIORITY: Use customdata which contains the actual config_index
+                                if 'customdata' in point_data and point_data['customdata'] is not None:
+                                    customdata = point_data['customdata']
+                                    if isinstance(customdata, dict):
+                                        val = customdata.get('0', customdata.get(0))
+                                        if val is not None:
+                                            clicked_config_index = int(val)
+                                    elif isinstance(customdata, (list, tuple)) and len(customdata) > 0:
+                                        clicked_config_index = int(customdata[0])
+                                    elif isinstance(customdata, (int, float)):
+                                        clicked_config_index = int(customdata)
+                                
+                                # FALLBACK: If customdata failed, try point_number
+                                if clicked_config_index is None:
+                                    point_number = point_data.get('point_number')
+                                    if point_number is not None:
+                                        # Use the SAME configs list as passed to the chart
+                                        if show_all:
+                                            configs = self.view_configs
+                                        else:
+                                            configs = [c for c in self.view_configs if c.is_pareto]
+                                        
+                                        # point_number is the index in the configs list
+                                        if 0 <= point_number < len(configs):
+                                            clicked_config_index = configs[point_number].config_index
+                                
+                                # Update session state if we found a config
+                                if clicked_config_index is not None:
+                                    current_selection = st.session_state.get('pareto_selected_config')
+                                    if current_selection != clicked_config_index:
+                                        st.session_state.pareto_selected_config = clicked_config_index
+                                        break  # Stop after first successful click
+                        except Exception as e:
+                            pass  # Ignore errors from other charts
             
             else:  # Radar Chart
                 # Get comparison configs for consistent display
