@@ -1048,7 +1048,7 @@ class ParetoExplorer:
             with col_title:
                 st.markdown(f"**Pareto Analysis** - Showing {len(self.view_configs):,} configs | {pareto_in_view} Pareto ⭐")
             with col_help:
-                with st.popover("ℹ️ Chart Guide", use_container_width=True):
+                with st.popover("📖 Guide"):
                     st.markdown("""
                     **How to read this chart:**
                     
@@ -1123,7 +1123,7 @@ class ParetoExplorer:
             with col_title:
                 st.markdown(f"**Robustness vs Performance** - Showing {len(self.view_configs):,} configs | {pareto_in_view} Pareto ⭐")
             with col_help:
-                with st.popover("ℹ️ Chart Guide", use_container_width=True):
+                with st.popover("📖 Guide"):
                     st.markdown("""
                     **How to read this chart:**
                     
@@ -1268,6 +1268,21 @@ class ParetoExplorer:
         with col1:
             st.markdown("**📊 Metrics**")
             
+            # Get currency and weighted settings from session state (set by Correlations tab)
+            display_currency = st.session_state.get('pareto_currency', 'USD')
+            display_weighted = st.session_state.get('pareto_use_weighted', True)
+            currency_suffix = "_usd" if display_currency == "USD" else "_btc"
+            
+            # Build metric names based on settings
+            def get_display_metric(base_name):
+                """Get the actual metric name to display based on settings"""
+                weighted_metric = f"{base_name}_w{currency_suffix}"
+                base_metric = f"{base_name}{currency_suffix}"
+                # Try weighted first if enabled and exists, otherwise base
+                if display_weighted and weighted_metric in config.suite_metrics:
+                    return weighted_metric
+                return base_metric
+            
             # Show first 5 scoring metrics with helpful tooltips
             metric_helps = {
                 'adg_w_usd': "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure",
@@ -1281,7 +1296,19 @@ class ParetoExplorer:
                 'drawdown_worst_usd': "Maximum portfolio decline - Lower is better. Worst equity drop from peak",
             }
             
-            for metric in self.loader.scoring_metrics[:5]:
+            # Display metrics based on Top Performers selection or fallback to scoring metrics
+            display_metrics = st.session_state.get('pareto_top_metrics', [])
+            
+            # Fallback: if no top metrics stored (e.g., first load or other tabs), use scoring metrics
+            if not display_metrics:
+                for base_metric in ['adg', 'sharpe_ratio', 'gain', 'calmar_ratio', 'sortino_ratio']:
+                    actual_metric = get_display_metric(base_metric)
+                    if actual_metric in config.suite_metrics:
+                        display_metrics.append(actual_metric)
+            
+            # Show up to 10 metrics (from Top Performers) or 5 (fallback)
+            max_display = 10 if st.session_state.get('pareto_top_metrics') else 5
+            for metric in display_metrics[:max_display]:
                 if metric in config.suite_metrics:
                     help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
                     st.metric(
@@ -1305,8 +1332,10 @@ class ParetoExplorer:
             st.metric("Overall Score", f"{robust:.3f}",
                      help="Consistency score (0-1) - Higher = more stable across scenarios. Calculated as 1/(1+CV)")
             
-            if config.metric_stats and 'adg_w_usd' in config.metric_stats:
-                stats = config.metric_stats['adg_w_usd']
+            # Use appropriate ADG metric for std dev display
+            adg_metric = get_display_metric('adg')
+            if config.metric_stats and adg_metric in config.metric_stats:
+                stats = config.metric_stats[adg_metric]
                 st.metric("Std Dev", f"{stats['std']:.6f}",
                          help="Standard deviation of daily gains - Lower = more predictable performance")
         
@@ -1438,7 +1467,7 @@ class ParetoExplorer:
                 "Robustness Importance", 
                 0, 100, 70, 5, 
                 key='robust_weight',
-                help="How much you value consistency across different market scenarios. Higher values favor configs with stable, predictable performance."
+                help="How much you value consistency across different scenarios. Higher values favor configs with stable, predictable performance."
             )
         
         # Track previous slider values to detect changes
@@ -2318,27 +2347,121 @@ class ParetoExplorer:
         """Stage 3: Deep Intelligence - Parameter & Market Analysis"""
         
         st.title("🧠 DEEP INTELLIGENCE")
-        st.markdown("**Advanced parameter and market regime analysis**")
-        
-        st.markdown("---")
-        
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Parameters", "🌍 Markets", "📈 Evolution", "🔗 Correlations"])
-        
-        with tab1:
-            st.subheader("Parameter Influence Analysis")
-            
-            col1, col2 = st.columns([3, 1])
-            
-            with col2:
-                top_n = st.slider("Top N Parameters", 10, 40, 20, key='top_n_params')
-            
-            with col1:
-                fig = self.viz.plot_parameter_influence_heatmap(top_n=top_n)
-                st.plotly_chart(fig, width='stretch')
+        st.markdown("**Advanced parameter and scenario analysis**")
+
+
+        # Persist active tab across reruns/mode switches.
+        # Streamlit tabs do not expose a readable active tab state, so we use a stateful
+        # control (segmented_control) and mirror it into the URL query params.
+        tab_keys = ["parameters", "scenarios", "evolution", "correlations"]
+        tab_labels = {
+            "parameters": "📊 Parameters",
+            "scenarios": "🎬 Scenarios",
+            "evolution": "📈 Evolution",
+            "correlations": "🔗 Correlations",
+        }
+
+        def _format_tab(tab_key: str) -> str:
+            return tab_labels.get(tab_key, tab_key)
+
+        qp_tab = st.query_params.get("deep_intel_tab", None)
+        if isinstance(qp_tab, list):
+            qp_tab = qp_tab[0] if qp_tab else None
+        if qp_tab not in tab_keys:
+            qp_tab = None
+
+        default_tab = qp_tab or st.session_state.get("deep_intel_active_tab", "parameters")
+        if default_tab not in tab_keys:
+            default_tab = "parameters"
+
+        active_tab = st.segmented_control(
+            "",
+            tab_keys,
+            default=default_tab,
+            format_func=_format_tab,
+            key="deep_intel_active_tab",
+            label_visibility="collapsed",
+            width="stretch",
+        )
+
+        qp_current = st.query_params.get("deep_intel_tab", None)
+        if isinstance(qp_current, list):
+            qp_current = qp_current[0] if qp_current else None
+        if active_tab in tab_keys and qp_current != active_tab:
+            st.query_params["deep_intel_tab"] = active_tab
+
+        if active_tab == "parameters":
+            _hg_title, _hg_guide = st.columns([10, 2], vertical_alignment="top")
+            with _hg_title:
+                st.subheader("Parameter Influence Analysis")
+            with _hg_guide:
+                with st.popover("📖 Guide"):
+                    st.markdown(
+                        """
+                        **🔥 Parameter Influence Heatmap**
+                        
+                        **📊 What it shows:**
+                        Correlations between bot parameters (rows) and performance metrics (columns).
+                        
+                        **🎨 How to read colors:**
+                        - 🔵 **Blue (+1.0)**: Parameter ↑ → Metric ↑ (strong positive)
+                        - ⚪ **White (0.0)**: No clear linear relationship
+                        - 🔴 **Red (-1.0)**: Parameter ↑ → Metric ↓ (strong negative)
+                        
+                        **⚠️ Important:**
+                        Correlation ≠ causation! Use this as a hint for focused experiments.
+                        
+                        **🎯 Action items:**
+                        1. Spot rows/columns with strong correlations (|corr| > 0.5)
+                        2. Test these parameters with targeted bound adjustments
+                        3. Run follow-up optimizations to confirm relationships
+                        """
+                    )
+
+            top_n = st.slider(
+                "Top N Parameters",
+                10,
+                40,
+                20,
+                key='top_n_params',
+                help=(
+                    "How many of the most variable parameters to show in the correlation heatmap. "
+                    "More parameters = more coverage, but more scrolling and visual density."
+                ),
+            )
+
+            fig = self.viz.plot_parameter_influence_heatmap(top_n=top_n)
+            st.plotly_chart(fig, width='stretch')
             
             # Parameters at bounds
             st.markdown("---")
-            st.subheader("⚠️ Parameters Near Bounds")
+            _b_title, _b_guide = st.columns([10, 2])
+            with _b_title:
+                st.subheader("⚠️ Parameters Near Bounds")
+            with _b_guide:
+                with st.popover("📖 Guide"):
+                    st.markdown(
+                        """
+                        **⚠️ Parameters Near Bounds**
+                        
+                        **📊 What it shows:**
+                        Parameters within 10% of their lower/upper optimization bounds.
+                        
+                        **🎨 Color coding:**
+                        - 🔴 **Red (< 5%)**: Critical — optimizer hitting wall
+                        - 🟠 **Orange (5-10%)**: Warning — getting close to limit
+                        
+                        **🔍 What it means:**
+                        Small percentages = optimizer wants to go further but can't.
+                        → Your search space might be too restrictive!
+                        
+                        **🎯 Action items:**
+                        1. **Expand bounds** where results make sense (e.g., if edge value performs well)
+                        2. **Keep tight** if edge values show poor performance (bound is correct)
+                        3. **Increase resolution** near boundaries for finer tuning
+                        4. **Re-run optimization** after adjustments to explore new space
+                        """
+                    )
             
             fig = self.viz.plot_parameter_bounds_distance(top_n=15)
             st.plotly_chart(fig, width='stretch')
@@ -2347,16 +2470,56 @@ class ParetoExplorer:
             
             if bounds_info['at_lower'] or bounds_info['at_upper']:
                 st.warning(f"**{len(bounds_info['at_lower']) + len(bounds_info['at_upper'])} parameters are near bounds!** Consider extending search space.")
-        
-        with tab2:
-            st.subheader("Market Regime Analysis")
+
+        elif active_tab == "scenarios":
+            # Title and guide
+            _mr_title, _mr_guide = st.columns([10, 2])
+            with _mr_title:
+                st.subheader("Scenario Analysis")
+            with _mr_guide:
+                with st.popover("📖 Guide"):
+                    st.markdown("""
+                    ### 📊 Scenario Comparison
+                    
+                    **📈 What it shows:**
+                    Performance distribution of Pareto configs across different backtest scenarios you defined (e.g., different time periods, symbols, or market conditions).
+                    
+                    **🎨 How to read the boxplots:**
+                    - **Box**: Contains 50% of data (25th to 75th percentile)
+                    - **Line inside box**: Median (50th percentile)
+                    - **Whiskers**: Extend to min/max within 1.5×IQR
+                    - **Dots**: Outliers beyond whiskers
+                    
+                    **🔍 What to look for:**
+                    - **Compare medians**: Which scenarios perform better overall?
+                    - **Compare box widths**: In which scenarios is performance more variable?
+                    - **Spot outliers**: Are there configs with exceptional (good/bad) performance in specific scenarios?
+                    - **Look for patterns**: Do all scenarios show similar distributions, or are there major differences?
+                    
+                    **🎯 Action items:**
+                    1. **Check consistency**: Configs performing well across all scenarios are more robust
+                    2. **Identify risk**: Scenarios with low medians or large variance may indicate higher risk
+                    3. **Compare statistics**: Use Mean/Std/Min/Max below to quantify differences between scenarios
+                    4. **Select accordingly**: Choose configs based on your scenario priorities (e.g., prioritize scenarios most relevant to your use case)
+                    """)
             
             if self.loader.scenario_labels:
                 st.markdown("**Scenario Performance Comparison**")
                 
-                metrics = self.loader.scoring_metrics if self.loader.scoring_metrics else ['adg_w_usd', 'sharpe_ratio_usd']
+                # Get all available metrics from suite_metrics (not just scoring_metrics)
+                # This gives access to all computed metrics, not just the ones used for optimization
+                pareto_configs = self.loader.get_pareto_configs()
+                if pareto_configs and pareto_configs[0].suite_metrics:
+                    available_metrics = list(pareto_configs[0].suite_metrics.keys())
+                else:
+                    available_metrics = self.loader.scoring_metrics if self.loader.scoring_metrics else ['adg_w_usd', 'sharpe_ratio_usd']
                 
-                selected_metric = st.selectbox("Select Metric:", metrics, key='scenario_metric')
+                selected_metric = st.selectbox(
+                    "Select Metric:", 
+                    available_metrics, 
+                    key='scenario_metric',
+                    help="Choose which performance metric to compare across scenarios. All computed metrics are available, not just optimization objectives."
+                )
                 
                 fig = self.viz.plot_scenario_comparison_boxplots(selected_metric)
                 st.plotly_chart(fig, width='stretch')
@@ -2375,53 +2538,480 @@ class ParetoExplorer:
                     if values:
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
-                            st.metric(f"{scenario.title()} - Mean", f"{np.mean(values):.6f}")
+                            st.metric(
+                                f"{scenario.title()} - Mean", 
+                                f"{np.mean(values):.6f}",
+                                help="Average performance across all Pareto configs in this scenario. Higher mean indicates better overall performance."
+                            )
                         with col2:
-                            st.metric(f"{scenario.title()} - Std", f"{np.std(values):.6f}")
+                            st.metric(
+                                f"{scenario.title()} - Std", 
+                                f"{np.std(values):.6f}",
+                                help="Standard deviation shows performance variability. Lower Std means more consistent results, higher Std means more spread between configs."
+                            )
                         with col3:
-                            st.metric(f"{scenario.title()} - Min", f"{np.min(values):.6f}")
+                            st.metric(
+                                f"{scenario.title()} - Min", 
+                                f"{np.min(values):.6f}",
+                                help="Worst-case performance among Pareto configs in this scenario. Important for risk assessment - how bad can it get?"
+                            )
                         with col4:
-                            st.metric(f"{scenario.title()} - Max", f"{np.max(values):.6f}")
+                            st.metric(
+                                f"{scenario.title()} - Max", 
+                                f"{np.max(values):.6f}",
+                                help="Best-case performance among Pareto configs in this scenario. Shows the potential upside if conditions align perfectly."
+                            )
             else:
                 st.info("No scenario data available")
-        
-        with tab3:
-            st.subheader("Optimization Evolution Timeline")
+
+        elif active_tab == "evolution":
+            # Title and guide
+            _ev_title, _ev_guide = st.columns([10, 2])
+            with _ev_title:
+                st.subheader("Optimization Evolution Timeline")
+            with _ev_guide:
+                with st.popover("📖 Guide"):
+                    st.markdown("""
+                    ### 📈 Optimization Evolution Timeline
+                    
+                    **📊 What it shows:**
+                    How the optimizer explored the parameter space over time - tracking performance progression from first iteration to final result.
+                    
+                    **🎨 How to read the chart:**
+                    - **Light blue dots**: Every single config tested (raw exploration)
+                    - **Blue line**: Smoothed trend showing average performance evolution
+                    - **Red stars ⭐**: Pareto-optimal configs discovered at that iteration
+                    
+                    **🔍 What to look for:**
+                    - **Early stars**: Optimizer found good configs quickly (efficient search)
+                    - **Late stars**: Breakthrough discoveries in later iterations (thorough exploration)
+                    - **Upward trend**: Performance generally improving over time (good convergence)
+                    - **Flat sections**: Optimizer exploring similar parameter regions
+                    - **Clusters of stars**: Multiple Pareto configs found in succession (rich area discovered)
+                    
+                    **🎯 Key insights:**
+                    1. **Search efficiency**: Stars in first 25% of iterations = fast convergence
+                    2. **Exploration quality**: Stars spread throughout timeline = thorough search, not premature convergence
+                    3. **Performance ceiling**: Last stars show if optimizer reached limits or could continue
+                    4. **Smoothing window**: Adjust slider to see short-term fluctuations (low value) vs long-term trends (high value)
+                    
+                    **💡 Action items:**
+                    - **Mostly early stars?** Your bounds may be too narrow - good configs found immediately
+                    - **Only late stars?** Consider running longer optimizations - best results come with patience
+                    - **No clear trend?** High variance indicates complex parameter interactions
+                    - **Steep upward trend?** Optimizer learning efficiently - consider similar setups for future runs
+                    """)
             
-            metrics = self.loader.scoring_metrics if self.loader.scoring_metrics else ['adg_w_usd']
-            selected_metric = st.selectbox("Select Metric:", metrics, key='evolution_metric')
+            # Metric selection with toggles like 2D
+            col_toggle1, col_toggle2 = st.columns(2)
+            with col_toggle1:
+                use_weighted = st.toggle("Use Weighted (_w) Metrics", value=True, 
+                                        help="Weighted metrics emphasize recent performance (recency-biased)", 
+                                        key='use_weighted_evolution')
+            with col_toggle2:
+                use_btc = st.toggle("Use BTC instead of USD", value=False,
+                                   help="Switch between USD and BTC denominated metrics",
+                                   key='use_btc_evolution')
             
-            window = st.slider("Smoothing Window", 10, 500, 100, 10, key='evolution_window')
+            # Get all available metrics and filter them
+            pareto_configs = self.loader.get_pareto_configs()
+            if pareto_configs and pareto_configs[0].suite_metrics:
+                available_metrics = list(pareto_configs[0].suite_metrics.keys())
+            else:
+                available_metrics = self.loader.scoring_metrics if self.loader.scoring_metrics else ['adg_w_usd']
+            
+            # Filter metrics based on toggles
+            filtered_metrics = []
+            for metric in available_metrics:
+                # Check currency
+                if use_btc and not metric.endswith('_btc'):
+                    continue
+                if not use_btc and not metric.endswith('_usd') and ('_usd' in available_metrics or '_btc' in available_metrics):
+                    # Skip if it's a currency metric but wrong currency
+                    if metric.replace('_usd', '_btc') in available_metrics or metric.replace('_btc', '_usd') in available_metrics:
+                        continue
+                
+                # Check weighted
+                if use_weighted and '_w_' not in metric and not metric.endswith('_w_usd') and not metric.endswith('_w_btc'):
+                    # Check if weighted version exists
+                    weighted_version = metric.replace('_usd', '_w_usd').replace('_btc', '_w_btc')
+                    if weighted_version in available_metrics:
+                        continue
+                if not use_weighted and ('_w_' in metric or metric.endswith('_w_usd') or metric.endswith('_w_btc')):
+                    continue
+                
+                filtered_metrics.append(metric)
+            
+            # Fallback if no metrics match
+            if not filtered_metrics:
+                filtered_metrics = available_metrics
+            
+            # Find best default metric
+            currency = 'btc' if use_btc else 'usd'
+            suffix = '_w' if use_weighted else ''
+            preferred_defaults = [f'adg{suffix}_{currency}', f'sharpe_ratio{suffix}_{currency}', f'adg_{currency}', f'sharpe_ratio_{currency}']
+            default_index = 0
+            for pref in preferred_defaults:
+                if pref in filtered_metrics:
+                    default_index = filtered_metrics.index(pref)
+                    break
+            
+            selected_metric = st.selectbox(
+                "Select Metric:", 
+                filtered_metrics,
+                index=default_index,
+                key='evolution_metric',
+                help="Choose which metric to track over optimization iterations. Shows how this specific metric evolved as the optimizer explored the parameter space."
+            )
+            
+            # Calculate adaptive window range based on data size
+            total_configs = len(self.loader.configs)
+            max_window = min(500, total_configs // 2)  # Max 500 or half the data
+            default_window = min(100, total_configs // 10)  # Default 100 or 10% of data
+            
+            window_percent = st.slider(
+                "Smoothing Window (%)", 
+                1, 25, 5, 1, 
+                key='evolution_window_pct',
+                help="Rolling average window as percentage of total iterations. Lower values (1-5%) show short-term fluctuations. Higher values (10-25%) reveal long-term trends."
+            )
+            
+            window = max(10, int(total_configs * window_percent / 100))  # At least 10 iterations
             
             fig = self.viz.plot_evolution_timeline(selected_metric, window=window)
-            st.plotly_chart(fig, width='stretch')
+            evolution_selection = st.plotly_chart(fig, key=f'evolution_chart_{window}', on_select='rerun')
             
-            st.info("💡 **Insight:** Red stars show when Pareto configs were discovered during optimization.")
-        
-        with tab4:
+            st.info("💡 **Insight:** Click red stars (or any point) to view detailed config information!")
+            
+            # Handle clicks on Pareto stars - Use session state like 2D/3D charts
+            if evolution_selection and evolution_selection.selection.points:
+                try:
+                    point_data = evolution_selection.selection.points[0]
+                    clicked_config_index = None
+                    
+                    # Try customdata first (Pareto stars)
+                    if 'customdata' in point_data and point_data['customdata']:
+                        customdata = point_data['customdata']
+                        if isinstance(customdata, dict):
+                            val = customdata.get('0', customdata.get(0))
+                            if val is not None:
+                                clicked_config_index = int(val)
+                        elif isinstance(customdata, (list, tuple)) and len(customdata) > 0:
+                            clicked_config_index = int(customdata[0])
+                        elif isinstance(customdata, (int, float)):
+                            clicked_config_index = int(customdata)
+                    
+                    # Fallback: Use x-value as iteration/config_index
+                    if clicked_config_index is None and 'x' in point_data:
+                        clicked_config_index = int(point_data['x'])
+                    
+                    # Update session state like 2D/3D charts do
+                    if clicked_config_index is not None:
+                        current_selection = st.session_state.get('pareto_selected_config')
+                        if current_selection != clicked_config_index:
+                            st.session_state.pareto_selected_config = clicked_config_index
+                except Exception as e:
+                    pass  # Silently ignore errors
+            
+            # Show config details using the fragment (same as 2D/3D)
+            self._show_config_details_fragment()
+
+        elif active_tab == "correlations":
             st.subheader("Multi-Metric Correlation")
             
-            # Trading style distribution
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                fig = self.viz.plot_trading_style_distribution()
-                st.plotly_chart(fig, width='stretch')
-            
-            with col2:
-                # Risk profile comparison of top 3
-                top_3 = self.loader.get_top_configs(
-                    metric_name=self.loader.scoring_metrics[0] if self.loader.scoring_metrics else 'adg_w_usd',
-                    n=3,
-                    pareto_only=True
-                )
+            pareto_configs = self.loader.get_pareto_configs()
+            if not pareto_configs:
+                st.info("No Pareto configs available.")
+            else:
+                # User controls in one row with spacing
+                col1, col2, col_spacer, col3 = st.columns([3, 2, 1, 3])
                 
-                if top_3:
-                    indices = [c.config_index for c in top_3]
-                    labels = [f"Config #{idx}" for idx in indices]
+                with col1:
+                    selection_strategy = st.radio(
+                        "Selection Strategy:",
+                        ["Top Performers", "Diverse Styles", "Risk Spectrum"],
+                        horizontal=False,
+                        key='risk_profile_strategy',
+                        help=(
+                            "**Top Performers:** Best configs across different metrics\n\n"
+                            "**Diverse Styles:** One config per trading style\n\n"
+                            "**Risk Spectrum:** Configs from lowest to highest risk"
+                        )
+                    )
+                
+                with col2:
+                    num_configs = st.slider(
+                        "Configs:",
+                        3, 10, 5, 1,
+                        key='risk_profile_num',
+                        help="Number of configs to compare"
+                    )
+                
+                # col_spacer is empty for spacing
+                
+                with col3:
+                    # Toggle controls like Evolution tab
+                    use_weighted = st.toggle(
+                        "Use Weighted (_w) Metrics", 
+                        value=True,
+                        help="Weighted metrics emphasize recent performance",
+                        key='risk_profile_weighted_toggle'
+                    )
                     
-                    fig = self.viz.plot_risk_profile_radar(indices, labels)
-                    st.plotly_chart(fig, width='stretch')
+                    use_btc = st.toggle(
+                        "Use BTC instead of USD",
+                        value=False,
+                        help="Switch between USD and BTC metrics",
+                        key='risk_profile_btc_toggle'
+                    )
+                    
+                    currency = "BTC" if use_btc else "USD"
+                
+                # Store settings in session state for config details display
+                st.session_state.pareto_currency = currency
+                st.session_state.pareto_use_weighted = use_weighted
+                st.session_state.pareto_top_metrics = []  # Will be filled by Top Performers selection
+                
+                # Build metric suffix based on selections
+                currency_suffix = "_usd" if currency == "USD" else "_btc"
+                weight_suffix = "_w" if use_weighted else ""
+                
+                selected_configs = []
+                labels = []
+                
+                if selection_strategy == "Top Performers":
+                    # Diverse top performers across key metrics
+                    # Note: Allow duplicate configs - same config can be best in multiple metrics
+                    
+                    # Use helper to find best metric variant that exists
+                    def find_metric(base_name: str, prefer_weighted: bool = True, need_currency: bool = True):
+                        """Find best available variant of a metric
+                        
+                        Logic: All metrics exist without _w, but not all have _w variant.
+                        - If prefer_weighted: try _w first, fallback to base
+                        - If not prefer_weighted: use base directly
+                        """
+                        if not pareto_configs:
+                            return base_name + (currency_suffix if need_currency else "")
+                        
+                        # Check first config's available metrics
+                        available_metrics = set(pareto_configs[0].suite_metrics.keys())
+                        
+                        if need_currency:
+                            # Currency metrics: base_usd or base_w_usd
+                            base_metric = f"{base_name}{currency_suffix}"
+                            weighted_metric = f"{base_name}_w{currency_suffix}"
+                            
+                            if prefer_weighted and weighted_metric in available_metrics:
+                                return weighted_metric
+                            return base_metric
+                        else:
+                            # Shared metrics: base or base_w
+                            base_metric = base_name
+                            weighted_metric = f"{base_name}_w"
+                            
+                            if prefer_weighted and weighted_metric in available_metrics:
+                                return weighted_metric
+                            return base_metric
+                    
+                    candidates = []
+                    used_metric_names = []  # Track actual metric names used
+                    
+                    # Define metrics to check (name, maximize/minimize, need_currency, label_format)
+                    metric_defs = [
+                        ('adg', True, True, 'Top ADG', '.6f'),
+                        ('sharpe_ratio', True, True, 'Top Sharpe', '.3f'),
+                        ('drawdown_worst', False, True, 'Best DD', '.4f'),  # minimize
+                        ('calmar_ratio', True, True, 'Top Calmar', '.3f'),
+                        ('sortino_ratio', True, True, 'Top Sortino', '.3f'),
+                        ('omega_ratio', True, True, 'Top Omega', '.3f'),
+                        ('gain', True, True, 'Top Gain', '.2f'),
+                        ('loss_profit_ratio', False, False, 'Best L/P', '.3f'),  # minimize, shared metric
+                        ('position_held_hours_mean', False, False, 'Fast Trade', '.1f'),  # minimize
+                        ('volume_pct_per_day_avg', True, False, 'Top Volume', '.2f'),  # shared metric
+                    ]
+                    
+                    for base_name, maximize, need_currency, label_prefix, fmt in metric_defs:
+                        metric_name = find_metric(base_name, use_weighted, need_currency)
+                        used_metric_names.append(metric_name)  # Track for display
+                        
+                        # Find best config for this metric
+                        if maximize:
+                            best = max(pareto_configs, key=lambda c: c.suite_metrics.get(metric_name, float('-inf')), default=None)
+                        else:
+                            best = min(pareto_configs, key=lambda c: c.suite_metrics.get(metric_name, float('inf')), default=None)
+                        
+                        if best:
+                            val = best.suite_metrics.get(metric_name, 0)
+                            label = f"{label_prefix} ({val:{fmt}})"
+                            if base_name == 'position_held_hours_mean':
+                                label = f"{label_prefix} ({val:.1f}h)"
+                            elif base_name == 'volume_pct_per_day_avg':
+                                label = f"{label_prefix} ({val:.2f}%)"
+                            candidates.append((best, label))
+                    
+                    # Store used metrics in session state for config details display
+                    st.session_state.pareto_top_metrics = used_metric_names
+                    
+                    # Take top N candidates
+                    for config, label in candidates[:num_configs]:
+                        selected_configs.append(config.config_index)
+                        labels.append(f"#{config.config_index} {label}")
+                
+                elif selection_strategy == "Diverse Styles":
+                    # One or more configs per trading style
+                    styles = {}
+                    for config in pareto_configs:
+                        style = self.loader.compute_trading_style(config)
+                        if style not in styles:
+                            styles[style] = []
+                        styles[style].append(config)
+                    
+                    # Sort each style by ADG and pick best
+                    configs_per_style = max(1, num_configs // len(styles)) if styles else 1
+                    
+                    for style, style_configs in sorted(styles.items()):
+                        sorted_style = sorted(style_configs, 
+                                            key=lambda c: c.suite_metrics.get('adg_w_usd', float('-inf')), 
+                                            reverse=True)
+                        for i, config in enumerate(sorted_style[:configs_per_style]):
+                            if len(selected_configs) >= num_configs:
+                                break
+                            selected_configs.append(config.config_index)
+                            adg = config.suite_metrics.get('adg_w_usd', 0)
+                            labels.append(f"#{config.config_index} {style} (ADG: {adg:.6f})")
+                        if len(selected_configs) >= num_configs:
+                            break
+                
+                elif selection_strategy == "Risk Spectrum":
+                    # Sort by overall risk score, pick evenly distributed
+                    configs_with_risk = []
+                    for config in pareto_configs:
+                        risk_profile = self.loader.compute_risk_profile_score(config)
+                        # Average risk score (0-10, higher = safer)
+                        avg_risk = sum(risk_profile.values()) / len(risk_profile)
+                        configs_with_risk.append((config, avg_risk))
+                    
+                    # Sort by risk (lowest to highest)
+                    configs_with_risk.sort(key=lambda x: x[1])
+                    
+                    # Pick evenly distributed across spectrum
+                    if len(configs_with_risk) <= num_configs:
+                        selected_items = configs_with_risk
+                    else:
+                        step = (len(configs_with_risk) - 1) / (num_configs - 1)
+                        indices = [int(i * step) for i in range(num_configs)]
+                        selected_items = [configs_with_risk[i] for i in indices]
+                    
+                    for config, risk_score in selected_items:
+                        selected_configs.append(config.config_index)
+                        risk_label = "High Risk" if risk_score < 4 else "Medium Risk" if risk_score < 7 else "Low Risk"
+                        labels.append(f"#{config.config_index} {risk_label} ({risk_score:.1f}/10)")
+                
+                if selected_configs:
+                    # Center the radar chart with better sizing
+                    col_left, col_chart, col_right = st.columns([0.5, 4, 0.5])
+                    
+                    with col_chart:
+                        fig = self.viz.plot_risk_profile_radar(selected_configs, labels)
+                        
+                        # Make radar chart clickable to select configs
+                        radar_selection = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key='risk_profile_radar')
+                        
+                        # Handle clicks on radar chart (both points and legend)
+                        if radar_selection and hasattr(radar_selection, 'selection'):
+                            clicked_config_index = None
+                            
+                            # Check for point clicks
+                            if radar_selection.selection.points:
+                                try:
+                                    point_data = radar_selection.selection.points[0]
+                                    
+                                    # Priority 1: customdata
+                                    if 'customdata' in point_data and point_data['customdata'] is not None:
+                                        customdata = point_data['customdata']
+                                        if isinstance(customdata, (list, tuple)) and len(customdata) > 0:
+                                            clicked_config_index = int(customdata[0])
+                                        elif isinstance(customdata, (int, float)):
+                                            clicked_config_index = int(customdata)
+                                    
+                                    # Priority 2: point_index + curve_number mapping
+                                    if clicked_config_index is None:
+                                        curve_num = point_data.get('curve_number')
+                                        if curve_num is not None and 0 <= curve_num < len(selected_configs):
+                                            clicked_config_index = selected_configs[curve_num]
+                                    
+                                    # Priority 3: trace_index
+                                    if clicked_config_index is None:
+                                        trace_idx = point_data.get('trace_index')
+                                        if trace_idx is not None and 0 <= trace_idx < len(selected_configs):
+                                            clicked_config_index = selected_configs[trace_idx]
+                                    
+                                    # Priority 4: Just use first selected config if nothing else works
+                                    if clicked_config_index is None and selected_configs:
+                                        # Try to extract curve number from any numeric field
+                                        for key in ['curveNumber', 'curve_number', 'traceIndex', 'trace_index']:
+                                            if key in point_data:
+                                                idx = point_data[key]
+                                                if isinstance(idx, (int, float)) and 0 <= int(idx) < len(selected_configs):
+                                                    clicked_config_index = selected_configs[int(idx)]
+                                                    break
+                                
+                                except Exception as e:
+                                    pass
+                            
+                            # Update session state if we got a valid config index
+                            if clicked_config_index is not None:
+                                current_selection = st.session_state.get('pareto_selected_config')
+                                if current_selection != clicked_config_index:
+                                    st.session_state.pareto_selected_config = clicked_config_index
+                                    st.rerun()
+                    
+                    # Config selector dropdown
+                    st.markdown("---")
+                    col_select, col_info = st.columns([1, 3])
+                    
+                    with col_select:
+                        # Create dropdown options with labels
+                        config_options = {f"{label}": idx for idx, label in zip(selected_configs, labels)}
+                        
+                        # Get current selection or default to first
+                        current_selected = st.session_state.get('pareto_selected_config')
+                        if current_selected not in selected_configs:
+                            current_selected = selected_configs[0]
+                        
+                        # Find the label for current selection
+                        current_label = None
+                        for label, idx in config_options.items():
+                            if idx == current_selected:
+                                current_label = label
+                                break
+                        
+                        if current_label is None:
+                            current_label = list(config_options.keys())[0]
+                        
+                        # Dropdown selector
+                        selected_label = st.selectbox(
+                            "Select Configuration:",
+                            options=list(config_options.keys()),
+                            index=list(config_options.keys()).index(current_label) if current_label in config_options else 0,
+                            key='correlation_config_selector',
+                            help="Choose a configuration to view detailed metrics and backtest results"
+                        )
+                        
+                        # Update session state when selection changes
+                        new_selection = config_options[selected_label]
+                        if new_selection != current_selected:
+                            st.session_state.pareto_selected_config = new_selection
+                            st.rerun()
+                    
+                    with col_info:
+                        st.info("💡 **Tip:** Click on the chart or use dropdown to select a config and view full details below.")
+                    
+                    # Show config details using the same fragment as 2D/3D/Evolution tabs
+                    self._show_config_details_fragment()
+                else:
+                    st.info("No configs available for comparison.")
     
     def _show_adversarial_lab(self):
         """Stage 4: Adversarial Lab - Stress Testing"""
@@ -2485,7 +3075,7 @@ class ParetoExplorer:
         - 🛡️ **Reduced Drawdown** through diversification
         - 📈 **Smoother Equity Curve** 
         - 🎯 **Better Risk-Adjusted Returns**
-        - 💪 **More Robust** across market regimes
+        - 💪 **More Robust** across scenarios
         """)
         
         # Config selector for portfolio
