@@ -50,96 +50,136 @@ class ParetoVisualizations:
         """
         if show_all:
             # Show all loaded configs (respects display range filter)
-            df = pd.DataFrame([{
-                'config_index': c.config_index,
-                'is_pareto': c.is_pareto,
-                **c.suite_metrics
-            } for c in self.loader.configs])
+            configs = self.loader.configs
         else:
-            df = self.loader.to_dataframe(pareto_only=True)
+            configs = self.loader.get_pareto_configs()
         
-        if df.empty:
+        if not configs:
             return go.Figure().add_annotation(text="No data available", showarrow=False)
         
-        # Check if required metrics exist in DataFrame
+        # Check if required metrics exist
         import streamlit as st
+        sample_config = configs[0]
         missing_metrics = []
         for metric in [x_metric, y_metric, color_metric, size_metric]:
-            if metric and metric not in df.columns:
+            if metric and metric not in sample_config.suite_metrics:
                 missing_metrics.append(metric)
         
         if missing_metrics:
             st.error(f"❌ Metrics not found: {', '.join(missing_metrics)}")
-            st.info(f"Available metrics: {', '.join([c for c in df.columns if c not in ['config_index', 'is_pareto']])}")
+            st.info(f"Available metrics: {', '.join(list(sample_config.suite_metrics.keys()))}")
             return go.Figure().add_annotation(
                 text=f"Metrics not available: {', '.join(missing_metrics)}", 
                 showarrow=False
             )
         
-        # Prepare data
-        hover_data = ['config_index', x_metric, y_metric]
-        if color_metric:
-            hover_data.append(color_metric)
-        if size_metric:
-            hover_data.append(size_metric)
+        # Separate into Pareto and non-Pareto
+        pareto_configs = [c for c in configs if c.is_pareto]
+        non_pareto_configs = [c for c in configs if not c.is_pareto]
         
-        # Create figure
-        fig = px.scatter(
-            df,
-            x=x_metric,
-            y=y_metric,
-            color=color_metric if color_metric else 'is_pareto',
-            size=size_metric if size_metric else None,
-            hover_data=hover_data,
-            title=f"{title_prefix}: {x_metric} vs {y_metric}",
-            labels={
-                x_metric: x_metric.replace('_', ' ').title(),
-                y_metric: y_metric.replace('_', ' ').title()
-            },
-            color_continuous_scale='Viridis' if color_metric else None,
-            opacity=0.7,
-            custom_data=['config_index']  # Add config_index to all points
-        )
+        fig = go.Figure()
         
-        # Highlight Pareto configs (smaller stars)
-        if show_all:
-            pareto_df = df[df['is_pareto'] == True]
-            fig.add_trace(go.Scatter(
-                x=pareto_df[x_metric],
-                y=pareto_df[y_metric],
-                mode='markers',
-                marker=dict(size=7, color='red', symbol='star', line=dict(width=1, color='white')),
-                name='Pareto Front',
-                hovertemplate='<b>Pareto Config #%{customdata[0]}</b><br>%{x:.6f}, %{y:.6f}<extra></extra>',
-                customdata=pareto_df[['config_index']].values
-            ))
+        # Add non-Pareto configs first (if show_all)
+        if show_all and non_pareto_configs:
+            x_vals = [c.suite_metrics.get(x_metric, 0) for c in non_pareto_configs]
+            y_vals = [c.suite_metrics.get(y_metric, 0) for c in non_pareto_configs]
+            config_indices = [c.config_index for c in non_pareto_configs]
+            
+            if color_metric:
+                color_vals = [c.suite_metrics.get(color_metric, 0) for c in non_pareto_configs]
+                fig.add_trace(go.Scatter(
+                    x=x_vals,
+                    y=y_vals,
+                    mode='markers',
+                    marker=dict(
+                        size=8 if not size_metric else [c.suite_metrics.get(size_metric, 5) for c in non_pareto_configs],
+                        color=color_vals,
+                        colorscale='Viridis',
+                        opacity=0.6,
+                        showscale=True,
+                        colorbar=dict(title=color_metric.replace('_', ' ').title())
+                    ),
+                    name='All Configs',
+                    customdata=[[idx] for idx in config_indices],
+                    hovertemplate=f'<b>Config #%{{customdata[0]}}</b><br>{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>'
+                ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=x_vals,
+                    y=y_vals,
+                    mode='markers',
+                    marker=dict(
+                        size=8 if not size_metric else [c.suite_metrics.get(size_metric, 5) for c in non_pareto_configs],
+                        color='lightblue',
+                        opacity=0.6
+                    ),
+                    name='All Configs',
+                    customdata=[[idx] for idx in config_indices],
+                    hovertemplate=f'<b>Config #%{{customdata[0]}}</b><br>{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>'
+                ))
+        
+        # Add Pareto configs
+        if pareto_configs:
+            x_vals = [c.suite_metrics.get(x_metric, 0) for c in pareto_configs]
+            y_vals = [c.suite_metrics.get(y_metric, 0) for c in pareto_configs]
+            config_indices = [c.config_index for c in pareto_configs]
+            
+            if color_metric:
+                color_vals = [c.suite_metrics.get(color_metric, 0) for c in pareto_configs]
+                fig.add_trace(go.Scatter(
+                    x=x_vals,
+                    y=y_vals,
+                    mode='markers',
+                    marker=dict(
+                        size=10 if not size_metric else [c.suite_metrics.get(size_metric, 8) for c in pareto_configs],
+                        color=color_vals,
+                        colorscale='Viridis',
+                        symbol='star',
+                        line=dict(width=1, color='white'),
+                        opacity=0.9,
+                        showscale=False if show_all else True,
+                        colorbar=dict(title=color_metric.replace('_', ' ').title()) if not show_all else None
+                    ),
+                    name='Pareto Front',
+                    customdata=[[idx] for idx in config_indices],
+                    hovertemplate=f'<b>Pareto Config #%{{customdata[0]}}</b><br>{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>'
+                ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=x_vals,
+                    y=y_vals,
+                    mode='markers',
+                    marker=dict(
+                        size=10 if not size_metric else [c.suite_metrics.get(size_metric, 8) for c in pareto_configs],
+                        color='red',
+                        symbol='star',
+                        line=dict(width=1, color='white'),
+                        opacity=0.9
+                    ),
+                    name='Pareto Front',
+                    customdata=[[idx] for idx in config_indices],
+                    hovertemplate=f'<b>Pareto Config #%{{customdata[0]}}</b><br>{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>'
+                ))
         
         # Highlight Best Match config
         if best_match_config is not None:
-            best_match_df = df[df['config_index'] == best_match_config.config_index]
-            if not best_match_df.empty:
-                fig.add_trace(go.Scatter(
-                    x=best_match_df[x_metric],
-                    y=best_match_df[y_metric],
-                    mode='markers',
-                    marker=dict(size=20, color='lime', symbol='star', line=dict(width=3, color='darkgreen')),
-                    name='🎯 Best Match',
-                    hovertemplate='<b>🎯 Best Match Config #%{customdata[0]}</b><br>%{x:.6f}, %{y:.6f}<extra></extra>',
-                    customdata=best_match_df[['config_index']].values
-                ))
-        
-        # Update hover template for all points to show config_index
-        fig.update_traces(
-            hovertemplate='<b>Config #%{customdata[0]}</b><br>' + 
-                         f'{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>',
-            selector=dict(mode='markers')
-        )
-        
-        # Add annotation showing point counts
-        pareto_count = len(df[df['is_pareto'] == True])
-        total_count = len(df)
+            x_val = best_match_config.suite_metrics.get(x_metric, 0)
+            y_val = best_match_config.suite_metrics.get(y_metric, 0)
+            
+            fig.add_trace(go.Scatter(
+                x=[x_val],
+                y=[y_val],
+                mode='markers',
+                marker=dict(size=20, color='lime', symbol='star', line=dict(width=3, color='darkgreen')),
+                name='🎯 Best Match',
+                customdata=[[best_match_config.config_index]],
+                hovertemplate=f'<b>🎯 Best Match Config #%{{customdata[0]}}</b><br>{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>'
+            ))
         
         fig.update_layout(
+            title=f"{title_prefix}: {x_metric} vs {y_metric}" if title_prefix else None,
+            xaxis_title=x_metric.replace('_', ' ').title(),
+            yaxis_title=y_metric.replace('_', ' ').title(),
             height=600,
             hovermode='closest',
             template='plotly_white',
@@ -271,6 +311,177 @@ class ParetoVisualizations:
         )
         
         return fig
+    
+    def plot_pareto_scatter_3d_pyvista(self,
+                                       x_metric: str,
+                                       y_metric: str,
+                                       z_metric: str,
+                                       color_metric: Optional[str] = None,
+                                       camera_phi: float = 45,
+                                       camera_theta: float = 45,
+                                       camera_radius: float = 5.0,
+                                       show_all: bool = False,
+                                       best_match_config = None,
+                                       configs_list = None):
+        """
+        3D scatter plot using PyVista (server-side rendering, no WebGL required)
+        
+        Args:
+            x_metric: Metric for x-axis
+            y_metric: Metric for y-axis
+            z_metric: Metric for z-axis
+            color_metric: Optional metric for color coding
+            camera_phi: Horizontal camera rotation (0-360 degrees)
+            camera_theta: Vertical camera angle (0-180 degrees)
+            camera_radius: Camera distance from center
+            show_all: If True, show all configs; if False, only Pareto
+            best_match_config: Optional ConfigMetrics to highlight as best match
+            configs_list: Optional list of configs to use
+        
+        Returns:
+            PIL Image (screenshot from PyVista)
+        """
+        try:
+            import pyvista as pv
+            import numpy as np
+            from PIL import Image
+        except ImportError as e:
+            import streamlit as st
+            st.error(f"PyVista not installed: {e}")
+            st.info("Install with: `pip install pyvista`")
+            return None
+        
+        # Use provided configs_list for consistent ordering, or fall back to loader
+        if configs_list is not None:
+            configs_to_use = configs_list
+        elif show_all:
+            configs_to_use = self.loader.configs
+        else:
+            configs_to_use = self.loader.get_pareto_configs()
+        
+        if not configs_to_use:
+            return None
+        
+        # Extract data
+        points = []
+        colors = []
+        sizes = []
+        is_pareto_list = []
+        is_best_match_list = []
+        
+        for c in configs_to_use:
+            x = c.suite_metrics.get(x_metric, 0)
+            y = c.suite_metrics.get(y_metric, 0)
+            z = c.suite_metrics.get(z_metric, 0)
+            points.append([x, y, z])
+            
+            # Color
+            if color_metric:
+                colors.append(c.suite_metrics.get(color_metric, 0))
+            else:
+                colors.append(1.0 if c.is_pareto else 0.0)
+            
+            # Size
+            if best_match_config and c.config_index == best_match_config.config_index:
+                sizes.append(20)
+                is_best_match_list.append(True)
+            elif c.is_pareto:
+                sizes.append(12)
+                is_best_match_list.append(False)
+            else:
+                sizes.append(6)
+                is_best_match_list.append(False)
+            
+            is_pareto_list.append(c.is_pareto)
+        
+        points = np.array(points)
+        colors = np.array(colors)
+        
+        # Normalize data for better visualization
+        points_normalized = points.copy()
+        for i in range(3):
+            pmin, pmax = points[:, i].min(), points[:, i].max()
+            if pmax > pmin:
+                points_normalized[:, i] = (points[:, i] - pmin) / (pmax - pmin)
+        
+        # Create PyVista point cloud
+        cloud = pv.PolyData(points_normalized)
+        cloud['colors'] = colors
+        
+        # Setup plotter (off-screen for server-side rendering)
+        try:
+            plotter = pv.Plotter(off_screen=True, window_size=[1080, 1080])
+        except Exception as e:
+            # Try with xvfb if available (for headless servers)
+            import streamlit as st
+            st.warning(f"Failed to create plotter: {e}")
+            st.info("Trying with xvfb...")
+            try:
+                pv.start_xvfb()
+                plotter = pv.Plotter(off_screen=True, window_size=[1080, 1080])
+            except Exception as e2:
+                st.error(f"Failed to initialize PyVista even with xvfb: {e2}")
+                st.info("On headless servers, install xvfb: `sudo apt-get install xvfb`")
+                st.code(f"Original error: {e}\nXvfb error: {e2}")
+                return None
+        
+        plotter.background_color = 'white'
+        
+        # Add non-Pareto points (if show_all)
+        if show_all:
+            non_pareto_mask = ~np.array(is_pareto_list)
+            if non_pareto_mask.any():
+                non_pareto_cloud = pv.PolyData(points_normalized[non_pareto_mask])
+                plotter.add_mesh(non_pareto_cloud, 
+                               color='lightgray',
+                               point_size=6,
+                               opacity=0.4,
+                               render_points_as_spheres=True)
+        
+        # Add Pareto points
+        pareto_mask = np.array(is_pareto_list)
+        if pareto_mask.any():
+            pareto_cloud = pv.PolyData(points_normalized[pareto_mask])
+            pareto_colors = colors[pareto_mask]
+            plotter.add_mesh(pareto_cloud,
+                           scalars=pareto_colors,
+                           cmap='viridis',
+                           point_size=12,
+                           render_points_as_spheres=True,
+                           show_scalar_bar=True,
+                           scalar_bar_args={'title': color_metric if color_metric else 'Pareto'})
+        
+        # Add best match (if present)
+        best_match_mask = np.array(is_best_match_list)
+        if best_match_mask.any():
+            best_match_cloud = pv.PolyData(points_normalized[best_match_mask])
+            plotter.add_mesh(best_match_cloud,
+                           color='lime',
+                           point_size=20,
+                           render_points_as_spheres=True)
+        
+        # Add axes
+        plotter.add_axes()
+        
+        # Calculate camera position from spherical coordinates
+        phi_rad = np.radians(camera_phi)
+        theta_rad = np.radians(camera_theta)
+        
+        x_cam = camera_radius * np.sin(theta_rad) * np.cos(phi_rad)
+        y_cam = camera_radius * np.sin(theta_rad) * np.sin(phi_rad)
+        z_cam = camera_radius * np.cos(theta_rad)
+        
+        # Center point (middle of normalized data)
+        center = [0.5, 0.5, 0.5]
+        plotter.camera_position = [(x_cam + center[0], y_cam + center[1], z_cam + center[2]), 
+                                  center, 
+                                  (0, 0, 1)]
+        
+        # Render and get screenshot
+        screenshot = plotter.screenshot(return_img=True)
+        plotter.close()
+        
+        return Image.fromarray(screenshot)
     
     def plot_parameter_influence_heatmap(self,
                                          params: Optional[List[str]] = None,
@@ -487,7 +698,7 @@ class ParetoVisualizations:
                 line=dict(width=1, color='white')
             ),
             text=labels,
-            customdata=config_indices,
+            customdata=[[idx] for idx in config_indices],  # Consistent format: list of lists
             hovertemplate='<b>%{text}</b><br>Performance: %{x:.6f}<br>Robustness: %{y:.3f}<extra></extra>'
         ))
         
