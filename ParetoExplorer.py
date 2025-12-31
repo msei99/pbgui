@@ -1217,43 +1217,45 @@ class ParetoExplorer:
         if st.session_state.pareto_selected_config not in all_indices:
             st.session_state.pareto_selected_config = all_indices[0]
         
-        # Create labels with Pareto indicator
-        config_labels = []
-        label_to_index = {}  # Map label to config_index
+        # Build display labels (but keep widget values as stable ints)
+        index_to_label = {}
         for c in all_configs:
             label = f"Config #{c.config_index}"
             if c.is_pareto:
                 label += " ⭐"
-            config_labels.append(label)
-            label_to_index[label] = c.config_index
-        
-        # Calculate the index for the selectbox based on current selection
-        default_index = 0
-        try:
-            selected_config_idx = st.session_state.pareto_selected_config
-            for i, c in enumerate(all_configs):
-                if c.config_index == selected_config_idx:
-                    default_index = i
-                    break
-        except (ValueError, TypeError, AttributeError):
-            default_index = 0
-        
-        # Ensure default_index is valid
-        default_index = max(0, min(default_index, len(config_labels) - 1))
-        
-        # Selectbox without key - use index parameter directly
-        selected_label = st.selectbox(
-            "🎯 Select Config:", 
-            config_labels, 
-            index=default_index,
-            help=f"Choose from {len(all_configs)} configs ({pareto_count} Pareto-optimal ⭐)"
+            index_to_label[c.config_index] = label
+
+        widget_key = 'fragment_config_selector'
+
+        desired_idx = st.session_state.pareto_selected_config
+        if desired_idx not in all_indices:
+            desired_idx = all_indices[0]
+            st.session_state.pareto_selected_config = desired_idx
+
+        # Keep widget synced to the selected config (external changes)
+        if widget_key not in st.session_state or st.session_state.get(widget_key) not in all_indices:
+            st.session_state[widget_key] = desired_idx
+        elif st.session_state.get(widget_key) != desired_idx:
+            st.session_state[widget_key] = desired_idx
+
+        def _on_fragment_config_change():
+            idx = st.session_state.get(widget_key)
+            if isinstance(idx, int) and idx in all_indices:
+                st.session_state.pareto_selected_config = idx
+                st.session_state['_pareto_last_change'] = 'fragment_selectbox'
+
+        # Render selectbox (value=int config_index)
+        st.selectbox(
+            "🎯 Select Config:",
+            options=all_indices,
+            format_func=lambda idx: index_to_label.get(idx, f"Config #{idx}"),
+            help=f"Choose from {len(all_configs)} configs ({pareto_count} Pareto-optimal ⭐)",
+            key=widget_key,
+            on_change=_on_fragment_config_change,
         )
         
-        # Extract config_index from selected label
-        selected_config_index = label_to_index[selected_label]
-        
-        # Update our tracking variable
-        st.session_state.pareto_selected_config = selected_config_index
+        # Get the selected config from session state
+        selected_config_index = st.session_state.pareto_selected_config
         
         # Find the config with this config_index
         config = next((c for c in all_configs if c.config_index == selected_config_index), None)
@@ -1262,62 +1264,74 @@ class ParetoExplorer:
             st.error(f"❌ Config #{selected_config_index} not found in loaded configs")
             st.stop()
         
-        # Show config details
-        col1, col2, col3 = st.columns(3)
+        # Get currency and weighted settings from session state (set by Correlations tab)
+        display_currency = st.session_state.get('pareto_currency', 'USD')
+        display_weighted = st.session_state.get('pareto_use_weighted', True)
+        currency_suffix = "_usd" if display_currency == "USD" else "_btc"
         
-        with col1:
+        # Build metric names based on settings
+        def get_display_metric(base_name):
+            """Get the actual metric name to display based on settings"""
+            weighted_metric = f"{base_name}_w{currency_suffix}"
+            base_metric = f"{base_name}{currency_suffix}"
+            # Try weighted first if enabled and exists, otherwise base
+            if display_weighted and weighted_metric in config.suite_metrics:
+                return weighted_metric
+            return base_metric
+        
+        # Metric help texts
+        metric_helps = {
+            'adg_w_usd': "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure",
+            'sharpe_ratio_usd': "Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk",
+            'sharpe_ratio_w_usd': "Weighted Sharpe Ratio - Risk-adjusted return accounting for wallet exposure",
+            'gain_usd': "Total profit multiplier - How many times the initial balance was gained",
+            'calmar_ratio_usd': "Return vs maximum drawdown - Higher is better. Measures profit relative to worst loss",
+            'sortino_ratio_usd': "Downside risk-adjusted return - Like Sharpe but only penalizes downside volatility",
+            'omega_ratio_usd': "Probability-weighted ratio of gains vs losses - Higher is better",
+            'sterling_ratio_usd': "Return vs average drawdown - Consistency of returns relative to typical losses",
+            'drawdown_worst_usd': "Maximum portfolio decline - Lower is better. Worst equity drop from peak",
+        }
+        
+        # Display metrics based on Top Performers selection or fallback to scoring metrics
+        display_metrics = st.session_state.get('pareto_top_metrics', [])
+        
+        # Fallback: if no top metrics stored (e.g., first load or other tabs), use scoring metrics
+        if not display_metrics:
+            for base_metric in ['adg', 'sharpe_ratio', 'gain', 'calmar_ratio', 'sortino_ratio']:
+                actual_metric = get_display_metric(base_metric)
+                if actual_metric in config.suite_metrics:
+                    display_metrics.append(actual_metric)
+        
+        max_display = 10 if st.session_state.get('pareto_top_metrics') else 5
+        metrics_to_show = [m for m in display_metrics[:max_display] if m in config.suite_metrics]
+        split_at = (len(metrics_to_show) + 1) // 2
+        metrics_left = metrics_to_show[:split_at]
+        metrics_right = metrics_to_show[split_at:]
+        
+        # Show config details: 2× Metrics + Trading Style + Robustness
+        col_metrics_a, col_metrics_b, col_style, col_robust = st.columns(4)
+        
+        with col_metrics_a:
             st.markdown("**📊 Metrics**")
-            
-            # Get currency and weighted settings from session state (set by Correlations tab)
-            display_currency = st.session_state.get('pareto_currency', 'USD')
-            display_weighted = st.session_state.get('pareto_use_weighted', True)
-            currency_suffix = "_usd" if display_currency == "USD" else "_btc"
-            
-            # Build metric names based on settings
-            def get_display_metric(base_name):
-                """Get the actual metric name to display based on settings"""
-                weighted_metric = f"{base_name}_w{currency_suffix}"
-                base_metric = f"{base_name}{currency_suffix}"
-                # Try weighted first if enabled and exists, otherwise base
-                if display_weighted and weighted_metric in config.suite_metrics:
-                    return weighted_metric
-                return base_metric
-            
-            # Show first 5 scoring metrics with helpful tooltips
-            metric_helps = {
-                'adg_w_usd': "Average Daily Gain (weighted) in USD - Daily profit rate accounting for wallet exposure",
-                'sharpe_ratio_usd': "Risk-adjusted return metric - Higher is better. Measures excess return per unit of risk",
-                'sharpe_ratio_w_usd': "Weighted Sharpe Ratio - Risk-adjusted return accounting for wallet exposure",
-                'gain_usd': "Total profit multiplier - How many times the initial balance was gained",
-                'calmar_ratio_usd': "Return vs maximum drawdown - Higher is better. Measures profit relative to worst loss",
-                'sortino_ratio_usd': "Downside risk-adjusted return - Like Sharpe but only penalizes downside volatility",
-                'omega_ratio_usd': "Probability-weighted ratio of gains vs losses - Higher is better",
-                'sterling_ratio_usd': "Return vs average drawdown - Consistency of returns relative to typical losses",
-                'drawdown_worst_usd': "Maximum portfolio decline - Lower is better. Worst equity drop from peak",
-            }
-            
-            # Display metrics based on Top Performers selection or fallback to scoring metrics
-            display_metrics = st.session_state.get('pareto_top_metrics', [])
-            
-            # Fallback: if no top metrics stored (e.g., first load or other tabs), use scoring metrics
-            if not display_metrics:
-                for base_metric in ['adg', 'sharpe_ratio', 'gain', 'calmar_ratio', 'sortino_ratio']:
-                    actual_metric = get_display_metric(base_metric)
-                    if actual_metric in config.suite_metrics:
-                        display_metrics.append(actual_metric)
-            
-            # Show up to 10 metrics (from Top Performers) or 5 (fallback)
-            max_display = 10 if st.session_state.get('pareto_top_metrics') else 5
-            for metric in display_metrics[:max_display]:
-                if metric in config.suite_metrics:
-                    help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
-                    st.metric(
-                        metric.replace('_', ' ').title(), 
-                        f"{config.suite_metrics[metric]:.6f}",
-                        help=help_text
-                    )
+            for metric in metrics_left:
+                help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
+                st.metric(
+                    metric.replace('_', ' ').title(),
+                    f"{config.suite_metrics[metric]:.6f}",
+                    help=help_text,
+                )
         
-        with col2:
+        with col_metrics_b:
+            st.markdown(" ")
+            for metric in metrics_right:
+                help_text = metric_helps.get(metric, f"{metric.replace('_', ' ').title()} - Performance metric")
+                st.metric(
+                    metric.replace('_', ' ').title(),
+                    f"{config.suite_metrics[metric]:.6f}",
+                    help=help_text,
+                )
+        
+        with col_style:
             st.markdown("**🎯 Trading Style**")
             style = self.loader.compute_trading_style(config)
             st.markdown(f"**{style}**")
@@ -1326,7 +1340,7 @@ class ParetoExplorer:
             st.metric("Avg Hold Hours", f"{config.suite_metrics.get('position_held_hours_mean', 0):.1f}",
                      help="Average time positions are held open - Lower = faster turnover, scalping style")
         
-        with col3:
+        with col_robust:
             st.markdown("**💪 Robustness**")
             robust = self.loader.compute_overall_robustness(config)
             st.metric("Overall Score", f"{robust:.3f}",
@@ -2717,12 +2731,53 @@ class ParetoExplorer:
             self._show_config_details_fragment()
 
         elif active_tab == "correlations":
-            st.subheader("Multi-Metric Correlation")
+            # Title and guide (match Evolution)
+            _corr_title, _corr_guide = st.columns([10, 2])
+            with _corr_title:
+                st.subheader("Multi-Metric Correlation")
+            with _corr_guide:
+                with st.popover("📖 Guide"):
+                    st.markdown("""
+                    ### 🔗 Multi‑Metric Correlation (Radar)
+
+                    **📊 What it does:**
+                    Compares multiple configs side‑by‑side across a *risk profile* using a radar chart. It’s designed to answer: *Which config is best overall for my goal, and what trade‑offs does it make?*
+
+                    **🕸️ How to read the radar:**
+                    - Each colored shape = one config.
+                    - Each axis = one risk/profile dimension (normalized scores).
+                    - Bigger / more “outward” shapes generally indicate stronger scores on those dimensions.
+                    - A balanced, round shape = consistent profile; sharp spikes = specialized strengths.
+
+                    **🎛️ Controls (top row):**
+                    - **🎯 Selection Strategy**
+                      - **🏆 Top Performers**: picks configs that win on different metrics (great for “best of each category”).
+                      - **🧬 Diverse Styles**: picks configs across trading styles (great for diversification).
+                      - **⚖️ Risk Spectrum**: picks configs from higher‑risk to lower‑risk (great to visualize the risk ladder).
+                    - **🔢 Configs**: how many configs are compared in the radar.
+                    - **⚖️ Use Weighted (_w) Metrics**: when available, uses weighted metric variants for ranking/display.
+                    - **₿ Use BTC instead of USD**: switches the currency‑denominated metrics used for ranking/display.
+
+                    **🖱️ How to select a config:**
+                    - **Click a shape/point in the radar** to select that config.
+                    - **Select Configuration** chooses from the configs currently shown in the radar.
+                    - **🎯 Select Config** (below) chooses from *all* visible configs.
+                    - All three selection methods stay synchronized.
+
+                    **💡 Workflow tips:**
+                    1. Start with **🏆 Top Performers** and 6–10 configs to see the “winners”.
+                    2. Switch to **🧬 Diverse Styles** to find complementary behavior.
+                    3. Use **⚖️ Risk Spectrum** to decide how much risk you want.
+                    """)
             
             pareto_configs = self.loader.get_pareto_configs()
             if not pareto_configs:
                 st.info("No Pareto configs available.")
             else:
+                # Define widget keys at the start
+                correlation_key = 'correlation_config_selector'
+                fragment_key = 'fragment_config_selector'
+                
                 # User controls in one row with spacing
                 col1, col2, col_spacer, col3 = st.columns([3, 2, 1, 3])
                 
@@ -2962,48 +3017,57 @@ class ParetoExplorer:
                             
                             # Update session state if we got a valid config index
                             if clicked_config_index is not None:
-                                current_selection = st.session_state.get('pareto_selected_config')
-                                if current_selection != clicked_config_index:
-                                    st.session_state.pareto_selected_config = clicked_config_index
-                                    st.rerun()
+                                # IMPORTANT: plotly selection persists across reruns.
+                                # Without a guard, an old click keeps re-applying and overwrites dropdown changes.
+                                last_clicked = st.session_state.get('_risk_profile_last_clicked_config')
+                                if last_clicked != clicked_config_index:
+                                    st.session_state['_risk_profile_last_clicked_config'] = clicked_config_index
+
+                                    current_selection = st.session_state.get('pareto_selected_config')
+                                    if current_selection != clicked_config_index:
+                                        st.session_state.pareto_selected_config = clicked_config_index
+                                        # Sync both widget keys (store int config_index)
+                                        st.session_state[fragment_key] = clicked_config_index
+                                        if clicked_config_index in selected_configs:
+                                            st.session_state[correlation_key] = clicked_config_index
+                                        st.session_state['_pareto_last_change'] = 'radar_chart'
                     
                     # Config selector dropdown
                     st.markdown("---")
-                    col_select, col_info = st.columns([1, 3])
+                    col_select, col_info = st.columns([1, 3], vertical_alignment="bottom")
                     
                     with col_select:
-                        # Create dropdown options with labels
-                        config_options = {f"{label}": idx for idx, label in zip(selected_configs, labels)}
+                        # Build labels but keep widget values as stable ints
+                        idx_to_corr_label = {idx: label for idx, label in zip(selected_configs, labels)}
                         
                         # Get current selection or default to first
                         current_selected = st.session_state.get('pareto_selected_config')
                         if current_selected not in selected_configs:
                             current_selected = selected_configs[0]
+                            st.session_state.pareto_selected_config = current_selected
+
+                        # Keep correlation widget valid and synced (when selected config is in the top list)
+                        if correlation_key not in st.session_state or st.session_state.get(correlation_key) not in selected_configs:
+                            st.session_state[correlation_key] = current_selected
+                        elif current_selected in selected_configs and st.session_state.get(correlation_key) != current_selected:
+                            st.session_state[correlation_key] = current_selected
+
+                        def _on_correlation_config_change():
+                            idx = st.session_state.get(correlation_key)
+                            if isinstance(idx, int) and idx in selected_configs:
+                                st.session_state.pareto_selected_config = idx
+                                st.session_state[fragment_key] = idx
+                                st.session_state['_pareto_last_change'] = 'correlation_selectbox'
                         
-                        # Find the label for current selection
-                        current_label = None
-                        for label, idx in config_options.items():
-                            if idx == current_selected:
-                                current_label = label
-                                break
-                        
-                        if current_label is None:
-                            current_label = list(config_options.keys())[0]
-                        
-                        # Dropdown selector
-                        selected_label = st.selectbox(
+                        # Dropdown selector with key (value=int config_index)
+                        st.selectbox(
                             "Select Configuration:",
-                            options=list(config_options.keys()),
-                            index=list(config_options.keys()).index(current_label) if current_label in config_options else 0,
-                            key='correlation_config_selector',
+                            options=selected_configs,
+                            format_func=lambda idx: idx_to_corr_label.get(idx, f"Config #{idx}"),
+                            key=correlation_key,
+                            on_change=_on_correlation_config_change,
                             help="Choose a configuration to view detailed metrics and backtest results"
                         )
-                        
-                        # Update session state when selection changes
-                        new_selection = config_options[selected_label]
-                        if new_selection != current_selected:
-                            st.session_state.pareto_selected_config = new_selection
-                            st.rerun()
                     
                     with col_info:
                         st.info("💡 **Tip:** Click on the chart or use dropdown to select a config and view full details below.")
