@@ -1585,8 +1585,30 @@ sudo_pw = """
     This is needed for:
     - install rclone
     - install rustup
+    - update PB7 venv
     - add IP-Address to hosts file
     ```"""
+
+update_pb7_venv = """
+    ```
+    Recreate your local PB7 virtual environment using Python 3.12.
+    Requires sudo password (to install python3.12-venv).
+    Steps:
+    - Stop PBRun
+    - Kill running PB7 processes (bots + workers)
+    - Install python3.12-venv
+    - Delete and recreate venv_pb7 with python3.12
+    - Install PB7 requirements and rebuild passivbot-rust
+    - Start PBRun
+    ```"""
+
+pb7_version_venv_python = """
+PB7 column
+
+Shows the PB7 version from README.md.
+
+If available, the suffix "/3.12" indicates the Python major.minor of the configured PB7 venv interpreter (pb7venv).
+"""
    
 smart_filter = """
     ```
