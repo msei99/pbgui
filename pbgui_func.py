@@ -121,7 +121,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.42 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': "Passivbot GUI v1.43 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Check VPS Errors
@@ -156,6 +156,7 @@ def get_navi_paths():
         "V7_OPTIMIZE":         os.path.join(NAVI_BASE_DIR, "v7_optimize.py"),
         "V7_GRID_VISUALIZER":  os.path.join(NAVI_BASE_DIR, "v7_grid_visualizer.py"),
         "V7_BALANCE_CALC":     os.path.join(NAVI_BASE_DIR, "v7_balance_calc.py"),
+        "V7_PARETO_EXPLORER":  os.path.join(NAVI_BASE_DIR, "v7_pareto_explorer.py"),
     }
     return paths
 
@@ -186,6 +187,7 @@ def build_navigation():
     p73 = st.Page(paths["V7_OPTIMIZE"], title="Optimize", icon=":material/tune:")
     p74 = st.Page(paths["V7_GRID_VISUALIZER"], title="Grid Visualizer", icon=":material/remove_red_eye:")
     p75 = st.Page(paths["V7_BALANCE_CALC"], title="Balance Calculator", icon=":material/attach_money:")
+    p76 = st.Page(paths["V7_PARETO_EXPLORER"], title="🎯 Pareto Explorer", icon=":material/analytics:")
 
        
     # Page Groups
@@ -194,7 +196,7 @@ def build_navigation():
     # Do not include DEBUGLOG page; centralized debuglog removed
                 
     InfotmationPages = [pSe1, pSe2]
-    v7Pages = [p71, p72, p73, p74, p75]
+    v7Pages = [p71, p72, p73, p74, p75, p76]
     v6Pages = [p61, p62, p63]
     SinglePages = [pS1, pS2, pS3, pS4]
 

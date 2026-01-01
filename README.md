@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.42
+# v1.43
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -19,6 +19,7 @@ It has the following functions:
 - Moving instances between your VPS.
 - Monitoring your instances and restarting them if they crash.
 - A dashboard for viewing trading performance.
+- Pareto Explorer for exploring optimizer results (Pareto front, correlations, 2D/3D plots, config inspection, start backtests, generate optimize configs with goal/risk presets).
 - An interface to CoinMarketCap for selecting and filtering coins.
 - Installing and updating your VPS with just a few clicks.
 - And much more to easily manage Passivbot.
@@ -292,6 +293,16 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.43 (01-01-2026)
+
+**NEW: Pareto Explorer (PBv7)**
+- Explore optimization results in a guided, multi-stage workflow (Command Center → Playground → Deep Intelligence)
+- Fast mode loads `pareto/*.json`; optional full load from `all_results.bin` with progress + rank-range display filtering
+- Interactive analysis: Pareto front exploration, 2D scatter, 3D projections, and correlations
+- Drill into any config: full config JSON, key metrics + risk score, and a complete metrics table
+- Quick actions: export results as CSV, run a PBv7 backtest from a selected config
+- Create a follow-up PBv7 Optimize config from a selected config (refined bounds) with goal profiles + risk adjustment, and optionally open it directly in the Optimize editor
 
 ## v1.42 (28-12-2025)
 
