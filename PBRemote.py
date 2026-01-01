@@ -66,6 +66,7 @@ class RemoteServer():
         self._pb7_version = "N/A"
         self._pb7_commit = None
         self._pb7_branch = "unknown"
+        self._pb7_python = "N/A"
         self.pbname = None
         self.instances_status = InstancesStatus(f'{self.path}/status.json')
         self.instances_status.load()
@@ -130,6 +131,8 @@ class RemoteServer():
     def pb7_commit(self): return self._pb7_commit
     @property
     def pb7_branch(self): return self._pb7_branch
+    @property
+    def pb7_python(self): return self._pb7_python
 
     @name.setter
     def name(self, new_name):
@@ -258,6 +261,10 @@ class RemoteServer():
                     else:
                         # Reset to unknown if pb7b not in alive file (old version)
                         self._pb7_branch = "unknown"
+                    if "pb7py" in cfg:
+                        self._pb7_python = cfg["pb7py"]
+                    else:
+                        self._pb7_python = "N/A"
                     return
                 except Exception as e:
                     print(f'{str(remote)} is corrupted {e}')
@@ -513,6 +520,12 @@ class PBRemote():
     @property
     def pb7_version(self):
         return self.local_run.pb7_version
+
+    @property
+    def pb7_python(self):
+        if hasattr(self.local_run, 'update_pb7_python_version'):
+            self.local_run.update_pb7_python_version()
+        return getattr(self.local_run, 'pb7_python', 'N/A')
     @property
     def pb6_version(self):
         return self.local_run.pb6_version
@@ -952,6 +965,8 @@ class PBRemote():
             self.systemts = timestamp
         self.local_run.load_versions()
         self.local_run.load_git_commits()
+        if hasattr(self.local_run, 'update_pb7_python_version'):
+            self.local_run.update_pb7_python_version()
         if timestamp - self.alivets < 60:
             return
         self.alivets = timestamp
@@ -984,6 +999,7 @@ class PBRemote():
             "pb7v": self.local_run.pb7_version,
             "pb7c": self.local_run.pb7_commit,
             "pb7b": getattr(self.local_run, 'pb7_branch', 'unknown'),
+            "pb7py": getattr(self.local_run, 'pb7_python', 'N/A'),
             })
         # Save the JSON data as a gzip file
         cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd.gz')

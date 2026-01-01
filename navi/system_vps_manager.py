@@ -188,7 +188,7 @@ def list_vps():
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
-        "PB7": f'{pbremote.pb7_version}',
+        "PB7": f"{pbremote.pb7_version}{'' if getattr(pbremote, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pb7_python'))}",
         "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7,
         "API Sync": "✅"
@@ -384,12 +384,22 @@ def list_vps():
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,
-            "PB7": f'{server.pb7_version}',
+            "PB7": f"{server.pb7_version}{'' if getattr(server, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pb7_python'))}",
             "PB7 Branch": f'{server_pb7_branch} ({server_pb7_commit_short})',
             "PB7 github": pb7,
             "API Sync": api_sync
         })
-    st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
+    column_config = None
+    if hasattr(st, "column_config"):
+        column_config = {
+            "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
+        }
+    st.data_editor(
+        data=d,
+        height=36 + (len(d)) * 35,
+        key=f"vps_overview_{st.session_state.ed_key}",
+        column_config=column_config,
+    )
     st.info("Select your VPS in the sidebar to get a detailed VPS report.")
     with st.sidebar:
         sync_api()
@@ -486,6 +496,14 @@ def manage_master():
             st.session_state.view_update_master = True
             st.rerun()
 
+        if st.button("Update PB7 venv", disabled=not enable_install, help=pbgui_help.update_pb7_venv):
+            vpsmanager.command = "master-pb7-python312"
+            vpsmanager.command_text = "Update PB7 venv"
+            vpsmanager.update_master(debug = st.session_state.setup_debug, sudo_pw = st.session_state.sudo_pw)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
+
     # Init Status
     if pbremote.bucket:
         rclone_ok = f' ✅'
@@ -577,7 +595,7 @@ def manage_master():
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
-        "PB7": f'{pbremote.pb7_version}',
+        "PB7": f"{pbremote.pb7_version}{'' if getattr(pbremote, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pb7_python'))}",
         "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7
     })
@@ -997,7 +1015,17 @@ def manage_master():
         
         master_pb7_branch_management()
     
-    st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
+    column_config = None
+    if hasattr(st, "column_config"):
+        column_config = {
+            "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
+        }
+    st.data_editor(
+        data=d,
+        height=36 + (len(d)) * 35,
+        key=f"vps_overview_{st.session_state.ed_key}",
+        column_config=column_config,
+    )
     monitor.server = pbremote
     monitor.servers = []
     monitor.servers.append(monitor.server)
@@ -1586,9 +1614,9 @@ def manage_vps():
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,
-            "PB7": f'{server.pb7_version}',
+            "PB7": f"{server.pb7_version}{'' if getattr(server, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pb7_python'))}",
             "PB7 Branch": f'{server_pb7_branch} ({server.pb7_commit[:7] if server.pb7_commit else "unknown"})',
-            "PB7 github": pb7
+            "PB7 github": pb7,
         })
         
         # PB7 Branch Management Section for VPS - directly above table
@@ -1810,7 +1838,17 @@ def manage_vps():
             
             vps_pb7_branch_management()
         
-        st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
+        column_config = None
+        if hasattr(st, "column_config"):
+            column_config = {
+                "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
+            }
+        st.data_editor(
+            data=d,
+            height=36 + (len(d)) * 35,
+            key=f"vps_overview_detail_{vps.hostname}_{st.session_state.ed_key}",
+            column_config=column_config,
+        )
         monitor.server = server
         monitor.servers = []
         monitor.servers.append(monitor.server)
