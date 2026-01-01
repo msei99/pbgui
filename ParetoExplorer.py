@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Tuple
 
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -94,25 +94,37 @@ class ParetoExplorer:
         # Load data (with caching and two-stage approach)
         # Stage 1: Always load Pareto JSONs (fast)
         # Stage 2: Optionally load all_results.bin (slow)
-        data = ParetoExplorer._load_data(self.results_path, load_strategy_tuple, max_configs, all_results_loaded)
-        if data is None:
-            st.error("❌ Failed to load data")
-            st.info(f"**Results Path:** `{self.results_path}`")
-            
-            # Check if path exists
-            all_results_path = os.path.join(self.results_path, "all_results.bin")
-            if not os.path.exists(self.results_path):
-                st.error(f"Directory not found: `{self.results_path}`")
-            elif not os.path.exists(all_results_path):
-                st.error(f"File not found: `all_results.bin`")
-                st.caption("Make sure the optimization completed successfully and all_results.bin was created.")
+        load_result = ParetoExplorer._load_data(self.results_path, load_strategy_tuple, max_configs, all_results_loaded)
+        if load_result.get("error"):
+            err = load_result.get("error")
+            if err:
+                st.error(f"❌ {err}")
             else:
-                st.error("Unknown error loading data. Check the terminal for details.")
-            
+                st.error("❌ Failed to load data")
+
+            st.info(f"**Results Path:** `{self.results_path}`")
+
+            # For legacy-format runs, avoid noisy follow-up errors.
+            if err != "Old format not supported":
+                # Check if path exists
+                all_results_path = os.path.join(self.results_path, "all_results.bin")
+                if not os.path.exists(self.results_path):
+                    st.error(f"Directory not found: `{self.results_path}`")
+                elif not os.path.exists(all_results_path):
+                    st.error("File not found: `all_results.bin`")
+                    st.caption("Make sure the optimization completed successfully and all_results.bin was created.")
+                elif load_result.get("traceback"):
+                    with st.expander("Details", expanded=False):
+                        st.code(load_result["traceback"])
+                else:
+                    st.error("Unknown error loading data. Check the terminal for details.")
+
             st.stop()
-        
+
         # Unpack cached data
-        self.loader, self.viz, load_stats = data
+        self.loader = load_result["loader"]
+        self.viz = load_result["viz"]
+        load_stats = load_result["load_stats"]
         
         # IMPORTANT: Store original configs in loader to prevent filtering corruption
         # Subsequent get_view_slice() calls will use this original list
@@ -146,12 +158,6 @@ class ParetoExplorer:
             self._show_pareto_playground()
         elif stage == 'Deep Intelligence':
             self._show_deep_intelligence()
-        elif stage == 'Adversarial Lab':
-            self._show_adversarial_lab()
-        elif stage == 'Portfolio Architect':
-            self._show_portfolio_architect()
-        elif stage == 'What-If Sandbox':
-            self._show_whatif_sandbox()
     
     def _get_view_configs(self) -> List:
         """
@@ -190,7 +196,7 @@ class ParetoExplorer:
             all_results_loaded: If True, load all_results.bin; else only pareto JSONs
         
         Returns:
-            Tuple of (loader, viz, load_stats) or None on error
+            Dict with keys: loader, viz, load_stats, error, traceback
         """
         try:
             loader = ParetoDataLoader(results_path)
@@ -201,14 +207,17 @@ class ParetoExplorer:
                     success = loader.load_pareto_jsons_only()
                     
                     if not success:
+                        if getattr(loader, "last_error", None):
+                            return {"loader": None, "viz": None, "load_stats": None, "error": loader.last_error, "traceback": None}
                         # Fallback: Try all_results.bin if no pareto JSONs found
                         st.warning("⚠️ No pareto/*.json files found. Loading all_results.bin...")
                         strategy_list = list(load_strategy) if load_strategy else ['performance']
                         success = loader.load(load_strategy=strategy_list, max_configs=max_configs)
                         
                         if not success:
-                            st.error("❌ Failed to load data from both pareto JSONs and all_results.bin")
-                            return None
+                            if getattr(loader, "last_error", None):
+                                return {"loader": None, "viz": None, "load_stats": None, "error": loader.last_error, "traceback": None}
+                            return {"loader": None, "viz": None, "load_stats": None, "error": "Failed to load data from both pareto JSONs and all_results.bin", "traceback": None}
             else:
                 # STAGE 2: Full mode - Load all configs from all_results.bin
                 # Show file size
@@ -243,20 +252,24 @@ class ParetoExplorer:
                         success = loader.load(load_strategy=strategy_list, max_configs=max_configs)
                     
                 if not success:
-                    st.error("❌ Failed to load all_results.bin")
-                    return None
+                    if getattr(loader, "last_error", None):
+                        return {"loader": None, "viz": None, "load_stats": None, "error": loader.last_error, "traceback": None}
+                    return {"loader": None, "viz": None, "load_stats": None, "error": "Failed to load all_results.bin", "traceback": None}
             
             viz = ParetoVisualizations(loader)
             load_stats = loader.load_stats
             
-            return (loader, viz, load_stats)
+            return {"loader": loader, "viz": viz, "load_stats": load_stats, "error": None, "traceback": None}
             
         except Exception as e:
-            st.error(f"❌ Exception during data loading:")
-            st.exception(e)
             import traceback
-            st.code(traceback.format_exc())
-            return None
+            return {
+                "loader": None,
+                "viz": None,
+                "load_stats": None,
+                "error": "Exception during data loading",
+                "traceback": traceback.format_exc(),
+            }
     
     def _render_sidebar(self, load_stats: Dict):
         """Render sidebar with navigation and info"""
@@ -380,9 +393,6 @@ class ParetoExplorer:
                 "🎯 Command Center",
                 "🎨 Pareto Playground", 
                 "🧠 Deep Intelligence",
-                "🎲 Adversarial Lab",
-                "💼 Portfolio Architect",
-                "🎮 What-If Sandbox"
             ]
             
             # Remove emoji for session state key
@@ -429,7 +439,7 @@ class ParetoExplorer:
                         width='stretch'
                     )
     
-    def _show_config_details(self, config_index):
+    def _show_config_details(self, config_index, key_prefix: str = "config_details"):
         """Show detailed config view with backtest option in a modal dialog"""
         
         config = self.loader.get_config_by_index(config_index)
@@ -521,6 +531,13 @@ class ParetoExplorer:
                          help="Combined risk assessment - Lower score = safer strategy. Based on drawdown, volatility, and recovery metrics")
         
         st.markdown("---")
+
+        # Load full config once for both display and actions
+        full_config_data = None
+        try:
+            full_config_data = self.loader.get_full_config(config.config_index)
+        except Exception:
+            full_config_data = None
         
         # Full config
         col_left, col_right = st.columns(2)
@@ -528,7 +545,6 @@ class ParetoExplorer:
         with col_left:
             with st.expander("📋 Full Configuration", expanded=True):
                 try:
-                    full_config_data = self.loader.get_full_config(config.config_index)
                     if full_config_data:
                         st.json(full_config_data)
                     else:
@@ -549,15 +565,19 @@ class ParetoExplorer:
         st.markdown("---")
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("🚀 Run Backtest", width='stretch', type="primary", key=f"bt_modal_{config_index}"):
+            if st.button(
+                "🚀 Run Backtest",
+                width='stretch',
+                type="primary",
+                key=f"{key_prefix}_bt_modal_{config_index}",
+            ):
                 try:
                     import BacktestV7
                     from pbgui_func import get_navi_paths, pb7dir
                     from pathlib import Path
                     import json
                     import time
-                    
-                    full_config_data = self.loader.get_full_config(config.config_index)
+
                     if not full_config_data:
                         st.error("❌ Full config data not available")
                         st.stop()
@@ -583,6 +603,1035 @@ class ParetoExplorer:
                     
                 except Exception as e:
                     st.error(f"❌ Error preparing backtest: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+        # Optimize preset generator (under configs)
+        self._render_optimize_preset_generator(
+            config=config,
+            full_config_data=full_config_data,
+            key_prefix=f"{key_prefix}_opt_{config_index}",
+        )
+
+    def _render_optimize_preset_generator(self, config, full_config_data, key_prefix: str):
+        """Reusable UI block: create PBv7 Optimize preset from a selected config."""
+
+        # Optimize preset generator (MVP)
+        st.markdown("---")
+        with st.expander("🧩 Create PBv7 Optimize Preset from this Config", expanded=False):
+            st.caption(
+                "Creates a new Optimize preset with bounds tightened around the selected config’s parameters. "
+                "Useful for a follow-up run focused on ‘fine-tuning’ instead of broad exploration."
+            )
+
+            default_preset_name = f"pareto_refine_cfg_{config.config_index}"
+            preset_name = st.text_input(
+                "Preset name",
+                value=default_preset_name,
+                max_chars=64,
+                key=f"{key_prefix}_preset_name",
+            )
+
+            default_window_pct = 10
+            bounds_adjust = st.slider(
+                "Bounds window adjustment",
+                min_value=-50,
+                max_value=50,
+                value=0,
+                step=1,
+                help=(
+                    "0 keeps the original run bounds unchanged. Negative = tighter window (less exploration). "
+                    "Positive = looser window (more exploration). Bounds are always clamped to the original run bounds."
+                ),
+                key=f"{key_prefix}_bounds_adjust",
+            )
+            if bounds_adjust == 0:
+                window_pct = 0.0
+                st.caption("Bounds unchanged (set adjustment ≠ 0 to tighten/loosen).")
+            else:
+                window_pct = float(max(0, min(100, default_window_pct + bounds_adjust)))
+                st.caption(
+                    f"Effective bounds window: ±{window_pct:.0f}% around selected values (base {default_window_pct}%, adjustment {bounds_adjust:+d})."
+                )
+
+            # High-level intent selection (no manual JSON typing)
+            base_optimize_block = full_config_data.get("optimize", {}) if isinstance(full_config_data, dict) else {}
+            base_scoring = base_optimize_block.get("scoring")
+            base_limits = base_optimize_block.get("limits")
+            if not base_scoring:
+                try:
+                    base_scoring = (config.optimize_settings or {}).get("scoring")
+                except Exception:
+                    base_scoring = None
+            if base_limits is None:
+                try:
+                    base_limits = (config.optimize_settings or {}).get("limits")
+                except Exception:
+                    base_limits = None
+            if not isinstance(base_scoring, list) or not base_scoring:
+                base_scoring = ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]
+            if base_limits is None:
+                base_limits = []
+
+            direction = st.selectbox(
+                "Optimization goal (high-level)",
+                [
+                    "Balanced (keep run scoring)",
+                    "More profit (risk can be higher)",
+                    "Safer (lower drawdowns)",
+                    "Smoother equity curve",
+                    "Fewer/shorter holds (faster turnover)",
+                    "Lower exposure (safer sizing)",
+                ],
+                index=0,
+                help=(
+                    "This sets reasonable defaults in the generated Optimize preset. "
+                    "You can still fine-tune everything in the PBv7 Optimize GUI after opening it."
+                ),
+                key=f"{key_prefix}_direction",
+            )
+
+            risk_adjust = st.slider(
+                "Risk adjustment",
+                min_value=-50,
+                max_value=50,
+                value=0,
+                step=5,
+                help=(
+                    "0 = neutral. Negative = more conservative, positive = more aggressive. "
+                    "This can tweak exposure/unstuck/enforcer-related bounds. "
+                    "It can also relax/tighten drawdown limits. "
+                    "(Safety goals may add additional risk-limits.)"
+                ),
+                key=f"{key_prefix}_risk_adjust",
+            )
+
+            def _detect_metric_scheme(metrics: List[str]) -> str:
+                # legacy: btc_* prefix; new: *_btc/_usd suffix; else base
+                for m in metrics:
+                    if isinstance(m, str) and m.startswith("btc_"):
+                        return "btc_prefix"
+                for m in metrics:
+                    if isinstance(m, str) and (m.endswith("_btc") or m.endswith("_usd")):
+                        return "suffix"
+                return "base"
+
+            def _m(name_base: str, scheme: str) -> str:
+                # choose a consistent naming convention
+                if scheme == "btc_prefix":
+                    return f"btc_{name_base}"
+                if scheme == "suffix":
+                    # default to _usd for currency metrics if user didn't specify
+                    if name_base in CURRENCY_METRICS:
+                        return f"{name_base}_usd"
+                    return name_base
+                return name_base
+
+            scheme = _detect_metric_scheme([str(x) for x in base_scoring])
+
+            def _limit(metric: str, penalize_if: str, value: Any) -> Dict[str, Any]:
+                return {"metric": metric, "penalize_if": penalize_if, "value": value}
+
+            def _upsert_limit(limits: Any, entry: Dict[str, Any]) -> Any:
+                """Insert or replace a limit entry by metric name (list format only)."""
+                if not isinstance(limits, list):
+                    return limits
+                metric = entry.get("metric")
+                if not metric:
+                    return limits
+                out = []
+                replaced = False
+                for e in limits:
+                    if isinstance(e, dict) and e.get("metric") == metric:
+                        out.append(entry)
+                        replaced = True
+                    else:
+                        out.append(e)
+                if not replaced:
+                    out.append(entry)
+                return out
+
+            def _remove_limit(limits: Any, metric_name: str) -> Any:
+                if not isinstance(limits, list):
+                    return limits
+                return [e for e in limits if not (isinstance(e, dict) and e.get("metric") == metric_name)]
+
+            def _find_limit_entry(limits: Any, metric_name: str) -> Optional[Dict[str, Any]]:
+                if not isinstance(limits, list):
+                    return None
+                for e in limits:
+                    if isinstance(e, dict) and e.get("metric") == metric_name:
+                        return e
+                return None
+
+            def _risk_limit_from_tolerance(
+                metric_base: str,
+                base_entry: Optional[Dict[str, Any]],
+                margin_min: float,
+                margin_max: float,
+                use_abs_seed: bool = False,
+                default_value: Optional[float] = None,
+            ) -> Optional[Dict[str, Any]]:
+                """Create a PassivBot list-format limit entry for a risk-related metric.
+
+                The threshold is computed in the same units as the selected config's suite metric.
+                Existing entry's `penalize_if`/`stat` are preserved when present.
+                """
+                metric_name = _m(metric_base, scheme)
+                # PassivBot supports both symbolic and word operators.
+                # Use symbolic operators by default and preserve any existing choice.
+                penalize_if_raw = (base_entry or {}).get("penalize_if", ">")
+                penalize_map = {
+                    "greater_than": ">",
+                    "less_than": "<",
+                }
+                penalize_if = penalize_map.get(str(penalize_if_raw), str(penalize_if_raw))
+                # IMPORTANT: do not force `stat` here.
+                # PassivBot defaults: '>' uses max, '<' uses min, range uses mean.
+                stat = (base_entry or {}).get("stat", None)
+
+                seed = config.suite_metrics.get(metric_name)
+                seed_val = float(seed) if isinstance(seed, (int, float)) else None
+                if seed_val is not None and use_abs_seed:
+                    seed_val = abs(seed_val)
+
+                # Symmetric risk adjustment around a neutral midpoint.
+                # signed < 0 => more conservative (tighter risk limits for '>' operators)
+                # signed > 0 => more aggressive (looser risk limits for '>' operators)
+                signed = float(risk_adjust) / 50.0  # -1..+1
+                mag = min(1.0, abs(signed))
+                margin = margin_min + mag * (margin_max - margin_min)
+
+                if seed_val is not None:
+                    # Apply direction based on operator semantics.
+                    # For '>' limits: higher threshold = looser, lower = tighter.
+                    # For '<' limits: higher threshold = tighter, lower = looser.
+                    op = str(penalize_if).strip()
+                    is_less = op.startswith("<") or op == "less_than"
+                    if signed > 0:
+                        factor = (1.0 - margin) if is_less else (1.0 + margin)
+                    else:
+                        factor = (1.0 + margin) if is_less else (1.0 - margin)
+                    factor = max(0.0, factor)
+                    value = seed_val * factor
+                else:
+                    base_value = (base_entry or {}).get("value")
+                    if isinstance(base_value, (int, float)):
+                        value = float(base_value)
+                    elif default_value is not None:
+                        value = float(default_value)
+                    else:
+                        return None
+
+                entry: Dict[str, Any] = {
+                    "metric": metric_name,
+                    "penalize_if": penalize_if,
+                    "value": round(float(value), 6),
+                }
+                if stat is not None:
+                    entry["stat"] = stat
+                return entry
+
+            def _risk_limits_pack_from_tolerance(limits: Any) -> Any:
+                """Upsert a small set of risk-related limits (list format only)."""
+                if not isinstance(limits, list):
+                    return limits
+
+                # Keep this small & impactful; limits don't add objectives but help shape the Pareto front.
+                specs = [
+                    # metric_base, margin_min, margin_max, use_abs_seed, fallback
+                    ("drawdown_worst", 0.05, 0.50, False, 0.30),
+                    ("expected_shortfall_1pct", 0.05, 0.60, False, 0.30),
+                    ("equity_choppiness_w", 0.10, 1.00, False, None),
+                    ("peak_recovery_hours_equity", 0.05, 0.80, False, None),
+                    ("position_held_hours_max", 0.05, 0.80, False, None),
+                    ("equity_balance_diff_neg_max", 0.05, 0.80, True, None),
+                ]
+
+                out = list(limits)
+                for metric_base, m_min, m_max, use_abs, fallback in specs:
+                    metric_name = _m(metric_base, scheme)
+                    existing = _find_limit_entry(out, metric_name)
+                    entry = _risk_limit_from_tolerance(
+                        metric_base=metric_base,
+                        base_entry=existing,
+                        margin_min=m_min,
+                        margin_max=m_max,
+                        use_abs_seed=use_abs,
+                        default_value=fallback,
+                    )
+                    if entry is not None:
+                        out = _upsert_limit(out, entry)
+                return out
+
+            # Build scoring/limits defaults from intent
+            scoring_out: List[str] = list(base_scoring)
+            limits_out: Any = list(base_limits) if isinstance(base_limits, list) else base_limits
+
+            # Objective candidates
+            profit_set = [_m("mdg_w", scheme), _m("adg_w", scheme), _m("gain", scheme)]
+            ratio_set = [_m("loss_profit_ratio", scheme), _m("sharpe_ratio", scheme), _m("sortino_ratio", scheme)]
+            risk_set = [_m("drawdown_worst", scheme), _m("drawdown_worst_mean_1pct", scheme), _m("expected_shortfall_1pct", scheme)]
+            smooth_set = [_m("equity_choppiness_w", scheme), _m("equity_jerkiness_w", scheme), _m("exponential_fit_error_w", scheme)]
+            turnover_set = [_m("positions_held_per_day", scheme), _m("position_held_hours_mean", scheme), _m("position_held_hours_max", scheme)]
+
+            def _unique_keep_order(items: List[str]) -> List[str]:
+                seen = set()
+                out = []
+                for it in items:
+                    if it not in seen:
+                        seen.add(it)
+                        out.append(it)
+                return out
+
+            def _cap_objectives(items: List[str], max_n: int = 4) -> List[str]:
+                # Optimizer gets slow with too many objectives.
+                capped = items[:max_n]
+                return capped
+
+            if direction == "Balanced (keep run scoring)":
+                scoring_out = _cap_objectives(_unique_keep_order(list(base_scoring)), 4)
+                limits_out = base_limits
+
+            elif direction == "More profit (risk can be higher)":
+                scoring_out = _cap_objectives(_unique_keep_order([
+                    profit_set[0],
+                    profit_set[1],
+                    ratio_set[1],
+                    ratio_set[0],
+                ]), 4)
+                limits_out = base_limits
+
+            elif direction == "Safer (lower drawdowns)":
+                scoring_out = _cap_objectives(_unique_keep_order([
+                    risk_set[0],
+                    risk_set[1],
+                    ratio_set[1],
+                    ratio_set[0],
+                ]), 4)
+                # Apply risk limit pack only when user adjusts risk
+                limits_out = base_limits
+                if risk_adjust != 0:
+                    limits_out = _risk_limits_pack_from_tolerance(limits_out)
+
+            elif direction == "Smoother equity curve":
+                scoring_out = _cap_objectives(_unique_keep_order([
+                    smooth_set[0],
+                    smooth_set[1],
+                    ratio_set[1],
+                    profit_set[0],
+                ]), 4)
+                limits_out = base_limits
+
+            elif direction == "Fewer/shorter holds (faster turnover)":
+                scoring_out = _cap_objectives(_unique_keep_order([
+                    turnover_set[1],
+                    turnover_set[2],
+                    profit_set[0],
+                    ratio_set[1],
+                ]), 4)
+                limits_out = base_limits
+
+            elif direction == "Lower exposure (safer sizing)":
+                scoring_out = _cap_objectives(_unique_keep_order([
+                    risk_set[0],
+                    ratio_set[0],
+                    profit_set[0],
+                    ratio_set[1],
+                ]), 4)
+                limits_out = base_limits
+                if risk_adjust != 0:
+                    limits_out = _risk_limits_pack_from_tolerance(limits_out)
+
+            # Risk adjustment should influence all goals (user can set 0 to disable).
+            # Apply a generic drawdown guard adjustment for list-format limits.
+            if isinstance(limits_out, list) and risk_adjust != 0:
+                metric_name = _m("drawdown_worst", scheme)
+                existing = _find_limit_entry(limits_out, metric_name)
+                entry = _risk_limit_from_tolerance(
+                    metric_base="drawdown_worst",
+                    base_entry=existing,
+                    margin_min=0.05,
+                    margin_max=0.60,
+                    use_abs_seed=False,
+                    default_value=0.30,
+                )
+                if entry is not None:
+                    limits_out = _upsert_limit(limits_out, entry)
+
+            # Final safety cap
+            scoring_out = _cap_objectives(_unique_keep_order([str(x) for x in scoring_out]), 4)
+
+            # Small, user-visible preview (no typing)
+            st.write("**Planned optimize defaults**")
+            try:
+                import json as _json
+                st.code(_json.dumps({"scoring": scoring_out, "limits": limits_out}, indent=2), language="json")
+            except Exception:
+                st.code(str({"scoring": scoring_out, "limits": limits_out}), language="json")
+
+            switch_to_optimize = st.toggle(
+                "Open PBv7 Optimize after creating preset",
+                value=True,
+                key=f"{key_prefix}_switch_to_optimize",
+            )
+
+            def _as_bound_tuple(bound_value: Any) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+                """Return (low, high, step) from Passivbot-style bounds formats."""
+                if isinstance(bound_value, (list, tuple)):
+                    if len(bound_value) >= 2:
+                        low = bound_value[0]
+                        high = bound_value[1]
+                        step = bound_value[2] if len(bound_value) >= 3 else None
+                        return (
+                            float(low) if low is not None else None,
+                            float(high) if high is not None else None,
+                            float(step) if step not in (None, 0) else None,
+                        )
+                    if len(bound_value) == 1:
+                        v = bound_value[0]
+                        return (float(v), float(v), None)
+                if isinstance(bound_value, (int, float)):
+                    v = float(bound_value)
+                    return (v, v, None)
+                return (None, None, None)
+
+            def _tighten_bounds_around_value(
+                low: Optional[float],
+                high: Optional[float],
+                value: float,
+                pct: float,
+                step: Optional[float],
+            ) -> Any:
+                if pct <= 0:
+                    return [low, high, step] if step else [low, high]
+                if low is None or high is None:
+                    return [value, value]
+                if high < low:
+                    low, high = high, low
+
+                delta = abs(value) * (pct / 100.0)
+                if delta == 0:
+                    # Use a tiny absolute delta so values near 0 can still produce a window
+                    delta = (high - low) * (pct / 100.0)
+                new_low = max(low, value - delta)
+                new_high = min(high, value + delta)
+
+                # Ensure non-degenerate range if optimization expects a range
+                if new_high <= new_low:
+                    if step:
+                        new_low = max(low, new_low - step)
+                        new_high = min(high, new_high + step)
+                    else:
+                        # fallback: expand by 1% of original range
+                        expand = max((high - low) * 0.01, 1e-12)
+                        new_low = max(low, new_low - expand)
+                        new_high = min(high, new_high + expand)
+
+                if step:
+                    # If step looks like integer stepping, round bounds accordingly
+                    if abs(step - 1.0) < 1e-12:
+                        new_low = float(int(round(new_low)))
+                        new_high = float(int(round(new_high)))
+                        if new_high <= new_low:
+                            new_high = min(high, new_low + 1.0)
+                    return [new_low, new_high, step]
+                return [new_low, new_high]
+
+            def _tighten_bounds_around_value_asymmetric(
+                low: Optional[float],
+                high: Optional[float],
+                value: float,
+                pct_down: float,
+                pct_up: float,
+                step: Optional[float],
+            ) -> Any:
+                """Asymmetric window around a value.
+
+                pct_down/pct_up are in percent and clamped to original bounds.
+                """
+                if (pct_down <= 0) and (pct_up <= 0):
+                    return [low, high, step] if step else [low, high]
+                if low is None or high is None:
+                    return [value, value]
+                if high < low:
+                    low, high = high, low
+
+                d_down = abs(value) * (pct_down / 100.0)
+                d_up = abs(value) * (pct_up / 100.0)
+                if d_down == 0:
+                    d_down = (high - low) * (pct_down / 100.0)
+                if d_up == 0:
+                    d_up = (high - low) * (pct_up / 100.0)
+
+                new_low = max(low, value - d_down)
+                new_high = min(high, value + d_up)
+
+                if new_high <= new_low:
+                    if step:
+                        new_low = max(low, new_low - step)
+                        new_high = min(high, new_high + step)
+                    else:
+                        expand = max((high - low) * 0.01, 1e-12)
+                        new_low = max(low, new_low - expand)
+                        new_high = min(high, new_high + expand)
+
+                if step:
+                    if abs(step - 1.0) < 1e-12:
+                        new_low = float(int(round(new_low)))
+                        new_high = float(int(round(new_high)))
+                        if new_high <= new_low:
+                            new_high = min(high, new_low + 1.0)
+                    return [new_low, new_high, step]
+                return [new_low, new_high]
+
+            def _normalize_bound_for_compare(v: Any) -> Any:
+                """Normalize bound formats for stable comparisons in previews."""
+                if isinstance(v, (list, tuple)):
+                    out = []
+                    for x in v:
+                        if isinstance(x, float):
+                            out.append(round(x, 12))
+                        else:
+                            out.append(x)
+                    return tuple(out)
+                if isinstance(v, float):
+                    return round(v, 12)
+                return v
+
+            def _bound_pretty(v: Any) -> str:
+                try:
+                    import json as _json
+                    return _json.dumps(v)
+                except Exception:
+                    return str(v)
+
+            def _build_new_bounds(
+                apply_risk_adjustments: bool = True,
+                apply_window_adjustments: bool = True,
+                apply_near_expansion: bool = True,
+                expand_notes_out: Optional[Dict[str, str]] = None,
+            ) -> Dict[str, Any]:
+                """Build new optimize.bounds from current UI choices.
+
+                Kept in one place so preview and save use identical logic.
+                """
+                base_bounds_local: Dict[str, Any] = dict(config.bounds or {})
+                new_bounds_local: Dict[str, Any] = {}
+
+                expand_enabled_local = bool(
+                    apply_near_expansion
+                    and show_near_bounds
+                    and expand_near_bounds
+                    and near_bounds_expand_pct > 0
+                    and isinstance(near_map, dict)
+                    and len(near_map) > 0
+                )
+
+                if expand_enabled_local:
+                    # Expand ORIGINAL bounds on the side where params are near the edge.
+                    for p_name, info in near_map.items():
+                        if p_name not in base_bounds_local:
+                            continue
+                        edge = (info or {}).get("edge")
+                        if edge not in ("lower", "upper"):
+                            continue
+
+                        low, high, step = _as_bound_tuple(base_bounds_local.get(p_name))
+                        if low is None or high is None:
+                            continue
+                        if abs(low) < 1e-15 and abs(high) < 1e-15:
+                            continue
+                        if high < low:
+                            low, high = high, low
+                        rng = high - low
+                        if rng < 1e-12:
+                            continue
+
+                        expand = rng * (near_bounds_expand_pct / 100.0)
+                        new_low = low
+                        new_high = high
+                        if edge == "lower":
+                            requested_low = low - expand
+                            new_low = requested_low
+                            if low >= 0:
+                                if new_low < 0:
+                                    if expand_notes_out is not None:
+                                        expand_notes_out[p_name] = f"lower expansion clamped to 0 (requested {requested_low:g})"
+                                new_low = max(0.0, new_low)
+                        else:
+                            requested_high = high + expand
+                            new_high = requested_high
+
+                        if step and abs(step - 1.0) < 1e-12:
+                            rounded_low = float(int(round(new_low)))
+                            rounded_high = float(int(round(new_high)))
+                            if abs(rounded_low - new_low) > 1e-12 or abs(rounded_high - new_high) > 1e-12:
+                                prev = expand_notes_out.get(p_name) if expand_notes_out is not None else None
+                                note = "rounded to integer step"
+                                if expand_notes_out is not None:
+                                    expand_notes_out[p_name] = f"{prev}; {note}" if prev else note
+                            new_low = rounded_low
+                            new_high = rounded_high
+                            if new_high <= new_low:
+                                new_high = new_low + 1.0
+
+                        base_bounds_local[p_name] = [new_low, new_high, step] if step else [new_low, new_high]
+
+                # Risk adjustment can tweak exposure/unstuck/enforcer bounds across goals.
+                # (Limits-pack remains safety-goal-only; handled outside this function.)
+                risk_enabled_local = bool(apply_risk_adjustments and risk_adjust != 0)
+                window_enabled_local = bool(apply_window_adjustments and window_pct > 0)
+
+                # If user doesn't want bounds adjustments and isn't applying risk adjustments,
+                # keep the original bounds exactly.
+                if not window_enabled_local and not risk_enabled_local and not expand_enabled_local:
+                    return dict(base_bounds_local)
+
+                def _is_side_enabled(side: str) -> Optional[bool]:
+                    """Return True/False if side can be determined, else None.
+
+                    A side is considered disabled if either n_positions == 0 or
+                    total_wallet_exposure_limit == 0 for that side.
+                    """
+                    if side not in ("long", "short"):
+                        return None
+                    bp = config.bot_params or {}
+                    n_key = f"{side}_n_positions"
+                    twel_key = f"{side}_total_wallet_exposure_limit"
+                    has_any = False
+                    disabled = False
+
+                    n_val = bp.get(n_key)
+                    if isinstance(n_val, (int, float)):
+                        has_any = True
+                        if float(n_val) <= 0:
+                            disabled = True
+
+                    twel_val = bp.get(twel_key)
+                    if isinstance(twel_val, (int, float)):
+                        has_any = True
+                        if float(twel_val) <= 0:
+                            disabled = True
+
+                    if not has_any:
+                        return None
+                    return not disabled
+
+                long_enabled = _is_side_enabled("long")
+                short_enabled = _is_side_enabled("short")
+
+                signed = float(risk_adjust) / 50.0  # -1..+1
+                strength = min(1.0, abs(signed))
+                # When bounds_adjust == 0 but risk is enabled, use a small dedicated window for risk params
+                risk_window_pct = max(2.0, min(25.0, 5.0 + 20.0 * strength))
+
+                def _risk_mults(invert: bool = False) -> Tuple[float, float]:
+                    """Return (down_mult, up_mult) for asymmetric windows."""
+                    if signed == 0:
+                        return (1.0, 1.0)
+                    aggressive = signed > 0
+                    if invert:
+                        aggressive = not aggressive
+                    # For profit goal, allow a stronger bias to explore higher exposure.
+                    if direction == "More profit (risk can be higher)" and not invert:
+                        return (0.3, 2.0) if aggressive else (2.0, 0.3)
+                    return (0.5, 1.5) if aggressive else (1.5, 0.5)
+
+                for param_name, bound_value in base_bounds_local.items():
+                    # If a side is disabled, do not modify its bounds and don't surface it in preview.
+                    # Preserve original entries exactly.
+                    pname = str(param_name)
+                    if pname.startswith("long_") and long_enabled is False:
+                        new_bounds_local[param_name] = bound_value
+                        continue
+                    if pname.startswith("short_") and short_enabled is False:
+                        new_bounds_local[param_name] = bound_value
+                        continue
+
+                    # If bounds window is off, preserve all non-risk params exactly.
+                    # Risk can still adjust risk-related params even when bounds_adjust == 0.
+                    is_risk_param = (
+                        "total_wallet_exposure_limit" in pname
+                        or pname.endswith("n_positions")
+                        or "_n_positions" in pname
+                        or "risk_we_excess_allowance_pct" in pname
+                        or "risk_wel_enforcer_threshold" in pname
+                        or "risk_twel_enforcer_threshold" in pname
+                        or "unstuck_loss_allowance_pct" in pname
+                    )
+                    if not window_enabled_local and not (risk_enabled_local and is_risk_param):
+                        new_bounds_local[param_name] = bound_value
+                        continue
+
+                    low, high, step = _as_bound_tuple(bound_value)
+
+                    # Preserve clearly disabled/invalid bounds instead of dropping them.
+                    # Dropping would show as "removed" in preview and could change behavior.
+                    if low is None or high is None:
+                        new_bounds_local[param_name] = bound_value
+                        continue
+                    if abs(low) < 1e-15 and abs(high) < 1e-15:
+                        new_bounds_local[param_name] = bound_value
+                        continue
+
+                    if param_name in config.bot_params and isinstance(config.bot_params[param_name], (int, float)):
+                        v = float(config.bot_params[param_name])
+
+                        if risk_enabled_local and is_risk_param:
+                            name = str(param_name)
+                            base = float(window_pct) if window_enabled_local else float(risk_window_pct)
+
+                            if "total_wallet_exposure_limit" in name:
+                                down_mult, up_mult = _risk_mults(invert=False)
+                                new_bounds_local[param_name] = _tighten_bounds_around_value_asymmetric(
+                                    low, high, v,
+                                    pct_down=max(0.0, min(100.0, base * down_mult)),
+                                    pct_up=max(0.0, min(100.0, base * up_mult)),
+                                    step=step,
+                                )
+                                continue
+
+                            if name.endswith("n_positions") or "_n_positions" in name:
+                                # Invert: conservative explores higher n_positions; aggressive lower.
+                                down_mult, up_mult = _risk_mults(invert=True)
+                                new_bounds_local[param_name] = _tighten_bounds_around_value_asymmetric(
+                                    low, high, v,
+                                    pct_down=max(0.0, min(100.0, base * down_mult)),
+                                    pct_up=max(0.0, min(100.0, base * up_mult)),
+                                    step=step,
+                                )
+                                continue
+
+                            if "risk_we_excess_allowance_pct" in name:
+                                down_mult, up_mult = _risk_mults(invert=False)
+                                new_bounds_local[param_name] = _tighten_bounds_around_value_asymmetric(
+                                    low, high, v,
+                                    pct_down=max(0.0, min(100.0, base * down_mult)),
+                                    pct_up=max(0.0, min(100.0, base * up_mult)),
+                                    step=step,
+                                )
+                                continue
+
+                            if "risk_wel_enforcer_threshold" in name or "risk_twel_enforcer_threshold" in name:
+                                down_mult, up_mult = _risk_mults(invert=False)
+                                new_bounds_local[param_name] = _tighten_bounds_around_value_asymmetric(
+                                    low, high, v,
+                                    pct_down=max(0.0, min(100.0, base * down_mult)),
+                                    pct_up=max(0.0, min(100.0, base * up_mult)),
+                                    step=step,
+                                )
+                                continue
+
+                            if "unstuck_loss_allowance_pct" in name:
+                                down_mult, up_mult = _risk_mults(invert=False)
+                                new_bounds_local[param_name] = _tighten_bounds_around_value_asymmetric(
+                                    low, high, v,
+                                    pct_down=max(0.0, min(100.0, base * down_mult)),
+                                    pct_up=max(0.0, min(100.0, base * up_mult)),
+                                    step=step,
+                                )
+                                continue
+
+                        if window_enabled_local:
+                            new_bounds_local[param_name] = _tighten_bounds_around_value(low, high, v, window_pct, step)
+                        else:
+                            new_bounds_local[param_name] = bound_value
+                    else:
+                        if step:
+                            new_bounds_local[param_name] = [low, high, step]
+                        else:
+                            new_bounds_local[param_name] = [low, high]
+
+                return new_bounds_local
+
+            # Preview: which bounds will change?
+            show_near_bounds = st.toggle(
+                "Show parameters near bounds (Deep Intelligence)",
+                value=False,
+                help="Highlights parameters within a tolerance of the original optimization bounds, using the same logic as the Deep Intelligence stage.",
+                key=f"{key_prefix}_show_near_bounds",
+            )
+            near_bounds_tol = 0.10
+            near_map: Dict[str, Dict[str, Any]] = {}
+            near_map_all: Dict[str, Dict[str, Any]] = {}
+            near_rows: List[Dict[str, Any]] = []
+            hidden_near_params: set[str] = set()
+            hide_hard_limited_near = False
+            if show_near_bounds:
+                near_bounds_tol = st.slider(
+                    "Near-bounds tolerance",
+                    min_value=0.01,
+                    max_value=0.25,
+                    value=0.10,
+                    step=0.01,
+                    help="A parameter is considered 'near' a bound if it is within this fraction of the bound range.",
+                    key=f"{key_prefix}_near_bounds_tol",
+                )
+
+                try:
+                    bounds_info = self.loader.get_parameters_at_bounds(tolerance=float(near_bounds_tol), top_n=10)
+                    for k, info in (bounds_info or {}).get("at_lower", {}).items():
+                        near_map[str(k)] = {"edge": "lower", **(info or {})}
+                    for k, info in (bounds_info or {}).get("at_upper", {}).items():
+                        near_map[str(k)] = {"edge": "upper", **(info or {})}
+
+                    # Keep an unfiltered snapshot for robust filtering in the preview.
+                    near_map_all = dict(near_map)
+
+                    for k, info in sorted(near_map.items(), key=lambda x: x[0]):
+                        near_rows.append({
+                            "param": str(k),
+                            "edge": info.get("edge"),
+                            "value": info.get("value"),
+                            "bound": info.get("bound"),
+                        })
+                except Exception:
+                    near_map = {}
+                    near_rows = []
+
+            expand_near_bounds = False
+            near_bounds_expand_pct = 0.0
+            if show_near_bounds:
+                expand_near_bounds = st.toggle(
+                    "Expand bounds for near-edge params",
+                    value=False,
+                    help="Expands the ORIGINAL optimize.bounds for parameters detected near the lower/upper edge.",
+                    key=f"{key_prefix}_expand_near_bounds",
+                )
+                if expand_near_bounds:
+                    near_bounds_expand_pct = float(
+                        st.slider(
+                            "Near-edge expansion (%)",
+                            min_value=0,
+                            max_value=100,
+                            value=25,
+                            step=5,
+                            help="Expands the bound range by this % (of the original range) on the side where the parameter is near an edge.",
+                            key=f"{key_prefix}_near_bounds_expand_pct",
+                        )
+                    )
+                    if not near_map:
+                        st.info("No near-edge parameters detected for the chosen tolerance.")
+
+                hide_hard_limited_near = st.toggle(
+                    "Hide near-bounds limited by 0-clamp",
+                    value=False,
+                    help="Hides parameters where LOWER near-edge expansion would be clamped to 0 (i.e. can't widen below 0).",
+                    key=f"{key_prefix}_hide_hard_limited_near",
+                )
+
+                if hide_hard_limited_near and near_map:
+                    _before_cnt = len(near_map)
+                    base_bounds_for_hide = {str(k): v for k, v in (config.bounds or {}).items()}
+
+                    # Derive "hard-limited" from the same near-expansion logic used for previews/saving.
+                    # This avoids mismatches where clamped params still appear in the tables.
+                    if expand_near_bounds and near_bounds_expand_pct > 0:
+                        _hide_notes: Dict[str, str] = {}
+                        try:
+                            _build_new_bounds(
+                                apply_risk_adjustments=False,
+                                apply_window_adjustments=False,
+                                apply_near_expansion=True,
+                                expand_notes_out=_hide_notes,
+                            )
+                        except Exception:
+                            _hide_notes = {}
+                        hidden_near_params = {p for p, note in _hide_notes.items() if "clamped to 0" in str(note)}
+                    else:
+                        # If we don't have an expansion pct active, only treat exact 0 as hard-limited.
+                        def _is_zero_lower(p_name: str, info: Dict[str, Any]) -> bool:
+                            try:
+                                if (info or {}).get("edge") != "lower":
+                                    return False
+                                low, _high, _step = _as_bound_tuple(base_bounds_for_hide.get(p_name))
+                                if low is None:
+                                    return False
+                                return abs(float(low)) <= 1e-12
+                            except Exception:
+                                return False
+                        hidden_near_params = {k for k, v in near_map.items() if _is_zero_lower(k, v)}
+
+                    near_map = {k: v for k, v in near_map.items() if k not in hidden_near_params}
+                    near_rows = [r for r in near_rows if str(r.get("param")) not in hidden_near_params]
+                    _after_cnt = len(near_map)
+                    if _after_cnt < _before_cnt:
+                        st.caption(f"Hidden {_before_cnt - _after_cnt} 0-clamp-limited parameter(s) from near-bounds.")
+
+            # Collect notes for near-edge expansion limitations (e.g. clamped to 0).
+            expand_notes: Dict[str, str] = {}
+
+            try:
+                _base_bounds_preview = config.bounds or {}
+                _result_bounds_preview = _build_new_bounds(
+                    apply_risk_adjustments=True,
+                    apply_window_adjustments=True,
+                    apply_near_expansion=True,
+                    expand_notes_out=expand_notes,
+                )
+                _expand_bounds_preview = _build_new_bounds(
+                    apply_risk_adjustments=False,
+                    apply_window_adjustments=False,
+                    apply_near_expansion=True,
+                    expand_notes_out=expand_notes,
+                )
+                _window_bounds_preview = _build_new_bounds(
+                    apply_risk_adjustments=False,
+                    apply_window_adjustments=True,
+                    apply_near_expansion=False,
+                )
+                _risk_bounds_preview = _build_new_bounds(
+                    apply_risk_adjustments=True,
+                    apply_window_adjustments=False,
+                    apply_near_expansion=False,
+                )
+                _base_keys = set(_base_bounds_preview.keys())
+                _new_keys = set(_result_bounds_preview.keys())
+
+                _rows = []
+                for k in sorted(_base_keys | _new_keys):
+                    # If user hid hard-limited near-bounds, also hide them from the bounds preview.
+                    if show_near_bounds and hide_hard_limited_near and str(k) in hidden_near_params:
+                        continue
+                    before = _base_bounds_preview.get(k, None)
+                    expand_v = _expand_bounds_preview.get(k, None)
+                    window_v = _window_bounds_preview.get(k, None)
+                    risk_v = _risk_bounds_preview.get(k, None)
+                    result_v = _result_bounds_preview.get(k, None)
+                    if k not in _base_keys:
+                        change = "added"
+                    elif k not in _new_keys:
+                        change = "removed"
+                    else:
+                        change = "changed" if _normalize_bound_for_compare(before) != _normalize_bound_for_compare(result_v) else ""
+
+                    # Also surface near-edge expansions that were limited (e.g. clamped to 0)
+                    # even if the final bounds are unchanged.
+                    if (
+                        not change
+                        and show_near_bounds
+                        and expand_near_bounds
+                        and near_bounds_expand_pct > 0
+                        and str(k) in expand_notes
+                    ):
+                        change = "limited"
+                    if change:
+                        row: Dict[str, Any] = {
+                            "param": str(k),
+                            "change": change,
+                            "before": _bound_pretty(before),
+                            "expand": _bound_pretty(expand_v),
+                            "window": _bound_pretty(window_v),
+                            "risk": _bound_pretty(risk_v),
+                            "result": _bound_pretty(result_v),
+                        }
+                        if show_near_bounds and expand_near_bounds and near_bounds_expand_pct > 0:
+                            row["expand_note"] = expand_notes.get(str(k), "")
+                        if show_near_bounds:
+                            info = near_map.get(str(k))
+                            if info:
+                                row["near_edge"] = info.get("edge")
+                                row["near_value"] = info.get("value")
+                                row["near_bound"] = info.get("bound")
+                            else:
+                                row["near_edge"] = ""
+                                row["near_value"] = ""
+                                row["near_bound"] = ""
+                        _rows.append({
+                            **row
+                        })
+
+                st.write("**Bounds changes preview**")
+                if bounds_adjust == 0 and risk_adjust == 0 and not (expand_near_bounds and near_bounds_expand_pct > 0):
+                    st.caption("No bounds changes (bounds window = 0 and risk adjustment = 0).")
+                else:
+                    st.caption("'expand' = near-edge expansion-only, 'window' = window-only, 'risk' = risk-only, 'result' = combined output.")
+                if show_near_bounds and expand_near_bounds and near_bounds_expand_pct > 0 and expand_notes:
+                    st.info("Some near-edge expansions were limited (e.g. lower bound clamped to 0). See 'expand_note'.")
+                if _rows:
+                    st.caption(f"{len(_rows)} bound(s) listed (added/removed/changed/limited).")
+                    st.dataframe(_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No bounds changes detected.")
+
+                if show_near_bounds:
+                    st.write("**Parameters near bounds**")
+                    if near_rows:
+                        st.caption(f"{len(near_rows)} parameter(s) are near bounds (tolerance {near_bounds_tol:.0%}).")
+                        st.dataframe(near_rows, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No parameters near bounds detected (or data unavailable).")
+            except Exception:
+                # Preview is best-effort; do not block the generator UI.
+                pass
+
+            if st.button(
+                "💾 Create Optimize Preset",
+                type="primary",
+                use_container_width=True,
+                key=f"{key_prefix}_create_preset",
+            ):
+                try:
+                    from pathlib import Path
+                    import json
+                    from pbgui_func import PBGDIR, get_navi_paths, replace_special_chars
+
+                    if not full_config_data:
+                        st.error("❌ Full config data not available; cannot build preset")
+                        st.stop()
+
+                    # Sanitize preset name
+                    safe_name = replace_special_chars(preset_name.strip()) if preset_name else default_preset_name
+                    safe_name = safe_name.replace("/", "_")
+                    if not safe_name:
+                        safe_name = default_preset_name
+
+                    # Base: copy current full config (keeps backtest window, exchanges, etc.)
+                    preset_config = dict(full_config_data)
+
+                    # Tighten bounds around selected config's parameter values
+                    new_bounds: Dict[str, Any] = _build_new_bounds(apply_risk_adjustments=True, apply_window_adjustments=True)
+
+                    # Ensure optimize block exists
+                    if "optimize" not in preset_config or not isinstance(preset_config.get("optimize"), dict):
+                        preset_config["optimize"] = {}
+                    preset_config["optimize"]["bounds"] = new_bounds
+
+                    # Apply high-level intent defaults; user can refine in PBv7 Optimize GUI
+                    preset_config["optimize"]["scoring"] = scoring_out
+                    preset_config["optimize"]["limits"] = limits_out
+
+                    # Save to normal optimize configs directory (not presets)
+                    preset_dir = Path(f"{PBGDIR}/data/opt_v7")
+                    preset_dir.mkdir(parents=True, exist_ok=True)
+                    preset_file = preset_dir / f"{safe_name}.json"
+
+                    with open(preset_file, "w", encoding="utf-8") as f:
+                        json.dump(preset_config, f, indent=4)
+
+                    st.success(f"✅ Optimize config created: {preset_file.name}")
+
+                    if switch_to_optimize:
+                        from OptimizeV7 import OptimizeV7Item
+
+                        # Clear other optimize views so v7_optimize opens the editor
+                        for k in [
+                            "opt_v7_results",
+                            "opt_v7_queue",
+                            "opt_v7_pareto",
+                            "opt_v7_pareto_name",
+                            "opt_v7_pareto_directory",
+                            "opt_v7_list",
+                        ]:
+                            if k in st.session_state:
+                                del st.session_state[k]
+
+                        st.session_state.opt_v7 = OptimizeV7Item(str(preset_file))
+                        st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
+
+                except Exception as e:
+                    st.error(f"❌ Failed to create preset: {e}")
                     import traceback
                     st.code(traceback.format_exc())
     
@@ -1109,12 +2158,7 @@ class ParetoExplorer:
                                 config = self.loader.get_config_by_index(clicked_config_index)
                                 if config:
                                     with st.expander(f"📋 Config #{clicked_config_index} Details", expanded=True):
-                                        self._show_config_details(clicked_config_index)
-                                        
-                                        # Backtest button
-                                        if st.button(f"🚀 Start Backtest for Config #{clicked_config_index}", 
-                                                   key=f'bt_preview_2d_{clicked_config_index}'):
-                                            self._start_backtest(config)
+                                        self._show_config_details(clicked_config_index, key_prefix="cc_2d")
                     except Exception as e:
                         st.warning(f"⚠️ Click handling error: {e}")
         
@@ -1182,12 +2226,7 @@ class ParetoExplorer:
                             config = self.loader.get_config_by_index(clicked_config_index)
                             if config:
                                 with st.expander(f"📋 Config #{clicked_config_index} Details", expanded=True):
-                                    self._show_config_details(clicked_config_index)
-                                    
-                                    # Backtest button
-                                    if st.button(f"🚀 Start Backtest for Config #{clicked_config_index}", 
-                                               key=f'bt_preview_rob_{clicked_config_index}'):
-                                        self._start_backtest(config)
+                                    self._show_config_details(clicked_config_index, key_prefix="cc_robustness")
                 except Exception as e:
                     st.warning(f"⚠️ Click handling error: {e}")
     
@@ -1448,6 +2487,12 @@ class ParetoExplorer:
                     st.error(f"❌ Error preparing backtest: {str(e)}")
                     import traceback
                     st.code(traceback.format_exc())
+
+        self._render_optimize_preset_generator(
+            config=config,
+            full_config_data=full_config_data,
+            key_prefix=f"pp_opt_{config.config_index}",
+        )
     
     def _show_pareto_playground(self):
         """Stage 2: Pareto Playground - Interactive Exploration"""
@@ -3076,166 +4121,6 @@ class ParetoExplorer:
                     self._show_config_details_fragment()
                 else:
                     st.info("No configs available for comparison.")
-    
-    def _show_adversarial_lab(self):
-        """Stage 4: Adversarial Lab - Stress Testing"""
-        
-        st.title("🎲 ADVERSARIAL LAB")
-        st.markdown("**Stress test configs under extreme scenarios**")
-        
-        st.markdown("---")
-        
-        st.info("🚧 **Coming Soon:** Stress testing with Monte Carlo simulations, adversarial scenarios, and fragility analysis.")
-        
-        # Config selector
-        pareto_indices = [c.config_index for c in self.loader.get_pareto_configs()]
-        selected_idx = st.selectbox("Select Config to Test:", pareto_indices, key='stress_test_config')
-        
-        if selected_idx is not None:
-            config = self.loader.configs[selected_idx]
-            
-            st.subheader(f"Config #{config.config_index} - {self.loader.compute_trading_style(config)}")
-            
-            # Current metrics
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Current Drawdown", f"{config.suite_metrics.get('drawdown_worst_usd', 0):.4f}")
-            with col2:
-                st.metric("Current Sharpe", f"{config.suite_metrics.get('sharpe_ratio_usd', 0):.4f}")
-            with col3:
-                st.metric("Current ADG", f"{config.suite_metrics.get('adg_w_usd', 0):.6f}")
-            
-            st.markdown("---")
-            
-            # Stress scenarios
-            st.subheader("🔥 STRESS SCENARIOS")
-            
-            scenarios = [
-                ("2x Drawdown", "What if worst drawdown doubles?"),
-                ("50% Volume Drop", "What if trading volume drops 50%?"),
-                ("2x Volatility", "What if market volatility doubles?"),
-                ("50% Fee Increase", "What if exchange fees increase 50%?"),
-                ("3x Slippage", "What if slippage triples?")
-            ]
-            
-            for scenario_name, scenario_desc in scenarios:
-                with st.expander(scenario_name):
-                    st.markdown(f"**{scenario_desc}**")
-                    st.info("Simulation results would appear here...")
-    
-    def _show_portfolio_architect(self):
-        """Stage 5: Portfolio Architect - Multi-Config Strategy"""
-        
-        st.title("💼 PORTFOLIO ARCHITECT")
-        st.markdown("**Combine multiple configs for better risk-adjusted returns**")
-        
-        st.markdown("---")
-        
-        st.info("🚧 **Coming Soon:** Portfolio construction with correlation analysis, allocation optimization, and combined equity simulation.")
-        
-        st.markdown("""
-        **Portfolio Benefits:**
-        - 🛡️ **Reduced Drawdown** through diversification
-        - 📈 **Smoother Equity Curve** 
-        - 🎯 **Better Risk-Adjusted Returns**
-        - 💪 **More Robust** across scenarios
-        """)
-        
-        # Config selector for portfolio
-        st.subheader("🎨 Build Your Portfolio")
-        
-        pareto_indices = [c.config_index for c in self.loader.get_pareto_configs()]
-        
-        selected_configs = st.multiselect(
-            "Select 2-3 Configs:",
-            pareto_indices,
-            default=pareto_indices[:3] if len(pareto_indices) >= 3 else pareto_indices,
-            max_selections=3,
-            key='portfolio_configs'
-        )
-        
-        if selected_configs:
-            st.success(f"Selected {len(selected_configs)} configs for portfolio")
-            
-            # Show selected configs
-            cols = st.columns(len(selected_configs))
-            
-            for i, idx in enumerate(selected_configs):
-                config = self.loader.configs[idx]
-                with cols[i]:
-                    st.markdown(f"**Config #{idx}**")
-                    st.markdown(f"{self.loader.compute_trading_style(config)}")
-                    
-                    primary_metric = self.loader.scoring_metrics[0] if self.loader.scoring_metrics else 'adg_w_usd'
-                    st.metric("Performance", f"{config.suite_metrics.get(primary_metric, 0):.6f}")
-                    st.metric("Robustness", f"{self.loader.compute_overall_robustness(config):.3f}")
-    
-    def _show_whatif_sandbox(self):
-        """Stage 6: What-If Sandbox - Interactive Parameter Tuning"""
-        
-        st.title("🎮 WHAT-IF SANDBOX")
-        st.markdown("**Experiment with parameter modifications**")
-        
-        st.markdown("---")
-        
-        st.info("🚧 **Coming Soon:** Interactive parameter sliders with ML-based performance prediction and quick validation.")
-        
-        # Config selector
-        pareto_indices = [c.config_index for c in self.loader.get_pareto_configs()]
-        selected_idx = st.selectbox("Select Base Config:", pareto_indices, key='whatif_config')
-        
-        if selected_idx is not None:
-            config = self.loader.configs[selected_idx]
-            
-            st.subheader(f"Base Config #{config.config_index}")
-            
-            # Original metrics
-            col1, col2, col3 = st.columns(3)
-            
-            primary_metric = self.loader.scoring_metrics[0] if self.loader.scoring_metrics else 'adg_w_usd'
-            
-            with col1:
-                st.metric("Original Performance", f"{config.suite_metrics.get(primary_metric, 0):.6f}")
-            with col2:
-                st.metric("Original Drawdown", f"{config.suite_metrics.get('drawdown_worst_usd', 0):.4f}")
-            with col3:
-                st.metric("Original Sharpe", f"{config.suite_metrics.get('sharpe_ratio_usd', 0):.4f}")
-            
-            st.markdown("---")
-            
-            # Parameter playground
-            st.subheader("🎛️ PARAMETER PLAYGROUND")
-            
-            st.markdown("**Top 5 Most Influential Parameters:**")
-            
-            # Example parameters (would be data-driven)
-            param_examples = [
-                'long_ema_span_0',
-                'long_entry_initial_qty_pct',
-                'long_close_grid_markup_end',
-                'long_unstuck_threshold',
-                'long_entry_trailing_threshold_pct'
-            ]
-            
-            for param in param_examples:
-                if param in config.bot_params:
-                    current_val = config.bot_params[param]
-                    
-                    if param in self.loader.optimize_bounds:
-                        lower, upper = self.loader.optimize_bounds[param]
-                        
-                        new_val = st.slider(
-                            param.replace('long_', '').replace('_', ' ').title(),
-                            float(lower),
-                            float(upper),
-                            float(current_val),
-                            key=f'slider_{param}'
-                        )
-                        
-                        if abs(new_val - current_val) > 0.001:
-                            delta_pct = ((new_val - current_val) / current_val * 100) if current_val != 0 else 0
-                            st.caption(f"Changed by {delta_pct:+.1f}%")
     
     def _generate_insights(self) -> List[tuple]:
         """Generate smart insights about the optimization"""

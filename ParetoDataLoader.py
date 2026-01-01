@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import json
 import glob
 from pathlib import Path, PurePath
+import re
 
 
 @dataclass
@@ -73,11 +74,45 @@ class ParetoDataLoader:
         
         # Cache for pareto JSON configs (index -> full config)
         self.pareto_configs_cache: Dict[int, Dict] = {}
+
+        # If a load fails for a known, user-facing reason, store it here.
+        # The UI can surface it without a stack trace.
+        self.last_error: Optional[str] = None
         
         # Global optimization settings (same for all configs)
         self.optimize_bounds: Dict[str, Tuple[float, float]] = {}
         self.optimize_limits: List[Dict] = []
         self.backtest_scenarios: List[Dict] = []
+
+    def _is_legacy_results_format(self) -> bool:
+        """Detect older optimize_results formats which this UI does not support.
+
+        Legacy signature (observed):
+        - `pareto/*.json` filenames start with a numeric score prefix like `001.2345_<hash>.json`.
+        - `pareto/*.json` content lacks `suite_metrics` (often contains `analyses*` keys instead).
+        """
+        try:
+            if not os.path.exists(self.pareto_dir):
+                return False
+            json_files = glob.glob(os.path.join(self.pareto_dir, "*.json"))
+            if not json_files:
+                return False
+
+            sample_file = os.path.basename(sorted(json_files)[0])
+            if re.match(r"^\d+\.\d+_", sample_file):
+                return True
+
+            # Content-based fallback (cheap: inspect one file)
+            sample_path = sorted(json_files)[0]
+            with open(sample_path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict) and "suite_metrics" not in obj and ("analyses" in obj or "analyses_combined" in obj):
+                return True
+
+            return False
+        except Exception:
+            # Never block loading due to detection issues.
+            return False
         
     def load(self, load_strategy: List[str] = None, max_configs: int = 2000, progress_callback=None) -> bool:
         """
@@ -94,6 +129,11 @@ class ParetoDataLoader:
         Returns:
             True if successful, False otherwise
         """
+        self.last_error = None
+
+        if self._is_legacy_results_format():
+            self.last_error = "Old format not supported"
+            return False
         if load_strategy is None:
             load_strategy = ['performance']  # Default: Passivbot official
         
@@ -408,6 +448,12 @@ class ParetoDataLoader:
         Returns:
             True if successful, False otherwise
         """
+        self.last_error = None
+
+        if self._is_legacy_results_format():
+            self.last_error = "Old format not supported"
+            return False
+
         if not os.path.exists(self.pareto_dir):
             return False
         
