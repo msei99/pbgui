@@ -61,6 +61,7 @@ class RemoteServer():
         self._pbgui_version = "N/A"
         self._pbgui_commit = None
         self._pbgui_branch = "unknown"
+        self._pbgui_python = "N/A"
         self._pb6_version = "N/A"
         self._pb6_commit = None
         self._pb7_version = "N/A"
@@ -121,6 +122,8 @@ class RemoteServer():
     def pbgui_commit(self): return self._pbgui_commit
     @property
     def pbgui_branch(self): return self._pbgui_branch
+    @property
+    def pbgui_python(self): return self._pbgui_python
     @property
     def pb6_version(self): return self._pb6_version
     @property
@@ -248,6 +251,10 @@ class RemoteServer():
                     else:
                         # Reset to unknown if pbgb not in alive file (old version)
                         self._pbgui_branch = "unknown"
+                    if "pbgpy" in cfg:
+                        self._pbgui_python = cfg["pbgpy"]
+                    else:
+                        self._pbgui_python = "N/A"
                     if "pb6v" in cfg:
                         self._pb6_version = cfg["pb6v"]
                     if "pb6c" in cfg:
@@ -499,6 +506,10 @@ class PBRemote():
     @property
     def pbgui_commit(self):
         return self.local_run.pbgui_commit
+
+    @property
+    def pbgui_python(self):
+        return getattr(self.local_run, 'pbgui_python', 'N/A')
     @property
     def mem(self):
         return psutil.virtual_memory()
@@ -994,6 +1005,7 @@ class PBRemote():
             "pbgv": self.local_run.pbgui_version,
             "pbgc": self.local_run.pbgui_commit,
             "pbgb": getattr(self.local_run, 'pbgui_branch', 'unknown'),
+            "pbgpy": getattr(self.local_run, 'pbgui_python', 'N/A'),
             "pb6v": self.local_run.pb6_version,
             "pb6c": self.local_run.pb6_commit,
             "pb7v": self.local_run.pb7_version,
