@@ -74,24 +74,9 @@
       tags: debug,never
 
   handlers:
-    - name: Detect pbgui python version
-      command: >-
-        {{ (ansible_python_interpreter | default(ansible_playbook_python)) }} -c
-        "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-      register: pbgui_python_version
-      changed_when: false
-      listen: "restart pbgui"
-
-    - name: Select pbgui requirements file
-      set_fact:
-        pbgui_requirements_file: >-
-          {{ (pbgui_python_version.stdout.startswith('3.10'))
-             | ternary(pbgdir ~ '/requirements310.txt', pbgdir ~ '/requirements.txt') }}
-      listen: "restart pbgui"
-
     - name: Install pbgui requirements
       pip:
-        requirements: "{{ pbgui_requirements_file | default(pbgdir ~ '/requirements.txt') }}"
+        requirements: "{{ pbgdir }}/requirements.txt"
         extra_args: --upgrade
       listen: "restart pbgui"
 
