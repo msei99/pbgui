@@ -1,0 +1,48 @@
+---
+# Create a new PBGui venv with Python 3.12 on localhost (Master)
+# Steps:
+# 1. Install python3.12-venv
+# 2. Create a new python3.12 venv for PBGui (parallel to existing venv)
+# 3. Install PBGui requirements for Python 3.12 (requirements312.txt)
+# Notes:
+# - This playbook intentionally does NOT stop/restart Streamlit/PBGui.
+# - Switch-over (symlink/rename + restart) should be done in a separate step.
+
+- hosts: localhost
+  gather_facts: "{{ debug }}"
+
+  vars:
+    ansible_become_password: "{{ user_pw }}"
+    user_pw: "{{ user_pw }}"
+
+    # PBGui repo directory (required)
+    pbgdir: "{{ pbgdir }}"
+
+    # Target venv directory for Python 3.12 PBGui (new/parallel)
+    # NOTE:
+    # - must not reference itself (would cause recursive templating)
+    # - must not rely on gathered facts (gather_facts may be disabled)
+    # Can still be overridden via --extra-vars pbgvenv312=...
+    pbgvenv312: "{{ lookup('env', 'HOME') }}/software/venv_pbgui312"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: Install python3.12-venv
+      apt:
+        pkg:
+          - python3.12-venv
+        update_cache: yes
+        clean: yes
+      become: yes
+
+    - name: create python3.12 venv for PBGui
+      pip:
+        virtualenv_command: python3.12 -m venv
+        virtualenv: "{{ pbgvenv312 }}"
+        requirements: "{{ pbgdir }}/requirements312.txt"
+        extra_args: --upgrade pip
+      when: pbgdir != "" and pbgvenv312 != ""
