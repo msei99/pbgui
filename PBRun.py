@@ -808,6 +808,7 @@ class PBRun():
         self.pb6_commit_origin = "N/A"
         self.pb7_commit = "N/A"
         self.pb7_commit_origin = "N/A"
+        self.pbgui_python = f"{sys.version_info.major}.{sys.version_info.minor}"
         self.pb7_python = "N/A"
         self._pb7_python_ts = 0
         self.upgrades = 0

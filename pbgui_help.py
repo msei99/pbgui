@@ -1635,6 +1635,14 @@ Shows the PB7 version from README.md.
 
 If available, the suffix "/3.12" indicates the Python major.minor of the configured PB7 venv interpreter (pb7venv).
 """
+
+pbgui_version_venv_python = """
+PBGui column
+
+Shows the PBGui version.
+
+If available, the suffix "/3.12" indicates the Python major.minor of the Python environment running PBGui/PBRun/PBRemote (typically venv_pbgui).
+"""
    
 smart_filter = """
     ```

@@ -183,7 +183,7 @@ def list_vps():
         "Start": datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S"),
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
-        "PBGui": f'{pbremote.pbgui_version}',
+        "PBGui": f"{pbremote.pbgui_version}{'' if getattr(pbremote, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pbgui_python'))}",
         "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
@@ -379,7 +379,7 @@ def list_vps():
             "Start": boot,
             "Reboot": reboot,
             "Updates": server.upgrades,
-            "PBGui": f'{server.pbgui_version}',
+            "PBGui": f"{server.pbgui_version}{'' if getattr(server, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pbgui_python'))}",
             "PBGui Branch": f'{server_branch} ({server_commit_short})',
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
@@ -392,6 +392,7 @@ def list_vps():
     column_config = None
     if hasattr(st, "column_config"):
         column_config = {
+            "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
             "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
         }
     st.data_editor(
@@ -590,7 +591,7 @@ def manage_master():
         "Start": datetime.fromtimestamp(pbremote.boot).strftime("%Y-%m-%d %H:%M:%S"),
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
-        "PBGui": f'{pbremote.pbgui_version}',
+        "PBGui": f"{pbremote.pbgui_version}{'' if getattr(pbremote, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pbgui_python'))}",
         "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
@@ -1018,6 +1019,7 @@ def manage_master():
     column_config = None
     if hasattr(st, "column_config"):
         column_config = {
+            "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
             "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
         }
     st.data_editor(
@@ -1621,7 +1623,7 @@ def manage_vps():
             "Reboot": reboot,
             "Updates": server.upgrades,
             "CMC Credits": server.cmc_credits,
-            "PBGui": f'{server.pbgui_version}',
+            "PBGui": f"{server.pbgui_version}{'' if getattr(server, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pbgui_python'))}",
             "PBGui Branch": f'{getattr(server, "pbgui_branch", "unknown")}',
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
@@ -1853,6 +1855,8 @@ def manage_vps():
         column_config = None
         if hasattr(st, "column_config"):
             column_config = {
+                "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
+                "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
                 "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
             }
         st.data_editor(
