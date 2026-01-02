@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.43
+# v1.44
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -25,9 +25,32 @@ It has the following functions:
 - And much more to easily manage Passivbot.
 
 ### Requirements
-- Python 3.10
+- Python 3.12 (default)
+- Python 3.10 (only required if you use PB6)
 - Streamlit 1.52.0
 - Linux
+
+### Migration (Python 3.10 -> 3.12)
+
+PBGui and PB7 use Python 3.12 by default. PB6 stays on Python 3.10.
+
+If you already have PBGui running, you can upgrade in a few clicks:
+
+Master (recommended):
+- Open the VPS Manager on your Master.
+- Click "Update/Install PBGui venv" to prepare the new Python 3.12 environment.
+- Then run the switch script:
+  - `pbgui/setup/mig_py312.sh`
+- Rollback (only if something goes wrong):
+  - `pbgui/setup/mig_py310.sh`
+
+VPS:
+- Open the VPS Manager for the selected VPS.
+- Click "Update PBGui venv" (this will recreate the PBGui Python environment on that VPS; PBGui services will be restarted).
+- Click "Update PB7 venv" if you also run PB7 on that VPS.
+- Recommended (especially on small VPS): After the update, click "Cleanup VPS" once to free disk space.
+
+Note: PB6 stays on Python 3.10. If you don't use PB6 on a VPS, Python 3.10 components may be removed to save disk space.
 
 ### Recommendation
 
@@ -141,19 +164,20 @@ curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.s
 Clone pbgui and passivbot v6 and v7
 ```
 git clone https://github.com/msei99/pbgui.git
-git clone https://github.com/enarjord/passivbot.git
+git clone https://github.com/enarjord/passivbot.git pb6
+git clone https://github.com/enarjord/passivbot.git pb7
 ```
 Create virtual environments
 ```
-python3.10 -m venv venv_pbgui
 python3.10 -m venv venv_pb6
-python3.10 -m venv venv_pb7
+python3.12 -m venv venv_pb7
+python3.12 -m venv venv_pbgui
 ```
 Install requirements for pb6, pb7 and pbgui
 ```
 source venv_pb6/bin/activate
 cd pb6
-git checkout v6.1.4b
+git checkout v6.1.4b_latest_v6
 pip install --upgrade pip
 pip install -r requirements.txt
 deactivate
@@ -293,6 +317,11 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.44 (02-01-2026)
+- PBGui and PB7 now run on Python 3.12 by default (PB6 stays on Python 3.10).
+- Easier installs/updates: dependencies are separated for Python 3.12 vs. legacy Python 3.10.
+- New/updated upgrade helpers in the VPS Manager to update PBGui/PB7 on Master and VPS.
 
 ## v1.43 (01-01-2026)
 

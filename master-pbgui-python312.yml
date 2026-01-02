@@ -3,7 +3,7 @@
 # Steps:
 # 1. Install python3.12-venv
 # 2. Create a new python3.12 venv for PBGui (parallel to existing venv)
-# 3. Install PBGui requirements for Python 3.12 (requirements312.txt)
+# 3. Install PBGui requirements for Python 3.12 (requirements.txt)
 # Notes:
 # - This playbook intentionally does NOT stop/restart Streamlit/PBGui.
 # - Switch-over (symlink/rename + restart) should be done in a separate step.
@@ -43,6 +43,6 @@
       pip:
         virtualenv_command: python3.12 -m venv
         virtualenv: "{{ pbgvenv312 }}"
-        requirements: "{{ pbgdir }}/requirements312.txt"
+        requirements: "{{ pbgdir }}/requirements.txt"
         extra_args: --upgrade pip
       when: pbgdir != "" and pbgvenv312 != ""

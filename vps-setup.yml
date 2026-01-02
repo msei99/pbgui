@@ -7,13 +7,13 @@
 # 4. Update Server
 # 5. Reboot if required
 # 6. Create swapfile
-# 7. Install git, python3.10, rustc, cargo
+# 7. Install git, python3.12 (and optionally python3.10 for PB6), rustc, cargo
 # 8. Clone pbgui repository
 # 9. Clone passivbot repository for pb6
 # 10. Clone passivbot repository for pb7
-# 11. Create python3.10 venv for pbgui
+# 11. Create python3.12 venv for pbgui
 # 12. Create python3.10 venv for pb6
-# 13. Create python3.10 venv for pb7
+# 13. Create python3.12 venv for pb7
 # 14. Build passivbot-rust with maturin
 # 15. Setup pbgui
 # 16. Restart PBRun, PBRemote and PBCoinData
@@ -219,20 +219,38 @@
       command: update-grub
       become: yes
 
-    - name: Add deadsnakes/ppa for installing python3.10
+    - name: Add deadsnakes/ppa for installing python3.10/python3.12
       apt_repository:
         repo: ppa:deadsnakes/ppa
       become: yes
 
-    - name: Install git, python3.10, rclone, gcc
+    - name: Install git, python3.12, rclone, gcc
       apt:
         pkg:
         - git
-        - python3.10-venv
+        - python3.12-venv
         - rclone
         - gcc
         clean: yes
       become: yes
+
+    - name: Install python3.10-venv for PB6
+      apt:
+        pkg:
+          - python3.10-venv
+        clean: yes
+      become: yes
+      when: install_pb6
+
+    - name: Remove python3.10-venv if PB6 is not installed
+      apt:
+        pkg:
+          - python3.10-venv
+        state: absent
+        autoremove: yes
+        clean: yes
+      become: yes
+      when: not install_pb6
 
     - name: Install rustup
       apt:
@@ -276,9 +294,9 @@
         version: master
         update: yes
 
-    - name: create python3.10 venv for pbgui
+    - name: create python3.12 venv for pbgui
       pip:
-        virtualenv_command: python3.10 -m venv
+        virtualenv_command: python3.12 -m venv
         virtualenv: "{{ install_dir }}/venv_pbgui"
         requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
         extra_args: --upgrade pip
@@ -297,9 +315,9 @@
         state: absent
       when: not install_pb6
 
-    - name: create python3.10 venv for pb7
+    - name: create python3.12 venv for pb7
       pip:
-        virtualenv_command: python3.10 -m venv
+        virtualenv_command: python3.12 -m venv
         virtualenv: "{{ install_dir }}/venv_pb7"
         requirements: "{{ install_dir }}/pb7/requirements.txt"
         extra_args: --upgrade pip
