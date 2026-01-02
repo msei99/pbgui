@@ -47,6 +47,20 @@
       when: pb7venv != ""
       ignore_errors: yes
 
+    - name: Install software-properties-common (for PPAs)
+      apt:
+        pkg:
+          - software-properties-common
+        update_cache: yes
+      become: yes
+
+    - name: Add deadsnakes/ppa
+      apt_repository:
+        repo: ppa:deadsnakes/ppa
+        state: present
+        update_cache: yes
+      become: yes
+
     - name: Install python3.12-venv
       apt:
         pkg:
