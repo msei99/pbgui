@@ -1586,7 +1586,27 @@ sudo_pw = """
     - install rclone
     - install rustup
     - update PB7 venv
+    - install PBGui venv
     - add IP-Address to hosts file
+    ```"""
+
+install_pbgui_venv = """
+    ```
+    Create or update a parallel PBGui virtual environment using Python 3.12.
+
+    What it does:
+    - Installs python3.12-venv (requires sudo)
+    - Creates/updates: ~/software/venv_pbgui312
+    - Installs dependencies from: <pbgui>/requirements312.txt
+
+    What it does NOT do:
+    - It does not switch the running PBGui/Streamlit instance to Python 3.12.
+
+    Next step (manual):
+    - Run: pbgui/setup/mig_py312.sh
+
+    Rollback (manual):
+    - Run: pbgui/setup/mig_py310.sh
     ```"""
 
 update_pb7_venv = """

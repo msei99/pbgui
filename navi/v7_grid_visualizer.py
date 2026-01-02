@@ -46,67 +46,83 @@ def get_GridTrailing_mode(trailing_grid_ratio: float) -> GridTrailingMode:
 
 @dataclass
 class GVData:
-    exchange_params: ExchangeParams = ExchangeParams(min_qty=0.001, min_cost=1.0, qty_step=0.001, price_step=0.01, c_mult=1.0)
-    state_params: StateParams = StateParams(
-        balance=1000.0,
-        order_book=OrderBook(bid=100.0, ask=100),
-        ema_bands=EmaBands(lower=100.0, upper=100.0)
+    exchange_params: ExchangeParams = field(
+        default_factory=lambda: ExchangeParams(
+            min_qty=0.001,
+            min_cost=1.0,
+            qty_step=0.001,
+            price_step=0.01,
+            c_mult=1.0,
+        )
+    )
+    state_params: StateParams = field(
+        default_factory=lambda: StateParams(
+            balance=1000.0,
+            order_book=OrderBook(bid=100.0, ask=100),
+            ema_bands=EmaBands(lower=100.0, upper=100.0),
+        )
     )
         
-    normal_bot_params_long: BotParams = BotParams(
-        wallet_exposure_limit=1.5,
-        n_positions=1,
-        entry_initial_qty_pct=0.03,
-        entry_initial_ema_dist=0.03,
-        entry_grid_spacing_pct=0.04,
-        entry_grid_spacing_weight=1.2,
-        entry_grid_double_down_factor=1.2,
-        entry_trailing_threshold_pct=0.05,
-        entry_trailing_retracement_pct=0.03,
-        entry_trailing_grid_ratio=-0.7, 
+    normal_bot_params_long: BotParams = field(
+        default_factory=lambda: BotParams(
+            wallet_exposure_limit=1.5,
+            n_positions=1,
+            entry_initial_qty_pct=0.03,
+            entry_initial_ema_dist=0.03,
+            entry_grid_spacing_pct=0.04,
+            entry_grid_spacing_weight=1.2,
+            entry_grid_double_down_factor=1.2,
+            entry_trailing_threshold_pct=0.05,
+            entry_trailing_retracement_pct=0.03,
+            entry_trailing_grid_ratio=-0.7,
 
-        close_grid_min_markup=0.03,
-        close_grid_markup_range=0.02,
-        close_grid_qty_pct=0.3,
-        close_trailing_threshold_pct=0.05,
-        close_trailing_retracement_pct=0.03,
-        close_trailing_qty_pct=0.3,
-        close_trailing_grid_ratio=0.0,
+            close_grid_min_markup=0.03,
+            close_grid_markup_range=0.02,
+            close_grid_qty_pct=0.3,
+            close_trailing_threshold_pct=0.05,
+            close_trailing_retracement_pct=0.03,
+            close_trailing_qty_pct=0.3,
+            close_trailing_grid_ratio=0.0,
+        )
     )
-    gridonly_bot_params_long = normal_bot_params_long.clone()
+    gridonly_bot_params_long: BotParams = field(init=False)
     
-    normal_bot_params_short: BotParams = BotParams(
-        wallet_exposure_limit=1.5,
-        n_positions=1,
-        entry_initial_qty_pct=0.03,
-        entry_initial_ema_dist=0.03,
-        entry_grid_spacing_pct=0.04,
-        entry_grid_spacing_weight=1.2,
-        entry_grid_double_down_factor=1.2,
-        entry_trailing_threshold_pct=0.05,
-        entry_trailing_retracement_pct=0.03,
-        entry_trailing_grid_ratio=-0.8, 
+    normal_bot_params_short: BotParams = field(
+        default_factory=lambda: BotParams(
+            wallet_exposure_limit=1.5,
+            n_positions=1,
+            entry_initial_qty_pct=0.03,
+            entry_initial_ema_dist=0.03,
+            entry_grid_spacing_pct=0.04,
+            entry_grid_spacing_weight=1.2,
+            entry_grid_double_down_factor=1.2,
+            entry_trailing_threshold_pct=0.05,
+            entry_trailing_retracement_pct=0.03,
+            entry_trailing_grid_ratio=-0.8,
 
-        close_grid_min_markup=0.03,
-        close_grid_markup_range=0.02,
-        close_grid_qty_pct=0.3,
-        close_trailing_threshold_pct=0.05,
-        close_trailing_retracement_pct=0.03,
-        close_trailing_qty_pct=0.3,
-        close_trailing_grid_ratio=0.0,
+            close_grid_min_markup=0.03,
+            close_grid_markup_range=0.02,
+            close_grid_qty_pct=0.3,
+            close_trailing_threshold_pct=0.05,
+            close_trailing_retracement_pct=0.03,
+            close_trailing_qty_pct=0.3,
+            close_trailing_grid_ratio=0.0,
+        )
     )
-    gridonly_bot_params_short = normal_bot_params_short.clone()
+    gridonly_bot_params_short: BotParams = field(init=False)
     
-    position_long_enty: Position = Position(size=0.00, price=100.0)
-    position_long_close: Position = Position(size=10.00, price=100.0)
-    position_short_entry: Position = Position(size=0.00, price=100.0)
-    position_short_close: Position = Position(size=-10.00, price=100.0)
+    position_long_enty: Position = field(default_factory=lambda: Position(size=0.00, price=100.0))
+    position_long_close: Position = field(default_factory=lambda: Position(size=10.00, price=100.0))
+    position_short_entry: Position = field(default_factory=lambda: Position(size=0.00, price=100.0))
+    position_short_close: Position = field(default_factory=lambda: Position(size=-10.00, price=100.0))
     
-    trailing_price_bundle: TrailingPriceBundle = TrailingPriceBundle(
-        max_since_open=100.0,
-        min_since_open=100.0,
-        max_since_min=100.0,
-        min_since_max=100.0
+    trailing_price_bundle: TrailingPriceBundle = field(
+        default_factory=lambda: TrailingPriceBundle(
+            max_since_open=100.0,
+            min_since_open=100.0,
+            max_since_min=100.0,
+            min_since_max=100.0,
+        )
     )
     
     long_entry_mode = GridTrailingMode.Unknown
@@ -119,19 +135,24 @@ class GVData:
     title: str = ""
     
     # Results
-    normal_entries_long = []
-    normal_closes_long = []
-    normal_entries_short = []
-    normal_closes_short = []
-    gridonly_entries_long = []
-    gridonly_closes_long = []
-    gridonly_entries_short = []
-    gridonly_closes_short = []
-    
-    long_entry_grid = 0
-    long_close_grid = 0
-    short_entry_grid = 0
-    short_close_grid = 0
+    normal_entries_long: List[Order] = field(default_factory=list)
+    normal_closes_long: List[Order] = field(default_factory=list)
+    normal_entries_short: List[Order] = field(default_factory=list)
+    normal_closes_short: List[Order] = field(default_factory=list)
+    gridonly_entries_long: List[Order] = field(default_factory=list)
+    gridonly_closes_long: List[Order] = field(default_factory=list)
+    gridonly_entries_short: List[Order] = field(default_factory=list)
+    gridonly_closes_short: List[Order] = field(default_factory=list)
+
+    long_entry_grid: int = 0
+    long_close_grid: int = 0
+    short_entry_grid: int = 0
+    short_close_grid: int = 0
+
+    def __post_init__(self):
+        # Derived params; must be per-instance (not shared class attributes)
+        self.gridonly_bot_params_long = self.normal_bot_params_long.clone()
+        self.gridonly_bot_params_short = self.normal_bot_params_short.clone()
     
     def to_json(self) -> str:
         # Only serialize bot_params_long and bot_params_short

@@ -505,6 +505,14 @@ def manage_master():
             st.session_state.view_update_master = True
             st.rerun()
 
+        if st.button("Install PBGui venv", disabled=not enable_install, help=pbgui_help.install_pbgui_venv):
+            vpsmanager.command = "master-pbgui-python312"
+            vpsmanager.command_text = "Install PBGui venv (Python 3.12)"
+            vpsmanager.update_master(debug = st.session_state.setup_debug, sudo_pw = st.session_state.sudo_pw)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
+
     # Init Status
     if pbremote.bucket:
         rclone_ok = f' ✅'
