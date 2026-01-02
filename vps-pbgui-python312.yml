@@ -34,6 +34,27 @@
         msg: "PBGui repo not found at {{ install_dir }}/pbgui (run VPS setup/update first)."
       when: not pbgui_repo.stat.exists
 
+    - name: Get current PBGui branch
+      command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ install_dir }}/pbgui"
+      register: current_branch
+      changed_when: false
+
+    - name: Update PBGui repository (keep current branch)
+      git:
+        repo: https://github.com/msei99/pbgui.git
+        dest: "{{ install_dir }}/pbgui"
+        version: "{{ (current_branch.stdout != 'HEAD') | ternary(current_branch.stdout, omit) }}"
+        update: yes
+        force: yes
+      register: pbgui_repo_update
+
+    - name: print pbgui_repo_update
+      debug:
+        var: pbgui_repo_update
+      tags: debug,never
+
     - name: Stop PBRun + PBRemote + PBCoinData
       shell: |
         source "{{ install_dir }}/venv_pbgui/bin/activate"
