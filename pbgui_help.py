@@ -1597,7 +1597,7 @@ install_pbgui_venv = """
     What it does:
     - Installs python3.12-venv (requires sudo)
     - Creates/updates: ~/software/venv_pbgui312
-    - Installs dependencies from: <pbgui>/requirements312.txt
+    - Installs dependencies from: <pbgui>/requirements.txt
 
     What it does NOT do:
     - It does not switch the running PBGui/Streamlit instance to Python 3.12.
@@ -1607,6 +1607,10 @@ install_pbgui_venv = """
 
     Rollback (manual):
     - Run: pbgui/setup/mig_py310.sh
+
+    Notes:
+    - requirements.txt is the default (Python 3.12)
+    - requirements310.txt keeps the pinned Python 3.10 baseline
     ```"""
 
 update_pb7_venv = """
@@ -1646,6 +1650,41 @@ Steps:
 - Start PBRun
 
 Note: sudo uses the VPS user password configured in the VPS settings.
+"""
+
+update_pbgui_venv_vps = """Create/update a parallel PBGui venv on the selected VPS using Python 3.12.
+
+Prerequisite:
+- Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
+
+What it does:
+- Stops PBRun + PBRemote + PBCoinData
+- Installs python3.12-venv (sudo)
+- Deletes and recreates: ~/software/venv_pbgui
+- Installs dependencies from: <pbgui>/requirements_vps.txt
+- Starts PBRun + PBRemote + PBCoinData
+
+Warning:
+- This replaces your existing venv_pbgui on the VPS.
+
+Note: sudo uses the VPS user password configured in the VPS settings.
+"""
+
+cleanup_vps = """Free disk space on the selected VPS.
+
+Prerequisite:
+- Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
+
+What it does:
+- Removes Snap (snapd)
+- Runs apt cleanup (autoremove/autoclean/clean)
+- Shrinks systemd journal logs (keeps ~1 day)
+
+Recommendation:
+- After big updates (PBGui/PB7) on small VPS, run this once to free disk space.
+
+Warning:
+- This removes Snap; only use it if you don't rely on snap-installed apps.
 """
 
 pb7_version_venv_python = """

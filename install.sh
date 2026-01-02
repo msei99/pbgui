@@ -4,12 +4,12 @@ if [ "$(lsb_release -si)" != "Ubuntu" ]; then
     echo "This script is only for Ubuntu"
     exit 1
 fi
-# Add deadsnakes/ppa for installing python3.10
+# Add deadsnakes/ppa for installing python3.10/python3.12
 sudo add-apt-repository ppa:deadsnakes/ppa -y
 
-# Install git, python3.10-venv, rclone, rustc and cargo
+# Install git, python3.10-venv, python3.12-venv, rclone, rustc and cargo
 sudo apt update
-sudo apt install git python3.10-venv rclone rustc cargo sshpass -y
+sudo apt install git python3.10-venv python3.12-venv rclone rustc cargo sshpass -y
 sudo apt install rustup -y
 
 # Update rust
@@ -38,7 +38,7 @@ deactivate
 # Clone the passivbot repository pb7
 git clone https://github.com/enarjord/passivbot.git pb7
 # Create a virtual environment for pb7
-python3.10 -m venv $DIR/venv_pb7
+python3.12 -m venv $DIR/venv_pb7
 # Activate the virtual environment
 source $DIR/venv_pb7/bin/activate
 # Upgrade pip
@@ -55,7 +55,7 @@ deactivate
 # Clone the pbgui repository
 git clone https://github.com/msei99/pbgui.git
 # Create a virtual environment for pbgui
-python3.10 -m venv $DIR/venv_pbgui
+python3.12 -m venv $DIR/venv_pbgui
 # Activate the virtual environment
 source $DIR/venv_pbgui/bin/activate
 # Upgrade pip

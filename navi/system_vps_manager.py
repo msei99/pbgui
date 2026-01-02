@@ -1253,6 +1253,19 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
+
+        if st.button(
+            "Update PBGui venv",
+            disabled=not vps.has_user_pw(),
+            help=pbgui_help.update_pbgui_venv_vps,
+            key=f"update_pbgui_venv_{vps.hostname}",
+        ):
+            vps.command = "vps-pbgui-python312"
+            vps.command_text = "Update PBGui venv"
+            vpsmanager.update_vps(vps, debug=st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
         col1, col2 = st.columns([1,0.8])
         with col1:
             if st.button("Update Linux", disabled=not vps.has_user_pw()):
@@ -1272,7 +1285,12 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
-        if st.button("Cleanup VPS", disabled=not vps.has_user_pw()):
+        if st.button(
+            "Cleanup VPS",
+            disabled=not vps.has_user_pw(),
+            help=pbgui_help.cleanup_vps,
+            key=f"cleanup_vps_{vps.hostname}",
+        ):
             vps.command = "vps-cleanup"
             vps.command_text = "Cleanup VPS"
             vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
