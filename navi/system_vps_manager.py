@@ -1231,6 +1231,18 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
+        if st.button(
+            "Update PB7 venv",
+            disabled=not vps.has_user_pw(),
+            help=pbgui_help.update_pb7_venv_vps,
+            key=f"update_pb7_venv_{vps.hostname}",
+        ):
+            vps.command = "vps-pb7-python312"
+            vps.command_text = "Update PB7 venv"
+            vpsmanager.update_vps(vps, debug=st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
         col1, col2 = st.columns([1,0.8])
         with col1:
             if st.button("Update Linux", disabled=not vps.has_user_pw()):

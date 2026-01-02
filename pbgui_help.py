@@ -1593,6 +1593,11 @@ update_pb7_venv = """
     ```
     Recreate your local PB7 virtual environment using Python 3.12.
     Requires sudo password (to install python3.12-venv).
+
+        Recommendation:
+        - It is possible to run the update while bots are active; they will be stopped automatically during the update and started again afterwards (via PBRun restart).
+        - Better: Move the bots to another VPS first, then update the venv.
+
     Steps:
     - Stop PBRun
     - Kill running PB7 processes (bots + workers)
@@ -1601,6 +1606,27 @@ update_pb7_venv = """
     - Install PB7 requirements and rebuild passivbot-rust
     - Start PBRun
     ```"""
+
+update_pb7_venv_vps = """Recreate PB7 venv on the selected VPS using Python 3.12.
+
+Prerequisite:
+- Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
+
+Recommendation:
+- It is possible to run the update while bots are active; they will be stopped automatically during the update and started again afterwards (via PBRun restart).
+- Better: Move the bots to another VPS first, then update the venv.
+
+Steps:
+- Stop PBRun on the VPS
+- Kill running PB7 processes (bots + workers)
+- Install python3.12-venv (sudo)
+- Delete and recreate venv_pb7 with python3.12
+- Update PB7 repository to the latest commit of the current branch
+- Install PB7 requirements and rebuild passivbot-rust
+- Start PBRun
+
+Note: sudo uses the VPS user password configured in the VPS settings.
+"""
 
 pb7_version_venv_python = """
 PB7 column
