@@ -1652,7 +1652,7 @@ Steps:
 Note: sudo uses the VPS user password configured in the VPS settings.
 """
 
-update_pbgui_venv_vps = """Create/update a parallel PBGui venv on the selected VPS using Python 3.12.
+update_pbgui_venv_vps = """Recreate the PBGui venv on the selected VPS using Python 3.12 (in-place).
 
 Prerequisite:
 - Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
@@ -1663,6 +1663,10 @@ What it does:
 - Deletes and recreates: ~/software/venv_pbgui
 - Installs dependencies from: <pbgui>/requirements_vps.txt
 - Starts PBRun + PBRemote + PBCoinData
+
+Note:
+- PBGui services will be restarted during this update (short downtime).
+- If PB6 is not installed on the VPS, Python 3.10 components may be removed to save disk space.
 
 Warning:
 - This replaces your existing venv_pbgui on the VPS.
