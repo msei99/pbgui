@@ -50,10 +50,32 @@ def list_vps():
 
     # Navigation
     with st.sidebar:
-        if st.button(":material/refresh:"):
+        if st.button(":material/refresh:", key="refresh_vps_sidebar"):
             vpsmanager.vpss = []
             vpsmanager.find_vps()
-            pbremote.systemts = 0  # Force reload all git data on next rerun
+            # Reload git/version/branch data immediately (avoid a second reload on rerun)
+            timestamp = round(datetime.now().timestamp())
+            with st.spinner("Loading git origins..."):
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                        future = ex.submit(pbremote.local_run.load_git_origin)
+                        future.result(timeout=5)
+                except concurrent.futures.TimeoutError:
+                    error_popup("Timeout: 'Loading git origins...' exceeded 5s")
+                except Exception as e:
+                    error_popup(f"Error loading git origins: {e}")
+            with st.spinner("Loading versions origins..."):
+                pbremote.local_run.load_versions_origin()
+            with st.spinner("Loading local Versions..."):
+                pbremote.local_run.load_versions()
+            with st.spinner("Loading local git commits..."):
+                pbremote.local_run.load_git_commits()
+            with st.spinner("Loading git branches history..."):
+                if hasattr(pbremote.local_run, 'load_git_branches_history'):
+                    pbremote.local_run.load_git_branches_history()
+                if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
+                    pbremote.local_run.load_pb7_branches_history()
+            pbremote.systemts = timestamp
             pbremote.update_remote_servers()
             st.rerun()
         if st.button(":material/add_box:"):
@@ -1179,12 +1201,36 @@ def manage_vps():
         st.checkbox("Debug", key="setup_debug")
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
-            if st.button(":material/refresh:"):
+            if st.button(":material/refresh:", key=f"refresh_vps_view_{vps.hostname}"):
                 monitor.d_v7 = []
                 monitor.d_multi = []
                 monitor.d_single = []
                 if "rclone_test" in st.session_state:
                     del st.session_state.rclone_test
+                # Also refresh git/branch data used for version/commit comparisons
+                timestamp = round(datetime.now().timestamp())
+                with st.spinner("Loading git origins..."):
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                            future = ex.submit(pbremote.local_run.load_git_origin)
+                            future.result(timeout=5)
+                    except concurrent.futures.TimeoutError:
+                        error_popup("Timeout: 'Loading git origins...' exceeded 5s")
+                    except Exception as e:
+                        error_popup(f"Error loading git origins: {e}")
+                with st.spinner("Loading versions origins..."):
+                    pbremote.local_run.load_versions_origin()
+                with st.spinner("Loading local Versions..."):
+                    pbremote.local_run.load_versions()
+                with st.spinner("Loading local git commits..."):
+                    pbremote.local_run.load_git_commits()
+                with st.spinner("Loading git branches history..."):
+                    if hasattr(pbremote.local_run, 'load_git_branches_history'):
+                        pbremote.local_run.load_git_branches_history()
+                    if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
+                        pbremote.local_run.load_pb7_branches_history()
+                pbremote.systemts = timestamp
+                pbremote.update_remote_servers()
                 st.rerun()
         with col2:
             if st.button(":material/home:"):
