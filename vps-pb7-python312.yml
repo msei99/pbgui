@@ -1,26 +1,21 @@
 ---
-# Recreate PB7 venv with Python 3.12 on localhost (Master)
+# Recreate PB7 venv with Python 3.12 on a VPS
 # Steps:
 # 1. Stop PBRun + PBRemote
-# 2. Kill running pb7 processes (bots + workers)
+# 2. Kill running PB7 processes (bots + workers)
 # 3. Install python3.12-venv
 # 4. Remove old venv_pb7
 # 5. Update pb7 repository (keep current branch)
 # 6. Create new python3.12 venv for pb7 + install requirements (upgrade pip)
 # 7. Build passivbot-rust with maturin
-# 8. Start PBRun
-# 9. Start PBRun + PBRemote
+# 8. Start PBRun + PBRemote
 
-- hosts: localhost
-  gather_facts: "{{ debug }}"
+- hosts: "{{ hostname }}"
+  gather_facts: true
 
   vars:
     ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
-    user_pw: "{{ user_pw }}"
-    pbgdir: "{{ pbgdir }}"
-    pb7dir: "{{ pb7dir }}"
-    pb7venv: "{{ pb7venv }}"
 
   tasks:
     - name: display facts
@@ -28,23 +23,25 @@
         var: ansible_facts
       tags: debug,never
 
+    - name: get install_dir
+      set_fact:
+        install_dir: "{{ ansible_user_dir }}/software"
+
     - name: Stop PBRun + PBRemote
       shell: |
-        python "{{ pbgdir }}/starter.py" -k PBRun PBRemote
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -k PBRun PBRemote
       args:
         executable: /bin/bash
-        chdir: "{{ pbgdir }}"
-      when: pbgdir != ""
+        chdir: "{{ install_dir }}/pbgui"
       ignore_errors: yes
 
     - name: kill all pb7 processes (bots)
-      shell: "kill $(ps -ef | grep {{ pb7dir }}/src/main.py | grep -v grep | awk '{print $2}')"
-      when: pb7dir != ""
+      shell: "kill $(ps -ef | grep {{ install_dir }}/pb7/src/main.py | grep -v grep | awk '{print $2}')"
       ignore_errors: yes
 
     - name: kill all pb7 processes (workers using pb7 venv)
-      shell: "kill $(ps -ef | grep {{ pb7venv }}/bin/python | grep -v grep | awk '{print $2}')"
-      when: pb7venv != ""
+      shell: "kill $(ps -ef | grep {{ install_dir }}/venv_pb7/bin/python | grep -v grep | awk '{print $2}')"
       ignore_errors: yes
 
     - name: Install python3.12-venv
@@ -57,27 +54,24 @@
 
     - name: Remove old pb7 venv
       file:
-        path: "{{ pb7venv }}"
+        path: "{{ install_dir }}/venv_pb7"
         state: absent
-      when: pb7venv != ""
       become: yes
 
     - name: Get current pb7 branch
       command: git rev-parse --abbrev-ref HEAD
       args:
-        chdir: "{{ pb7dir }}"
+        chdir: "{{ install_dir }}/pb7"
       register: current_pb7_branch
       changed_when: false
-      when: pb7dir != ""
 
     - name: update passivbot repository for pb7 (keep current branch)
       git:
         repo: https://github.com/enarjord/passivbot.git
-        dest: "{{ pb7dir }}"
+        dest: "{{ install_dir }}/pb7"
         version: "{{ current_pb7_branch.stdout }}"
         update: yes
         force: yes
-      when: pb7dir != ""
       register: pb7_repo
 
     - name: print pb7_repo
@@ -88,20 +82,18 @@
     - name: create python3.12 venv for pb7
       pip:
         virtualenv_command: python3.12 -m venv
-        virtualenv: "{{ pb7venv }}"
-        requirements: "{{ pb7dir }}/requirements.txt"
+        virtualenv: "{{ install_dir }}/venv_pb7"
+        requirements: "{{ install_dir }}/pb7/requirements.txt"
         extra_args: --upgrade pip
-      when: pb7dir != "" and pb7venv != ""
 
     - name: Build passivbot-rust with maturin
       shell: |
         source ~/.profile || source ~/.bashrc || true
-        source "{{ pb7venv }}/bin/activate"
+        source "{{ install_dir }}/venv_pb7/bin/activate"
         maturin develop --release
       args:
-        chdir: "{{ pb7dir }}/passivbot-rust"
+        chdir: "{{ install_dir }}/pb7/passivbot-rust"
         executable: /bin/bash
-      when: pb7dir != "" and pb7venv != ""
       register: maturin_result
 
     - name: print maturin result
@@ -111,8 +103,8 @@
 
     - name: Start PBRun + PBRemote
       shell: |
-        python "{{ pbgdir }}/starter.py" -s PBRun PBRemote
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -s PBRun PBRemote
       args:
         executable: /bin/bash
-        chdir: "{{ pbgdir }}"
-      when: pbgdir != ""
+        chdir: "{{ install_dir }}/pbgui"
