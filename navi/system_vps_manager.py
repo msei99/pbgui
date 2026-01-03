@@ -16,8 +16,16 @@ import concurrent.futures
 def list_vps():
     vpsmanager = st.session_state.vpsmanager
     pbremote = st.session_state.pbremote
+    # Keep local displayed versions/commits fresh (cheap; avoid 1h stale UI)
+    try:
+        pbremote.local_run.load_versions()
+        pbremote.local_run.load_git_commits()
+    except Exception as e:
+        error_popup(f"Error loading local versions/commits: {e}")
+
     timestamp = round(datetime.now().timestamp())
-    if timestamp - pbremote.systemts > 3600:
+    force_origin_reload = st.session_state.pop("force_vps_origin_reload", False)
+    if force_origin_reload or (timestamp - pbremote.systemts > 3600):
         with st.spinner("Loading git origins..."):
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -2163,6 +2171,9 @@ def view_update_master():
         "- This can take some minutes.\n"
         "- After update is successful you can go back to Overview.\n")
     vpsmanager.view_update_status()
+    # After a successful update, force a one-time refresh of origin/branch data on return to Overview.
+    if getattr(vpsmanager, "update_status", None) == "successful":
+        st.session_state["force_vps_origin_reload"] = True
     vpsmanager.view_update_log()
 
 def view_update():
@@ -2184,6 +2195,9 @@ def view_update():
         "- This can take some minutes.\n"
         "- After update is successful you can go back to Manage VPS.\n")
     vps.view_update_status()
+    # After a successful update, force a one-time refresh of origin/branch data on return to Overview.
+    if getattr(vps, "update_status", None) == "successful":
+        st.session_state["force_vps_origin_reload"] = True
     vps.view_update_log()
 
 def view_init():
