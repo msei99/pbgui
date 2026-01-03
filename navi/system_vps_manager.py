@@ -16,6 +16,9 @@ import concurrent.futures
 def list_vps():
     vpsmanager = st.session_state.vpsmanager
     pbremote = st.session_state.pbremote
+    timestamp = round(datetime.now().timestamp())
+    force_origin_reload = st.session_state.pop("force_vps_origin_reload", False)
+
     # Keep local displayed versions/commits fresh (cheap; avoid 1h stale UI)
     try:
         pbremote.local_run.load_versions()
@@ -23,8 +26,10 @@ def list_vps():
     except Exception as e:
         error_popup(f"Error loading local versions/commits: {e}")
 
-    timestamp = round(datetime.now().timestamp())
-    force_origin_reload = st.session_state.pop("force_vps_origin_reload", False)
+    # Force-refresh PB7 venv Python version after venv updates
+    if hasattr(pbremote.local_run, "update_pb7_python_version"):
+        pbremote.local_run.update_pb7_python_version(force=force_origin_reload)
+
     if force_origin_reload or (timestamp - pbremote.systemts > 3600):
         with st.spinner("Loading git origins..."):
             try:
@@ -439,6 +444,12 @@ def manage_master():
     vpsmanager = st.session_state.vpsmanager
     # Init PBRemote
     pbremote = st.session_state.pbremote
+
+    # If we just ran an update, force-refresh the cached PB7 venv Python version
+    force_origin_reload = st.session_state.pop("force_vps_origin_reload", False)
+    if hasattr(pbremote.local_run, "update_pb7_python_version"):
+        pbremote.local_run.update_pb7_python_version(force=force_origin_reload)
+
     # Init coindata
     coindata = st.session_state.pbcoindata
     # Init Monitor
@@ -479,6 +490,8 @@ def manage_master():
                 monitor.d_v7 = []
                 monitor.d_multi = []
                 monitor.d_single = []
+                if hasattr(pbremote.local_run, "update_pb7_python_version"):
+                    pbremote.local_run.update_pb7_python_version(force=True)
                 st.rerun()
         with col2:
             if st.button(":material/home:"):
@@ -690,6 +703,9 @@ def manage_master():
                                     pbremote.local_run.load_git_commits()
                                 except Exception as e:
                                     error_popup(f"Error loading local versions/commits: {e}")
+
+                                if hasattr(pbremote.local_run, "update_pb7_python_version"):
+                                    pbremote.local_run.update_pb7_python_version(force=True)
 
                                 try:
                                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -923,6 +939,9 @@ def manage_master():
                                         pbremote.local_run.load_git_commits()
                                     except Exception as e:
                                         error_popup(f"Error loading local versions/commits: {e}")
+
+                                    if hasattr(pbremote.local_run, "update_pb7_python_version"):
+                                        pbremote.local_run.update_pb7_python_version(force=True)
 
                                     try:
                                         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
