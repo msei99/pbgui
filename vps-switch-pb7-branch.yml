@@ -102,7 +102,14 @@
       listen: "restart pb7"
 
     - name: kill all pb7 processes
-      shell: "kill $(ps -ef | grep {{ pb7dir }}/src/main.py | grep -v grep | awk '{print $2}')"
+      shell: |
+        pids="$(ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}')"
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
       listen: "restart pb7"
       ignore_errors: yes
 

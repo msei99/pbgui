@@ -56,11 +56,25 @@
             chdir: "{{ install_dir }}/pbgui"
 
         - name: kill all pb6 processes
-          shell: "kill $(ps -ef | grep {{ install_dir }}/pb6/passivbot | grep -v grep | awk '{print $2}')"
+          shell: |
+            pids="$(ps -ef | grep "{{ install_dir }}/pb6/passivbot" | grep -v grep | awk '{print $2}')"
+            if [ -n "$pids" ]; then
+              kill $pids
+            fi
+          args:
+            executable: /bin/bash
+          changed_when: false
           ignore_errors: yes
 
         - name: kill all pb7 processes
-          shell: "kill $(ps -ef | grep {{ install_dir }}/pb7/src/main.py | grep -v grep | awk '{print $2}')"
+          shell: |
+            pids="$(ps -ef | grep "{{ install_dir }}/pb7/src/main.py" | grep -v grep | awk '{print $2}')"
+            if [ -n "$pids" ]; then
+              kill $pids
+            fi
+          args:
+            executable: /bin/bash
+          changed_when: false
           ignore_errors: yes
 
         - name: Disable swapfile
