@@ -31,19 +31,24 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Install software-properties-common (for PPAs)
-      apt:
-        pkg:
-          - software-properties-common
-        update_cache: yes
-      become: yes
+    - name: Detect OS + arch (for Ubuntu 20.04 x86_64 uv path)
+      shell: |
+        set -euo pipefail
+        . /etc/os-release
+        echo "${ID:-unknown} ${VERSION_ID:-unknown}"
+        uname -m
+      args:
+        executable: /bin/bash
+      register: os_arch
+      changed_when: false
 
-    - name: Add deadsnakes/ppa
-      apt_repository:
-        repo: ppa:deadsnakes/ppa
-        state: present
-        update_cache: yes
-      become: yes
+    - name: Set use_uv_python312 flag (Ubuntu 20.04 + x86_64)
+      set_fact:
+        use_uv_python312: >-
+          {{ (os_arch.stdout_lines[0].startswith('ubuntu 20.04'))
+             and (os_arch.stdout_lines[1] == 'x86_64') }}
+        uv_bin: "{{ lookup('env', 'HOME') }}/.local/bin/uv"
+      changed_when: false
 
     - name: Install python3.12-venv
       apt:
@@ -52,6 +57,52 @@
         update_cache: yes
         clean: yes
       become: yes
+      when: not (use_uv_python312 | default(false))
+
+    - name: Install curl + ca-certificates for uv (Ubuntu 20.04 x86_64)
+      apt:
+        pkg:
+          - curl
+          - ca-certificates
+        update_cache: yes
+        clean: yes
+      become: yes
+      when: use_uv_python312 | default(false)
+
+    - name: Install uv (Ubuntu 20.04 x86_64)
+      shell: |
+        set -euo pipefail
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+      args:
+        executable: /bin/bash
+        creates: "{{ uv_bin }}"
+      when: use_uv_python312 | default(false)
+
+    - name: Install Python 3.12 via uv (Ubuntu 20.04 x86_64)
+      shell: |
+        set -euo pipefail
+        "{{ uv_bin }}" python install 3.12
+      args:
+        executable: /bin/bash
+      register: uv_python_install
+      changed_when: uv_python_install.rc == 0 and (uv_python_install.stdout | default('')) != ''
+      when: use_uv_python312 | default(false)
+
+    - name: Create Python 3.12 venv for PBGui via uv (Ubuntu 20.04 x86_64)
+      shell: |
+        set -euo pipefail
+        "{{ uv_bin }}" venv --python 3.12 "{{ pbgvenv312 }}"
+      args:
+        executable: /bin/bash
+        creates: "{{ pbgvenv312 }}/bin/activate"
+      when: (use_uv_python312 | default(false)) and pbgdir != "" and pbgvenv312 != ""
+
+    - name: Install PBGui requirements into uv venv (Ubuntu 20.04 x86_64)
+      pip:
+        requirements: "{{ pbgdir }}/requirements.txt"
+        executable: "{{ pbgvenv312 }}/bin/pip"
+        extra_args: --upgrade pip
+      when: (use_uv_python312 | default(false)) and pbgdir != "" and pbgvenv312 != ""
 
     - name: create python3.12 venv for PBGui
       pip:
@@ -59,4 +110,4 @@
         virtualenv: "{{ pbgvenv312 }}"
         requirements: "{{ pbgdir }}/requirements.txt"
         extra_args: --upgrade pip
-      when: pbgdir != "" and pbgvenv312 != ""
+      when: (not (use_uv_python312 | default(false))) and pbgdir != "" and pbgvenv312 != ""
