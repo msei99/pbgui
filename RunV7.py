@@ -664,6 +664,7 @@ class V7Instance():
 
     @st.dialog("Paste config", width="large")
     def import_instance(self):
+        invalid_json = False
         # Init session_state for keys
         if "import_run_v7_user" in st.session_state:
             if st.session_state.import_run_v7_user != self.user:
@@ -675,13 +676,16 @@ class V7Instance():
             if st.session_state.import_run_v7_config != json.dumps(self.config.config, indent=4):
                 try:
                     self.config.config = json.loads(st.session_state.import_run_v7_config)
-                except:
-                    error_popup("Invalid JSON")
+                except Exception:
+                    invalid_json = True
             st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
             if self.config.live.user in self._users.list_v7():
                 self._user = self.config.live.user
         else:
             st.session_state.import_run_v7_config = ""
+
+        if invalid_json:
+            st.error('Invalid JSON (use true/false/null, not True/False/None)', icon="⚠️")
         # Display import
         st.selectbox('User',self._users.list_v7(), key="import_run_v7_user")
         st.text_area(f'config', key="import_run_v7_config", height=500)

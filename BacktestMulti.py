@@ -21,7 +21,8 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pbvenv, pbdir, validateJSON, config_pretty_str, replace_special_chars
+from pbgui_func import PBGDIR, pbvenv, pbdir, validateJSON, replace_special_chars
+from pbgui_purefunc import config_pretty_str
 import uuid
 from Base import Base
 from Config import Config

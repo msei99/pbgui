@@ -248,12 +248,6 @@ def validateHJSON(hjsonData):
         return False
     return True
 
-def config_pretty_str(config: dict):
-    pretty_str = pprint.pformat(config)
-    for r in [("'", '"'), ("True", "true"), ("False", "false")]:
-        pretty_str = pretty_str.replace(*r)
-    return pretty_str
-
 def upload_pbconfigdb(config: str, symbol: str, source_name : str):
     if validateJSON(config):
         uniq = str(uuid.uuid4().hex)

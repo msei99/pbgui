@@ -11,7 +11,8 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, config_pretty_str, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
+from pbgui_purefunc import config_pretty_str
 from pbgui_purefunc import load_ini, save_ini
 from PBCoinData import CoinData, normalize_symbol
 import uuid
@@ -1000,15 +1001,18 @@ class BacktestV7Item(ConfigV7Editor):
 
     @st.dialog("Paste config", width="large")
     def import_instance(self):
+        invalid_json = False
         # Init session_state for keys
         if "import_backtest_v7_config" in st.session_state:
             if st.session_state.import_backtest_v7_config != json.dumps(self.config.config, indent=4):
                 try:
                     self.config.config = json.loads(st.session_state.import_backtest_v7_config)
-                except:
-                    st.error("Invalid JSON")
-                    # error_popup("Invalid JSON")
+                except Exception:
+                    invalid_json = True
             st.session_state.import_backtest_v7_config = json.dumps(self.config.config, indent=4)
+
+        if invalid_json:
+            st.error('Invalid JSON (use true/false/null, not True/False/None)', icon="⚠️")
         # Display import
         st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_backtest_v7_config", height=500)
         col1, col2 = st.columns([1,1])
