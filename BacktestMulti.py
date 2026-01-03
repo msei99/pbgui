@@ -2,7 +2,11 @@ import streamlit as st
 from bokeh.plotting import figure
 from bokeh.palettes import Category20_20, Category20b_20, Category20c_20
 from bokeh.models import NumeralTickFormatter, HoverTool
-from streamlit_bokeh import streamlit_bokeh
+try:
+    from streamlit_bokeh import streamlit_bokeh  # type: ignore
+except Exception:
+    def streamlit_bokeh(fig, **kwargs):
+        return st.bokeh_chart(fig, use_container_width=kwargs.get("use_container_width", True))
 import pbgui_help
 import json
 import psutil
