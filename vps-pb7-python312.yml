@@ -37,11 +37,25 @@
       ignore_errors: yes
 
     - name: kill all pb7 processes (bots)
-      shell: "kill $(ps -ef | grep {{ install_dir }}/pb7/src/main.py | grep -v grep | awk '{print $2}')"
+      shell: |
+        pids="$(ps -ef | grep "{{ install_dir }}/pb7/src/main.py" | grep -v grep | awk '{print $2}')"
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
       ignore_errors: yes
 
     - name: kill all pb7 processes (workers using pb7 venv)
-      shell: "kill $(ps -ef | grep {{ install_dir }}/venv_pb7/bin/python | grep -v grep | awk '{print $2}')"
+      shell: |
+        pids="$(ps -ef | grep "{{ install_dir }}/venv_pb7/bin/python" | grep -v grep | awk '{print $2}')"
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
       ignore_errors: yes
 
     - name: Install python3.12-venv
