@@ -56,10 +56,13 @@ def validateHJSON(hjsonData):
     return True
 
 def config_pretty_str(config: dict):
-    pretty_str = pprint.pformat(config)
-    for r in [("'", '"'), ("True", "true"), ("False", "false")]:
-        pretty_str = pretty_str.replace(*r)
-    return pretty_str
+    try:
+        return json.dumps(config, indent=4)
+    except TypeError:
+        pretty_str = pprint.pformat(config)
+        for r in [("'", '"'), ("True", "true"), ("False", "false"), ("None", "null")]:
+            pretty_str = pretty_str.replace(*r)
+        return pretty_str
 
 def load_symbols_from_ini(exchange: str, market_type: str):
     pb_config = configparser.ConfigParser()

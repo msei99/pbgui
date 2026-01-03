@@ -1,7 +1,8 @@
 import streamlit as st
 from pathlib import Path
 import json
-from pbgui_func import validateJSON, config_pretty_str, error_popup
+from pbgui_func import validateJSON, error_popup
+from pbgui_purefunc import config_pretty_str
 import pbgui_help
 import traceback
 import multiprocessing
