@@ -57,12 +57,20 @@
       changed_when: false
 
     - name: kill all pb7 processes (bots)
-      shell: "kill $(ps -ef | grep {{ pb7dir }}/src/main.py | grep -v grep | awk '{print $2}')"
+      shell: |
+        pids=$(ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}')
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
       when: pb7dir != ""
       ignore_errors: yes
 
     - name: kill all pb7 processes (workers using pb7 venv)
-      shell: "kill $(ps -ef | grep {{ pb7venv }}/bin/python | grep -v grep | awk '{print $2}')"
+      shell: |
+        pids=$(ps -ef | grep "{{ pb7venv }}/bin/python" | grep -v grep | awk '{print $2}')
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
       when: pb7venv != ""
       ignore_errors: yes
 
@@ -76,12 +84,10 @@
       when: not (use_uv_python312 | default(false))
 
     - name: Install curl + ca-certificates for uv (Ubuntu 20.04 x86_64)
-      apt:
-        pkg:
-          - curl
-          - ca-certificates
-        update_cache: yes
-        clean: yes
+      raw: |
+        set -e
+        apt-get update -y
+        DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates
       become: yes
       when: use_uv_python312 | default(false)
 
