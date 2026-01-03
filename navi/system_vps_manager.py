@@ -683,14 +683,39 @@ def manage_master():
                     with col_btn1:
                         if st.button("🔄 Reload", key="reload_master_branches", width="stretch"):
                             with st.spinner("Reloading..."):
+                                # Also refresh version/commit/origin data (not only branch history)
+                                timestamp = round(datetime.now().timestamp())
+                                try:
+                                    pbremote.local_run.load_versions()
+                                    pbremote.local_run.load_git_commits()
+                                except Exception as e:
+                                    error_popup(f"Error loading local versions/commits: {e}")
+
+                                try:
+                                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                                        future = ex.submit(pbremote.local_run.load_git_origin)
+                                        future.result(timeout=5)
+                                except concurrent.futures.TimeoutError:
+                                    error_popup("Timeout: 'Loading git origins...' exceeded 5s")
+                                except Exception as e:
+                                    error_popup(f"Error loading git origins: {e}")
+
+                                try:
+                                    pbremote.local_run.load_versions_origin()
+                                except Exception as e:
+                                    error_popup(f"Error loading versions origin: {e}")
+
                                 if hasattr(pbremote.local_run, 'load_git_branches_history'):
                                     pbremote.local_run.load_git_branches_history()
                                 if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
                                     pbremote.local_run.load_pb7_branches_history()
+                                pbremote.systemts = timestamp
                                 # Reset commit counters for all branches
                                 if 'master_commits_loaded' in st.session_state:
                                     del st.session_state.master_commits_loaded
-                            st.rerun(scope="fragment")
+                            # Keep expander open and rerun full page so status/table refreshes too.
+                            st.session_state.pbgui_expander_open = True
+                            st.rerun()
                     with col_btn2:
                         if st.button("🔽 +50", key="load_more_top_master", width="stretch"):
                             if 'master_commits_loaded' not in st.session_state:
@@ -891,12 +916,37 @@ def manage_master():
                         with col_btn1:
                             if st.button("🔄 Reload", key="reload_master_pb7_branches", width="stretch"):
                                 with st.spinner("Reloading..."):
+                                    # Also refresh version/commit/origin data (not only branch history)
+                                    timestamp = round(datetime.now().timestamp())
+                                    try:
+                                        pbremote.local_run.load_versions()
+                                        pbremote.local_run.load_git_commits()
+                                    except Exception as e:
+                                        error_popup(f"Error loading local versions/commits: {e}")
+
+                                    try:
+                                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                                            future = ex.submit(pbremote.local_run.load_git_origin)
+                                            future.result(timeout=5)
+                                    except concurrent.futures.TimeoutError:
+                                        error_popup("Timeout: 'Loading git origins...' exceeded 5s")
+                                    except Exception as e:
+                                        error_popup(f"Error loading git origins: {e}")
+
+                                    try:
+                                        pbremote.local_run.load_versions_origin()
+                                    except Exception as e:
+                                        error_popup(f"Error loading versions origin: {e}")
+
                                     if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
                                         pbremote.local_run.load_pb7_branches_history()
+                                    pbremote.systemts = timestamp
                                     # Reset commit counters for all branches
                                     if 'master_pb7_commits_loaded' in st.session_state:
                                         del st.session_state.master_pb7_commits_loaded
-                                st.rerun(scope="fragment")
+                                # Keep expander open and rerun full page so status/table refreshes too.
+                                st.session_state.pb7_expander_open = True
+                                st.rerun()
                         with col_btn2:
                             if st.button("🔽 +50", key="load_more_top_master_pb7", width="stretch"):
                                 if 'master_pb7_commits_loaded' not in st.session_state:
