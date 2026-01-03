@@ -50,10 +50,32 @@ def list_vps():
 
     # Navigation
     with st.sidebar:
-        if st.button(":material/refresh:"):
+        if st.button(":material/refresh:", key="refresh_vps_sidebar"):
             vpsmanager.vpss = []
             vpsmanager.find_vps()
-            pbremote.systemts = 0  # Force reload all git data on next rerun
+            # Reload git/version/branch data immediately (avoid a second reload on rerun)
+            timestamp = round(datetime.now().timestamp())
+            with st.spinner("Loading git origins..."):
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                        future = ex.submit(pbremote.local_run.load_git_origin)
+                        future.result(timeout=5)
+                except concurrent.futures.TimeoutError:
+                    error_popup("Timeout: 'Loading git origins...' exceeded 5s")
+                except Exception as e:
+                    error_popup(f"Error loading git origins: {e}")
+            with st.spinner("Loading versions origins..."):
+                pbremote.local_run.load_versions_origin()
+            with st.spinner("Loading local Versions..."):
+                pbremote.local_run.load_versions()
+            with st.spinner("Loading local git commits..."):
+                pbremote.local_run.load_git_commits()
+            with st.spinner("Loading git branches history..."):
+                if hasattr(pbremote.local_run, 'load_git_branches_history'):
+                    pbremote.local_run.load_git_branches_history()
+                if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
+                    pbremote.local_run.load_pb7_branches_history()
+            pbremote.systemts = timestamp
             pbremote.update_remote_servers()
             st.rerun()
         if st.button(":material/add_box:"):
@@ -183,12 +205,12 @@ def list_vps():
         "Start": datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S"),
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
-        "PBGui": f'{pbremote.pbgui_version}',
+        "PBGui": f"{pbremote.pbgui_version}{'' if getattr(pbremote, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pbgui_python'))}",
         "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
-        "PB7": f'{pbremote.pb7_version}',
+        "PB7": f"{pbremote.pb7_version}{'' if getattr(pbremote, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pb7_python'))}",
         "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7,
         "API Sync": "✅"
@@ -379,17 +401,28 @@ def list_vps():
             "Start": boot,
             "Reboot": reboot,
             "Updates": server.upgrades,
-            "PBGui": f'{server.pbgui_version}',
+            "PBGui": f"{server.pbgui_version}{'' if getattr(server, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pbgui_python'))}",
             "PBGui Branch": f'{server_branch} ({server_commit_short})',
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,
-            "PB7": f'{server.pb7_version}',
+            "PB7": f"{server.pb7_version}{'' if getattr(server, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pb7_python'))}",
             "PB7 Branch": f'{server_pb7_branch} ({server_pb7_commit_short})',
             "PB7 github": pb7,
             "API Sync": api_sync
         })
-    st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
+    column_config = None
+    if hasattr(st, "column_config"):
+        column_config = {
+            "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
+            "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
+        }
+    st.data_editor(
+        data=d,
+        height=36 + (len(d)) * 35,
+        key=f"vps_overview_{st.session_state.ed_key}",
+        column_config=column_config,
+    )
     st.info("Select your VPS in the sidebar to get a detailed VPS report.")
     with st.sidebar:
         sync_api()
@@ -486,6 +519,22 @@ def manage_master():
             st.session_state.view_update_master = True
             st.rerun()
 
+        if st.button("Update PB7 venv", disabled=not enable_install, help=pbgui_help.update_pb7_venv):
+            vpsmanager.command = "master-pb7-python312"
+            vpsmanager.command_text = "Update PB7 venv"
+            vpsmanager.update_master(debug = st.session_state.setup_debug, sudo_pw = st.session_state.sudo_pw)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
+
+        if st.button("Install PBGui venv", disabled=not enable_install, help=pbgui_help.install_pbgui_venv):
+            vpsmanager.command = "master-pbgui-python312"
+            vpsmanager.command_text = "Install PBGui venv (Python 3.12)"
+            vpsmanager.update_master(debug = st.session_state.setup_debug, sudo_pw = st.session_state.sudo_pw)
+            del st.session_state.manage_master
+            st.session_state.view_update_master = True
+            st.rerun()
+
     # Init Status
     if pbremote.bucket:
         rclone_ok = f' ✅'
@@ -572,12 +621,12 @@ def manage_master():
         "Start": datetime.fromtimestamp(pbremote.boot).strftime("%Y-%m-%d %H:%M:%S"),
         "Reboot": reboot,
         "Updates": pbremote.local_run.upgrades,
-        "PBGui": f'{pbremote.pbgui_version}',
+        "PBGui": f"{pbremote.pbgui_version}{'' if getattr(pbremote, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pbgui_python'))}",
         "PBGui Branch": f'{master_branch} ({master_commit[:7]})',
         "PBGui github": pbgui,
         "PB6": f'{pbremote.pb6_version}',
         "PB6 github": pb6,
-        "PB7": f'{pbremote.pb7_version}',
+        "PB7": f"{pbremote.pb7_version}{'' if getattr(pbremote, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pb7_python'))}",
         "PB7 Branch": f'{master_pb7_branch} ({master_pb7_commit[:7]})',
         "PB7 github": pb7
     })
@@ -997,7 +1046,18 @@ def manage_master():
         
         master_pb7_branch_management()
     
-    st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
+    column_config = None
+    if hasattr(st, "column_config"):
+        column_config = {
+            "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
+            "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
+        }
+    st.data_editor(
+        data=d,
+        height=36 + (len(d)) * 35,
+        key=f"vps_overview_{st.session_state.ed_key}",
+        column_config=column_config,
+    )
     monitor.server = pbremote
     monitor.servers = []
     monitor.servers.append(monitor.server)
@@ -1141,12 +1201,36 @@ def manage_vps():
         st.checkbox("Debug", key="setup_debug")
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
-            if st.button(":material/refresh:"):
+            if st.button(":material/refresh:", key=f"refresh_vps_view_{vps.hostname}"):
                 monitor.d_v7 = []
                 monitor.d_multi = []
                 monitor.d_single = []
                 if "rclone_test" in st.session_state:
                     del st.session_state.rclone_test
+                # Also refresh git/branch data used for version/commit comparisons
+                timestamp = round(datetime.now().timestamp())
+                with st.spinner("Loading git origins..."):
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                            future = ex.submit(pbremote.local_run.load_git_origin)
+                            future.result(timeout=5)
+                    except concurrent.futures.TimeoutError:
+                        error_popup("Timeout: 'Loading git origins...' exceeded 5s")
+                    except Exception as e:
+                        error_popup(f"Error loading git origins: {e}")
+                with st.spinner("Loading versions origins..."):
+                    pbremote.local_run.load_versions_origin()
+                with st.spinner("Loading local Versions..."):
+                    pbremote.local_run.load_versions()
+                with st.spinner("Loading local git commits..."):
+                    pbremote.local_run.load_git_commits()
+                with st.spinner("Loading git branches history..."):
+                    if hasattr(pbremote.local_run, 'load_git_branches_history'):
+                        pbremote.local_run.load_git_branches_history()
+                    if hasattr(pbremote.local_run, 'load_pb7_branches_history'):
+                        pbremote.local_run.load_pb7_branches_history()
+                pbremote.systemts = timestamp
+                pbremote.update_remote_servers()
                 st.rerun()
         with col2:
             if st.button(":material/home:"):
@@ -1203,6 +1287,31 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
+        if st.button(
+            "Update PB7 venv",
+            disabled=not vps.has_user_pw(),
+            help=pbgui_help.update_pb7_venv_vps,
+            key=f"update_pb7_venv_{vps.hostname}",
+        ):
+            vps.command = "vps-pb7-python312"
+            vps.command_text = "Update PB7 venv"
+            vpsmanager.update_vps(vps, debug=st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
+
+        if st.button(
+            "Update PBGui venv",
+            disabled=not vps.has_user_pw(),
+            help=pbgui_help.update_pbgui_venv_vps,
+            key=f"update_pbgui_venv_{vps.hostname}",
+        ):
+            vps.command = "vps-pbgui-python312"
+            vps.command_text = "Update PBGui venv"
+            vpsmanager.update_vps(vps, debug=st.session_state.setup_debug)
+            st.session_state.view_update = vps
+            del st.session_state.manage_vps
+            st.rerun()
         col1, col2 = st.columns([1,0.8])
         with col1:
             if st.button("Update Linux", disabled=not vps.has_user_pw()):
@@ -1222,7 +1331,12 @@ def manage_vps():
             st.session_state.view_update = vps
             del st.session_state.manage_vps
             st.rerun()
-        if st.button("Cleanup VPS", disabled=not vps.has_user_pw()):
+        if st.button(
+            "Cleanup VPS",
+            disabled=not vps.has_user_pw(),
+            help=pbgui_help.cleanup_vps,
+            key=f"cleanup_vps_{vps.hostname}",
+        ):
             vps.command = "vps-cleanup"
             vps.command_text = "Cleanup VPS"
             vpsmanager.update_vps(vps, debug = st.session_state.setup_debug)
@@ -1581,14 +1695,14 @@ def manage_vps():
             "Reboot": reboot,
             "Updates": server.upgrades,
             "CMC Credits": server.cmc_credits,
-            "PBGui": f'{server.pbgui_version}',
+            "PBGui": f"{server.pbgui_version}{'' if getattr(server, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pbgui_python'))}",
             "PBGui Branch": f'{getattr(server, "pbgui_branch", "unknown")}',
             "PBGui github": pbgui,
             "PB6": f'{server.pb6_version}',
             "PB6 github": pb6,
-            "PB7": f'{server.pb7_version}',
+            "PB7": f"{server.pb7_version}{'' if getattr(server, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pb7_python'))}",
             "PB7 Branch": f'{server_pb7_branch} ({server.pb7_commit[:7] if server.pb7_commit else "unknown"})',
-            "PB7 github": pb7
+            "PB7 github": pb7,
         })
         
         # PB7 Branch Management Section for VPS - directly above table
@@ -1810,7 +1924,19 @@ def manage_vps():
             
             vps_pb7_branch_management()
         
-        st.data_editor(data=d, height=36+(len(d))*35, key=f"vps_overview_{st.session_state.ed_key}")
+        column_config = None
+        if hasattr(st, "column_config"):
+            column_config = {
+                "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
+                "PBGui": st.column_config.TextColumn(help=pbgui_help.pbgui_version_venv_python),
+                "PB7": st.column_config.TextColumn(help=pbgui_help.pb7_version_venv_python),
+            }
+        st.data_editor(
+            data=d,
+            height=36 + (len(d)) * 35,
+            key=f"vps_overview_detail_{vps.hostname}_{st.session_state.ed_key}",
+            column_config=column_config,
+        )
         monitor.server = server
         monitor.servers = []
         monitor.servers.append(monitor.server)

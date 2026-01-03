@@ -808,6 +808,9 @@ class PBRun():
         self.pb6_commit_origin = "N/A"
         self.pb7_commit = "N/A"
         self.pb7_commit_origin = "N/A"
+        self.pbgui_python = f"{sys.version_info.major}.{sys.version_info.minor}"
+        self.pb7_python = "N/A"
+        self._pb7_python_ts = 0
         self.upgrades = 0
         self.reboot = False
         self.run_multi = []
@@ -902,6 +905,37 @@ class PBRun():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbrun.pid')
         self.my_pid = None
+
+    def update_pb7_python_version(self, force: bool = False):
+        """Cache PB7 venv Python major.minor (e.g. 3.12) for status display."""
+        timestamp = round(datetime.now().timestamp())
+        if not force and self._pb7_python_ts and (timestamp - self._pb7_python_ts) < 3600:
+            return
+        self._pb7_python_ts = timestamp
+        self.pb7_python = "N/A"
+        if not self.pb7venv:
+            return
+        try:
+            if not Path(self.pb7venv).exists():
+                return
+            cmd = [
+                self.pb7venv,
+                "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ]
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode == 0:
+                out = (res.stdout or "").strip()
+                if out:
+                    self.pb7_python = out
+        except Exception:
+            return
 
     def has_upgrades(self):
         """Check if apt-get dist-upgrade -s finds upgrades available"""

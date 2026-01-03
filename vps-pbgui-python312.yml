@@ -1,0 +1,114 @@
+---
+# Recreate PBGui venv with Python 3.12 on a VPS (in-place, not parallel)
+# Steps:
+# 1. Stop PBRun + PBRemote + PBCoinData
+# 2. Install python3.12-venv
+# 3. Remove old venv_pbgui
+# 4. Create new python3.12 venv for PBGui + install requirements (upgrade pip)
+# 5. Start PBRun + PBRemote + PBCoinData
+
+- hosts: "{{ hostname }}"
+  gather_facts: true
+
+  vars:
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: get install_dir
+      set_fact:
+        install_dir: "{{ ansible_user_dir }}/software"
+
+    - name: Ensure PBGui repo exists
+      stat:
+        path: "{{ install_dir }}/pbgui"
+      register: pbgui_repo
+
+    - name: Fail if PBGui repo is missing
+      fail:
+        msg: "PBGui repo not found at {{ install_dir }}/pbgui (run VPS setup/update first)."
+      when: not pbgui_repo.stat.exists
+
+    - name: Get current PBGui branch
+      command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ install_dir }}/pbgui"
+      register: current_branch
+      changed_when: false
+
+    - name: Update PBGui repository (keep current branch)
+      git:
+        repo: https://github.com/msei99/pbgui.git
+        dest: "{{ install_dir }}/pbgui"
+        version: "{{ (current_branch.stdout != 'HEAD') | ternary(current_branch.stdout, omit) }}"
+        update: yes
+        force: yes
+      register: pbgui_repo_update
+
+    - name: print pbgui_repo_update
+      debug:
+        var: pbgui_repo_update
+      tags: debug,never
+
+    - name: Stop PBRun + PBRemote + PBCoinData
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -k PBRun PBRemote PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      ignore_errors: yes
+
+    - name: Install python3.12-venv
+      apt:
+        pkg:
+          - python3.12-venv
+        update_cache: yes
+        clean: yes
+      become: yes
+
+    - name: Check if PB6 is installed (repo)
+      stat:
+        path: "{{ install_dir }}/pb6"
+      register: pb6_repo
+
+    - name: Check if PB6 is installed (venv)
+      stat:
+        path: "{{ install_dir }}/venv_pb6"
+      register: pb6_venv
+
+    - name: Remove python3.10-venv if PB6 is not installed
+      apt:
+        pkg:
+          - python3.10-venv
+        state: absent
+        autoremove: yes
+        clean: yes
+      become: yes
+      when: not pb6_repo.stat.exists and not pb6_venv.stat.exists
+
+    - name: Remove old PBGui venv
+      file:
+        path: "{{ install_dir }}/venv_pbgui"
+        state: absent
+      become: yes
+
+    - name: create python3.12 venv for PBGui
+      pip:
+        virtualenv_command: python3.12 -m venv
+        virtualenv: "{{ install_dir }}/venv_pbgui"
+        requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
+        extra_args: --upgrade pip
+
+    - name: Start PBRun + PBRemote + PBCoinData
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -s PBRun PBRemote PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
