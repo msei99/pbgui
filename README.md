@@ -38,16 +38,21 @@ If you already have PBGui running, you can upgrade in a few clicks:
 
 Master (recommended):
 - Open the VPS Manager on your Master.
-- Click "Update/Install PBGui venv" to prepare the new Python 3.12 environment.
-- Then run the switch script:
-  - `pbgui/setup/mig_py312.sh`
-- Rollback (only if something goes wrong):
-  - `pbgui/setup/mig_py310.sh`
+- **PBGui**
+  - Click "Update/Install PBGui venv" to prepare the new Python 3.12 environment.
+  - Then run the switch script:
+    - `pbgui/setup/mig_py312.sh`
+  - Rollback (only if something goes wrong):
+    - `pbgui/setup/mig_py310.sh`
+- **PB7**
+  - Update PB7 by clicking "Update PB7 venv".
 
 VPS:
 - Open the VPS Manager for the selected VPS.
-- Click "Update PBGui venv" (this will recreate the PBGui Python environment on that VPS; PBGui services will be restarted).
-- Click "Update PB7 venv" if you also run PB7 on that VPS.
+- **PBGui**
+  - Click "Update PBGui venv" (this will recreate the PBGui Python environment on that VPS; PBGui services will be restarted).
+- **PB7**
+  - Click "Update PB7 venv" if you also run PB7 on that VPS.
 - Recommended (especially on small VPS): After the update, click "Cleanup VPS" once to free disk space.
 
 Note: PB6 stays on Python 3.10. If you don't use PB6 on a VPS, Python 3.10 components may be removed to save disk space.
