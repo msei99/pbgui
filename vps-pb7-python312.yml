@@ -16,6 +16,8 @@
   vars:
     ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
+    pb7_requirements_file: "{{ ansible_user_dir }}/software/pb7/requirements-live.txt"
+    pb7_min_free_mb: 800
 
   tasks:
     - name: display facts
@@ -93,12 +95,42 @@
         var: pb7_repo
       tags: debug,never
 
+    - name: Check free space for pb7 venv install (before)
+      shell: |
+        df -Pm "{{ install_dir }}" | awk 'NR==2 {print $4}'
+      args:
+        executable: /bin/bash
+      register: pb7_free_mb_before
+      changed_when: false
+
+    - name: Fail early if not enough free space
+      fail:
+        msg: "Not enough free space on filesystem containing {{ install_dir }}: {{ pb7_free_mb_before.stdout | default('unknown') }} MB free, need >= {{ pb7_min_free_mb }} MB. Free disk space or override with -e pb7_min_free_mb=0."
+      when:
+        - pb7_min_free_mb | int > 0
+        - (pb7_free_mb_before.stdout | int) < (pb7_min_free_mb | int)
+
     - name: create python3.12 venv for pb7
       pip:
         virtualenv_command: python3.12 -m venv
         virtualenv: "{{ install_dir }}/venv_pb7"
-        requirements: "{{ install_dir }}/pb7/requirements.txt"
-        extra_args: --upgrade pip
+        requirements: "{{ pb7_requirements_file }}"
+        extra_args: --no-cache-dir
+      environment:
+        PIP_NO_CACHE_DIR: "1"
+        PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    - name: Check free space after pb7 requirements install
+      shell: |
+        df -Pm "{{ install_dir }}" | awk 'NR==2 {print $4}'
+      args:
+        executable: /bin/bash
+      register: pb7_free_mb_after_deps
+      changed_when: false
+
+    - name: Print pb7 requirements disk usage
+      debug:
+        msg: "pb7 install usage (deps only): {{ (pb7_free_mb_before.stdout | int) - (pb7_free_mb_after_deps.stdout | int) }} MB"
 
     - name: Build passivbot-rust with maturin
       shell: |
@@ -114,6 +146,26 @@
       debug:
         var: maturin_result
       tags: debug,never
+
+    - name: Check free space at end
+      shell: |
+        df -Pm "{{ install_dir }}" | awk 'NR==2 {print $4}'
+      args:
+        executable: /bin/bash
+      register: pb7_free_mb_end
+      changed_when: false
+
+    - name: Get pb7 venv size (MB)
+      shell: |
+        du -sm "{{ install_dir }}/venv_pb7" | awk '{print $1}'
+      args:
+        executable: /bin/bash
+      register: pb7_venv_size_mb
+      changed_when: false
+
+    - name: Print pb7 total disk usage summary
+      debug:
+        msg: "pb7 install summary: deps={{ (pb7_free_mb_before.stdout | int) - (pb7_free_mb_after_deps.stdout | int) }} MB, total={{ (pb7_free_mb_before.stdout | int) - (pb7_free_mb_end.stdout | int) }} MB, venv_size={{ pb7_venv_size_mb.stdout | default('unknown') }} MB"
 
     - name: Start PBRun + PBRemote
       shell: |

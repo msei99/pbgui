@@ -87,8 +87,11 @@
     - name: Install pb7 requirements
       pip:
         virtualenv: "{{ install_dir }}/venv_pb7"
-        requirements: "{{ install_dir }}/pb7/requirements.txt"
-        extra_args: --upgrade pip
+        requirements: "{{ install_dir }}/pb7/requirements-live.txt"
+        extra_args: --no-cache-dir
+      environment:
+        PIP_NO_CACHE_DIR: "1"
+        PIP_DISABLE_PIP_VERSION_CHECK: "1"
       listen: "restart pb7"
 
     - name: Build passivbot-rust with maturin
