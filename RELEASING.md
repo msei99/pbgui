@@ -1,20 +1,28 @@
 # Releasing pbgui
 
-## Version bump (required)
+## Checklist
 
-1) Update version in `README.md`
-- Update the header `# vX.YY`.
+### 1) Bump version strings
 
-2) Extend the changelog in `README.md`
-- Add a new top entry under `# Changelog`:
+- `README.md`: update the header `# vX.YY`
+- `pbgui_func.py`: update the `About` string to `vX.YY`
+
+### 2) Add changelog entry
+
+- `README.md`: under `# Changelog`, add a new top entry:
   - `## vX.YY (DD-MM-YYYY)`
-  - Keep newest versions at the top.
+  - Put newest versions at the top.
 
-3) Update the UI version string
-- Update the `About` string in `pbgui_func.py`.
+### 3) Commit + tag + push
 
-## Publish (optional)
+```bash
+git add README.md pbgui_func.py
+git commit -m "Release vX.YY"
+git tag vX.YY
+git push
+git push --tags
+```
 
-- Commit message suggestion: `Release vX.YY`.
-- (Optional) Create a git tag: `git tag vX.YY` and push: `git push && git push --tags`.
-- (Optional) Create a GitHub release from the tag.
+### 4) (Optional) GitHub Release
+
+- Create a GitHub Release from tag `vX.YY`.
