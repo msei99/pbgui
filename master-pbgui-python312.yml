@@ -23,7 +23,11 @@
     # - must not reference itself (would cause recursive templating)
     # - must not rely on gathered facts (gather_facts may be disabled)
     # Can still be overridden via --extra-vars pbgvenv312=...
-    pbgvenv312: "{{ lookup('env', 'HOME') }}/software/venv_pbgui312"
+    # Default: create venv next to the PBGui repo folder (matches setup/mig_py312.sh)
+    # Examples:
+    # - pbgdir=~/software/pbgui -> ~/software/venv_pbgui312
+    # - pbgdir=~/pbgui         -> ~/venv_pbgui312
+    pbgvenv312: "{{ (pbgdir | dirname) }}/venv_pbgui312"
 
   tasks:
     - name: display facts
