@@ -1585,8 +1585,127 @@ sudo_pw = """
     This is needed for:
     - install rclone
     - install rustup
+    - update PB7 venv
+    - install PBGui venv
     - add IP-Address to hosts file
     ```"""
+
+install_pbgui_venv = """
+    ```
+    Create or update a parallel PBGui virtual environment using Python 3.12.
+
+    What it does:
+    - Installs python3.12-venv (requires sudo)
+    - Creates/updates: ~/software/venv_pbgui312
+    - Installs dependencies from: <pbgui>/requirements.txt
+
+    What it does NOT do:
+    - It does not switch the running PBGui/Streamlit instance to Python 3.12.
+
+    Next step (manual):
+    - Run: pbgui/setup/mig_py312.sh
+
+    Rollback (manual):
+    - Run: pbgui/setup/mig_py310.sh
+
+    Notes:
+    - requirements.txt is the default (Python 3.12)
+    - requirements310.txt keeps the pinned Python 3.10 baseline
+    ```"""
+
+update_pb7_venv = """
+    ```
+    Recreate your local PB7 virtual environment using Python 3.12.
+    Requires sudo password (to install python3.12-venv).
+
+        Recommendation:
+        - It is possible to run the update while bots are active; they will be stopped automatically during the update and started again afterwards (via PBRun restart).
+        - Better: Move the bots to another VPS first, then update the venv.
+
+    Steps:
+    - Stop PBRun
+    - Kill running PB7 processes (bots + workers)
+    - Install python3.12-venv
+    - Delete and recreate venv_pb7 with python3.12
+    - Install PB7 requirements and rebuild passivbot-rust
+    - Start PBRun
+    ```"""
+
+update_pb7_venv_vps = """Recreate PB7 venv on the selected VPS using Python 3.12.
+
+Prerequisite:
+- Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
+
+Recommendation:
+- It is possible to run the update while bots are active; they will be stopped automatically during the update and started again afterwards (via PBRun restart).
+- Better: Move the bots to another VPS first, then update the venv.
+
+Steps:
+- Stop PBRun on the VPS
+- Kill running PB7 processes (bots + workers)
+- Install python3.12-venv (sudo)
+- Delete and recreate venv_pb7 with python3.12
+- Update PB7 repository to the latest commit of the current branch
+- Install PB7 requirements and rebuild passivbot-rust
+- Start PBRun
+
+Note: sudo uses the VPS user password configured in the VPS settings.
+"""
+
+update_pbgui_venv_vps = """Recreate the PBGui venv on the selected VPS using Python 3.12 (in-place).
+
+Prerequisite:
+- Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
+
+What it does:
+- Stops PBRun + PBRemote + PBCoinData
+- Installs python3.12-venv (sudo)
+- Deletes and recreates: ~/software/venv_pbgui
+- Installs dependencies from: <pbgui>/requirements_vps.txt
+- Starts PBRun + PBRemote + PBCoinData
+
+Note:
+- PBGui services will be restarted during this update (short downtime).
+- If PB6 is not installed on the VPS, Python 3.10 components may be removed to save disk space.
+
+Warning:
+- This replaces your existing venv_pbgui on the VPS.
+
+Note: sudo uses the VPS user password configured in the VPS settings.
+"""
+
+cleanup_vps = """Free disk space on the selected VPS.
+
+Prerequisite:
+- Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
+
+What it does:
+- Removes Snap (snapd)
+- Runs apt cleanup (autoremove/autoclean/clean)
+- Shrinks systemd journal logs (keeps ~1 day)
+
+Recommendation:
+- After big updates (PBGui/PB7) on small VPS, run this once to free disk space.
+
+Warning:
+- This removes Snap; only use it if you don't rely on snap-installed apps.
+"""
+
+pb7_version_venv_python = """
+PB7 column
+
+Shows the PB7 version from README.md.
+
+If available, the suffix "/3.12" indicates the Python major.minor of the configured PB7 venv interpreter (pb7venv).
+"""
+
+pbgui_version_venv_python = """
+PBGui column
+
+Shows the PBGui version.
+
+If available, the suffix "/3.12" indicates the Python major.minor of the Python environment running PBGui/PBRun/PBRemote (typically venv_pbgui).
+"""
    
 smart_filter = """
     ```

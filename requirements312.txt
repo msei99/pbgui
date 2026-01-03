@@ -1,0 +1,3 @@
+# Legacy alias for Python 3.12.
+# The default (3.12) pinned dependencies live in requirements.txt.
+-r requirements.txt
