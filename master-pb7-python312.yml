@@ -151,11 +151,21 @@
         creates: "{{ pb7venv }}/bin/activate"
       when: (use_uv_python312 | default(false)) and pb7dir != "" and pb7venv != ""
 
+    - name: Ensure pip exists in uv venv (Ubuntu 20.04 x86_64)
+      shell: |
+        set -euo pipefail
+        "{{ pb7venv }}/bin/python" -m ensurepip --upgrade
+      args:
+        executable: /bin/bash
+      when: (use_uv_python312 | default(false)) and pb7dir != "" and pb7venv != ""
+
     - name: Install PB7 requirements into uv venv
-      pip:
-        requirements: "{{ pb7dir }}/requirements.txt"
-        executable: "{{ pb7venv }}/bin/pip"
-        extra_args: --upgrade pip
+      shell: |
+        set -euo pipefail
+        "{{ pb7venv }}/bin/python" -m pip install --upgrade pip
+        "{{ pb7venv }}/bin/python" -m pip install -r "{{ pb7dir }}/requirements.txt"
+      args:
+        executable: /bin/bash
       when: (use_uv_python312 | default(false)) and pb7dir != "" and pb7venv != ""
 
     - name: Build passivbot-rust with maturin

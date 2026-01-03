@@ -97,11 +97,21 @@
         creates: "{{ pbgvenv312 }}/bin/activate"
       when: (use_uv_python312 | default(false)) and pbgdir != "" and pbgvenv312 != ""
 
+    - name: Ensure pip exists in uv venv (Ubuntu 20.04 x86_64)
+      shell: |
+        set -euo pipefail
+        "{{ pbgvenv312 }}/bin/python" -m ensurepip --upgrade
+      args:
+        executable: /bin/bash
+      when: (use_uv_python312 | default(false)) and pbgdir != "" and pbgvenv312 != ""
+
     - name: Install PBGui requirements into uv venv (Ubuntu 20.04 x86_64)
-      pip:
-        requirements: "{{ pbgdir }}/requirements.txt"
-        executable: "{{ pbgvenv312 }}/bin/pip"
-        extra_args: --upgrade pip
+      shell: |
+        set -euo pipefail
+        "{{ pbgvenv312 }}/bin/python" -m pip install --upgrade pip
+        "{{ pbgvenv312 }}/bin/python" -m pip install -r "{{ pbgdir }}/requirements.txt"
+      args:
+        executable: /bin/bash
       when: (use_uv_python312 | default(false)) and pbgdir != "" and pbgvenv312 != ""
 
     - name: create python3.12 venv for PBGui
