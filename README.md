@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.45
+# v1.46
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,10 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.46 (04-01-2026)
+- Added step parameters to optimizer bounds
+- Added candle_lock_timeout_seconds parameter to Live configuration
 
 ## v1.45 (03-01-2026)
 - Fix: avoid nested Streamlit dialogs when importing configs (PBv7 Run/Backtest).
