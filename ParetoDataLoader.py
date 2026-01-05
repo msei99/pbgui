@@ -584,15 +584,14 @@ class ParetoDataLoader:
     
     def get_full_config(self, config_index: int) -> Optional[Dict]:
         """
-        Get full config for a specific index by merging Pareto JSON + all_results.bin
+        Get full config for a specific index
         
-        Strategy:
-        1. Load any Pareto JSON (they all have same base config structure)
-        2. Load optimized bot params from all_results.bin at config_index
-        3. Merge bot params into pareto config
+        Two modes:
+        1. Fast mode (pareto JSONs only): Load JSON file directly at sorted index
+        2. All results mode: Merge all_results.bin[index] with pareto JSON template
         
         Args:
-            config_index: Index of config in all_results.bin
+            config_index: Index in self.configs list (0-based)
             
         Returns:
             Complete config dict with all sections (backtest, bot, optimize, live, etc.)
@@ -605,31 +604,44 @@ class ParetoDataLoader:
         try:
             import json
             
-            # 1. Load ANY pareto JSON as template (they share same base config)
-            pareto_files = [f for f in os.listdir(self.pareto_dir) if f.endswith('.json')]
+            # Get sorted pareto JSON files
+            pareto_files = sorted([f for f in os.listdir(self.pareto_dir) if f.endswith('.json')])
             if not pareto_files:
                 return None
             
+            # FAST MODE: Configs loaded from pareto/*.json
+            # In this mode, config_index is the position in sorted pareto files
+            # Check if we loaded from JSONs (load_stats has 'pareto_only' strategy)
+            load_strategy = self.load_stats.get('load_strategy', [])
+            if 'pareto_only' in load_strategy or len(self.configs) == len(pareto_files):
+                # Fast mode: Load JSON directly at this index
+                if 0 <= config_index < len(pareto_files):
+                    json_file = os.path.join(self.pareto_dir, pareto_files[config_index])
+                    with open(json_file, 'r') as f:
+                        full_config = json.load(f)
+                    self.pareto_configs_cache[config_index] = full_config
+                    return full_config
+                return None
+            
+            # ALL RESULTS MODE: Configs loaded from all_results.bin
+            # Load template from any pareto JSON (they share same base structure)
             template_file = os.path.join(self.pareto_dir, pareto_files[0])
             with open(template_file, 'r') as f:
                 full_config = json.load(f)
             
-            # 2. Load optimized bot params from all_results.bin at config_index
+            # Load optimized bot params + metrics from all_results.bin at config_index
             with open(self.all_results_path, 'rb') as f:
                 unpacker = msgpack.Unpacker(f, raw=False, max_buffer_size=2**31-1)
                 for idx, config_data in enumerate(unpacker):
                     if idx == config_index:
-                        # 3. Merge optimized bot params (keep missing params from pareto template)
+                        # Merge bot params (keep missing params from pareto template)
                         if 'bot' in config_data:
-                            # Merge each side (long/short) individually
                             for side in ['long', 'short']:
                                 if side in config_data['bot']:
-                                    # Update only the parameters that exist in all_results.bin
                                     if side in full_config['bot']:
                                         full_config['bot'][side].update(config_data['bot'][side])
                                     else:
                                         full_config['bot'][side] = config_data['bot'][side]
-                                # If side missing in all_results.bin, keep pareto template values
                         
                         # Cache and return
                         self.pareto_configs_cache[config_index] = full_config

@@ -1384,8 +1384,6 @@ class Bot:
 
 class Long:
     def __init__(self):
-        # self._close_grid_markup_range = 0.0015976
-        # self._close_grid_min_markup = 0.012839
         self._close_grid_markup_end = 0.0089
         self._close_grid_markup_start = 0.0344
         self._close_grid_qty_pct = 0.125
@@ -1426,8 +1424,6 @@ class Long:
         self._long = {
             "close_grid_markup_end": self._close_grid_markup_end,
             "close_grid_markup_start": self._close_grid_markup_start,
-            # "close_grid_markup_range": self._close_grid_markup_range,
-            # "close_grid_min_markup": self._close_grid_min_markup,
             "close_grid_qty_pct": self._close_grid_qty_pct,
             "close_trailing_grid_ratio": self._close_trailing_grid_ratio,
             "close_trailing_qty_pct": self._close_trailing_qty_pct,
@@ -1576,10 +1572,6 @@ class Long:
         if "risk_twel_enforcer_threshold" in new_long:
             self.risk_twel_enforcer_threshold = new_long["risk_twel_enforcer_threshold"]
 
-    # @property
-    # def close_grid_markup_range(self): return self._close_grid_markup_range
-    # @property
-    # def close_grid_min_markup(self): return self._close_grid_min_markup
     @property
     def close_grid_markup_end(self): return self._close_grid_markup_end
     @property
@@ -1663,14 +1655,6 @@ class Long:
     def close_grid_markup_start(self, new_close_grid_markup_start):
         self._close_grid_markup_start = new_close_grid_markup_start
         self._long["close_grid_markup_start"] = self._close_grid_markup_start
-    # @close_grid_markup_range.setter
-    # def close_grid_markup_range(self, new_close_grid_markup_range):
-    #     self._close_grid_markup_range = new_close_grid_markup_range
-    #     self._long["close_grid_markup_range"] = self._close_grid_markup_range
-    # @close_grid_min_markup.setter
-    # def close_grid_min_markup(self, new_close_grid_min_markup):
-    #     self._close_grid_min_markup = new_close_grid_min_markup
-    #     self._long["close_grid_min_markup"] = self._close_grid_min_markup
     @close_grid_qty_pct.setter
     def close_grid_qty_pct(self, new_close_grid_qty_pct):
         self._close_grid_qty_pct = new_close_grid_qty_pct
@@ -1817,8 +1801,6 @@ class Long:
 
 class Short:
     def __init__(self):
-        # self._close_grid_markup_range = 0.028266
-        # self._close_grid_min_markup = 0.013899
         self._close_grid_markup_end = 0.0089
         self._close_grid_markup_start = 0.0344
         self._close_grid_qty_pct = 0.125
@@ -1859,8 +1841,6 @@ class Short:
         self._short = {
             "close_grid_markup_end": self._close_grid_markup_end,
             "close_grid_markup_start": self._close_grid_markup_start,
-            # "close_grid_markup_range": self._close_grid_markup_range,
-            # "close_grid_min_markup": self._close_grid_min_markup,
             "close_grid_qty_pct": self._close_grid_qty_pct,
             "close_trailing_grid_ratio": self._close_trailing_grid_ratio,
             "close_trailing_qty_pct": self._close_trailing_qty_pct,
@@ -2013,10 +1993,6 @@ class Short:
     def close_grid_markup_end(self): return self._close_grid_markup_end
     @property
     def close_grid_markup_start(self): return self._close_grid_markup_start
-    # @property
-    # def close_grid_markup_range(self): return self._close_grid_markup_range
-    # @property
-    # def close_grid_min_markup(self): return self._close_grid_min_markup
     @property
     def close_grid_qty_pct(self): return self._close_grid_qty_pct
     @property
@@ -2096,14 +2072,6 @@ class Short:
     def close_grid_markup_start(self, new_close_grid_markup_start):
         self._close_grid_markup_start = new_close_grid_markup_start
         self._short["close_grid_markup_start"] = self._close_grid_markup_start
-    # @close_grid_markup_range.setter
-    # def close_grid_markup_range(self, new_close_grid_markup_range):
-    #     self._close_grid_markup_range = new_close_grid_markup_range
-    #     self._short["close_grid_markup_range"] = self._close_grid_markup_range
-    # @close_grid_min_markup.setter
-    # def close_grid_min_markup(self, new_close_grid_min_markup):
-    #     self._close_grid_min_markup = new_close_grid_min_markup
-    #     self._short["close_grid_min_markup"] = self._close_grid_min_markup
     @close_grid_qty_pct.setter
     def close_grid_qty_pct(self, new_close_grid_qty_pct):
         self._close_grid_qty_pct = new_close_grid_qty_pct
@@ -2360,6 +2328,8 @@ class Live:
         self._time_in_force = "good_till_cancelled"
         self._warmup_ratio = 0.2
         self._max_warmup_minutes = 0
+        self._warmup_jitter_seconds = 30.0
+        self._max_concurrent_api_requests = None
         self._candle_lock_timeout_seconds = 10
         self._balance_override = None
         self._balance_hysteresis_snap_pct = 0.02
@@ -2390,6 +2360,8 @@ class Live:
             "time_in_force": self._time_in_force,
             "warmup_ratio": self._warmup_ratio,
             "max_warmup_minutes": self._max_warmup_minutes,
+            "warmup_jitter_seconds": self._warmup_jitter_seconds,
+            "max_concurrent_api_requests": self._max_concurrent_api_requests,
             "candle_lock_timeout_seconds": self._candle_lock_timeout_seconds,
             "balance_override": self._balance_override,
             "balance_hysteresis_snap_pct": self._balance_hysteresis_snap_pct,
@@ -2451,6 +2423,10 @@ class Live:
             self._warmup_ratio = new_live["warmup_ratio"]
         if "max_warmup_minutes" in new_live:
             self.max_warmup_minutes = new_live["max_warmup_minutes"]
+        if "warmup_jitter_seconds" in new_live:
+            self.warmup_jitter_seconds = new_live["warmup_jitter_seconds"]
+        if "max_concurrent_api_requests" in new_live:
+            self.max_concurrent_api_requests = new_live["max_concurrent_api_requests"]
         if "candle_lock_timeout_seconds" in new_live:
             self.candle_lock_timeout_seconds = new_live["candle_lock_timeout_seconds"]
         if "balance_override" in new_live:
@@ -2508,6 +2484,10 @@ class Live:
     def warmup_ratio(self): return self._warmup_ratio
     @property
     def max_warmup_minutes(self): return self._max_warmup_minutes
+    @property
+    def warmup_jitter_seconds(self): return self._warmup_jitter_seconds
+    @property
+    def max_concurrent_api_requests(self): return self._max_concurrent_api_requests
     @property
     def candle_lock_timeout_seconds(self): return self._candle_lock_timeout_seconds
     @property
@@ -2613,6 +2593,14 @@ class Live:
     def max_warmup_minutes(self, new_max_warmup_minutes):
         self._max_warmup_minutes = new_max_warmup_minutes
         self._live["max_warmup_minutes"] = self._max_warmup_minutes
+    @warmup_jitter_seconds.setter
+    def warmup_jitter_seconds(self, new_warmup_jitter_seconds):
+        self._warmup_jitter_seconds = new_warmup_jitter_seconds
+        self._live["warmup_jitter_seconds"] = self._warmup_jitter_seconds
+    @max_concurrent_api_requests.setter
+    def max_concurrent_api_requests(self, new_max_concurrent_api_requests):
+        self._max_concurrent_api_requests = new_max_concurrent_api_requests
+        self._live["max_concurrent_api_requests"] = self._max_concurrent_api_requests
     @candle_lock_timeout_seconds.setter
     def candle_lock_timeout_seconds(self, new_candle_lock_timeout_seconds):
         self._candle_lock_timeout_seconds = new_candle_lock_timeout_seconds

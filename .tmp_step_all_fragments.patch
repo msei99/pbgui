@@ -1,0 +1,1794 @@
+*** Begin Patch
+*** Update File: /home/mani/software/pbgui/OptimizeV7.py
+@@
+    def fragment_long_entry_grid_double_down_factor(self):
+-        if "edit_opt_v7_long_entry_grid_double_down_factor" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_grid_double_down_factor != (self.config.optimize.bounds.long_entry_grid_double_down_factor_0, self.config.optimize.bounds.long_entry_grid_double_down_factor_1):
+-                self.config.optimize.bounds.long_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor[0]
+-                self.config.optimize.bounds.long_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_long_entry_grid_double_down_factor[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_grid_double_down_factor = (self.config.optimize.bounds.long_entry_grid_double_down_factor_0, self.config.optimize.bounds.long_entry_grid_double_down_factor_1)
+-        st.slider(
+-            "long_entry_grid_double_down_factor",
+-            min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN,
+-            max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX,
+-            step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP,
+-            format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT,
+-            key="edit_opt_v7_long_entry_grid_double_down_factor",
+-            help=pbgui_help.entry_grid_double_down_factor)
+-    
+-    # long_entry_volatility_ema_span_hours
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_grid_double_down_factor",
++            min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN,
++            max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX,
++            slider_step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP,
++            slider_format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT,
++            help_text=pbgui_help.entry_grid_double_down_factor,
++        )
+@@
+    def fragment_long_entry_volatility_ema_span_hours(self):
+-        if "edit_opt_v7_long_entry_volatility_ema_span_hours" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours != (self.config.optimize.bounds.long_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.long_entry_volatility_ema_span_hours_1):
+-                self.config.optimize.bounds.long_entry_volatility_ema_span_hours_0 = st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours[0]
+-                self.config.optimize.bounds.long_entry_volatility_ema_span_hours_1 = st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_volatility_ema_span_hours = (self.config.optimize.bounds.long_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.long_entry_volatility_ema_span_hours_1)
+-        st.slider(
+-            "long_entry_volatility_ema_span_hours",
+-            min_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MIN,
+-            max_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MAX,
+-            step=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_STEP,
+-            format=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_FORMAT,
+-            key="edit_opt_v7_long_entry_volatility_ema_span_hours",
+-            help=pbgui_help.entry_volatility_ema_span_hours)
+-
+-    # long_entry_grid_spacing_volatility_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_volatility_ema_span_hours",
++            min_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MIN,
++            max_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MAX,
++            slider_step=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_STEP,
++            slider_format=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_FORMAT,
++            help_text=pbgui_help.entry_volatility_ema_span_hours,
++        )
+@@
+    def fragment_long_entry_grid_spacing_volatility_weight(self):
+-        if "edit_opt_v7_long_entry_grid_spacing_volatility_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight != (self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_1):
+-                self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight[0]
+-                self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_grid_spacing_volatility_weight = (self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_volatility_weight_1)
+-        st.slider(
+-            "long_entry_grid_spacing_volatility_weight",
+-            min_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MAX,
+-            step=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_STEP,
+-            format=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_FORMAT,
+-            key="edit_opt_v7_long_entry_grid_spacing_volatility_weight",
+-            help=pbgui_help.entry_grid_spacing_volatility_weight)
+-
+-    # long_entry_grid_spacing_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_grid_spacing_volatility_weight",
++            min_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_grid_spacing_volatility_weight,
++        )
+@@
+    def fragment_long_entry_grid_spacing_pct(self):
+-        if "edit_opt_v7_long_entry_grid_spacing_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_grid_spacing_pct != (self.config.optimize.bounds.long_entry_grid_spacing_pct_0, self.config.optimize.bounds.long_entry_grid_spacing_pct_1):
+-                self.config.optimize.bounds.long_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct[0]
+-                self.config.optimize.bounds.long_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_grid_spacing_pct = (self.config.optimize.bounds.long_entry_grid_spacing_pct_0, self.config.optimize.bounds.long_entry_grid_spacing_pct_1)
+-        st.slider(
+-            "long_entry_grid_spacing_pct",
+-            min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN,
+-            max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX,
+-            step=Bounds.ENTRY_GRID_SPACING_PCT_STEP,
+-            format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT,
+-            key="edit_opt_v7_long_entry_grid_spacing_pct",
+-            help=pbgui_help.entry_grid_spacing)
+-    
+-    # long_entry_grid_spacing_we_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_grid_spacing_pct",
++            min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN,
++            max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX,
++            slider_step=Bounds.ENTRY_GRID_SPACING_PCT_STEP,
++            slider_format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT,
++            help_text=pbgui_help.entry_grid_spacing,
++        )
+@@
+    def fragment_long_entry_grid_spacing_we_weight(self):
+-        if "edit_opt_v7_long_entry_grid_spacing_we_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight != (self.config.optimize.bounds.long_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_we_weight_1):
+-                self.config.optimize.bounds.long_entry_grid_spacing_we_weight_0 = st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight[0]
+-                self.config.optimize.bounds.long_entry_grid_spacing_we_weight_1 = st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_grid_spacing_we_weight = (self.config.optimize.bounds.long_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.long_entry_grid_spacing_we_weight_1)
+-        st.slider(
+-            "long_entry_grid_spacing_we_weight",
+-            min_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MAX,
+-            step=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_STEP,
+-            format=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_FORMAT,
+-            key="edit_opt_v7_long_entry_grid_spacing_we_weight",
+-            help=pbgui_help.entry_grid_spacing)
+-    
+-    # long_entry_initial_ema_dist
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_grid_spacing_we_weight",
++            min_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_grid_spacing,
++        )
+@@
+    def fragment_long_entry_initial_ema_dist(self):
+-        if "edit_opt_v7_long_entry_initial_ema_dist" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_initial_ema_dist != (self.config.optimize.bounds.long_entry_initial_ema_dist_0, self.config.optimize.bounds.long_entry_initial_ema_dist_1):
+-                self.config.optimize.bounds.long_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist[0]
+-                self.config.optimize.bounds.long_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_long_entry_initial_ema_dist[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_initial_ema_dist = (self.config.optimize.bounds.long_entry_initial_ema_dist_0, self.config.optimize.bounds.long_entry_initial_ema_dist_1)
+-        st.slider(
+-            "long_entry_initial_ema_dist",
+-            min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN,
+-            max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX,
+-            step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP,
+-            format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT,
+-            key="edit_opt_v7_long_entry_initial_ema_dist",
+-            help=pbgui_help.entry_initial_ema_dist)
+-    
+-    # long_entry_initial_qty_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_initial_ema_dist",
++            min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN,
++            max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX,
++            slider_step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP,
++            slider_format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT,
++            help_text=pbgui_help.entry_initial_ema_dist,
++        )
+@@
+    def fragment_long_entry_initial_qty_pct(self):
+-        if "edit_opt_v7_long_entry_initial_qty_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_initial_qty_pct != (self.config.optimize.bounds.long_entry_initial_qty_pct_0, self.config.optimize.bounds.long_entry_initial_qty_pct_1):
+-                self.config.optimize.bounds.long_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct[0]
+-                self.config.optimize.bounds.long_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_long_entry_initial_qty_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_initial_qty_pct = (self.config.optimize.bounds.long_entry_initial_qty_pct_0, self.config.optimize.bounds.long_entry_initial_qty_pct_1)
+-        st.slider(
+-            "long_entry_initial_qty_pct",
+-            min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN,
+-            max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX,
+-            step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP,
+-            format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT,
+-            key="edit_opt_v7_long_entry_initial_qty_pct",
+-            help=pbgui_help.entry_initial_qty_pct)
+-    
+-    # long_entry_trailing_double_down_factor
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_initial_qty_pct",
++            min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN,
++            max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX,
++            slider_step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP,
++            slider_format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT,
++            help_text=pbgui_help.entry_initial_qty_pct,
++        )
+@@
+    def fragment_long_entry_trailing_double_down_factor(self):
+-        if "edit_opt_v7_long_entry_trailing_double_down_factor" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor != (self.config.optimize.bounds.long_entry_trailing_double_down_factor_0, self.config.optimize.bounds.long_entry_trailing_double_down_factor_1):
+-                self.config.optimize.bounds.long_entry_trailing_double_down_factor_0 = st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor[0]
+-                self.config.optimize.bounds.long_entry_trailing_double_down_factor_1 = st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_double_down_factor = (self.config.optimize.bounds.long_entry_trailing_double_down_factor_0, self.config.optimize.bounds.long_entry_trailing_double_down_factor_1)
+-        st.slider(
+-            "long_entry_trailing_double_down_factor",
+-            min_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MAX,
+-            step=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_STEP,
+-            format=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_double_down_factor",
+-            help=pbgui_help.trailing_parameters)
+-    
+-    # long_entry_trailing_grid_ratio
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_double_down_factor",
++            min_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MIN,
++            max_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_long_entry_trailing_grid_ratio(self):
+-        if "edit_opt_v7_long_entry_trailing_grid_ratio" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio != (self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, self.config.optimize.bounds.long_entry_trailing_grid_ratio_1):
+-                self.config.optimize.bounds.long_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio[0]
+-                self.config.optimize.bounds.long_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_grid_ratio = (self.config.optimize.bounds.long_entry_trailing_grid_ratio_0, self.config.optimize.bounds.long_entry_trailing_grid_ratio_1)
+-        st.slider(
+-            "long_entry_trailing_grid_ratio",
+-            min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX,
+-            step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP,
+-            format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_grid_ratio",
+-            help=pbgui_help.trailing_parameters)
+-    
+-    # long_entry_trailing_retracement_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_grid_ratio",
++            min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN,
++            max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_long_entry_trailing_retracement_pct(self):
+-        if "edit_opt_v7_long_entry_trailing_retracement_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct != (self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, self.config.optimize.bounds.long_entry_trailing_retracement_pct_1):
+-                self.config.optimize.bounds.long_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct[0]
+-                self.config.optimize.bounds.long_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_retracement_pct = (self.config.optimize.bounds.long_entry_trailing_retracement_pct_0, self.config.optimize.bounds.long_entry_trailing_retracement_pct_1)
+-        st.slider(
+-            "long_entry_trailing_retracement_pct",
+-            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX,
+-            step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP,
+-            format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_retracement_pct",
+-            help=pbgui_help.trailing_parameters)
+-
+-    # long_entry_trailing_retracement_we_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_retracement_pct",
++            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_long_entry_trailing_retracement_we_weight(self):
+-        if "edit_opt_v7_long_entry_trailing_retracement_we_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight != (self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_1):
+-                self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight[0]
+-                self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_retracement_we_weight = (self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_we_weight_1)
+-        st.slider(
+-            "long_entry_trailing_retracement_we_weight",
+-            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_retracement_we_weight",
+-            help=pbgui_help.entry_trailing_retracement_we_weight)
+-
+-    # long_entry_trailing_retracement_volatility_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_retracement_we_weight",
++            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_retracement_we_weight,
++        )
+@@
+    def fragment_long_entry_trailing_retracement_volatility_weight(self):
+-        if "edit_opt_v7_long_entry_trailing_retracement_volatility_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight != (self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_1):
+-                self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight[0]
+-                self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_retracement_volatility_weight = (self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_retracement_volatility_weight_1)
+-        st.slider(
+-            "long_entry_trailing_retracement_volatility_weight",
+-            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_retracement_volatility_weight",
+-            help=pbgui_help.entry_trailing_retracement_volatility_weight)
+-
+-    # long_entry_trailing_threshold_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_retracement_volatility_weight",
++            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_retracement_volatility_weight,
++        )
+@@
+    def fragment_long_entry_trailing_threshold_pct(self):
+-        if "edit_opt_v7_long_entry_trailing_threshold_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct != (self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, self.config.optimize.bounds.long_entry_trailing_threshold_pct_1):
+-                self.config.optimize.bounds.long_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct[0]
+-                self.config.optimize.bounds.long_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_threshold_pct = (self.config.optimize.bounds.long_entry_trailing_threshold_pct_0, self.config.optimize.bounds.long_entry_trailing_threshold_pct_1)
+-        st.slider(
+-            "long_entry_trailing_threshold_pct",
+-            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX,
+-            step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP,
+-            format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_threshold_pct",
+-            help=pbgui_help.trailing_parameters)
+-
+-    # long_entry_trailing_threshold_we_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_threshold_pct",
++            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_long_entry_trailing_threshold_we_weight(self):
+-        if "edit_opt_v7_long_entry_trailing_threshold_we_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight != (self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_1):
+-                self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight[0]
+-                self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_threshold_we_weight = (self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_we_weight_1)
+-        st.slider(
+-            "long_entry_trailing_threshold_we_weight",
+-            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_threshold_we_weight",
+-            help=pbgui_help.entry_trailing_threshold_we_weight)
+-
+-    # long_entry_trailing_threshold_volatility_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_threshold_we_weight",
++            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_threshold_we_weight,
++        )
+@@
+    def fragment_long_entry_trailing_threshold_volatility_weight(self):
+-        if "edit_opt_v7_long_entry_trailing_threshold_volatility_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight != (self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_1):
+-                self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_0 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight[0]
+-                self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_1 = st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_entry_trailing_threshold_volatility_weight = (self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.long_entry_trailing_threshold_volatility_weight_1)
+-        st.slider(
+-            "long_entry_trailing_threshold_volatility_weight",
+-            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_FORMAT,
+-            key="edit_opt_v7_long_entry_trailing_threshold_volatility_weight",
+-            help=pbgui_help.entry_trailing_threshold_volatility_weight)
+-
+-    # long_filter_volatility_ema_span
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_entry_trailing_threshold_volatility_weight",
++            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_threshold_volatility_weight,
++        )
+@@
+    def fragment_long_filter_volatility_ema_span(self):
+-        if "edit_opt_v7_long_filter_volatility_ema_span" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_filter_volatility_ema_span != (self.config.optimize.bounds.long_filter_volatility_ema_span_0, self.config.optimize.bounds.long_filter_volatility_ema_span_1):
+-                self.config.optimize.bounds.long_filter_volatility_ema_span_0 = st.session_state.edit_opt_v7_long_filter_volatility_ema_span[0]
+-                self.config.optimize.bounds.long_filter_volatility_ema_span_1 = st.session_state.edit_opt_v7_long_filter_volatility_ema_span[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_filter_volatility_ema_span = (self.config.optimize.bounds.long_filter_volatility_ema_span_0, self.config.optimize.bounds.long_filter_volatility_ema_span_1)
+-        st.slider(
+-            "long_filter_volatility_ema_span",
+-            min_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MIN,
+-            max_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MAX,
+-            step=Bounds.FILTER_VOLATILITY_EMA_SPAN_STEP,
+-            format=Bounds.FILTER_VOLATILITY_EMA_SPAN_FORMAT,
+-            key="edit_opt_v7_long_filter_volatility_ema_span",
+-            help=pbgui_help.filter_ema_span)
+-
+-    # long_filter_volatility_drop_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_filter_volatility_ema_span",
++            min_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MIN,
++            max_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MAX,
++            slider_step=Bounds.FILTER_VOLATILITY_EMA_SPAN_STEP,
++            slider_format=Bounds.FILTER_VOLATILITY_EMA_SPAN_FORMAT,
++            help_text=pbgui_help.filter_ema_span,
++        )
+@@
+    def fragment_long_filter_volatility_drop_pct(self):
+-        if "edit_opt_v7_long_filter_volatility_drop_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_filter_volatility_drop_pct != (self.config.optimize.bounds.long_filter_volatility_drop_pct_0, self.config.optimize.bounds.long_filter_volatility_drop_pct_1):
+-                self.config.optimize.bounds.long_filter_volatility_drop_pct_0 = st.session_state.edit_opt_v7_long_filter_volatility_drop_pct[0]
+-                self.config.optimize.bounds.long_filter_volatility_drop_pct_1 = st.session_state.edit_opt_v7_long_filter_volatility_drop_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_filter_volatility_drop_pct = (self.config.optimize.bounds.long_filter_volatility_drop_pct_0, self.config.optimize.bounds.long_filter_volatility_drop_pct_1)
+-        st.slider(
+-            "long_filter_volatility_drop_pct",
+-            min_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MIN,
+-            max_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MAX,
+-            step=Bounds.FILTER_VOLATILITY_DROP_PCT_STEP,
+-            format=Bounds.FILTER_VOLATILITY_DROP_PCT_FORMAT,
+-            key="edit_opt_v7_long_filter_volatility_drop_pct",
+-            help=pbgui_help.filter_volatility_drop_pct)
+-
+-    # long_filter_volume_drop_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_filter_volatility_drop_pct",
++            min_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MIN,
++            max_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MAX,
++            slider_step=Bounds.FILTER_VOLATILITY_DROP_PCT_STEP,
++            slider_format=Bounds.FILTER_VOLATILITY_DROP_PCT_FORMAT,
++            help_text=pbgui_help.filter_volatility_drop_pct,
++        )
+@@
+    def fragment_long_filter_volume_drop_pct(self):
+-        if "edit_opt_v7_long_filter_volume_drop_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_filter_volume_drop_pct != (self.config.optimize.bounds.long_filter_volume_drop_pct_0, self.config.optimize.bounds.long_filter_volume_drop_pct_1):
+-                self.config.optimize.bounds.long_filter_volume_drop_pct_0 = st.session_state.edit_opt_v7_long_filter_volume_drop_pct[0]
+-                self.config.optimize.bounds.long_filter_volume_drop_pct_1 = st.session_state.edit_opt_v7_long_filter_volume_drop_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_filter_volume_drop_pct = (self.config.optimize.bounds.long_filter_volume_drop_pct_0, self.config.optimize.bounds.long_filter_volume_drop_pct_1)
+-        st.slider(
+-            "long_filter_volume_drop_pct",
+-            min_value=Bounds.FILTER_VOLUME_DROP_PCT_MIN,
+-            max_value=Bounds.FILTER_VOLUME_DROP_PCT_MAX,
+-            step=Bounds.FILTER_VOLUME_DROP_PCT_STEP,
+-            format=Bounds.FILTER_VOLUME_DROP_PCT_FORMAT,
+-            key="edit_opt_v7_long_filter_volume_drop_pct",
+-            help=pbgui_help.filter_volume_drop_pct)
+-    
+-    # long_filter_volume_ema_span
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_filter_volume_drop_pct",
++            min_value=Bounds.FILTER_VOLUME_DROP_PCT_MIN,
++            max_value=Bounds.FILTER_VOLUME_DROP_PCT_MAX,
++            slider_step=Bounds.FILTER_VOLUME_DROP_PCT_STEP,
++            slider_format=Bounds.FILTER_VOLUME_DROP_PCT_FORMAT,
++            help_text=pbgui_help.filter_volume_drop_pct,
++        )
+@@
+    def fragment_long_filter_volume_ema_span(self):
+-        if "edit_opt_v7_long_filter_volume_ema_span" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_filter_volume_ema_span != (self.config.optimize.bounds.long_filter_volume_ema_span_0, self.config.optimize.bounds.long_filter_volume_ema_span_1):
+-                self.config.optimize.bounds.long_filter_volume_ema_span_0 = st.session_state.edit_opt_v7_long_filter_volume_ema_span[0]
+-                self.config.optimize.bounds.long_filter_volume_ema_span_1 = st.session_state.edit_opt_v7_long_filter_volume_ema_span[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_filter_volume_ema_span = (self.config.optimize.bounds.long_filter_volume_ema_span_0, self.config.optimize.bounds.long_filter_volume_ema_span_1)
+-        st.slider(
+-            "long_filter_volume_ema_span",
+-            min_value=Bounds.FILTER_VOLUME_EMA_SPAN_MIN,
+-            max_value=Bounds.FILTER_VOLUME_EMA_SPAN_MAX,
+-            step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
+-            format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
+-            key="edit_opt_v7_long_filter_volume_ema_span",
+-            help=pbgui_help.filter_ema_span)
+-
+-    # long_n_positions
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_filter_volume_ema_span",
++            min_value=Bounds.FILTER_VOLUME_EMA_SPAN_MIN,
++            max_value=Bounds.FILTER_VOLUME_EMA_SPAN_MAX,
++            slider_step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
++            slider_format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
++            help_text=pbgui_help.filter_ema_span,
++        )
+@@
+    def fragment_long_n_positions(self):
+-        if "edit_opt_v7_long_n_positions" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_n_positions != (self.config.optimize.bounds.long_n_positions_0, self.config.optimize.bounds.long_n_positions_1):
+-                self.config.optimize.bounds.long_n_positions_0 = st.session_state.edit_opt_v7_long_n_positions[0]
+-                self.config.optimize.bounds.long_n_positions_1 = st.session_state.edit_opt_v7_long_n_positions[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_n_positions = (self.config.optimize.bounds.long_n_positions_0, self.config.optimize.bounds.long_n_positions_1)
+-        st.slider(
+-            "long_n_positions",
+-            min_value=Bounds.N_POSITIONS_MIN,
+-            max_value=Bounds.N_POSITIONS_MAX,
+-            step=Bounds.N_POSITIONS_STEP,
+-            format=Bounds.N_POSITIONS_FORMAT,
+-            key="edit_opt_v7_long_n_positions",
+-            help=pbgui_help.n_positions)
+-    
+-    # long_total_wallet_exposure_limit
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_n_positions",
++            min_value=Bounds.N_POSITIONS_MIN,
++            max_value=Bounds.N_POSITIONS_MAX,
++            slider_step=Bounds.N_POSITIONS_STEP,
++            slider_format=Bounds.N_POSITIONS_FORMAT,
++            help_text=pbgui_help.n_positions,
++        )
+@@
+    def fragment_long_total_wallet_exposure_limit(self):
+-        if "edit_opt_v7_long_total_wallet_exposure_limit" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_total_wallet_exposure_limit != (self.config.optimize.bounds.long_total_wallet_exposure_limit_0, self.config.optimize.bounds.long_total_wallet_exposure_limit_1):
+-                self.config.optimize.bounds.long_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit[0]
+-                self.config.optimize.bounds.long_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_long_total_wallet_exposure_limit[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_total_wallet_exposure_limit = (self.config.optimize.bounds.long_total_wallet_exposure_limit_0, self.config.optimize.bounds.long_total_wallet_exposure_limit_1)
+-        st.slider(
+-            "long_total_wallet_exposure_limit",
+-            min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN,
+-            max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX,
+-            step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP,
+-            format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT,
+-            key="edit_opt_v7_long_total_wallet_exposure_limit",
+-            help=pbgui_help.total_wallet_exposure_limit)
+-
+-    # long_unstuck_close_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_total_wallet_exposure_limit",
++            min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN,
++            max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX,
++            slider_step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP,
++            slider_format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT,
++            help_text=pbgui_help.total_wallet_exposure_limit,
++        )
+@@
+    def fragment_long_unstuck_close_pct(self):
+-        if "edit_opt_v7_long_unstuck_close_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_unstuck_close_pct != (self.config.optimize.bounds.long_unstuck_close_pct_0, self.config.optimize.bounds.long_unstuck_close_pct_1):
+-                self.config.optimize.bounds.long_unstuck_close_pct_0 = st.session_state.edit_opt_v7_long_unstuck_close_pct[0]
+-                self.config.optimize.bounds.long_unstuck_close_pct_1 = st.session_state.edit_opt_v7_long_unstuck_close_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_unstuck_close_pct = (self.config.optimize.bounds.long_unstuck_close_pct_0, self.config.optimize.bounds.long_unstuck_close_pct_1)
+-        st.slider(
+-            "long_unstuck_close_pct",
+-            min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN,
+-            max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX,
+-            step=Bounds.UNSTUCK_CLOSE_PCT_STEP,
+-            format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT,
+-            key="edit_opt_v7_long_unstuck_close_pct",
+-            help=pbgui_help.unstuck_close_pct)
+-
+-    # long_unstuck_ema_dist
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_unstuck_close_pct",
++            min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN,
++            max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX,
++            slider_step=Bounds.UNSTUCK_CLOSE_PCT_STEP,
++            slider_format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT,
++            help_text=pbgui_help.unstuck_close_pct,
++        )
+@@
+    def fragment_long_unstuck_ema_dist(self):
+-        if "edit_opt_v7_long_unstuck_ema_dist" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_unstuck_ema_dist != (self.config.optimize.bounds.long_unstuck_ema_dist_0, self.config.optimize.bounds.long_unstuck_ema_dist_1):
+-                self.config.optimize.bounds.long_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_long_unstuck_ema_dist[0]
+-                self.config.optimize.bounds.long_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_long_unstuck_ema_dist[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_unstuck_ema_dist = (self.config.optimize.bounds.long_unstuck_ema_dist_0, self.config.optimize.bounds.long_unstuck_ema_dist_1)
+-        st.slider(
+-            "long_unstuck_ema_dist",
+-            min_value=Bounds.UNSTUCK_EMA_DIST_MIN,
+-            max_value=Bounds.UNSTUCK_EMA_DIST_MAX,
+-            step=Bounds.UNSTUCK_EMA_DIST_STEP,
+-            format=Bounds.UNSTUCK_EMA_DIST_FORMAT,
+-            key="edit_opt_v7_long_unstuck_ema_dist",
+-            help=pbgui_help.unstuck_ema_dist)
+-
+-    # long_unstuck_loss_allowance_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_unstuck_ema_dist",
++            min_value=Bounds.UNSTUCK_EMA_DIST_MIN,
++            max_value=Bounds.UNSTUCK_EMA_DIST_MAX,
++            slider_step=Bounds.UNSTUCK_EMA_DIST_STEP,
++            slider_format=Bounds.UNSTUCK_EMA_DIST_FORMAT,
++            help_text=pbgui_help.unstuck_ema_dist,
++        )
+@@
+    def fragment_long_unstuck_loss_allowance_pct(self):
+-        if "edit_opt_v7_long_unstuck_loss_allowance_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct != (self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1):
+-                self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct[0]
+-                self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_unstuck_loss_allowance_pct = (self.config.optimize.bounds.long_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.long_unstuck_loss_allowance_pct_1)
+-        st.slider(
+-            "long_unstuck_loss_allowance_pct",
+-            min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN,
+-            max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX,
+-            step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP,
+-            format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT,
+-            key="edit_opt_v7_long_unstuck_loss_allowance_pct",
+-            help=pbgui_help.unstuck_loss_allowance_pct)
+-
+-    # long_unstuck_threshold
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_unstuck_loss_allowance_pct",
++            min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN,
++            max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX,
++            slider_step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP,
++            slider_format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT,
++            help_text=pbgui_help.unstuck_loss_allowance_pct,
++        )
+@@
+    def fragment_long_unstuck_threshold(self):
+-        if "edit_opt_v7_long_unstuck_threshold" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_unstuck_threshold != (self.config.optimize.bounds.long_unstuck_threshold_0, self.config.optimize.bounds.long_unstuck_threshold_1):
+-                self.config.optimize.bounds.long_unstuck_threshold_0 = st.session_state.edit_opt_v7_long_unstuck_threshold[0]
+-                self.config.optimize.bounds.long_unstuck_threshold_1 = st.session_state.edit_opt_v7_long_unstuck_threshold[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_unstuck_threshold = (self.config.optimize.bounds.long_unstuck_threshold_0, self.config.optimize.bounds.long_unstuck_threshold_1)
+-        st.slider(
+-            "long_unstuck_threshold",
+-            min_value=Bounds.UNSTUCK_THRESHOLD_MIN,
+-            max_value=Bounds.UNSTUCK_THRESHOLD_MAX,
+-            step=Bounds.UNSTUCK_THRESHOLD_STEP,
+-            format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
+-            key="edit_opt_v7_long_unstuck_threshold",
+-            help=pbgui_help.unstuck_threshold)
+-
+-    # long_risk_wel_enforcer_threshold
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_unstuck_threshold",
++            min_value=Bounds.UNSTUCK_THRESHOLD_MIN,
++            max_value=Bounds.UNSTUCK_THRESHOLD_MAX,
++            slider_step=Bounds.UNSTUCK_THRESHOLD_STEP,
++            slider_format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
++            help_text=pbgui_help.unstuck_threshold,
++        )
+@@
+    def fragment_long_risk_wel_enforcer_threshold(self):
+-        if "edit_opt_v7_long_risk_wel_enforcer_threshold" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold != (self.config.optimize.bounds.long_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_wel_enforcer_threshold_1):
+-                self.config.optimize.bounds.long_risk_wel_enforcer_threshold_0 = st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold[0]
+-                self.config.optimize.bounds.long_risk_wel_enforcer_threshold_1 = st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_risk_wel_enforcer_threshold = (self.config.optimize.bounds.long_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_wel_enforcer_threshold_1)
+-        st.slider(
+-            "long_risk_wel_enforcer_threshold",
+-            min_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MIN,
+-            max_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MAX,
+-            step=Bounds.RISK_WEL_ENFORCER_THRESHOLD_STEP,
+-            format=Bounds.RISK_WEL_ENFORCER_THRESHOLD_FORMAT,
+-            key="edit_opt_v7_long_risk_wel_enforcer_threshold",
+-            help=pbgui_help.risk_wel_enforcer_threshold)
+-
+-    # long_risk_we_excess_allowance_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_risk_wel_enforcer_threshold",
++            min_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MIN,
++            max_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MAX,
++            slider_step=Bounds.RISK_WEL_ENFORCER_THRESHOLD_STEP,
++            slider_format=Bounds.RISK_WEL_ENFORCER_THRESHOLD_FORMAT,
++            help_text=pbgui_help.risk_wel_enforcer_threshold,
++        )
+@@
+    def fragment_long_risk_we_excess_allowance_pct(self):
+-        if "edit_opt_v7_long_risk_we_excess_allowance_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct != (self.config.optimize.bounds.long_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.long_risk_we_excess_allowance_pct_1):
+-                self.config.optimize.bounds.long_risk_we_excess_allowance_pct_0 = st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct[0]
+-                self.config.optimize.bounds.long_risk_we_excess_allowance_pct_1 = st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_risk_we_excess_allowance_pct = (self.config.optimize.bounds.long_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.long_risk_we_excess_allowance_pct_1)
+-        st.slider(
+-            "long_risk_we_excess_allowance_pct",
+-            min_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MIN,
+-            max_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MAX,
+-            step=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_STEP,
+-            format=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_FORMAT,
+-            key="edit_opt_v7_long_risk_we_excess_allowance_pct",
+-            help=pbgui_help.risk_we_excess_allowance_pct)
+-
+-    # long_risk_twel_enforcer_threshold
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_risk_we_excess_allowance_pct",
++            min_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MIN,
++            max_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MAX,
++            slider_step=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_STEP,
++            slider_format=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_FORMAT,
++            help_text=pbgui_help.risk_we_excess_allowance_pct,
++        )
+@@
+    def fragment_long_risk_twel_enforcer_threshold(self):
+-        if "edit_opt_v7_long_risk_twel_enforcer_threshold" in st.session_state:
+-            if st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold != (self.config.optimize.bounds.long_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_twel_enforcer_threshold_1):
+-                self.config.optimize.bounds.long_risk_twel_enforcer_threshold_0 = st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold[0]
+-                self.config.optimize.bounds.long_risk_twel_enforcer_threshold_1 = st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold[1]
+-        else:
+-            st.session_state.edit_opt_v7_long_risk_twel_enforcer_threshold = (self.config.optimize.bounds.long_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.long_risk_twel_enforcer_threshold_1)
+-        st.slider(
+-            "long_risk_twel_enforcer_threshold",
+-            min_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MIN,
+-            max_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MAX,
+-            step=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_STEP,
+-            format=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_FORMAT,
+-            key="edit_opt_v7_long_risk_twel_enforcer_threshold",
+-            help=pbgui_help.risk_twel_enforcer_threshold)
+-
+-    # # short_close_grid_markup_range
+-    # @st.fragment
+-    # def fragment_short_close_grid_markup_range(self):
+-    #     if "edit_opt_v7_short_close_grid_markup_range" in st.session_state:
+-    #         if st.session_state.edit_opt_v7_short_close_grid_markup_range != (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1):
+-    #             self.config.optimize.bounds.short_close_grid_markup_range_0 = st.session_state.edit_opt_v7_short_close_grid_markup_range[0]
+-    #             self.config.optimize.bounds.short_close_grid_markup_range_1 = st.session_state.edit_opt_v7_short_close_grid_markup_range[1]
+-    #     else:
+-    #         st.session_state.edit_opt_v7_short_close_grid_markup_range = (self.config.optimize.bounds.short_close_grid_markup_range_0, self.config.optimize.bounds.short_close_grid_markup_range_1)
+-    #     st.slider(
+-    #         "short_close_grid_markup_range",
+-    #         min_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MIN,
+-    #         max_value=Bounds.CLOSE_GRID_MARKUP_RANGE_MAX,
+-    #         step=Bounds.CLOSE_GRID_MARKUP_RANGE_STEP,
+-    #         format=Bounds.CLOSE_GRID_MARKUP_RANGE_FORMAT,
+-    #         key="edit_opt_v7_short_close_grid_markup_range",
+-    #         help=pbgui_help.close_grid_parameters)
+-    
+-    # # short_close_grid_min_markup
+-    # @st.fragment
+-    # def fragment_short_close_grid_min_markup(self):
+-    #     if "edit_opt_v7_short_close_grid_min_markup" in st.session_state:
+-    #         if st.session_state.edit_opt_v7_short_close_grid_min_markup != (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1):
+-    #             self.config.optimize.bounds.short_close_grid_min_markup_0 = st.session_state.edit_opt_v7_short_close_grid_min_markup[0]
+-    #             self.config.optimize.bounds.short_close_grid_min_markup_1 = st.session_state.edit_opt_v7_short_close_grid_min_markup[1]
+-    #     else:
+-    #         st.session_state.edit_opt_v7_short_close_grid_min_markup = (self.config.optimize.bounds.short_close_grid_min_markup_0, self.config.optimize.bounds.short_close_grid_min_markup_1)
+-    #     st.slider(
+-    #         "short_close_grid_min_markup",
+-    #         min_value=Bounds.CLOSE_GRID_MIN_MARKUP_MIN,
+-    #         max_value=Bounds.CLOSE_GRID_MIN_MARKUP_MAX,
+-    #         step=Bounds.CLOSE_GRID_MIN_MARKUP_STEP,
+-    #         format=Bounds.CLOSE_GRID_MIN_MARKUP_FORMAT,
+-    #         key="edit_opt_v7_short_close_grid_min_markup",
+-    #         help=pbgui_help.close_grid_parameters)
+-    
+-    # short_close_grid_markup_end
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "long_risk_twel_enforcer_threshold",
++            min_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MIN,
++            max_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MAX,
++            slider_step=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_STEP,
++            slider_format=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_FORMAT,
++            help_text=pbgui_help.risk_twel_enforcer_threshold,
++        )
+@@
+    def fragment_short_close_grid_markup_end(self):
+-        if "edit_opt_v7_short_close_grid_markup_end" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_close_grid_markup_end != (self.config.optimize.bounds.short_close_grid_markup_end_0, self.config.optimize.bounds.short_close_grid_markup_end_1):
+-                self.config.optimize.bounds.short_close_grid_markup_end_0 = st.session_state.edit_opt_v7_short_close_grid_markup_end[0]
+-                self.config.optimize.bounds.short_close_grid_markup_end_1 = st.session_state.edit_opt_v7_short_close_grid_markup_end[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_close_grid_markup_end = (self.config.optimize.bounds.short_close_grid_markup_end_0, self.config.optimize.bounds.short_close_grid_markup_end_1)
+-        st.slider(
+-            "short_close_grid_markup_end",
+-            min_value=Bounds.CLOSE_GRID_MARKUP_END_MIN,
+-            max_value=Bounds.CLOSE_GRID_MARKUP_END_MAX,
+-            step=Bounds.CLOSE_GRID_MARKUP_END_STEP,
+-            format=Bounds.CLOSE_GRID_MARKUP_END_FORMAT,
+-            key="edit_opt_v7_short_close_grid_markup_end",
+-            help=pbgui_help.close_grid_parameters)
+-    
+-    # short_close_grid_markup_start
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_close_grid_markup_end",
++            min_value=Bounds.CLOSE_GRID_MARKUP_END_MIN,
++            max_value=Bounds.CLOSE_GRID_MARKUP_END_MAX,
++            slider_step=Bounds.CLOSE_GRID_MARKUP_END_STEP,
++            slider_format=Bounds.CLOSE_GRID_MARKUP_END_FORMAT,
++            help_text=pbgui_help.close_grid_parameters,
++        )
+@@
+    def fragment_short_close_grid_markup_start(self):
+-        if "edit_opt_v7_short_close_grid_markup_start" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_close_grid_markup_start != (self.config.optimize.bounds.short_close_grid_markup_start_0, self.config.optimize.bounds.short_close_grid_markup_start_1):
+-                self.config.optimize.bounds.short_close_grid_markup_start_0 = st.session_state.edit_opt_v7_short_close_grid_markup_start[0]
+-                self.config.optimize.bounds.short_close_grid_markup_start_1 = st.session_state.edit_opt_v7_short_close_grid_markup_start[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_close_grid_markup_start = (self.config.optimize.bounds.short_close_grid_markup_start_0, self.config.optimize.bounds.short_close_grid_markup_start_1)
+-        st.slider(
+-            "short_close_grid_markup_start",
+-            min_value=Bounds.CLOSE_GRID_MARKUP_START_MIN,
+-            max_value=Bounds.CLOSE_GRID_MARKUP_START_MAX,
+-            step=Bounds.CLOSE_GRID_MARKUP_START_STEP,
+-            format=Bounds.CLOSE_GRID_MARKUP_START_FORMAT,
+-            key="edit_opt_v7_short_close_grid_markup_start",
+-            help=pbgui_help.close_grid_parameters)
+-
+-    # short_close_grid_qty_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_close_grid_markup_start",
++            min_value=Bounds.CLOSE_GRID_MARKUP_START_MIN,
++            max_value=Bounds.CLOSE_GRID_MARKUP_START_MAX,
++            slider_step=Bounds.CLOSE_GRID_MARKUP_START_STEP,
++            slider_format=Bounds.CLOSE_GRID_MARKUP_START_FORMAT,
++            help_text=pbgui_help.close_grid_parameters,
++        )
+@@
+    def fragment_short_close_grid_qty_pct(self):
+-        if "edit_opt_v7_short_close_grid_qty_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_close_grid_qty_pct != (self.config.optimize.bounds.short_close_grid_qty_pct_0, self.config.optimize.bounds.short_close_grid_qty_pct_1):
+-                self.config.optimize.bounds.short_close_grid_qty_pct_0 = st.session_state.edit_opt_v7_short_close_grid_qty_pct[0]
+-                self.config.optimize.bounds.short_close_grid_qty_pct_1 = st.session_state.edit_opt_v7_short_close_grid_qty_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_close_grid_qty_pct = (self.config.optimize.bounds.short_close_grid_qty_pct_0, self.config.optimize.bounds.short_close_grid_qty_pct_1)
+-        st.slider(
+-            "short_close_grid_qty_pct",
+-            min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN,
+-            max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX,
+-            step=Bounds.CLOSE_GRID_QTY_PCT_STEP,
+-            format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT,
+-            key="edit_opt_v7_short_close_grid_qty_pct",
+-            help=pbgui_help.close_grid_parameters)
+-
+-    # short_close_trailing_grid_ratio
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_close_grid_qty_pct",
++            min_value=Bounds.CLOSE_GRID_QTY_PCT_MIN,
++            max_value=Bounds.CLOSE_GRID_QTY_PCT_MAX,
++            slider_step=Bounds.CLOSE_GRID_QTY_PCT_STEP,
++            slider_format=Bounds.CLOSE_GRID_QTY_PCT_FORMAT,
++            help_text=pbgui_help.close_grid_parameters,
++        )
+@@
+    def fragment_short_close_trailing_grid_ratio(self):
+-        if "edit_opt_v7_short_close_trailing_grid_ratio" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_close_trailing_grid_ratio != (self.config.optimize.bounds.short_close_trailing_grid_ratio_0, self.config.optimize.bounds.short_close_trailing_grid_ratio_1):
+-                self.config.optimize.bounds.short_close_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio[0]
+-                self.config.optimize.bounds.short_close_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_close_trailing_grid_ratio[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_close_trailing_grid_ratio = (self.config.optimize.bounds.short_close_trailing_grid_ratio_0, self.config.optimize.bounds.short_close_trailing_grid_ratio_1)
+-        st.slider(
+-            "short_close_trailing_grid_ratio",
+-            min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN,
+-            max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX,
+-            step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP,
+-            format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT,
+-            key="edit_opt_v7_short_close_trailing_grid_ratio",
+-            help=pbgui_help.close_grid_parameters)
+-    
+-    # short_close_trailing_qty_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_close_trailing_grid_ratio",
++            min_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MIN,
++            max_value=Bounds.CLOSE_TRAILING_GRID_RATIO_MAX,
++            slider_step=Bounds.CLOSE_TRAILING_GRID_RATIO_STEP,
++            slider_format=Bounds.CLOSE_TRAILING_GRID_RATIO_FORMAT,
++            help_text=pbgui_help.close_grid_parameters,
++        )
+@@
+    def fragment_short_close_trailing_qty_pct(self):
+-        if "edit_opt_v7_short_close_trailing_qty_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_close_trailing_qty_pct != (self.config.optimize.bounds.short_close_trailing_qty_pct_0, self.config.optimize.bounds.short_close_trailing_qty_pct_1):
+-                self.config.optimize.bounds.short_close_trailing_qty_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct[0]
+-                self.config.optimize.bounds.short_close_trailing_qty_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_qty_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_close_trailing_qty_pct = (self.config.optimize.bounds.short_close_trailing_qty_pct_0, self.config.optimize.bounds.short_close_trailing_qty_pct_1)
+-        st.slider(
+-            "short_close_trailing_qty_pct",
+-            min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN,
+-            max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX,
+-            step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP,
+-            format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT,
+-            key="edit_opt_v7_short_close_trailing_qty_pct",
+-            help=pbgui_help.trailing_parameters)
+-    
+-    # short_close_trailing_retracement_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_close_trailing_qty_pct",
++            min_value=Bounds.CLOSE_TRAILING_QTY_PCT_MIN,
++            max_value=Bounds.CLOSE_TRAILING_QTY_PCT_MAX,
++            slider_step=Bounds.CLOSE_TRAILING_QTY_PCT_STEP,
++            slider_format=Bounds.CLOSE_TRAILING_QTY_PCT_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_short_close_trailing_retracement_pct(self):
+-        if "edit_opt_v7_short_close_trailing_retracement_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_close_trailing_retracement_pct != (self.config.optimize.bounds.short_close_trailing_retracement_pct_0, self.config.optimize.bounds.short_close_trailing_retracement_pct_1):
+-                self.config.optimize.bounds.short_close_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct[0]
+-                self.config.optimize.bounds.short_close_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_retracement_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_close_trailing_retracement_pct = (self.config.optimize.bounds.short_close_trailing_retracement_pct_0, self.config.optimize.bounds.short_close_trailing_retracement_pct_1)
+-        st.slider(
+-            "short_close_trailing_retracement_pct",
+-            min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN,
+-            max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX,
+-            step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP,
+-            format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT,
+-            key="edit_opt_v7_short_close_trailing_retracement_pct",
+-            help=pbgui_help.trailing_parameters)
+-    
+-    # short_close_trailing_threshold_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_close_trailing_retracement_pct",
++            min_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MIN,
++            max_value=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_MAX,
++            slider_step=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_STEP,
++            slider_format=Bounds.CLOSE_TRAILING_RETRACEMENT_PCT_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_short_close_trailing_threshold_pct(self):
+-        if "edit_opt_v7_short_close_trailing_threshold_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_close_trailing_threshold_pct != (self.config.optimize.bounds.short_close_trailing_threshold_pct_0, self.config.optimize.bounds.short_close_trailing_threshold_pct_1):
+-                self.config.optimize.bounds.short_close_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct[0]
+-                self.config.optimize.bounds.short_close_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_close_trailing_threshold_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_close_trailing_threshold_pct = (self.config.optimize.bounds.short_close_trailing_threshold_pct_0, self.config.optimize.bounds.short_close_trailing_threshold_pct_1)
+-        st.slider(
+-            "short_close_trailing_threshold_pct",
+-            min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN,
+-            max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX,
+-            step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP,
+-            format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT,
+-            key="edit_opt_v7_short_close_trailing_threshold_pct",
+-            help=pbgui_help.trailing_parameters)
+-    
+-    # short_ema_span_0
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_close_trailing_threshold_pct",
++            min_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MIN,
++            max_value=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_MAX,
++            slider_step=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_STEP,
++            slider_format=Bounds.CLOSE_TRAILING_THRESHOLD_PCT_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_short_ema_span_0(self):
+-        if "edit_opt_v7_short_ema_span_0" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_ema_span_0 != (self.config.optimize.bounds.short_ema_span_0_0, self.config.optimize.bounds.short_ema_span_0_1):
+-                self.config.optimize.bounds.short_ema_span_0_0 = st.session_state.edit_opt_v7_short_ema_span_0[0]
+-                self.config.optimize.bounds.short_ema_span_0_1 = st.session_state.edit_opt_v7_short_ema_span_0[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_ema_span_0 = (self.config.optimize.bounds.short_ema_span_0_0, self.config.optimize.bounds.short_ema_span_0_1)
+-        st.slider(
+-            "short_ema_span_0",
+-            min_value=Bounds.EMA_SPAN_0_MIN,
+-            max_value=Bounds.EMA_SPAN_0_MAX,
+-            step=Bounds.EMA_SPAN_0_STEP,
+-            format=Bounds.EMA_SPAN_0_FORMAT,
+-            key="edit_opt_v7_short_ema_span_0",
+-            help=pbgui_help.ema_span)
+-    
+-    # short_ema_span_1
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_ema_span_0",
++            min_value=Bounds.EMA_SPAN_0_MIN,
++            max_value=Bounds.EMA_SPAN_0_MAX,
++            slider_step=Bounds.EMA_SPAN_0_STEP,
++            slider_format=Bounds.EMA_SPAN_0_FORMAT,
++            help_text=pbgui_help.ema_span,
++        )
+@@
+    def fragment_short_ema_span_1(self):
+-        if "edit_opt_v7_short_ema_span_1" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_ema_span_1 != (self.config.optimize.bounds.short_ema_span_1_0, self.config.optimize.bounds.short_ema_span_1_1):
+-                self.config.optimize.bounds.short_ema_span_1_0 = st.session_state.edit_opt_v7_short_ema_span_1[0]
+-                self.config.optimize.bounds.short_ema_span_1_1 = st.session_state.edit_opt_v7_short_ema_span_1[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_ema_span_1 = (self.config.optimize.bounds.short_ema_span_1_0, self.config.optimize.bounds.short_ema_span_1_1)
+-        st.slider(
+-            "short_ema_span_1",
+-            min_value=Bounds.EMA_SPAN_1_MIN,
+-            max_value=Bounds.EMA_SPAN_1_MAX,
+-            step=Bounds.EMA_SPAN_1_STEP,
+-            format=Bounds.EMA_SPAN_1_FORMAT,
+-            key="edit_opt_v7_short_ema_span_1",
+-            help=pbgui_help.ema_span)
+-    
+-    # short_entry_grid_double_down_factor
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_ema_span_1",
++            min_value=Bounds.EMA_SPAN_1_MIN,
++            max_value=Bounds.EMA_SPAN_1_MAX,
++            slider_step=Bounds.EMA_SPAN_1_STEP,
++            slider_format=Bounds.EMA_SPAN_1_FORMAT,
++            help_text=pbgui_help.ema_span,
++        )
+@@
+    def fragment_short_entry_grid_double_down_factor(self):
+-        if "edit_opt_v7_short_entry_grid_double_down_factor" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_grid_double_down_factor != (self.config.optimize.bounds.short_entry_grid_double_down_factor_0, self.config.optimize.bounds.short_entry_grid_double_down_factor_1):
+-                self.config.optimize.bounds.short_entry_grid_double_down_factor_0 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor[0]
+-                self.config.optimize.bounds.short_entry_grid_double_down_factor_1 = st.session_state.edit_opt_v7_short_entry_grid_double_down_factor[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_grid_double_down_factor = (self.config.optimize.bounds.short_entry_grid_double_down_factor_0, self.config.optimize.bounds.short_entry_grid_double_down_factor_1)
+-        st.slider(
+-            "short_entry_grid_double_down_factor",
+-            min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN,
+-            max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX,
+-            step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP,
+-            format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT,
+-            key="edit_opt_v7_short_entry_grid_double_down_factor",
+-            help=pbgui_help.entry_grid_double_down_factor)
+-
+-    # short_entry_volatility_ema_span_hours
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_grid_double_down_factor",
++            min_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MIN,
++            max_value=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_MAX,
++            slider_step=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_STEP,
++            slider_format=Bounds.ENTRY_GRID_DOUBLE_DOWN_FACTOR_FORMAT,
++            help_text=pbgui_help.entry_grid_double_down_factor,
++        )
+@@
+    def fragment_short_entry_volatility_ema_span_hours(self):
+-        if "edit_opt_v7_short_entry_volatility_ema_span_hours" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours != (self.config.optimize.bounds.short_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.short_entry_volatility_ema_span_hours_1):
+-                self.config.optimize.bounds.short_entry_volatility_ema_span_hours_0 = st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours[0]
+-                self.config.optimize.bounds.short_entry_volatility_ema_span_hours_1 = st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_volatility_ema_span_hours = (self.config.optimize.bounds.short_entry_volatility_ema_span_hours_0, self.config.optimize.bounds.short_entry_volatility_ema_span_hours_1)
+-        st.slider(
+-            "short_entry_volatility_ema_span_hours",
+-            min_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MIN,
+-            max_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MAX,
+-            step=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_STEP,
+-            format=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_FORMAT,
+-            key="edit_opt_v7_short_entry_volatility_ema_span_hours",
+-            help=pbgui_help.entry_volatility_ema_span_hours)
+-
+-    # short_entry_grid_spacing_volatility_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_volatility_ema_span_hours",
++            min_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MIN,
++            max_value=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_MAX,
++            slider_step=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_STEP,
++            slider_format=Bounds.ENTRY_VOLATILITY_EMA_SPAN_HOURS_FORMAT,
++            help_text=pbgui_help.entry_volatility_ema_span_hours,
++        )
+@@
+    def fragment_short_entry_grid_spacing_volatility_weight(self):
+-        if "edit_opt_v7_short_entry_grid_spacing_volatility_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight != (self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_1):
+-                self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight[0]
+-                self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_grid_spacing_volatility_weight = (self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_volatility_weight_1)
+-        st.slider(
+-            "short_entry_grid_spacing_volatility_weight",
+-            min_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MAX,
+-            step=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_STEP,
+-            format=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_FORMAT,
+-            key="edit_opt_v7_short_entry_grid_spacing_volatility_weight",
+-            help=pbgui_help.entry_grid_spacing_volatility_weight)
+-
+-    # short_entry_grid_spacing_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_grid_spacing_volatility_weight",
++            min_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_GRID_SPACING_VOLATILITY_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_grid_spacing_volatility_weight,
++        )
+@@
+    def fragment_short_entry_grid_spacing_pct(self):
+-        if "edit_opt_v7_short_entry_grid_spacing_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_grid_spacing_pct != (self.config.optimize.bounds.short_entry_grid_spacing_pct_0, self.config.optimize.bounds.short_entry_grid_spacing_pct_1):
+-                self.config.optimize.bounds.short_entry_grid_spacing_pct_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct[0]
+-                self.config.optimize.bounds.short_entry_grid_spacing_pct_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_grid_spacing_pct = (self.config.optimize.bounds.short_entry_grid_spacing_pct_0, self.config.optimize.bounds.short_entry_grid_spacing_pct_1)
+-        st.slider(
+-            "short_entry_grid_spacing_pct",
+-            min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN,
+-            max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX,
+-            step=Bounds.ENTRY_GRID_SPACING_PCT_STEP,
+-            format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT,
+-            key="edit_opt_v7_short_entry_grid_spacing_pct",
+-            help=pbgui_help.entry_grid_spacing)
+-    
+-    # short_entry_grid_spacing_we_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_grid_spacing_pct",
++            min_value=Bounds.ENTRY_GRID_SPACING_PCT_MIN,
++            max_value=Bounds.ENTRY_GRID_SPACING_PCT_MAX,
++            slider_step=Bounds.ENTRY_GRID_SPACING_PCT_STEP,
++            slider_format=Bounds.ENTRY_GRID_SPACING_PCT_FORMAT,
++            help_text=pbgui_help.entry_grid_spacing,
++        )
+@@
+    def fragment_short_entry_grid_spacing_we_weight(self):
+-        if "edit_opt_v7_short_entry_grid_spacing_we_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight != (self.config.optimize.bounds.short_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_we_weight_1):
+-                self.config.optimize.bounds.short_entry_grid_spacing_we_weight_0 = st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight[0]
+-                self.config.optimize.bounds.short_entry_grid_spacing_we_weight_1 = st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_grid_spacing_we_weight = (self.config.optimize.bounds.short_entry_grid_spacing_we_weight_0, self.config.optimize.bounds.short_entry_grid_spacing_we_weight_1)
+-        st.slider(
+-            "short_entry_grid_spacing_we_weight",
+-            min_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MAX,
+-            step=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_STEP,
+-            format=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_FORMAT,
+-            key="edit_opt_v7_short_entry_grid_spacing_we_weight",
+-            help=pbgui_help.entry_grid_spacing)
+-    
+-    # short_entry_initial_ema_dist
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_grid_spacing_we_weight",
++            min_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_GRID_SPACING_WE_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_grid_spacing,
++        )
+@@
+    def fragment_short_entry_initial_ema_dist(self):
+-        if "edit_opt_v7_short_entry_initial_ema_dist" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_initial_ema_dist != (self.config.optimize.bounds.short_entry_initial_ema_dist_0, self.config.optimize.bounds.short_entry_initial_ema_dist_1):
+-                self.config.optimize.bounds.short_entry_initial_ema_dist_0 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist[0]
+-                self.config.optimize.bounds.short_entry_initial_ema_dist_1 = st.session_state.edit_opt_v7_short_entry_initial_ema_dist[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_initial_ema_dist = (self.config.optimize.bounds.short_entry_initial_ema_dist_0, self.config.optimize.bounds.short_entry_initial_ema_dist_1)
+-        st.slider(
+-            "short_entry_initial_ema_dist",
+-            min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN,
+-            max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX,
+-            step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP,
+-            format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT,
+-            key="edit_opt_v7_short_entry_initial_ema_dist",
+-            help=pbgui_help.entry_initial_ema_dist)
+-
+-    # short_entry_initial_qty_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_initial_ema_dist",
++            min_value=Bounds.ENTRY_INITIAL_EMA_DIST_MIN,
++            max_value=Bounds.ENTRY_INITIAL_EMA_DIST_MAX,
++            slider_step=Bounds.ENTRY_INITIAL_EMA_DIST_STEP,
++            slider_format=Bounds.ENTRY_INITIAL_EMA_DIST_FORMAT,
++            help_text=pbgui_help.entry_initial_ema_dist,
++        )
+@@
+    def fragment_short_entry_initial_qty_pct(self):
+-        if "edit_opt_v7_short_entry_initial_qty_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_initial_qty_pct != (self.config.optimize.bounds.short_entry_initial_qty_pct_0, self.config.optimize.bounds.short_entry_initial_qty_pct_1):
+-                self.config.optimize.bounds.short_entry_initial_qty_pct_0 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct[0]
+-                self.config.optimize.bounds.short_entry_initial_qty_pct_1 = st.session_state.edit_opt_v7_short_entry_initial_qty_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_initial_qty_pct = (self.config.optimize.bounds.short_entry_initial_qty_pct_0, self.config.optimize.bounds.short_entry_initial_qty_pct_1)
+-        st.slider(
+-            "short_entry_initial_qty_pct",
+-            min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN,
+-            max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX,
+-            step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP,
+-            format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT,
+-            key="edit_opt_v7_short_entry_initial_qty_pct",
+-            help=pbgui_help.entry_initial_qty_pct)
+-    
+-    # short_entry_trailing_double_down_factor
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_initial_qty_pct",
++            min_value=Bounds.ENTRY_INITIAL_QTY_PCT_MIN,
++            max_value=Bounds.ENTRY_INITIAL_QTY_PCT_MAX,
++            slider_step=Bounds.ENTRY_INITIAL_QTY_PCT_STEP,
++            slider_format=Bounds.ENTRY_INITIAL_QTY_PCT_FORMAT,
++            help_text=pbgui_help.entry_initial_qty_pct,
++        )
+@@
+    def fragment_short_entry_trailing_double_down_factor(self):
+-        if "edit_opt_v7_short_entry_trailing_double_down_factor" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor != (self.config.optimize.bounds.short_entry_trailing_double_down_factor_0, self.config.optimize.bounds.short_entry_trailing_double_down_factor_1):
+-                self.config.optimize.bounds.short_entry_trailing_double_down_factor_0 = st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor[0]
+-                self.config.optimize.bounds.short_entry_trailing_double_down_factor_1 = st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_double_down_factor = (self.config.optimize.bounds.short_entry_trailing_double_down_factor_0, self.config.optimize.bounds.short_entry_trailing_double_down_factor_1)
+-        st.slider(
+-            "short_entry_trailing_double_down_factor",
+-            min_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MAX,
+-            step=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_STEP,
+-            format=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_double_down_factor",
+-            help=pbgui_help.trailing_parameters)
+-    
+-    # short_entry_trailing_grid_ratio
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_double_down_factor",
++            min_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MIN,
++            max_value=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_DOUBLE_DOWN_FACTOR_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_short_entry_trailing_grid_ratio(self):
+-        if "edit_opt_v7_short_entry_trailing_grid_ratio" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio != (self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, self.config.optimize.bounds.short_entry_trailing_grid_ratio_1):
+-                self.config.optimize.bounds.short_entry_trailing_grid_ratio_0 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio[0]
+-                self.config.optimize.bounds.short_entry_trailing_grid_ratio_1 = st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_grid_ratio = (self.config.optimize.bounds.short_entry_trailing_grid_ratio_0, self.config.optimize.bounds.short_entry_trailing_grid_ratio_1)
+-        st.slider(
+-            "short_entry_trailing_grid_ratio",
+-            min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX,
+-            step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP,
+-            format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_grid_ratio",
+-            help=pbgui_help.trailing_parameters)
+-    
+-    # short_entry_trailing_retracement_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_grid_ratio",
++            min_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MIN,
++            max_value=Bounds.ENTRY_TRAILING_GRID_RATIO_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_GRID_RATIO_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_GRID_RATIO_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_short_entry_trailing_retracement_pct(self):
+-        if "edit_opt_v7_short_entry_trailing_retracement_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct != (self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, self.config.optimize.bounds.short_entry_trailing_retracement_pct_1):
+-                self.config.optimize.bounds.short_entry_trailing_retracement_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct[0]
+-                self.config.optimize.bounds.short_entry_trailing_retracement_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_retracement_pct = (self.config.optimize.bounds.short_entry_trailing_retracement_pct_0, self.config.optimize.bounds.short_entry_trailing_retracement_pct_1)
+-        st.slider(
+-            "short_entry_trailing_retracement_pct",
+-            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX,
+-            step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP,
+-            format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_retracement_pct",
+-            help=pbgui_help.trailing_parameters)
+-
+-    # short_entry_trailing_retracement_we_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_retracement_pct",
++            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_RETRACEMENT_PCT_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_short_entry_trailing_retracement_we_weight(self):
+-        if "edit_opt_v7_short_entry_trailing_retracement_we_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight != (self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_1):
+-                self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight[0]
+-                self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_retracement_we_weight = (self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_we_weight_1)
+-        st.slider(
+-            "short_entry_trailing_retracement_we_weight",
+-            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_retracement_we_weight",
+-            help=pbgui_help.entry_trailing_retracement_we_weight)
+-
+-    # short_entry_trailing_retracement_volatility_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_retracement_we_weight",
++            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_RETRACEMENT_WE_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_retracement_we_weight,
++        )
+@@
+    def fragment_short_entry_trailing_retracement_volatility_weight(self):
+-        if "edit_opt_v7_short_entry_trailing_retracement_volatility_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight != (self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_1):
+-                self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight[0]
+-                self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_retracement_volatility_weight = (self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_retracement_volatility_weight_1)
+-        st.slider(
+-            "short_entry_trailing_retracement_volatility_weight",
+-            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_retracement_volatility_weight",
+-            help=pbgui_help.entry_trailing_retracement_volatility_weight)
+-
+-    # short_entry_trailing_threshold_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_retracement_volatility_weight",
++            min_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_RETRACEMENT_VOLATILITY_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_retracement_volatility_weight,
++        )
+@@
+    def fragment_short_entry_trailing_threshold_pct(self):
+-        if "edit_opt_v7_short_entry_trailing_threshold_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct != (self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, self.config.optimize.bounds.short_entry_trailing_threshold_pct_1):
+-                self.config.optimize.bounds.short_entry_trailing_threshold_pct_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct[0]
+-                self.config.optimize.bounds.short_entry_trailing_threshold_pct_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_threshold_pct = (self.config.optimize.bounds.short_entry_trailing_threshold_pct_0, self.config.optimize.bounds.short_entry_trailing_threshold_pct_1)
+-        st.slider(
+-            "short_entry_trailing_threshold_pct",
+-            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX,
+-            step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP,
+-            format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_threshold_pct",
+-            help=pbgui_help.trailing_parameters)
+-
+-    # short_entry_trailing_threshold_we_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_threshold_pct",
++            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_THRESHOLD_PCT_FORMAT,
++            help_text=pbgui_help.trailing_parameters,
++        )
+@@
+    def fragment_short_entry_trailing_threshold_we_weight(self):
+-        if "edit_opt_v7_short_entry_trailing_threshold_we_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight != (self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_1):
+-                self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight[0]
+-                self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_threshold_we_weight = (self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_we_weight_1)
+-        st.slider(
+-            "short_entry_trailing_threshold_we_weight",
+-            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_threshold_we_weight",
+-            help=pbgui_help.entry_trailing_threshold_we_weight)
+-
+-    # short_entry_trailing_threshold_volatility_weight
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_threshold_we_weight",
++            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_THRESHOLD_WE_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_threshold_we_weight,
++        )
+@@
+    def fragment_short_entry_trailing_threshold_volatility_weight(self):
+-        if "edit_opt_v7_short_entry_trailing_threshold_volatility_weight" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight != (self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_1):
+-                self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_0 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight[0]
+-                self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_1 = st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_entry_trailing_threshold_volatility_weight = (self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_0, self.config.optimize.bounds.short_entry_trailing_threshold_volatility_weight_1)
+-        st.slider(
+-            "short_entry_trailing_threshold_volatility_weight",
+-            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MIN,
+-            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MAX,
+-            step=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_STEP,
+-            format=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_FORMAT,
+-            key="edit_opt_v7_short_entry_trailing_threshold_volatility_weight",
+-            help=pbgui_help.entry_trailing_threshold_volatility_weight)
+-
+-    # short_filter_volatility_ema_span
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_entry_trailing_threshold_volatility_weight",
++            min_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MIN,
++            max_value=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_MAX,
++            slider_step=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_STEP,
++            slider_format=Bounds.ENTRY_TRAILING_THRESHOLD_VOLATILITY_WEIGHT_FORMAT,
++            help_text=pbgui_help.entry_trailing_threshold_volatility_weight,
++        )
+@@
+    def fragment_short_filter_volatility_ema_span(self):
+-        if "edit_opt_v7_short_filter_volatility_ema_span" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_filter_volatility_ema_span != (self.config.optimize.bounds.short_filter_volatility_ema_span_0, self.config.optimize.bounds.short_filter_volatility_ema_span_1):
+-                self.config.optimize.bounds.short_filter_volatility_ema_span_0 = st.session_state.edit_opt_v7_short_filter_volatility_ema_span[0]
+-                self.config.optimize.bounds.short_filter_volatility_ema_span_1 = st.session_state.edit_opt_v7_short_filter_volatility_ema_span[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_filter_volatility_ema_span = (self.config.optimize.bounds.short_filter_volatility_ema_span_0, self.config.optimize.bounds.short_filter_volatility_ema_span_1)
+-        st.slider(
+-            "short_filter_volatility_ema_span",
+-            min_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MIN,
+-            max_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MAX,
+-            step=Bounds.FILTER_VOLATILITY_EMA_SPAN_STEP,
+-            format=Bounds.FILTER_VOLATILITY_EMA_SPAN_FORMAT,
+-            key="edit_opt_v7_short_filter_volatility_ema_span",
+-            help=pbgui_help.filter_ema_span)
+-    
+-    # short_filter_volatility_drop_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_filter_volatility_ema_span",
++            min_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MIN,
++            max_value=Bounds.FILTER_VOLATILITY_EMA_SPAN_MAX,
++            slider_step=Bounds.FILTER_VOLATILITY_EMA_SPAN_STEP,
++            slider_format=Bounds.FILTER_VOLATILITY_EMA_SPAN_FORMAT,
++            help_text=pbgui_help.filter_ema_span,
++        )
+@@
+    def fragment_short_filter_volatility_drop_pct(self):
+-        if "edit_opt_v7_short_filter_volatility_drop_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_filter_volatility_drop_pct != (self.config.optimize.bounds.short_filter_volatility_drop_pct_0, self.config.optimize.bounds.short_filter_volatility_drop_pct_1):
+-                self.config.optimize.bounds.short_filter_volatility_drop_pct_0 = st.session_state.edit_opt_v7_short_filter_volatility_drop_pct[0]
+-                self.config.optimize.bounds.short_filter_volatility_drop_pct_1 = st.session_state.edit_opt_v7_short_filter_volatility_drop_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_filter_volatility_drop_pct = (self.config.optimize.bounds.short_filter_volatility_drop_pct_0, self.config.optimize.bounds.short_filter_volatility_drop_pct_1)
+-        st.slider(
+-            "short_filter_volatility_drop_pct",
+-            min_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MIN,
+-            max_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MAX,
+-            step=Bounds.FILTER_VOLATILITY_DROP_PCT_STEP,
+-            format=Bounds.FILTER_VOLATILITY_DROP_PCT_FORMAT,
+-            key="edit_opt_v7_short_filter_volatility_drop_pct",
+-            help=pbgui_help.filter_volatility_drop_pct)
+-    
+-    # short_filter_volume_drop_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_filter_volatility_drop_pct",
++            min_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MIN,
++            max_value=Bounds.FILTER_VOLATILITY_DROP_PCT_MAX,
++            slider_step=Bounds.FILTER_VOLATILITY_DROP_PCT_STEP,
++            slider_format=Bounds.FILTER_VOLATILITY_DROP_PCT_FORMAT,
++            help_text=pbgui_help.filter_volatility_drop_pct,
++        )
+@@
+    def fragment_short_filter_volume_drop_pct(self):
+-        if "edit_opt_v7_short_filter_volume_drop_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_filter_volume_drop_pct != (self.config.optimize.bounds.short_filter_volume_drop_pct_0, self.config.optimize.bounds.short_filter_volume_drop_pct_1):
+-                self.config.optimize.bounds.short_filter_volume_drop_pct_0 = st.session_state.edit_opt_v7_short_filter_volume_drop_pct[0]
+-                self.config.optimize.bounds.short_filter_volume_drop_pct_1 = st.session_state.edit_opt_v7_short_filter_volume_drop_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_filter_volume_drop_pct = (self.config.optimize.bounds.short_filter_volume_drop_pct_0, self.config.optimize.bounds.short_filter_volume_drop_pct_1)
+-        st.slider(
+-            "short_filter_volume_drop_pct",
+-            min_value=Bounds.FILTER_VOLUME_DROP_PCT_MIN,
+-            max_value=Bounds.FILTER_VOLUME_DROP_PCT_MAX,
+-            step=Bounds.FILTER_VOLUME_DROP_PCT_STEP,
+-            format=Bounds.FILTER_VOLUME_DROP_PCT_FORMAT,
+-            key="edit_opt_v7_short_filter_volume_drop_pct",
+-            help=pbgui_help.filter_volume_drop_pct)
+-
+-    # short_filter_volume_ema_span
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_filter_volume_drop_pct",
++            min_value=Bounds.FILTER_VOLUME_DROP_PCT_MIN,
++            max_value=Bounds.FILTER_VOLUME_DROP_PCT_MAX,
++            slider_step=Bounds.FILTER_VOLUME_DROP_PCT_STEP,
++            slider_format=Bounds.FILTER_VOLUME_DROP_PCT_FORMAT,
++            help_text=pbgui_help.filter_volume_drop_pct,
++        )
+@@
+    def fragment_short_filter_volume_ema_span(self):
+-        if "edit_opt_v7_short_filter_volume_ema_span" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_filter_volume_ema_span != (self.config.optimize.bounds.short_filter_volume_ema_span_0, self.config.optimize.bounds.short_filter_volume_ema_span_1):
+-                self.config.optimize.bounds.short_filter_volume_ema_span_0 = st.session_state.edit_opt_v7_short_filter_volume_ema_span[0]
+-                self.config.optimize.bounds.short_filter_volume_ema_span_1 = st.session_state.edit_opt_v7_short_filter_volume_ema_span[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_filter_volume_ema_span = (self.config.optimize.bounds.short_filter_volume_ema_span_0, self.config.optimize.bounds.short_filter_volume_ema_span_1)
+-        st.slider(
+-            "short_filter_volume_ema_span",
+-            min_value=Bounds.FILTER_VOLUME_EMA_SPAN_MIN,
+-            max_value=Bounds.FILTER_VOLUME_EMA_SPAN_MAX,
+-            step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
+-            format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
+-            key="edit_opt_v7_short_filter_volume_ema_span",
+-            help=pbgui_help.filter_ema_span)
+-
+-    # short_n_positions
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_filter_volume_ema_span",
++            min_value=Bounds.FILTER_VOLUME_EMA_SPAN_MIN,
++            max_value=Bounds.FILTER_VOLUME_EMA_SPAN_MAX,
++            slider_step=Bounds.FILTER_VOLUME_EMA_SPAN_STEP,
++            slider_format=Bounds.FILTER_VOLUME_EMA_SPAN_FORMAT,
++            help_text=pbgui_help.filter_ema_span,
++        )
+@@
+    def fragment_short_n_positions(self):
+-        if "edit_opt_v7_short_n_positions" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_n_positions != (self.config.optimize.bounds.short_n_positions_0, self.config.optimize.bounds.short_n_positions_1):
+-                self.config.optimize.bounds.short_n_positions_0 = st.session_state.edit_opt_v7_short_n_positions[0]
+-                self.config.optimize.bounds.short_n_positions_1 = st.session_state.edit_opt_v7_short_n_positions[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_n_positions = (self.config.optimize.bounds.short_n_positions_0, self.config.optimize.bounds.short_n_positions_1)
+-        st.slider(
+-            "short_n_positions",
+-            min_value=Bounds.N_POSITIONS_MIN,
+-            max_value=Bounds.N_POSITIONS_MAX,
+-            step=Bounds.N_POSITIONS_STEP,
+-            format=Bounds.N_POSITIONS_FORMAT,
+-            key="edit_opt_v7_short_n_positions",
+-            help=pbgui_help.n_positions)
+-    
+-    # short_total_wallet_exposure_limit
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_n_positions",
++            min_value=Bounds.N_POSITIONS_MIN,
++            max_value=Bounds.N_POSITIONS_MAX,
++            slider_step=Bounds.N_POSITIONS_STEP,
++            slider_format=Bounds.N_POSITIONS_FORMAT,
++            help_text=pbgui_help.n_positions,
++        )
+@@
+    def fragment_short_total_wallet_exposure_limit(self):
+-        if "edit_opt_v7_short_total_wallet_exposure_limit" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_total_wallet_exposure_limit != (self.config.optimize.bounds.short_total_wallet_exposure_limit_0, self.config.optimize.bounds.short_total_wallet_exposure_limit_1):
+-                self.config.optimize.bounds.short_total_wallet_exposure_limit_0 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit[0]
+-                self.config.optimize.bounds.short_total_wallet_exposure_limit_1 = st.session_state.edit_opt_v7_short_total_wallet_exposure_limit[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_total_wallet_exposure_limit = (self.config.optimize.bounds.short_total_wallet_exposure_limit_0, self.config.optimize.bounds.short_total_wallet_exposure_limit_1)
+-        st.slider(
+-            "short_total_wallet_exposure_limit",
+-            min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN,
+-            max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX,
+-            step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP,
+-            format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT,
+-            key="edit_opt_v7_short_total_wallet_exposure_limit",
+-            help=pbgui_help.total_wallet_exposure_limit)
+-    
+-    # short_unstuck_close_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_total_wallet_exposure_limit",
++            min_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MIN,
++            max_value=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_MAX,
++            slider_step=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_STEP,
++            slider_format=Bounds.TOTAL_WALLET_EXPOSURE_LIMIT_FORMAT,
++            help_text=pbgui_help.total_wallet_exposure_limit,
++        )
+@@
+    def fragment_short_unstuck_close_pct(self):
+-        if "edit_opt_v7_short_unstuck_close_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_unstuck_close_pct != (self.config.optimize.bounds.short_unstuck_close_pct_0, self.config.optimize.bounds.short_unstuck_close_pct_1):
+-                self.config.optimize.bounds.short_unstuck_close_pct_0 = st.session_state.edit_opt_v7_short_unstuck_close_pct[0]
+-                self.config.optimize.bounds.short_unstuck_close_pct_1 = st.session_state.edit_opt_v7_short_unstuck_close_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_unstuck_close_pct = (self.config.optimize.bounds.short_unstuck_close_pct_0, self.config.optimize.bounds.short_unstuck_close_pct_1)
+-        st.slider(
+-            "short_unstuck_close_pct",
+-            min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN,
+-            max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX,
+-            step=Bounds.UNSTUCK_CLOSE_PCT_STEP,
+-            format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT,
+-            key="edit_opt_v7_short_unstuck_close_pct",
+-            help=pbgui_help.unstuck_close_pct)
+-
+-    # short_unstuck_ema_dist
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_unstuck_close_pct",
++            min_value=Bounds.UNSTUCK_CLOSE_PCT_MIN,
++            max_value=Bounds.UNSTUCK_CLOSE_PCT_MAX,
++            slider_step=Bounds.UNSTUCK_CLOSE_PCT_STEP,
++            slider_format=Bounds.UNSTUCK_CLOSE_PCT_FORMAT,
++            help_text=pbgui_help.unstuck_close_pct,
++        )
+@@
+    def fragment_short_unstuck_ema_dist(self):
+-        if "edit_opt_v7_short_unstuck_ema_dist" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_unstuck_ema_dist != (self.config.optimize.bounds.short_unstuck_ema_dist_0, self.config.optimize.bounds.short_unstuck_ema_dist_1):
+-                self.config.optimize.bounds.short_unstuck_ema_dist_0 = st.session_state.edit_opt_v7_short_unstuck_ema_dist[0]
+-                self.config.optimize.bounds.short_unstuck_ema_dist_1 = st.session_state.edit_opt_v7_short_unstuck_ema_dist[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_unstuck_ema_dist = (self.config.optimize.bounds.short_unstuck_ema_dist_0, self.config.optimize.bounds.short_unstuck_ema_dist_1)
+-        st.slider(
+-            "short_unstuck_ema_dist",
+-            min_value=Bounds.UNSTUCK_EMA_DIST_MIN,
+-            max_value=Bounds.UNSTUCK_EMA_DIST_MAX,
+-            step=Bounds.UNSTUCK_EMA_DIST_STEP,
+-            format=Bounds.UNSTUCK_EMA_DIST_FORMAT,
+-            key="edit_opt_v7_short_unstuck_ema_dist",
+-            help=pbgui_help.unstuck_ema_dist)
+-    
+-    # short_unstuck_loss_allowance_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_unstuck_ema_dist",
++            min_value=Bounds.UNSTUCK_EMA_DIST_MIN,
++            max_value=Bounds.UNSTUCK_EMA_DIST_MAX,
++            slider_step=Bounds.UNSTUCK_EMA_DIST_STEP,
++            slider_format=Bounds.UNSTUCK_EMA_DIST_FORMAT,
++            help_text=pbgui_help.unstuck_ema_dist,
++        )
+@@
+    def fragment_short_unstuck_loss_allowance_pct(self):
+-        if "edit_opt_v7_short_unstuck_loss_allowance_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct != (self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1):
+-                self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct[0]
+-                self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1 = st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_unstuck_loss_allowance_pct = (self.config.optimize.bounds.short_unstuck_loss_allowance_pct_0, self.config.optimize.bounds.short_unstuck_loss_allowance_pct_1)
+-        st.slider(
+-            "short_unstuck_loss_allowance_pct",
+-            min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN,
+-            max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX,
+-            step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP,
+-            format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT,
+-            key="edit_opt_v7_short_unstuck_loss_allowance_pct",
+-            help=pbgui_help.unstuck_loss_allowance_pct)
+-    
+-    # short_unstuck_threshold
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_unstuck_loss_allowance_pct",
++            min_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MIN,
++            max_value=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_MAX,
++            slider_step=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_STEP,
++            slider_format=Bounds.UNSTUCK_LOSS_ALLOWANCE_PCT_FORMAT,
++            help_text=pbgui_help.unstuck_loss_allowance_pct,
++        )
+@@
+    def fragment_short_unstuck_threshold(self):
+-        if "edit_opt_v7_short_unstuck_threshold" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_unstuck_threshold != (self.config.optimize.bounds.short_unstuck_threshold_0, self.config.optimize.bounds.short_unstuck_threshold_1):
+-                self.config.optimize.bounds.short_unstuck_threshold_0 = st.session_state.edit_opt_v7_short_unstuck_threshold[0]
+-                self.config.optimize.bounds.short_unstuck_threshold_1 = st.session_state.edit_opt_v7_short_unstuck_threshold[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_unstuck_threshold = (self.config.optimize.bounds.short_unstuck_threshold_0, self.config.optimize.bounds.short_unstuck_threshold_1)
+-        st.slider(
+-            "short_unstuck_threshold",
+-            min_value=Bounds.UNSTUCK_THRESHOLD_MIN,
+-            max_value=Bounds.UNSTUCK_THRESHOLD_MAX,
+-            step=Bounds.UNSTUCK_THRESHOLD_STEP,
+-            format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
+-            key="edit_opt_v7_short_unstuck_threshold",
+-            help=pbgui_help.unstuck_threshold)
+-
+-    # short_risk_wel_enforcer_threshold
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_unstuck_threshold",
++            min_value=Bounds.UNSTUCK_THRESHOLD_MIN,
++            max_value=Bounds.UNSTUCK_THRESHOLD_MAX,
++            slider_step=Bounds.UNSTUCK_THRESHOLD_STEP,
++            slider_format=Bounds.UNSTUCK_THRESHOLD_FORMAT,
++            help_text=pbgui_help.unstuck_threshold,
++        )
+@@
+    def fragment_short_risk_wel_enforcer_threshold(self):
+-        if "edit_opt_v7_short_risk_wel_enforcer_threshold" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold != (self.config.optimize.bounds.short_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_wel_enforcer_threshold_1):
+-                self.config.optimize.bounds.short_risk_wel_enforcer_threshold_0 = st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold[0]
+-                self.config.optimize.bounds.short_risk_wel_enforcer_threshold_1 = st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_risk_wel_enforcer_threshold = (self.config.optimize.bounds.short_risk_wel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_wel_enforcer_threshold_1)
+-        st.slider(
+-            "short_risk_wel_enforcer_threshold",
+-            min_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MIN,
+-            max_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MAX,
+-            step=Bounds.RISK_WEL_ENFORCER_THRESHOLD_STEP,
+-            format=Bounds.RISK_WEL_ENFORCER_THRESHOLD_FORMAT,
+-            key="edit_opt_v7_short_risk_wel_enforcer_threshold",
+-            help=pbgui_help.risk_wel_enforcer_threshold)
+-
+-    # short_risk_we_excess_allowance_pct
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_risk_wel_enforcer_threshold",
++            min_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MIN,
++            max_value=Bounds.RISK_WEL_ENFORCER_THRESHOLD_MAX,
++            slider_step=Bounds.RISK_WEL_ENFORCER_THRESHOLD_STEP,
++            slider_format=Bounds.RISK_WEL_ENFORCER_THRESHOLD_FORMAT,
++            help_text=pbgui_help.risk_wel_enforcer_threshold,
++        )
+@@
+    def fragment_short_risk_we_excess_allowance_pct(self):
+-        if "edit_opt_v7_short_risk_we_excess_allowance_pct" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct != (self.config.optimize.bounds.short_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.short_risk_we_excess_allowance_pct_1):
+-                self.config.optimize.bounds.short_risk_we_excess_allowance_pct_0 = st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct[0]
+-                self.config.optimize.bounds.short_risk_we_excess_allowance_pct_1 = st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_risk_we_excess_allowance_pct = (self.config.optimize.bounds.short_risk_we_excess_allowance_pct_0, self.config.optimize.bounds.short_risk_we_excess_allowance_pct_1)
+-        st.slider(
+-            "short_risk_we_excess_allowance_pct",
+-            min_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MIN,
+-            max_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MAX,
+-            step=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_STEP,
+-            format=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_FORMAT,
+-            key="edit_opt_v7_short_risk_we_excess_allowance_pct",
+-            help=pbgui_help.risk_we_excess_allowance_pct)
+-
+-    # short_risk_twel_enforcer_threshold
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_risk_we_excess_allowance_pct",
++            min_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MIN,
++            max_value=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_MAX,
++            slider_step=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_STEP,
++            slider_format=Bounds.RISK_WE_EXCESS_ALLOWANCE_PCT_FORMAT,
++            help_text=pbgui_help.risk_we_excess_allowance_pct,
++        )
+@@
+    def fragment_short_risk_twel_enforcer_threshold(self):
+-        if "edit_opt_v7_short_risk_twel_enforcer_threshold" in st.session_state:
+-            if st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold != (self.config.optimize.bounds.short_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_twel_enforcer_threshold_1):
+-                self.config.optimize.bounds.short_risk_twel_enforcer_threshold_0 = st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold[0]
+-                self.config.optimize.bounds.short_risk_twel_enforcer_threshold_1 = st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold[1]
+-        else:
+-            st.session_state.edit_opt_v7_short_risk_twel_enforcer_threshold = (self.config.optimize.bounds.short_risk_twel_enforcer_threshold_0, self.config.optimize.bounds.short_risk_twel_enforcer_threshold_1)
+-        st.slider(
+-            "short_risk_twel_enforcer_threshold",
+-            min_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MIN,
+-            max_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MAX,
+-            step=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_STEP,
+-            format=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_FORMAT,
+-            key="edit_opt_v7_short_risk_twel_enforcer_threshold",
+-            help=pbgui_help.risk_twel_enforcer_threshold)
+-
+-    @st.fragment
+-    @st.fragment
++        self._bounds_slider_with_step(
++            "short_risk_twel_enforcer_threshold",
++            min_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MIN,
++            max_value=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_MAX,
++            slider_step=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_STEP,
++            slider_format=Bounds.RISK_TWEL_ENFORCER_THRESHOLD_FORMAT,
++            help_text=pbgui_help.risk_twel_enforcer_threshold,
++        )
+*** End Patch
