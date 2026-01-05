@@ -1112,6 +1112,9 @@ entry_grid_spacing = """
         the wallet exposure limit; negative values tighten spacing when exposure is small.
     ```"""
 
+# aliases used by UI
+entry_grid_spacing_pct = entry_grid_spacing
+
 entry_initial_ema_dist = """
     ```
     offset from lower/upper ema band.
