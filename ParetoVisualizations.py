@@ -595,6 +595,10 @@ class ParetoVisualizations:
             Plotly figure
         """
         configs = self.loader.get_pareto_configs()
+
+        # Scenario values are lazily loaded in all_results.bin mode.
+        for c in configs:
+            self.loader.ensure_details(c)
         
         if not configs or not self.loader.scenario_labels:
             return go.Figure().add_annotation(text="No scenario data available", showarrow=False)
@@ -1227,6 +1231,10 @@ class ParetoVisualizations:
         distances = []
         param_names = []
         colors = []
+
+        pareto_configs = self.loader.get_pareto_configs()
+        for c in pareto_configs:
+            self.loader.ensure_bot_params(c)
         
         for param in at_bounds[:top_n]:
             if param not in self.loader.optimize_bounds:
@@ -1236,7 +1244,6 @@ class ParetoVisualizations:
             param_range = upper - lower
             
             # Get values from Pareto configs
-            pareto_configs = self.loader.get_pareto_configs()
             values = [c.bot_params.get(param, 0) for c in pareto_configs if param in c.bot_params]
             
             if not values:

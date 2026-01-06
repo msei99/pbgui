@@ -4,15 +4,29 @@ Provides comprehensive metrics, robustness scores, and parameter analysis
 """
 
 import os
+import heapq
 import msgpack
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Iterator
 from dataclasses import dataclass
 import json
 import glob
 from pathlib import Path, PurePath
 import re
+import time
+import hashlib
+
+try:
+    import msgspec  # type: ignore
+except Exception:
+    msgspec = None
+
+_HAS_MSGSPEC = (msgspec is not None) and (os.environ.get("PBG_DISABLE_MSGSPEC") != "1")
+_MSGSPEC_MSGPACK_DECODER = msgspec.msgpack.Decoder() if _HAS_MSGSPEC else None
+
+_DISABLE_SCAN_CACHE = os.environ.get("PBG_DISABLE_SCAN_CACHE") == "1"
+_FULL_SCAN_CACHE = os.environ.get("PBG_FULL_SCAN_CACHE") == "1"
 
 
 @dataclass
@@ -52,6 +66,13 @@ class ConfigMetrics:
     # Is this config on the Pareto front?
     is_pareto: bool = False
 
+    # Cached overall robustness score [0, 1] used when `robustness_scores` isn't loaded.
+    overall_robustness: float = 0.0
+
+    # Lazy-loading flags (all_results.bin mode)
+    details_loaded: bool = True
+    bot_params_loaded: bool = True
+
 
 class ParetoDataLoader:
     """Loads and analyzes all_results.bin from optimize runs"""
@@ -88,6 +109,65 @@ class ParetoDataLoader:
         self.optimize_limits: List[Dict] = []
         self.backtest_scenarios: List[Dict] = []
 
+    def _scan_cache_paths(self) -> Tuple[str, str]:
+        """Return (meta_json_path, npz_path) for the persistent scan cache."""
+        base = self.all_results_path + ".scan_cache"
+        return base + ".meta.json", base + ".npz"
+
+    def _is_scan_cache_valid(self) -> bool:
+        """Check if scan cache exists and matches current all_results.bin (mtime+size)."""
+        meta_path, npz_path = self._scan_cache_paths()
+        try:
+            if not os.path.exists(meta_path) or not os.path.exists(npz_path):
+                return False
+            if not os.path.exists(self.all_results_path):
+                return False
+            st_bin = os.stat(self.all_results_path)
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            src = meta.get("source") or {}
+            return int(src.get("size") or -1) == int(st_bin.st_size) and float(src.get("mtime") or -1) == float(st_bin.st_mtime)
+        except Exception:
+            return False
+
+    def _load_scan_cache(self) -> Optional[Dict[str, Any]]:
+        """Load scan cache (meta + numpy arrays). Returns dict or None on failure."""
+        meta_path, npz_path = self._scan_cache_paths()
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            arrays = np.load(npz_path, allow_pickle=False)
+            return {"meta": meta, "arrays": arrays}
+        except Exception:
+            return None
+
+    def _write_scan_cache(self, meta: Dict[str, Any], arrays: Dict[str, np.ndarray]) -> None:
+        """Write scan cache to disk (best-effort)."""
+        meta_path, npz_path = self._scan_cache_paths()
+        try:
+            os.makedirs(os.path.dirname(meta_path) or ".", exist_ok=True)
+            tmp_meta = meta_path + ".tmp"
+            # NOTE: np.savez appends ".npz" if the path doesn't end with it.
+            # Ensure the temp file ends with ".npz" so os.replace() targets the correct filename.
+            tmp_npz = npz_path + ".tmp.npz"
+
+            with open(tmp_meta, "w", encoding="utf-8") as f:
+                json.dump(meta, f)
+
+            np.savez(tmp_npz, **arrays)
+
+            os.replace(tmp_meta, meta_path)
+            os.replace(tmp_npz, npz_path)
+        except Exception:
+            # Cache is an optimization; never fail loading due to cache write.
+            try:
+                if os.path.exists(tmp_meta):
+                    os.remove(tmp_meta)
+                if os.path.exists(tmp_npz):
+                    os.remove(tmp_npz)
+            except Exception:
+                pass
+
     def _is_legacy_results_format(self) -> bool:
         """Detect older optimize_results formats which this UI does not support.
 
@@ -117,6 +197,15 @@ class ParetoDataLoader:
         except Exception:
             # Never block loading due to detection issues.
             return False
+
+    def _decode_msgpack_object(self, payload: bytes) -> Any:
+        """Decode a single msgpack object from a bytes slice.
+
+        Prefers msgspec if installed; falls back to msgpack.
+        """
+        if _HAS_MSGSPEC and _MSGSPEC_MSGPACK_DECODER is not None:
+            return _MSGSPEC_MSGPACK_DECODER.decode(payload)
+        return msgpack.loads(payload, raw=False, strict_map_key=False)
         
     def load(self, load_strategy: List[str] = None, max_configs: int = 2000, progress_callback=None) -> bool:
         """
@@ -144,62 +233,745 @@ class ParetoDataLoader:
         if not os.path.exists(self.all_results_path):
             return False
         
+        t_total0 = time.perf_counter()
+
+        # Reset state
+        self.configs = []
+        self.raw_configs_cache = {}
+        self.pareto_configs_cache = {}
+        self.scoring_metrics = []
+        self.scenario_labels = []
+        self.optimize_bounds = {}
+        self.optimize_limits = []
+        self.backtest_scenarios = []
+
         # Load pareto hashes to mark pareto configs
+        t0 = time.perf_counter()
         self._load_pareto_hashes()
-        
-        # Load all configs from binary file
-        if progress_callback:
-            progress_callback(0, 100, "Loading binary file...")
-        
+        t_load_pareto_hashes = time.perf_counter() - t0
+
+        # Preload globals from first object (cheap) so the main scan can run in raw=True mode.
         try:
-            configs_data = self._load_binary_file(progress_callback=progress_callback)
-        except Exception as e:
+            with open(self.all_results_path, 'rb') as f:
+                u0 = msgpack.Unpacker(f, raw=False, strict_map_key=False, read_size=1024 * 1024)
+                first_obj = next(iter(u0))
+            if isinstance(first_obj, dict):
+                # populate scoring_metrics, optimize bounds/limits, scenarios, scenario_labels
+                try:
+                    optimize_config = first_obj.get('optimize', {}) or {}
+                    self.scoring_metrics = optimize_config.get('scoring', []) or []
+                    self.optimize_bounds = optimize_config.get('bounds', {}) or {}
+                    self.optimize_limits = optimize_config.get('limits', []) or []
+                except Exception:
+                    pass
+
+                try:
+                    if 'suite_metrics' in first_obj:
+                        suite_metrics_block = first_obj.get('suite_metrics', {}) or {}
+                        if not self.scenario_labels:
+                            self.scenario_labels = suite_metrics_block.get('scenario_labels', []) or []
+                    backtest_config = first_obj.get('backtest', {}) or {}
+                    suite_config = backtest_config.get('suite', {}) or {}
+                    if suite_config.get('enabled'):
+                        self.backtest_scenarios = suite_config.get('scenarios', []) or []
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # -------- Persistent scan cache fast-path --------
+        # If the cache is valid, avoid decoding the entire all_results.bin.
+        # We'll select indices from cached arrays and only unpack selected configs by offsets.
+        t_cache_load0 = time.perf_counter()
+        scan_cache = self._load_scan_cache() if (not _DISABLE_SCAN_CACHE and self._is_scan_cache_valid()) else None
+        t_cache_load = time.perf_counter() - t_cache_load0
+
+        if scan_cache is not None:
+            meta = scan_cache.get("meta") or {}
+            arrays = scan_cache.get("arrays")
+            try:
+                # Restore globals from cache
+                self.scoring_metrics = meta.get("scoring_metrics") or []
+                self.scenario_labels = meta.get("scenario_labels") or []
+                self.optimize_bounds = meta.get("optimize_bounds") or {}
+                self.optimize_limits = meta.get("optimize_limits") or []
+                self.backtest_scenarios = meta.get("backtest_scenarios") or []
+
+                # If cache doesn't include fields required by the current strategy, fall back.
+                strategy = list(load_strategy) if load_strategy else ['performance']
+
+                required_fields = {"offsets", "constraint_violation", "primary"}
+                if 'robustness' in strategy:
+                    required_fields.add("overall_robustness")
+                if 'sharpe' in strategy:
+                    required_fields.add("sharpe")
+                if 'drawdown' in strategy:
+                    required_fields.add("drawdown")
+                if 'calmar' in strategy:
+                    required_fields.add("calmar")
+                if 'sortino' in strategy:
+                    required_fields.add("sortino")
+                if 'omega' in strategy:
+                    required_fields.add("omega")
+                if 'volatility' in strategy:
+                    required_fields.add("volatility")
+                if 'recovery' in strategy:
+                    required_fields.add("recovery")
+
+                available_fields = set(getattr(arrays, "files", []) or [])
+                missing = required_fields - available_fields
+                if missing:
+                    scan_cache = None
+                    raise RuntimeError(f"scan cache missing fields: {sorted(missing)}")
+
+                offsets = arrays["offsets"]
+                constraint_v = arrays["constraint_violation"]
+                primary_v = arrays["primary"]
+                overall_rob_v = arrays["overall_robustness"] if "overall_robustness" in available_fields else None
+                sharpe_v = arrays["sharpe"] if "sharpe" in available_fields else None
+                drawdown_v = arrays["drawdown"] if "drawdown" in available_fields else None
+                calmar_v = arrays["calmar"] if "calmar" in available_fields else None
+                sortino_v = arrays["sortino"] if "sortino" in available_fields else None
+                omega_v = arrays["omega"] if "omega" in available_fields else None
+                volatility_v = arrays["volatility"] if "volatility" in available_fields else None
+                recovery_v = arrays["recovery"] if "recovery" in available_fields else None
+
+                total_parsed = int(len(offsets))
+                if total_parsed <= 0:
+                    scan_cache = None
+                else:
+                    idxs = np.arange(total_parsed, dtype=np.int32)
+                    configs_per_criterion = max(1, int(max_configs // len(strategy))) if strategy else max_configs
+
+                    def _topk_by(keys: Tuple[np.ndarray, ...], k: int) -> np.ndarray:
+                        order = np.lexsort(keys)
+                        return order[:k]
+
+                    # Precompute full performance ordering (used for fill)
+                    perf_order = _topk_by((idxs, primary_v, constraint_v), min(max_configs, total_parsed))
+                    # Note: primary_v is stored as (-primary_metric) already? No; stored as positive.
+                    # For performance we want constraint asc, -primary desc, idx asc => keys: (idx, -primary, constraint)
+                    perf_order = np.lexsort((idxs, -primary_v, constraint_v))[: min(max_configs, total_parsed)]
+
+                    selected_order: List[int] = []
+                    selected_set: set = set()
+
+                    for criterion in strategy:
+                        if criterion == 'performance':
+                            order = perf_order[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'robustness':
+                            if overall_rob_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing overall_robustness')
+                            order = np.lexsort((idxs, constraint_v, -overall_rob_v))[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'sharpe':
+                            if sharpe_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing sharpe')
+                            order = np.lexsort((idxs, -sharpe_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'drawdown':
+                            if drawdown_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing drawdown')
+                            order = np.lexsort((idxs, -drawdown_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'calmar':
+                            if calmar_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing calmar')
+                            order = np.lexsort((idxs, -calmar_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'sortino':
+                            if sortino_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing sortino')
+                            order = np.lexsort((idxs, -sortino_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'omega':
+                            if omega_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing omega')
+                            order = np.lexsort((idxs, -omega_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'volatility':
+                            if volatility_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing volatility')
+                            order = np.lexsort((idxs, volatility_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'recovery':
+                            if recovery_v is None:
+                                scan_cache = None
+                                raise RuntimeError('scan cache missing recovery')
+                            order = np.lexsort((idxs, recovery_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                        else:
+                            order = perf_order[: min(configs_per_criterion, total_parsed)]
+
+                        for cand in order.tolist():
+                            if cand in selected_set:
+                                continue
+                            selected_set.add(int(cand))
+                            selected_order.append(int(cand))
+
+                    if len(selected_order) < max_configs:
+                        for cand in perf_order.tolist():
+                            if len(selected_order) >= max_configs:
+                                break
+                            if cand in selected_set:
+                                continue
+                            selected_set.add(int(cand))
+                            selected_order.append(int(cand))
+
+                    if len(selected_order) > max_configs:
+                        selected_order = selected_order[:max_configs]
+
+                    # Parse selected configs by offsets
+                    if progress_callback:
+                        progress_callback(0, max(1, len(selected_order)), "Parsing selected configs (offset cache)...")
+
+                    t_parse_selected0 = time.perf_counter()
+                    pairs = [(int(offsets[i]), int(i)) for i in selected_order if 0 <= int(i) < total_parsed]
+                    pairs.sort(key=lambda x: x[0])
+
+                    idx_to_metrics: Dict[int, ConfigMetrics] = {}
+                    idx_to_raw: Dict[int, Dict] = {}
+
+                    with open(self.all_results_path, 'rb') as f:
+                        file_size = os.path.getsize(self.all_results_path)
+                        for n_done, (off, i) in enumerate(pairs, 1):
+                            try:
+                                # Prefer decoding from a bounded bytes slice so msgspec can be used.
+                                end = int(offsets[i + 1]) if (int(i) + 1) < total_parsed else int(file_size)
+                                if end <= int(off):
+                                    raise ValueError("invalid offset range")
+                                f.seek(int(off))
+                                payload = f.read(int(end - int(off)))
+
+                                config_data = self._decode_msgpack_object(payload)
+
+                                # Reuse precomputed robustness from scan cache (if present).
+                                pre_rob = None
+                                if overall_rob_v is not None:
+                                    try:
+                                        pre_rob = float(overall_rob_v[i])
+                                    except Exception:
+                                        pre_rob = None
+
+                                if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
+                                    metrics = self._parse_config_light_raw(i, config_data, precomputed_overall_robustness=pre_rob)
+                                else:
+                                    metrics = self._parse_config_light(
+                                        i,
+                                        config_data,
+                                        precomputed_overall_robustness=pre_rob,
+                                        compute_overall_robustness=False,
+                                    )
+
+                                idx_to_metrics[i] = metrics
+                                idx_to_raw[i] = config_data
+                            except Exception:
+                                # Fall back to legacy per-object unpack
+                                try:
+                                    f.seek(int(off))
+                                    unpacker = msgpack.Unpacker(f, raw=True, strict_map_key=False)
+                                    config_data = next(iter(unpacker))
+                                    pre_rob = None
+                                    if overall_rob_v is not None:
+                                        try:
+                                            pre_rob = float(overall_rob_v[i])
+                                        except Exception:
+                                            pre_rob = None
+                                    metrics = self._parse_config_light_raw(i, config_data, precomputed_overall_robustness=pre_rob)
+                                    idx_to_metrics[i] = metrics
+                                    idx_to_raw[i] = config_data
+                                except Exception:
+                                    continue
+                            if progress_callback and (n_done % 50 == 0 or n_done == len(pairs)):
+                                progress_callback(n_done, len(pairs), f"Parsed {n_done}/{len(pairs)} selected configs")
+
+                    self.configs = [idx_to_metrics[i] for i in selected_order if i in idx_to_metrics]
+                    self.raw_configs_cache = idx_to_raw
+                    t_parse_selected = time.perf_counter() - t_parse_selected0
+
+                    # Compute Pareto front
+                    t_pareto0 = time.perf_counter()
+                    self._compute_pareto_front_fast()
+                    t_pareto = time.perf_counter() - t_pareto0
+
+                    t_total = time.perf_counter() - t_total0
+                    self.load_stats = {
+                        'total_parsed': total_parsed,
+                        'selected_configs': len(self.configs),
+                        'pareto_configs': sum(1 for c in self.configs if c.is_pareto),
+                        'scenarios': self.scenario_labels,
+                        'scoring_metrics': self.scoring_metrics,
+                        'load_strategy': load_strategy,
+                        'max_configs': max_configs,
+                        'timings': {
+                            'total': t_total,
+                            'load_pareto_hashes': t_load_pareto_hashes,
+                            'parse_all_results': t_cache_load + t_parse_selected,
+                            'scan_all_results': 0.0,
+                            'parse_selected_configs': t_parse_selected,
+                            'select_top_configs': 0.0,
+                            'compute_pareto_front': t_pareto,
+                        },
+                    }
+                    return True
+            except Exception:
+                # Fall back to full scan
+                scan_cache = None
+
+        # Parse configs streaming from msgpack (avoid materializing entire file as a list)
+        if progress_callback:
+            progress_callback(0, os.path.getsize(self.all_results_path), "Loading/parsing all_results.bin...")
+
+        def _metrics_dict_from_config_data(config_data: Dict) -> Dict:
+            if 'suite_metrics' in config_data:
+                suite_metrics_block = config_data.get('suite_metrics', {}) or {}
+                if not self.scenario_labels:
+                    self.scenario_labels = suite_metrics_block.get('scenario_labels', []) or []
+                return suite_metrics_block.get('metrics', {}) or {}
+            metrics_block = config_data.get('metrics', {}) or {}
+            return metrics_block.get('stats', {}) or {}
+
+        def _ensure_globals_from_config_data(config_data: Dict) -> None:
+            if not self.scoring_metrics and 'optimize' in config_data:
+                optimize_config = config_data.get('optimize', {}) or {}
+                self.scoring_metrics = optimize_config.get('scoring', []) or []
+                if not self.optimize_bounds:
+                    self.optimize_bounds = optimize_config.get('bounds', {}) or {}
+                    self.optimize_limits = optimize_config.get('limits', []) or []
+
+            if not self.backtest_scenarios and 'backtest' in config_data:
+                backtest_config = config_data.get('backtest', {}) or {}
+                suite_config = backtest_config.get('suite', {}) or {}
+                if suite_config.get('enabled'):
+                    self.backtest_scenarios = suite_config.get('scenarios', []) or []
+
+        def _aggregated_metric_value(metric_data: Any) -> float:
+            if isinstance(metric_data, dict):
+                if 'aggregated' in metric_data:
+                    try:
+                        return float(metric_data.get('aggregated') or 0.0)
+                    except Exception:
+                        return 0.0
+                if 'mean' in metric_data:
+                    try:
+                        return float(metric_data.get('mean') or 0.0)
+                    except Exception:
+                        return 0.0
+                stats = metric_data.get('stats')
+                if isinstance(stats, dict):
+                    try:
+                        return float(stats.get('mean') or 0.0)
+                    except Exception:
+                        return 0.0
+                return 0.0
+            if isinstance(metric_data, (int, float)):
+                return float(metric_data)
+            return 0.0
+
+        def _mean_std_from_metric_data(metric_data: Any) -> Tuple[float, float]:
+            if not isinstance(metric_data, dict):
+                return 0.0, 0.0
+            if 'stats' in metric_data and isinstance(metric_data.get('stats'), dict):
+                stats = metric_data.get('stats', {}) or {}
+                mean = stats.get('mean', 0.0)
+                std = stats.get('std', 0.0)
+            else:
+                mean = metric_data.get('mean', 0.0)
+                std = metric_data.get('std', 0.0)
+            try:
+                return float(mean or 0.0), float(std or 0.0)
+            except Exception:
+                return 0.0, 0.0
+
+        parsed_count = 0
+        total_parsed = 0
+
+        strategy = list(load_strategy) if load_strategy else ['performance']
+        only_performance = len(strategy) == 1 and strategy[0] == 'performance'
+        configs_per_criterion = max_configs // len(strategy) if strategy else max_configs
+        configs_per_criterion = max(1, int(configs_per_criterion))
+        needs_robustness = 'robustness' in strategy
+
+        needs_sharpe = 'sharpe' in strategy
+        needs_drawdown = 'drawdown' in strategy
+        needs_calmar = 'calmar' in strategy
+        needs_sortino = 'sortino' in strategy
+        needs_omega = 'omega' in strategy
+        needs_volatility = 'volatility' in strategy
+        needs_recovery = 'recovery' in strategy
+
+        # Heaps store (priority_tuple, idx, key_tuple)
+        heaps: Dict[str, List[Tuple[Tuple[float, ...], int, Tuple[float, ...]]]] = {c: [] for c in strategy}
+        perf_fill_heap: List[Tuple[Tuple[float, ...], int, Tuple[float, ...]]] = []
+
+        def _push_candidate(heap: List, k: int, idx: int, key: Tuple[float, ...]):
+            priority = tuple(-float(x) for x in key)
+            item = (priority, int(idx), key)
+            if len(heap) < k:
+                heapq.heappush(heap, item)
+                return
+            if item[0] > heap[0][0]:
+                heapq.heapreplace(heap, item)
+
+        # For building a persistent scan cache
+        offsets_all: List[int] = []
+        constraint_all: List[float] = []
+        primary_all: List[float] = []
+
+        # Default: cache only fields required by the current strategy.
+        # Opt-in full cache (faster strategy switching, slower first scan) via PBG_FULL_SCAN_CACHE=1.
+        cache_full = bool(_FULL_SCAN_CACHE)
+        store_sharpe = cache_full or needs_sharpe
+        store_drawdown = cache_full or needs_drawdown
+        store_calmar = cache_full or needs_calmar
+        store_sortino = cache_full or needs_sortino
+        store_omega = cache_full or needs_omega
+        store_volatility = cache_full or needs_volatility
+        store_recovery = cache_full or needs_recovery
+        store_overall_rob = cache_full or needs_robustness
+
+        fast_perf_scan = bool(only_performance and not cache_full)
+
+        sharpe_all: Optional[List[float]] = [] if store_sharpe else None
+        drawdown_all: Optional[List[float]] = [] if store_drawdown else None
+        calmar_all: Optional[List[float]] = [] if store_calmar else None
+        sortino_all: Optional[List[float]] = [] if store_sortino else None
+        omega_all: Optional[List[float]] = [] if store_omega else None
+        volatility_all: Optional[List[float]] = [] if store_volatility else None
+        recovery_all: Optional[List[float]] = [] if store_recovery else None
+        overall_rob_all: Optional[List[float]] = [] if store_overall_rob else None
+
+        # Use raw=True for the scan to avoid decoding all strings on first load.
+        # We'll parse selected configs with raw=False afterwards.
+        primary_metric = self.scoring_metrics[0] if self.scoring_metrics else 'adg_w_usd'
+        primary_metric_b = primary_metric.encode('utf-8', errors='ignore')
+
+        def _get(d: Any, k: Any, default=None):
+            if isinstance(d, dict):
+                return d.get(k, default)
+            return default
+
+        def _metrics_dict_from_raw(obj: Dict) -> Dict:
+            if b'suite_metrics' in obj:
+                suite = _get(obj, b'suite_metrics', {}) or {}
+                return _get(suite, b'metrics', {}) or {}
+            m = _get(obj, b'metrics', {}) or {}
+            return _get(m, b'stats', {}) or {}
+
+        def _aggregated_metric_value_raw(metric_data: Any) -> float:
+            if isinstance(metric_data, dict):
+                if b'aggregated' in metric_data:
+                    v = metric_data.get(b'aggregated')
+                    try:
+                        return float(v or 0.0)
+                    except Exception:
+                        return 0.0
+                if b'mean' in metric_data:
+                    v = metric_data.get(b'mean')
+                    try:
+                        return float(v or 0.0)
+                    except Exception:
+                        return 0.0
+                stats = metric_data.get(b'stats')
+                if isinstance(stats, dict):
+                    v = stats.get(b'mean')
+                    try:
+                        return float(v or 0.0)
+                    except Exception:
+                        return 0.0
+                return 0.0
+            if isinstance(metric_data, (int, float)):
+                return float(metric_data)
+            return 0.0
+
+        def _mean_std_from_metric_data_raw(metric_data: Any) -> Tuple[float, float]:
+            if not isinstance(metric_data, dict):
+                return 0.0, 0.0
+            if b'stats' in metric_data and isinstance(metric_data.get(b'stats'), dict):
+                stats = metric_data.get(b'stats', {}) or {}
+                mean = stats.get(b'mean', 0.0)
+                std = stats.get(b'std', 0.0)
+            else:
+                mean = metric_data.get(b'mean', 0.0)
+                std = metric_data.get(b'std', 0.0)
+            try:
+                return float(mean or 0.0), float(std or 0.0)
+            except Exception:
+                return 0.0, 0.0
+
+        t_scan0 = time.perf_counter()
+        try:
+            for idx, (offset, config_data) in enumerate(self._iter_binary_file(progress_callback=progress_callback, with_offsets=True, raw_mode=True)):
+                total_parsed += 1
+
+                offsets_all.append(int(offset))
+
+                # raw=True scan extraction
+                metrics_dict = _metrics_dict_from_raw(config_data)
+                metrics_block = _get(config_data, b'metrics', {}) or {}
+                try:
+                    constraint_violation = float(metrics_block.get(b'constraint_violation', 0.0) or 0.0)
+                except Exception:
+                    constraint_violation = 0.0
+
+                primary_val = _aggregated_metric_value_raw(metrics_dict.get(primary_metric_b))
+
+                if fast_perf_scan:
+                    constraint_all.append(float(constraint_violation))
+                    primary_all.append(float(primary_val))
+                    sharpe_val = drawdown_val = calmar_val = sortino_val = omega_val = volatility_val = recovery_val = 0.0
+                    overall_robustness = 0.0
+                else:
+                    sharpe_val = _aggregated_metric_value_raw(metrics_dict.get(b'sharpe_ratio_usd')) if store_sharpe else 0.0
+                    drawdown_val = _aggregated_metric_value_raw(metrics_dict.get(b'drawdown_worst_usd')) if store_drawdown else 0.0
+                    calmar_val = _aggregated_metric_value_raw(metrics_dict.get(b'calmar_ratio_usd')) if store_calmar else 0.0
+                    sortino_val = _aggregated_metric_value_raw(metrics_dict.get(b'sortino_ratio_usd')) if store_sortino else 0.0
+                    omega_val = _aggregated_metric_value_raw(metrics_dict.get(b'omega_ratio_usd')) if store_omega else 0.0
+                    volatility_val = _aggregated_metric_value_raw(metrics_dict.get(b'equity_volatility_usd')) if store_volatility else 0.0
+                    recovery_val = _aggregated_metric_value_raw(metrics_dict.get(b'drawdown_recovery_hours_mean')) if store_recovery else 0.0
+
+                    overall_robustness = 0.0
+                    if store_overall_rob and metrics_dict:
+                        # Match compute_overall_robustness() semantics without allocating dicts
+                        score_sum = 0.0
+                        score_n = 0
+                        for metric_data in metrics_dict.values():
+                            if not isinstance(metric_data, dict):
+                                continue
+                            mean, std = _mean_std_from_metric_data_raw(metric_data)
+                            if abs(mean) > 1e-10:
+                                cv = abs(std / mean)
+                                score_sum += 1.0 / (1.0 + cv)
+                            else:
+                                score_sum += 1.0
+                            score_n += 1
+                        overall_robustness = (score_sum / score_n) if score_n else 0.0
+
+                    constraint_all.append(float(constraint_violation))
+                    primary_all.append(float(primary_val))
+                    if sharpe_all is not None:
+                        sharpe_all.append(float(sharpe_val))
+                    if drawdown_all is not None:
+                        drawdown_all.append(float(drawdown_val))
+                    if calmar_all is not None:
+                        calmar_all.append(float(calmar_val))
+                    if sortino_all is not None:
+                        sortino_all.append(float(sortino_val))
+                    if omega_all is not None:
+                        omega_all.append(float(omega_val))
+                    if volatility_all is not None:
+                        volatility_all.append(float(volatility_val))
+                    if recovery_all is not None:
+                        recovery_all.append(float(recovery_val))
+                    if overall_rob_all is not None:
+                        overall_rob_all.append(float(overall_robustness))
+
+                key_perf = (constraint_violation, -primary_val, int(idx))
+
+                # Always maintain performance heap for fill.
+                _push_candidate(perf_fill_heap, max_configs, idx, key_perf)
+
+                for criterion in strategy:
+                    if criterion == 'performance':
+                        key = key_perf
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'robustness':
+                        key = (-overall_robustness, constraint_violation, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'sharpe':
+                        key = (constraint_violation, -sharpe_val, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'drawdown':
+                        key = (constraint_violation, -drawdown_val, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'calmar':
+                        key = (constraint_violation, -calmar_val, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'sortino':
+                        key = (constraint_violation, -sortino_val, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'omega':
+                        key = (constraint_violation, -omega_val, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'volatility':
+                        key = (constraint_violation, volatility_val, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'recovery':
+                        key = (constraint_violation, recovery_val, int(idx))
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    else:
+                        key = key_perf
+                        _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+
+                parsed_count += 1
+        except Exception:
             import traceback
             traceback.print_exc()
             return False
-        
-        # Parse each config
-        parsed_count = 0
-        total_configs = len(configs_data)
-        
-        # Parse ALL configs first (we need to find the best ones)
-        # NOTE: We cache config_data temporarily during parsing
-        temp_cache = {}
-        for idx, config_data in enumerate(configs_data):
-            try:
-                metrics = self._parse_config(idx, config_data)
-                self.configs.append(metrics)
-                # Temporary cache - will be filtered after selection
-                temp_cache[idx] = config_data
-                parsed_count += 1
-                
-                # Report progress every 100 configs
-                if progress_callback and (parsed_count % 100 == 0 or parsed_count == total_configs):
-                    progress_callback(parsed_count, total_configs, f"Parsing configs: {parsed_count}/{total_configs}")
-            except Exception as e:
-                if idx < 3:  # Show details for first 3 errors
-                    import traceback
-                    traceback.print_exc()
-                continue
-        
+        t_scan = time.perf_counter() - t_scan0
+
         if parsed_count == 0:
             return False
-        
-        # Select top N configs based on load_strategy
-        total_parsed = len(self.configs)
-        self.configs = self._select_top_configs_by_strategy(self.configs, load_strategy, max_count=max_configs)
-        
-        # Cache ONLY the selected configs (saves memory!)
-        for config in self.configs:
-            if config.config_index in temp_cache:
-                self.raw_configs_cache[config.config_index] = temp_cache[config.config_index]
-        
-        # Clear temp cache to free memory
-        temp_cache.clear()
-        
+
+        # Determine selected indices in stable order (same semantics as _select_top_configs_by_strategy)
+        t_select0 = time.perf_counter()
+        selected_order: List[int] = []
+        selected_set: set = set()
+
+        for criterion in strategy:
+            heap_items = heaps.get(criterion) or []
+            # Sort by original key (ascending = best first)
+            for _, cand_idx, _ in sorted(heap_items, key=lambda x: x[2]):
+                if cand_idx in selected_set:
+                    continue
+                selected_set.add(cand_idx)
+                selected_order.append(cand_idx)
+
+        # Fill remaining with best-by-performance
+        if len(selected_order) < max_configs:
+            for _, cand_idx, _ in sorted(perf_fill_heap, key=lambda x: x[2]):
+                if len(selected_order) >= max_configs:
+                    break
+                if cand_idx in selected_set:
+                    continue
+                selected_set.add(cand_idx)
+                selected_order.append(cand_idx)
+
+        # Ensure hard cap
+        if len(selected_order) > max_configs:
+            selected_order = selected_order[:max_configs]
+            selected_set = set(selected_order)
+
+        t_select = time.perf_counter() - t_select0
+
+        # Parse selected configs by offsets (no second full-file pass; no candidate dict caching)
+        if progress_callback:
+            progress_callback(0, max(1, len(selected_order)), "Parsing selected configs (offsets)...")
+
+        t_parse_selected0 = time.perf_counter()
+        pairs = [(int(offsets_all[i]), int(i)) for i in selected_order if 0 <= int(i) < len(offsets_all)]
+        pairs.sort(key=lambda x: x[0])
+
+        parsed_selected: Dict[int, ConfigMetrics] = {}
+        raw_selected: Dict[int, Dict] = {}
+        with open(self.all_results_path, 'rb') as f:
+            file_size = os.path.getsize(self.all_results_path)
+            for n_done, (off, idx) in enumerate(pairs, 1):
+                try:
+                    # Prefer decoding from a bounded bytes slice so msgspec can be used.
+                    end = int(offsets_all[idx + 1]) if (int(idx) + 1) < len(offsets_all) else int(file_size)
+                    if end <= int(off):
+                        raise ValueError("invalid offset range")
+                    f.seek(int(off))
+                    payload = f.read(int(end - int(off)))
+
+                    config_data = self._decode_msgpack_object(payload)
+
+                    # Use precomputed robustness from the scan phase (if available) to skip recomputation here.
+                    pre_rob = None
+                    if overall_rob_all is not None:
+                        try:
+                            pre_rob = float(overall_rob_all[idx])
+                        except Exception:
+                            pre_rob = None
+
+                    if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
+                        metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
+                    else:
+                        metrics = self._parse_config_light(
+                            idx,
+                            config_data,
+                            precomputed_overall_robustness=pre_rob,
+                            compute_overall_robustness=False,
+                        )
+
+                    parsed_selected[idx] = metrics
+                    raw_selected[idx] = config_data
+                except Exception:
+                    # Fall back to legacy per-object unpack
+                    try:
+                        f.seek(int(off))
+                        unpacker = msgpack.Unpacker(f, raw=True, strict_map_key=False)
+                        config_data = next(iter(unpacker))
+                        pre_rob = None
+                        if overall_rob_all is not None:
+                            try:
+                                pre_rob = float(overall_rob_all[idx])
+                            except Exception:
+                                pre_rob = None
+                        metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
+                        parsed_selected[idx] = metrics
+                        raw_selected[idx] = config_data
+                    except Exception:
+                        continue
+                if progress_callback and (n_done % 50 == 0 or n_done == len(pairs)):
+                    progress_callback(n_done, len(pairs), f"Parsed {n_done}/{len(pairs)} selected configs")
+
+        self.raw_configs_cache = raw_selected
+        self.configs = [parsed_selected[i] for i in selected_order if i in parsed_selected]
+        t_parse_selected = time.perf_counter() - t_parse_selected0
+
+        total_parsed = total_parsed
+        t_parse = t_scan + t_parse_selected
+
+        # Write persistent scan cache (best-effort)
+        if not _DISABLE_SCAN_CACHE:
+            try:
+                st_bin = os.stat(self.all_results_path)
+                cache_meta = {
+                    "version": 2,
+                    "source": {"size": int(st_bin.st_size), "mtime": float(st_bin.st_mtime)},
+                    "scoring_metrics": self.scoring_metrics,
+                    "scenario_labels": self.scenario_labels,
+                    "optimize_bounds": self.optimize_bounds,
+                    "optimize_limits": self.optimize_limits,
+                    "backtest_scenarios": self.backtest_scenarios,
+                    "has_overall_robustness": bool(store_overall_rob),
+                    "cached_fields": [
+                        "offsets",
+                        "constraint_violation",
+                        "primary",
+                        *( ["sharpe"] if sharpe_all is not None else [] ),
+                        *( ["drawdown"] if drawdown_all is not None else [] ),
+                        *( ["calmar"] if calmar_all is not None else [] ),
+                        *( ["sortino"] if sortino_all is not None else [] ),
+                        *( ["omega"] if omega_all is not None else [] ),
+                        *( ["volatility"] if volatility_all is not None else [] ),
+                        *( ["recovery"] if recovery_all is not None else [] ),
+                        *( ["overall_robustness"] if overall_rob_all is not None else [] ),
+                    ],
+                }
+                cache_arrays = {
+                    "offsets": np.asarray(offsets_all, dtype=np.int64),
+                    "constraint_violation": np.asarray(constraint_all, dtype=np.float32),
+                    "primary": np.asarray(primary_all, dtype=np.float32),
+                }
+                if sharpe_all is not None:
+                    cache_arrays["sharpe"] = np.asarray(sharpe_all, dtype=np.float32)
+                if drawdown_all is not None:
+                    cache_arrays["drawdown"] = np.asarray(drawdown_all, dtype=np.float32)
+                if calmar_all is not None:
+                    cache_arrays["calmar"] = np.asarray(calmar_all, dtype=np.float32)
+                if sortino_all is not None:
+                    cache_arrays["sortino"] = np.asarray(sortino_all, dtype=np.float32)
+                if omega_all is not None:
+                    cache_arrays["omega"] = np.asarray(omega_all, dtype=np.float32)
+                if volatility_all is not None:
+                    cache_arrays["volatility"] = np.asarray(volatility_all, dtype=np.float32)
+                if recovery_all is not None:
+                    cache_arrays["recovery"] = np.asarray(recovery_all, dtype=np.float32)
+                if overall_rob_all is not None:
+                    cache_arrays["overall_robustness"] = np.asarray(overall_rob_all, dtype=np.float32)
+                self._write_scan_cache(cache_meta, cache_arrays)
+            except Exception:
+                pass
+
         # Compute Pareto front based on objectives (optimized)
+        t_pareto0 = time.perf_counter()
         self._compute_pareto_front_fast()
-        
+        t_pareto = time.perf_counter() - t_pareto0
+
+        t_total = time.perf_counter() - t_total0
+
         # Store stats for GUI display
         self.load_stats = {
             'total_parsed': total_parsed,
@@ -208,11 +980,19 @@ class ParetoDataLoader:
             'scenarios': self.scenario_labels,
             'scoring_metrics': self.scoring_metrics,
             'load_strategy': load_strategy,
-            'max_configs': max_configs
+            'max_configs': max_configs,
+            'timings': {
+                'total': t_total,
+                'load_pareto_hashes': t_load_pareto_hashes,
+                'parse_all_results': t_parse,
+                'scan_all_results': t_scan,
+                'parse_selected_configs': t_parse_selected,
+                'select_top_configs': t_select,
+                'compute_pareto_front': t_pareto,
+            },
         }
-        
+
         return True
-    
     def _select_top_configs_by_strategy(self, all_configs: List[ConfigMetrics], 
                                         strategy: List[str], 
                                         max_count: int = 2000) -> List[ConfigMetrics]:
@@ -241,14 +1021,16 @@ class ParetoDataLoader:
         for criterion in strategy:
             if criterion == 'performance':
                 # Sort by constraint_violation, then primary metric (Passivbot official)
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get(primary_metric, float('-inf'))
-                    )
+                        -c.suite_metrics.get(primary_metric, float('-inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
@@ -258,106 +1040,124 @@ class ParetoDataLoader:
                 configs_with_robustness = [
                     (c, self.compute_overall_robustness(c)) for c in all_configs
                 ]
-                configs_with_robustness.sort(key=lambda x: (-x[1], x[0].constraint_violation))
-                for config, _ in configs_with_robustness[:configs_per_criterion]:
+                top = heapq.nsmallest(
+                    configs_per_criterion,
+                    configs_with_robustness,
+                    key=lambda x: (-x[1], x[0].constraint_violation, x[0].config_index),
+                )
+                for config, _ in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
             
             elif criterion == 'sharpe':
                 # Best Sharpe ratio
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get('sharpe_ratio_usd', float('-inf'))
-                    )
+                        -c.suite_metrics.get('sharpe_ratio_usd', float('-inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
             
             elif criterion == 'drawdown':
                 # Lowest drawdown (higher is better, drawdown is negative)
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get('drawdown_worst_usd', float('inf'))
-                    )
+                        -c.suite_metrics.get('drawdown_worst_usd', float('inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
             
             elif criterion == 'calmar':
                 # Best Calmar ratio
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get('calmar_ratio_usd', float('-inf'))
-                    )
+                        -c.suite_metrics.get('calmar_ratio_usd', float('-inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
             
             elif criterion == 'sortino':
                 # Best Sortino ratio
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get('sortino_ratio_usd', float('-inf'))
-                    )
+                        -c.suite_metrics.get('sortino_ratio_usd', float('-inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
             
             elif criterion == 'omega':
                 # Best Omega ratio
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get('omega_ratio_usd', float('-inf'))
-                    )
+                        -c.suite_metrics.get('omega_ratio_usd', float('-inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
             
             elif criterion == 'volatility':
                 # Lowest volatility (stable returns)
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        c.suite_metrics.get('equity_volatility_usd', float('inf'))
-                    )
+                        c.suite_metrics.get('equity_volatility_usd', float('inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
             
             elif criterion == 'recovery':
                 # Fastest recovery from drawdowns
-                sorted_configs = sorted(
+                top = heapq.nsmallest(
+                    configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        c.suite_metrics.get('drawdown_recovery_hours_mean', float('inf'))
-                    )
+                        c.suite_metrics.get('drawdown_recovery_hours_mean', float('inf')),
+                        c.config_index,
+                    ),
                 )
-                for config in sorted_configs[:configs_per_criterion]:
+                for config in top:
                     if config.config_index not in selected_indices:
                         selected_configs.append(config)
                         selected_indices.add(config.config_index)
@@ -365,14 +1165,16 @@ class ParetoDataLoader:
         # If we still need more configs to reach max_count, fill with best by performance
         if len(selected_configs) < max_count:
             remaining = max_count - len(selected_configs)
-            sorted_configs = sorted(
+            top = heapq.nsmallest(
+                max_count,
                 all_configs,
                 key=lambda c: (
                     c.constraint_violation,
-                    -c.suite_metrics.get(primary_metric, float('-inf'))
-                )
+                    -c.suite_metrics.get(primary_metric, float('-inf')),
+                    c.config_index,
+                ),
             )
-            for config in sorted_configs:
+            for config in top:
                 if len(selected_configs) >= max_count:
                     break
                 if config.config_index not in selected_indices:
@@ -477,6 +1279,12 @@ class ParetoDataLoader:
         if not os.path.exists(self.pareto_dir):
             return False
         
+        t_total0 = time.perf_counter()
+
+        # Reset state
+        self.configs = []
+        self.raw_configs_cache = {}
+
         # Find all JSON files in pareto directory
         json_pattern = os.path.join(self.pareto_dir, "*.json")
         json_files = glob.glob(json_pattern)
@@ -486,6 +1294,7 @@ class ParetoDataLoader:
         
         # Parse each JSON file
         parsed_count = 0
+        t_parse0 = time.perf_counter()
         for json_file in json_files:
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
@@ -503,6 +1312,8 @@ class ParetoDataLoader:
                     print(f"Error parsing {json_file}:")
                     traceback.print_exc()
                 continue
+
+            t_parse = time.perf_counter() - t_parse0
         
         if parsed_count == 0:
             return False
@@ -519,6 +1330,8 @@ class ParetoDataLoader:
                 # Use first 3 metrics as default
                 self.scoring_metrics = list(first_config.suite_metrics.keys())[:3]
         
+        t_total = time.perf_counter() - t_total0
+
         # Store stats
         self.load_stats = {
             'total_parsed': parsed_count,
@@ -527,7 +1340,12 @@ class ParetoDataLoader:
             'scenarios': self.scenario_labels,
             'scoring_metrics': self.scoring_metrics,
             'load_strategy': ['pareto_only'],
-            'max_configs': parsed_count
+            'max_configs': parsed_count,
+            'timings': {
+                'total': t_total,
+                'parse_pareto_jsons': t_parse,
+                'pareto_json_files': len(json_files),
+            },
         }
         
         return True
@@ -550,6 +1368,38 @@ class ParetoDataLoader:
             for config in self.configs:
                 if config.constraint_violation <= threshold:
                     config.is_pareto = True
+
+    def _iter_binary_file(self, progress_callback=None, with_offsets: bool = False, raw_mode: bool = False) -> Iterator[Any]:
+        """
+        Stream msgpack objects from all_results.bin (handles multiple packed objects).
+        Avoids loading the entire file into memory as a Python list.
+
+        Args:
+            progress_callback: Optional callback(current, total, message) for progress updates.
+                               In this method, current/total are byte offsets.
+        Yields:
+            Each unpacked object (dict).
+        """
+        file_size = os.path.getsize(self.all_results_path)
+        with open(self.all_results_path, 'rb') as f:
+            unpacker = msgpack.Unpacker(f, raw=bool(raw_mode), strict_map_key=False, read_size=8 * 1024 * 1024)
+            count = 0
+            last_pos = unpacker.tell()
+            for obj in unpacker:
+                cur_pos = unpacker.tell()
+                count += 1
+                if progress_callback and count % 100 == 0:
+                    progress = (f.tell() / file_size) if file_size else 1.0
+                    progress_callback(
+                        f.tell(),
+                        file_size,
+                        f"Loading binary file: {count:,} configs ({progress*100:.0f}%)",
+                    )
+                if with_offsets:
+                    yield last_pos, obj
+                else:
+                    yield obj
+                last_pos = cur_pos
     
     def _load_binary_file(self, progress_callback=None) -> List[Dict]:
         """
@@ -558,27 +1408,17 @@ class ParetoDataLoader:
         Args:
             progress_callback: Optional callback for progress updates
         """
-        configs = []
-        
-        # Get file size for progress tracking
+        configs: List[Dict] = []
+
+        # Get file size for final progress update
         file_size = os.path.getsize(self.all_results_path)
-        
-        with open(self.all_results_path, 'rb') as f:
-            unpacker = msgpack.Unpacker(f, raw=False, strict_map_key=False)
-            
-            for obj in unpacker:
-                configs.append(obj)
-                
-                # Report progress every 100 configs
-                if progress_callback and len(configs) % 100 == 0:
-                    # Estimate progress based on file position
-                    progress = f.tell() / file_size
-                    progress_callback(f.tell(), file_size, f"Loading binary file: {len(configs)} configs ({progress*100:.0f}%)")
-        
-        # Final update
+
+        for obj in self._iter_binary_file(progress_callback=progress_callback):
+            configs.append(obj)
+
         if progress_callback:
             progress_callback(file_size, file_size, f"Loaded {len(configs)} configs from binary file")
-        
+
         return configs
     
     def _load_pareto_hashes(self):
@@ -597,10 +1437,164 @@ class ParetoDataLoader:
         In real implementation, would hash the bot parameters
         """
         # Try to extract hash from results_filename or results_dir
-        results_dir = config_data.get('results_dir', '')
-        if results_dir:
+        results_dir = config_data.get('results_dir')
+        if results_dir is None and isinstance(config_data, dict):
+            results_dir = config_data.get(b'results_dir')
+        if isinstance(results_dir, bytes):
+            try:
+                results_dir = results_dir.decode('utf-8', errors='ignore')
+            except Exception:
+                results_dir = ''
+        if isinstance(results_dir, str) and results_dir:
             return os.path.basename(results_dir)
-        return f"config_{hash(str(config_data.get('bot', {})))}"
+
+        # Fallback: deterministic-ish hash of bot params
+        bot = None
+        if isinstance(config_data, dict):
+            bot = config_data.get('bot')
+            if bot is None:
+                bot = config_data.get(b'bot')
+        try:
+            payload = repr(bot).encode('utf-8', errors='ignore')
+            return f"config_{hashlib.sha1(payload).hexdigest()[:12]}"
+        except Exception:
+            return "config_unknown"
+
+    def _deep_decode_bytes(self, obj: Any) -> Any:
+        """Recursively decode bytes keys/values into str.
+
+        Used only on-demand (e.g., ensure_details) to keep load fast.
+        """
+        if isinstance(obj, dict):
+            out: Dict[Any, Any] = {}
+            for k, v in obj.items():
+                if isinstance(k, bytes):
+                    try:
+                        k = k.decode('utf-8', errors='ignore')
+                    except Exception:
+                        k = str(k)
+                out[k] = self._deep_decode_bytes(v)
+            return out
+        if isinstance(obj, list):
+            return [self._deep_decode_bytes(x) for x in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._deep_decode_bytes(x) for x in obj)
+        if isinstance(obj, bytes):
+            try:
+                return obj.decode('utf-8', errors='ignore')
+            except Exception:
+                return ''
+        return obj
+
+    def _parse_config_light_raw(
+        self,
+        idx: int,
+        config_data: Dict,
+        precomputed_overall_robustness: Optional[float] = None,
+    ) -> ConfigMetrics:
+        """Light parse for bytes-keyed msgpack objects (raw=True)."""
+
+        def _get(d: Any, k: bytes, default=None):
+            if isinstance(d, dict):
+                return d.get(k, default)
+            return default
+
+        metrics_block = _get(config_data, b'metrics', {}) or {}
+        objectives_raw = _get(metrics_block, b'objectives', {}) or {}
+        objectives: Dict[str, float] = {}
+        if isinstance(objectives_raw, dict):
+            for k, v in objectives_raw.items():
+                if isinstance(k, bytes):
+                    try:
+                        k = k.decode('utf-8', errors='ignore')
+                    except Exception:
+                        k = str(k)
+                try:
+                    objectives[str(k)] = float(v or 0.0)
+                except Exception:
+                    objectives[str(k)] = 0.0
+
+        try:
+            constraint_violation = float(_get(metrics_block, b'constraint_violation', 0.0) or 0.0)
+        except Exception:
+            constraint_violation = 0.0
+
+        if b'suite_metrics' in config_data:
+            suite_metrics_block = _get(config_data, b'suite_metrics', {}) or {}
+            metrics_dict = _get(suite_metrics_block, b'metrics', {}) or {}
+            if not self.scenario_labels:
+                raw_labels = _get(suite_metrics_block, b'scenario_labels', []) or []
+                if isinstance(raw_labels, list):
+                    self.scenario_labels = [
+                        (x.decode('utf-8', errors='ignore') if isinstance(x, bytes) else str(x)) for x in raw_labels
+                    ]
+        else:
+            metrics_dict = _get(metrics_block, b'stats', {}) or {}
+
+        suite_metrics: Dict[str, float] = {}
+        if isinstance(metrics_dict, dict):
+            for metric_name, metric_data in metrics_dict.items():
+                if isinstance(metric_name, bytes):
+                    try:
+                        metric_name = metric_name.decode('utf-8', errors='ignore')
+                    except Exception:
+                        metric_name = str(metric_name)
+                if isinstance(metric_data, dict):
+                    aggregated = metric_data.get(b'aggregated', metric_data.get(b'mean', 0.0))
+                    try:
+                        suite_metrics[str(metric_name)] = float(aggregated or 0.0)
+                    except Exception:
+                        suite_metrics[str(metric_name)] = 0.0
+                else:
+                    try:
+                        suite_metrics[str(metric_name)] = float(metric_data or 0.0)
+                    except Exception:
+                        suite_metrics[str(metric_name)] = 0.0
+
+        optimize_settings: Dict[str, Any] = {}
+        opt = _get(config_data, b'optimize')
+        if isinstance(opt, dict):
+            scoring = opt.get(b'scoring', [])
+            if isinstance(scoring, list):
+                scoring = [(x.decode('utf-8', errors='ignore') if isinstance(x, bytes) else x) for x in scoring]
+            optimize_settings = {
+                'scoring': scoring or [],
+                'limits': opt.get(b'limits', []) or [],
+                'iters': opt.get(b'iters', 0) or 0,
+                'population_size': opt.get(b'population_size', 0) or 0,
+                'pareto_max_size': opt.get(b'pareto_max_size', 0) or 0,
+            }
+
+        scenario_details = None
+        backtest = _get(config_data, b'backtest')
+        if isinstance(backtest, dict):
+            suite = backtest.get(b'suite')
+            if isinstance(suite, dict) and suite.get(b'enabled'):
+                scenario_details = suite.get(b'scenarios', []) or []
+
+        config_hash = self._compute_config_hash(config_data)
+        is_pareto = config_hash in self.pareto_hashes
+
+        overall_robustness = float(precomputed_overall_robustness or 0.0)
+
+        return ConfigMetrics(
+            config_index=idx,
+            config_hash=config_hash,
+            objectives=objectives,
+            constraint_violation=constraint_violation,
+            suite_metrics=suite_metrics,
+            scenario_metrics={},
+            robustness_scores={},
+            bot_params={},
+            bounds=self.optimize_bounds,
+            optimize_settings=optimize_settings,
+            scenario_details=scenario_details,
+            metric_stats={},
+            is_pareto=is_pareto,
+            overall_robustness=overall_robustness,
+            details_loaded=False,
+            bot_params_loaded=False,
+        )
     
     def get_full_config(self, config_index: int) -> Optional[Dict]:
         """
@@ -653,13 +1647,34 @@ class ParetoDataLoader:
             config_data = self.raw_configs_cache.get(config_index)
             if config_data:
                 # Merge bot params (keep missing params from pareto template)
-                if 'bot' in config_data:
+                bot_section = None
+                if isinstance(config_data, dict):
+                    bot_section = config_data.get('bot')
+                    if bot_section is None:
+                        bot_section = config_data.get(b'bot')
+
+                if isinstance(bot_section, dict):
                     for side in ['long', 'short']:
-                        if side in config_data['bot']:
-                            if side in full_config['bot']:
-                                full_config['bot'][side].update(config_data['bot'][side])
-                            else:
-                                full_config['bot'][side] = config_data['bot'][side]
+                        side_dict = bot_section.get(side)
+                        if side_dict is None:
+                            side_dict = bot_section.get(side.encode('utf-8'))
+                        if not isinstance(side_dict, dict):
+                            continue
+
+                        decoded_side: Dict[str, Any] = {}
+                        for k, v in side_dict.items():
+                            if isinstance(k, bytes):
+                                try:
+                                    k = k.decode('utf-8', errors='ignore')
+                                except Exception:
+                                    k = str(k)
+                            decoded_side[str(k)] = v
+
+                        if side in full_config.get('bot', {}):
+                            full_config['bot'][side].update(decoded_side)
+                        else:
+                            full_config.setdefault('bot', {})
+                            full_config['bot'][side] = decoded_side
                 
                 # Cache and return
                 self.pareto_configs_cache[config_index] = full_config
@@ -672,6 +1687,210 @@ class ParetoDataLoader:
             print(f"Error loading full config for index {config_index}: {e}")
             traceback.print_exc()
             return None
+
+    def _parse_config_light(
+        self,
+        idx: int,
+        config_data: Dict,
+        precomputed_overall_robustness: Optional[float] = None,
+        compute_overall_robustness: bool = True,
+    ) -> ConfigMetrics:
+        """Parse a config cheaply for fast initial UI rendering.
+
+        Keeps:
+        - objectives / constraint_violation
+        - suite_metrics (aggregated)
+        - overall_robustness scalar (computed from mean/std if present)
+
+        Defers:
+        - scenario_metrics
+        - metric_stats
+        - robustness_scores (per-metric)
+        - bot_params
+        """
+        metrics_block = config_data.get('metrics', {}) or {}
+        objectives = metrics_block.get('objectives', {}) or {}
+        try:
+            constraint_violation = float(metrics_block.get('constraint_violation', 0.0) or 0.0)
+        except Exception:
+            constraint_violation = 0.0
+
+        if 'suite_metrics' in config_data:
+            suite_metrics_block = config_data.get('suite_metrics', {}) or {}
+            metrics_dict = suite_metrics_block.get('metrics', {}) or {}
+            if not self.scenario_labels:
+                self.scenario_labels = suite_metrics_block.get('scenario_labels', []) or []
+        else:
+            metrics_dict = metrics_block.get('stats', {}) or {}
+
+        if not self.scoring_metrics and 'optimize' in config_data:
+            optimize_config = config_data.get('optimize', {}) or {}
+            self.scoring_metrics = optimize_config.get('scoring', []) or []
+            if not self.optimize_bounds:
+                self.optimize_bounds = optimize_config.get('bounds', {}) or {}
+                self.optimize_limits = optimize_config.get('limits', []) or []
+
+        if not self.backtest_scenarios and 'backtest' in config_data:
+            backtest_config = config_data.get('backtest', {}) or {}
+            suite_config = backtest_config.get('suite', {}) or {}
+            if suite_config.get('enabled'):
+                self.backtest_scenarios = suite_config.get('scenarios', []) or []
+
+        suite_metrics: Dict[str, float] = {}
+        do_robustness = bool(compute_overall_robustness) and precomputed_overall_robustness is None
+        score_sum = 0.0
+        score_n = 0
+
+        for metric_name, metric_data in metrics_dict.items():
+            if isinstance(metric_data, dict):
+                aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
+                try:
+                    suite_metrics[metric_name] = float(aggregated or 0.0)
+                except Exception:
+                    suite_metrics[metric_name] = 0.0
+
+                if do_robustness:
+                    if 'stats' in metric_data and isinstance(metric_data.get('stats'), dict):
+                        stats = metric_data.get('stats', {}) or {}
+                        mean = stats.get('mean', 0.0)
+                        std = stats.get('std', 0.0)
+                    else:
+                        mean = metric_data.get('mean', 0.0)
+                        std = metric_data.get('std', 0.0)
+
+                    try:
+                        mean_f = float(mean or 0.0)
+                        std_f = float(std or 0.0)
+                    except Exception:
+                        mean_f = 0.0
+                        std_f = 0.0
+
+                    if abs(mean_f) > 1e-10:
+                        cv = abs(std_f / mean_f)
+                        score_sum += 1.0 / (1.0 + cv)
+                    else:
+                        score_sum += 1.0
+                    score_n += 1
+            else:
+                # Non-dict format: treat as already-aggregated
+                try:
+                    suite_metrics[metric_name] = float(metric_data or 0.0)
+                except Exception:
+                    suite_metrics[metric_name] = 0.0
+
+        if precomputed_overall_robustness is not None:
+            overall_robustness = float(precomputed_overall_robustness)
+        elif do_robustness:
+            overall_robustness = (score_sum / score_n) if score_n else 0.0
+        else:
+            overall_robustness = 0.0
+
+        optimize_settings: Dict[str, Any] = {}
+        if 'optimize' in config_data:
+            opt = config_data.get('optimize', {}) or {}
+            optimize_settings = {
+                'scoring': opt.get('scoring', []) or [],
+                'limits': opt.get('limits', []) or [],
+                'iters': opt.get('iters', 0) or 0,
+                'population_size': opt.get('population_size', 0) or 0,
+                'pareto_max_size': opt.get('pareto_max_size', 0) or 0,
+            }
+
+        scenario_details = None
+        if 'backtest' in config_data:
+            suite_config = (config_data.get('backtest', {}) or {}).get('suite', {}) or {}
+            if suite_config.get('enabled'):
+                scenario_details = suite_config.get('scenarios', []) or []
+
+        config_hash = self._compute_config_hash(config_data)
+        is_pareto = config_hash in self.pareto_hashes
+
+        return ConfigMetrics(
+            config_index=idx,
+            config_hash=config_hash,
+            objectives=objectives,
+            constraint_violation=constraint_violation,
+            suite_metrics=suite_metrics,
+            scenario_metrics={},
+            robustness_scores={},
+            bot_params={},
+            bounds=self.optimize_bounds,
+            optimize_settings=optimize_settings,
+            scenario_details=scenario_details,
+            metric_stats={},
+            is_pareto=is_pareto,
+            overall_robustness=float(overall_robustness),
+            details_loaded=False,
+            bot_params_loaded=False,
+        )
+
+    def ensure_bot_params(self, config: ConfigMetrics) -> None:
+        """Populate bot params for a config (without parsing scenario details)."""
+        if config.bot_params_loaded:
+            return
+        config_data = self.raw_configs_cache.get(config.config_index)
+        if not isinstance(config_data, dict):
+            return
+
+        bot_params: Dict[str, Any] = {}
+        bot_config = config_data.get('bot')
+        if bot_config is None:
+            bot_config = config_data.get(b'bot')
+        bot_config = bot_config or {}
+        if isinstance(bot_config, dict):
+            long_cfg = bot_config.get('long')
+            if long_cfg is None:
+                long_cfg = bot_config.get(b'long')
+            if isinstance(long_cfg, dict):
+                for param, value in long_cfg.items():
+                    if isinstance(param, bytes):
+                        try:
+                            param = param.decode('utf-8', errors='ignore')
+                        except Exception:
+                            param = str(param)
+                    bot_params[f'long_{param}'] = value
+            short_cfg = bot_config.get('short')
+            if short_cfg is None:
+                short_cfg = bot_config.get(b'short')
+            if isinstance(short_cfg, dict):
+                for param, value in short_cfg.items():
+                    if isinstance(param, bytes):
+                        try:
+                            param = param.decode('utf-8', errors='ignore')
+                        except Exception:
+                            param = str(param)
+                    bot_params[f'short_{param}'] = value
+
+        config.bot_params = bot_params
+        config.bot_params_loaded = True
+
+    def ensure_details(self, config: ConfigMetrics) -> None:
+        """Populate scenario_metrics/metric_stats/robustness_scores (expensive)."""
+        if config.details_loaded:
+            return
+        config_data = self.raw_configs_cache.get(config.config_index)
+        if not isinstance(config_data, dict):
+            return
+
+        # raw=True cache stores bytes keys/values; decode only when details are requested.
+        if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
+            config_data = self._deep_decode_bytes(config_data)
+        full = self._parse_config(config.config_index, config_data)
+        config.objectives = full.objectives
+        config.constraint_violation = full.constraint_violation
+        config.suite_metrics = full.suite_metrics
+        config.scenario_metrics = full.scenario_metrics
+        config.robustness_scores = full.robustness_scores
+        config.bot_params = full.bot_params
+        config.bot_params_loaded = True
+        config.bounds = full.bounds
+        config.optimize_settings = full.optimize_settings
+        config.scenario_details = full.scenario_details
+        config.metric_stats = full.metric_stats
+        config.config_hash = full.config_hash
+        config.is_pareto = full.is_pareto
+        config.overall_robustness = full.overall_robustness
+        config.details_loaded = True
     
     def _parse_config(self, idx: int, config_data: Dict) -> ConfigMetrics:
         """Parse a single config from all_results.bin"""
@@ -793,6 +2012,8 @@ class ParetoDataLoader:
         # Compute config hash
         config_hash = self._compute_config_hash(config_data)
         is_pareto = config_hash in self.pareto_hashes
+
+        overall_robustness = float(np.mean(list(robustness_scores.values()))) if robustness_scores else 0.0
         
         return ConfigMetrics(
             config_index=idx,
@@ -807,7 +2028,10 @@ class ParetoDataLoader:
             optimize_settings=optimize_settings,
             scenario_details=scenario_details,
             metric_stats=metric_stats,
-            is_pareto=is_pareto
+            is_pareto=is_pareto,
+            overall_robustness=overall_robustness,
+            details_loaded=True,
+            bot_params_loaded=True,
         )
     
     def _parse_json_config(self, config_data: Dict, idx: int) -> Optional[ConfigMetrics]:
@@ -931,6 +2155,8 @@ class ParetoDataLoader:
             
             # Compute config hash
             config_hash = self._compute_config_hash(config_data)
+
+            overall_robustness = float(np.mean(list(robustness_scores.values()))) if robustness_scores else 0.0
             
             return ConfigMetrics(
                 config_index=idx,
@@ -945,7 +2171,10 @@ class ParetoDataLoader:
                 optimize_settings=optimize_settings,
                 scenario_details=scenario_details,
                 metric_stats=metric_stats,
-                is_pareto=True  # All JSON configs are Pareto
+                is_pareto=True,  # All JSON configs are Pareto
+                overall_robustness=overall_robustness,
+                details_loaded=True,
+                bot_params_loaded=True,
             )
         
         except Exception as e:
@@ -983,6 +2212,9 @@ class ParetoDataLoader:
         
         rows = []
         for config in configs:
+            # Export should include rich fields; keep this lazy to speed up initial load.
+            if not config.details_loaded:
+                self.ensure_details(config)
             row = {
                 'config_index': config.config_index,
                 'config_hash': config.config_hash,
@@ -1002,6 +2234,8 @@ class ParetoDataLoader:
                 row[f'robust_{metric}'] = score
             
             # Add bot parameters
+            if not config.bot_params_loaded or not config.bot_params:
+                self.ensure_bot_params(config)
             row.update(config.bot_params)
             
             # Add scenario-specific metrics (optional)
@@ -1074,11 +2308,10 @@ class ParetoDataLoader:
         Returns:
             Overall robustness score [0, 1] (higher is more robust)
         """
-        if not config.robustness_scores:
-            return 0.0
-        
-        scores = list(config.robustness_scores.values())
-        return float(np.mean(scores))
+        if config.robustness_scores:
+            scores = list(config.robustness_scores.values())
+            return float(np.mean(scores))
+        return float(getattr(config, 'overall_robustness', 0.0) or 0.0)
     
     def find_similar_configs(self, reference_config: ConfigMetrics, 
                             n: int = 5, 
@@ -1147,6 +2380,10 @@ class ParetoDataLoader:
         
         # Take only top N
         top_configs = [c for c, score in scored_configs[:top_n]]
+
+        # Parameter analysis requires bot params
+        for cfg in top_configs:
+            self.ensure_bot_params(cfg)
         
         # Check if long/short are enabled by looking at key parameters
         long_enabled = (
