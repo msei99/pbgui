@@ -15,6 +15,7 @@ numba==0.59.1 ; python_version < "3.11"
 hjson==3.1.0
 msgpack==1.1.2 ; python_version >= "3.11"
 msgpack==1.0.8 ; python_version < "3.11"
+msgspec==0.20.0 ; python_version >= "3.11"
 ccxt==4.4.85
 ansible==13.2.0 ; python_version >= "3.11"
 ansible==8.7.0 ; python_version < "3.11"

@@ -13,6 +13,8 @@ Example:
 import streamlit as st
 import sys
 import os
+import time
+from contextlib import contextmanager
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -29,6 +31,30 @@ from Config import CURRENCY_METRICS, SHARED_METRICS
 
 class ParetoExplorer:
     """Pareto Explorer - Main Application"""
+
+    class _PerfTimer:
+        def __init__(self, enabled: bool):
+            self.enabled = bool(enabled)
+            self._items: List[Tuple[str, float]] = []
+
+        @contextmanager
+        def section(self, name: str):
+            if not self.enabled:
+                yield
+                return
+            t0 = time.perf_counter()
+            try:
+                yield
+            finally:
+                self._items.append((name, time.perf_counter() - t0))
+
+        def lines(self) -> List[str]:
+            if not self.enabled:
+                return []
+            total = sum(dt for _, dt in self._items)
+            out = [f"Total: {total:.3f}s"]
+            out.extend([f"- {name}: {dt:.3f}s" for name, dt in self._items])
+            return out
     
     def __init__(self, results_path: str):
         """
@@ -43,6 +69,9 @@ class ParetoExplorer:
         
     def run(self):
         """Main entry point - runs the Streamlit app"""
+
+        show_timings = bool(st.session_state.get('pareto_show_timings', False))
+        timer = ParetoExplorer._PerfTimer(enabled=show_timings)
         
         # Custom CSS
         st.markdown("""
@@ -105,7 +134,8 @@ class ParetoExplorer:
         # Load data (with caching and two-stage approach)
         # Stage 1: Always load Pareto JSONs (fast)
         # Stage 2: Optionally load all_results.bin (slow)
-        load_result = ParetoExplorer._load_data(self.results_path, load_strategy_tuple, max_configs, all_results_loaded)
+        with timer.section("load_data"):
+            load_result = ParetoExplorer._load_data(self.results_path, load_strategy_tuple, max_configs, all_results_loaded)
         if load_result.get("error"):
             err = load_result.get("error")
             if err:
@@ -147,41 +177,70 @@ class ParetoExplorer:
         
         # Render sidebar FIRST (includes display range slider)
         # This must happen before _get_view_configs() so the slider state is available
-        self._render_sidebar(load_stats)
+        with timer.section("render_sidebar"):
+            self._render_sidebar(load_stats)
         
         # Get view slice AFTER sidebar is rendered (uses slider state)
         # CACHE this expensive operation - only recompute if slider or results_path changed!
         view_range = st.session_state.get('view_range_slider', (0, 500))
         cache_key = f"view_configs_{self.results_path}_{view_range[0]}_{view_range[1]}"
         
-        if cache_key not in st.session_state:
-            self.view_configs = self._get_view_configs()
-            st.session_state[cache_key] = self.view_configs
-            # Clean up old cache entries for different results_path or view_range
-            keys_to_delete = [k for k in st.session_state.keys() 
-                            if k.startswith('view_configs_') and k != cache_key]
-            for k in keys_to_delete:
-                del st.session_state[k]
-        else:
-            self.view_configs = st.session_state[cache_key]
+        with timer.section("get_view_configs"):
+            if cache_key not in st.session_state:
+                self.view_configs = self._get_view_configs()
+                st.session_state[cache_key] = self.view_configs
+                # Clean up old cache entries for different results_path or view_range
+                keys_to_delete = [k for k in st.session_state.keys() 
+                                if k.startswith('view_configs_') and k != cache_key]
+                for k in keys_to_delete:
+                    del st.session_state[k]
+            else:
+                self.view_configs = st.session_state[cache_key]
         
         # Temporarily replace loader.configs with view for visualizations
         # This will be used by all visualization methods
-        self.loader.configs = self.view_configs
-        
-        # IMPORTANT: Reinitialize visualizations AFTER filtering to ensure they use the correct data
-        from ParetoVisualizations import ParetoVisualizations
-        self.viz = ParetoVisualizations(self.loader)
+        with timer.section("apply_view_and_init_viz"):
+            self.loader.configs = self.view_configs
+
+            # IMPORTANT: Reinitialize visualizations AFTER filtering to ensure they use the correct data
+            from ParetoVisualizations import ParetoVisualizations
+            self.viz = ParetoVisualizations(self.loader)
         
         # Main content area
         stage = st.session_state.get('stage', 'Command Center')
-        
-        if stage == 'Command Center':
-            self._show_command_center()
-        elif stage == 'Pareto Playground':
-            self._show_pareto_playground()
-        elif stage == 'Deep Intelligence':
-            self._show_deep_intelligence()
+
+        with timer.section(f"stage:{stage}"):
+            if stage == 'Command Center':
+                self._show_command_center()
+            elif stage == 'Pareto Playground':
+                self._show_pareto_playground()
+            elif stage == 'Deep Intelligence':
+                self._show_deep_intelligence()
+
+        if show_timings:
+            load_key = f"{self.results_path}|{load_strategy_tuple}|{max_configs}|{int(all_results_loaded)}"
+            cache_token = load_result.get("cache_token")
+            tokens = st.session_state.get("_pareto_load_cache_tokens", {})
+            cache_hit = bool(cache_token is not None and tokens.get(load_key) == cache_token)
+            tokens[load_key] = cache_token
+            st.session_state["_pareto_load_cache_tokens"] = tokens
+
+            with st.sidebar:
+                st.markdown("---")
+                with st.expander("⏱ Timings", expanded=False):
+                    st.markdown(f"Cache: **{'hit' if cache_hit else 'miss'}**")
+                    for line in timer.lines():
+                        st.markdown(line)
+
+                    timings = (load_stats or {}).get("timings") if isinstance(load_stats, dict) else None
+                    if isinstance(timings, dict) and timings:
+                        st.markdown("---")
+                        st.markdown("Loader timings:")
+                        for k, v in timings.items():
+                            if isinstance(v, (int, float)):
+                                st.markdown(f"- `{k}`: {float(v):.3f}s")
+                            else:
+                                st.markdown(f"- `{k}`: {v}")
     
     def _get_view_configs(self) -> List:
         """
@@ -223,6 +282,7 @@ class ParetoExplorer:
             Dict with keys: loader, viz, load_stats, error, traceback
         """
         try:
+            cache_token = time.time_ns()
             loader = ParetoDataLoader(results_path)
             
             if not all_results_loaded:
@@ -283,7 +343,14 @@ class ParetoExplorer:
             viz = ParetoVisualizations(loader)
             load_stats = loader.load_stats
             
-            return {"loader": loader, "viz": viz, "load_stats": load_stats, "error": None, "traceback": None}
+            return {
+                "loader": loader,
+                "viz": viz,
+                "load_stats": load_stats,
+                "cache_token": cache_token,
+                "error": None,
+                "traceback": None,
+            }
             
         except Exception as e:
             import traceback
@@ -291,6 +358,7 @@ class ParetoExplorer:
                 "loader": None,
                 "viz": None,
                 "load_stats": None,
+                "cache_token": None,
                 "error": "Exception during data loading",
                 "traceback": traceback.format_exc(),
             }
@@ -446,6 +514,12 @@ class ParetoExplorer:
             
             # Quick actions
             st.subheader("⚡ Quick Actions")
+
+            st.checkbox(
+                "Show timings",
+                key='pareto_show_timings',
+                help="Show per-rerun timings to identify slow UI sections (load vs render vs plots).",
+            )
             
             if st.button("🔄 Reload Data", width='stretch'):
                 st.cache_resource.clear()
@@ -470,6 +544,9 @@ class ParetoExplorer:
         if not config:
             st.error(f"❌ Config #{config_index} not found")
             return
+
+        self.loader.ensure_bot_params(config)
+        self.loader.ensure_details(config)
         
         st.subheader(f"📋 Configuration #{config_index}")
         
@@ -573,9 +650,11 @@ class ParetoExplorer:
                         st.json(full_config_data)
                     else:
                         st.warning("⚠️ Full config not available - showing bot params only")
+                        self.loader.ensure_bot_params(config)
                         st.json(config.bot_params)
                 except Exception as e:
                     st.error(f"❌ Error loading config: {str(e)}")
+                    self.loader.ensure_bot_params(config)
                     st.json(config.bot_params)
         
         with col_right:
@@ -647,6 +726,8 @@ class ParetoExplorer:
                 "Creates a new Optimize preset with bounds tightened around the selected config’s parameters. "
                 "Useful for a follow-up run focused on ‘fine-tuning’ instead of broad exploration."
             )
+
+            self.loader.ensure_bot_params(config)
 
             default_preset_name = f"pareto_refine_cfg_{config.config_index}"
             preset_name = st.text_input(
@@ -1956,6 +2037,7 @@ class ParetoExplorer:
                     st.markdown(f"**{stars}**")
                 
                 # Scenario breakdown
+                self.loader.ensure_details(config)
                 if config.scenario_metrics:
                     st.markdown("**🌍 Scenario Performance**")
                     scenario_cols = st.columns(len(self.loader.scenario_labels))
@@ -1981,6 +2063,7 @@ class ParetoExplorer:
                                     st.json(full_config_data)
                             else:
                                 st.warning("⚠️ Could not load full config - showing bot params only")
+                                self.loader.ensure_bot_params(config)
                                 st.json(config.bot_params)
                         except Exception as e:
                             st.error(f"❌ Error loading config: {str(e)}")
