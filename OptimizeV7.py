@@ -1232,17 +1232,130 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.edit_opt_v7_offspring_multiplier = self.config.optimize.offspring_multiplier
         st.number_input("offspring_multiplier", min_value=0.0, max_value=10000.0, step=0.1, format="%.2f", key="edit_opt_v7_offspring_multiplier", help=pbgui_help.offspring_multiplier)
 
-    # crossover_probability
+    # crossover_probability and mutation_probability (combined fragment for interdependent validation)
     @st.fragment
-    def fragment_crossover_probability(self):
-        if "edit_opt_v7_crossover_probability" in st.session_state:
-            if st.session_state.edit_opt_v7_crossover_probability != self.config.optimize.crossover_probability:
-                self.config.optimize.crossover_probability = st.session_state.edit_opt_v7_crossover_probability
-        else:
-            st.session_state.edit_opt_v7_crossover_probability = self.config.optimize.crossover_probability
-        st.number_input("crossover_probability", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_crossover_probability", help=pbgui_help.crossover_probability)
+    def fragment_crossover_mutation_probability(self):
+        # Root cause of the 0.0 jumps: Streamlit may sanitize a number_input's value
+        # when its min/max changes between reruns. For two interdependent max_values,
+        # this can cause the other field to be reset unexpectedly.
+        #
+        # Solution: keep a stable "committed" state (integer hundredths) and, per rerun,
+        # detect which field the user edited and clamp ONLY that edited field against
+        # the other committed value. Then render both widgets with max_value derived
+        # from committed values (so both + buttons are disabled at the limit).
+
+        def _to_i(value: float) -> int:
+            try:
+                return int(round(float(value) * 100.0))
+            except Exception:
+                return 0
+
+        def _from_i(value_i: int) -> float:
+            return float(int(value_i)) / 100.0
+
+        def _clamp_i(value_i: int) -> int:
+            return max(0, min(100, int(value_i)))
+
+        def _max_i_from_other(other_i: int) -> int:
+            return _clamp_i(100 - int(other_i))
+
+        # Initialize committed state from config
+        if "_opt_v7_committed_crossover_i" not in st.session_state:
+            st.session_state._opt_v7_committed_crossover_i = _clamp_i(_to_i(self.config.optimize.crossover_probability))
+        if "_opt_v7_committed_mutation_i" not in st.session_state:
+            st.session_state._opt_v7_committed_mutation_i = _clamp_i(_to_i(self.config.optimize.mutation_probability))
+
+        committed_crossover_i = _clamp_i(st.session_state._opt_v7_committed_crossover_i)
+        committed_mutation_i = _clamp_i(st.session_state._opt_v7_committed_mutation_i)
+
+        # Ensure committed state is valid
+        if committed_crossover_i + committed_mutation_i > 100:
+            committed_mutation_i = _max_i_from_other(committed_crossover_i)
+            st.session_state._opt_v7_committed_mutation_i = committed_mutation_i
+
+        # Initialize widget state from committed values only once
+        if "edit_opt_v7_crossover_probability" not in st.session_state:
+            st.session_state.edit_opt_v7_crossover_probability = _from_i(committed_crossover_i)
+        if "edit_opt_v7_mutation_probability" not in st.session_state:
+            st.session_state.edit_opt_v7_mutation_probability = _from_i(committed_mutation_i)
+
+        # Detect user edits since last rerun
+        input_crossover_i = _clamp_i(_to_i(st.session_state.edit_opt_v7_crossover_probability))
+        input_mutation_i = _clamp_i(_to_i(st.session_state.edit_opt_v7_mutation_probability))
+
+        changed_crossover = input_crossover_i != committed_crossover_i
+        changed_mutation = input_mutation_i != committed_mutation_i
+
+        # Commit change: clamp ONLY the edited field
+        if changed_mutation and not changed_crossover:
+            max_mutation_i = _max_i_from_other(committed_crossover_i)
+            committed_mutation_i = min(input_mutation_i, max_mutation_i)
+        elif changed_crossover and not changed_mutation:
+            max_crossover_i = _max_i_from_other(committed_mutation_i)
+            committed_crossover_i = min(input_crossover_i, max_crossover_i)
+        elif changed_crossover and changed_mutation:
+            # If both changed (e.g. browser/IME), prefer mutation as "active"
+            max_mutation_i = _max_i_from_other(committed_crossover_i)
+            committed_mutation_i = min(input_mutation_i, max_mutation_i)
+            # Re-clamp crossover in case mutation reduced its max
+            max_crossover_i = _max_i_from_other(committed_mutation_i)
+            committed_crossover_i = min(input_crossover_i, max_crossover_i)
+
+        # Save committed values
+        st.session_state._opt_v7_committed_crossover_i = committed_crossover_i
+        st.session_state._opt_v7_committed_mutation_i = committed_mutation_i
+
+        # Update widget state to committed values BEFORE rendering widgets
+        st.session_state.edit_opt_v7_crossover_probability = _from_i(committed_crossover_i)
+        st.session_state.edit_opt_v7_mutation_probability = _from_i(committed_mutation_i)
+
+        # Dynamic max values for BOTH widgets (disables + on both at sum == 1.0)
+        max_crossover = _from_i(_max_i_from_other(committed_mutation_i))
+        max_mutation = _from_i(_max_i_from_other(committed_crossover_i))
+
+        col1, col2 = st.columns([1, 1])
+
+        with col1:
+            st.number_input(
+                "crossover_probability",
+                min_value=0.0,
+                max_value=max_crossover,
+                step=0.01,
+                format="%.2f",
+                key="edit_opt_v7_crossover_probability",
+                help=pbgui_help.crossover_probability,
+            )
+            current_crossover = round(float(st.session_state.edit_opt_v7_crossover_probability), 2)
+            current_mutation = round(float(st.session_state.edit_opt_v7_mutation_probability), 2)
+            if current_crossover >= max_crossover - 0.001:
+                current_sum = round(current_crossover + current_mutation, 2)
+                st.caption(
+                    f"ℹ️ Max: crossover {current_crossover:.2f} + mutation {current_mutation:.2f} = {current_sum:.2f}"
+                )
+
+        with col2:
+            st.number_input(
+                "mutation_probability",
+                min_value=0.0,
+                max_value=max_mutation,
+                step=0.01,
+                format="%.2f",
+                key="edit_opt_v7_mutation_probability",
+                help=pbgui_help.mutation_probability,
+            )
+            current_mutation = round(float(st.session_state.edit_opt_v7_mutation_probability), 2)
+            current_crossover = round(float(st.session_state.edit_opt_v7_crossover_probability), 2)
+            if current_mutation >= max_mutation - 0.001:
+                current_sum = round(current_crossover + current_mutation, 2)
+                st.caption(
+                    f"ℹ️ Max: crossover {current_crossover:.2f} + mutation {current_mutation:.2f} = {current_sum:.2f}"
+                )
+
+        # Update config from committed state
+        self.config.optimize.crossover_probability = _from_i(committed_crossover_i)
+        self.config.optimize.mutation_probability = _from_i(committed_mutation_i)
     
-    # crossover_eta
+    # Separate fragment for crossover_eta (no interdependency)
     @st.fragment
     def fragment_crossover_eta(self):
         if "edit_opt_v7_crossover_eta" in st.session_state:
@@ -1252,15 +1365,11 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.edit_opt_v7_crossover_eta = self.config.optimize.crossover_eta
         st.number_input("crossover_eta", min_value=0.0, max_value=10000.0, step=1.0, format="%.2f", key="edit_opt_v7_crossover_eta", help=pbgui_help.crossover_eta)
     
-    # mutation_probability
+    # mutation_probability is now part of fragment_crossover_mutation_probability - this fragment is deprecated
     @st.fragment
     def fragment_mutation_probability(self):
-        if "edit_opt_v7_mutation_probability" in st.session_state:
-            if st.session_state.edit_opt_v7_mutation_probability != self.config.optimize.mutation_probability:
-                self.config.optimize.mutation_probability = st.session_state.edit_opt_v7_mutation_probability
-        else:
-            st.session_state.edit_opt_v7_mutation_probability = self.config.optimize.mutation_probability
-        st.number_input("mutation_probability", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="edit_opt_v7_mutation_probability", help=pbgui_help.mutation_probability)
+        # This is now handled in fragment_crossover_mutation_probability
+        pass
 
     # mutation_eta
     @st.fragment
@@ -5698,15 +5807,15 @@ class OptimizeV7Item(ConfigV7Editor):
             self.fragment_offspring_multiplier()
         with col4:
             self.fragment_mutation_indpb()
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2 = st.columns([2,2])
         with col1:
-            self.fragment_crossover_probability()
+            self.fragment_crossover_mutation_probability()
         with col2:
-            self.fragment_crossover_eta()
-        with col3:
-            self.fragment_mutation_probability()
-        with col4:
-            self.fragment_mutation_eta()
+            col2a, col2b = st.columns([1,1])
+            with col2a:
+                self.fragment_crossover_eta()
+            with col2b:
+                self.fragment_mutation_eta()
         self.fragment_scoring()
 
         # Filters
