@@ -74,6 +74,10 @@ class ParetoDataLoader:
         
         # Cache for pareto JSON configs (index -> full config)
         self.pareto_configs_cache: Dict[int, Dict] = {}
+        
+        # Cache for raw config_data from all_results.bin (config_index -> config_data)
+        # This avoids re-reading the entire file for each config
+        self.raw_configs_cache: Dict[int, Dict] = {}
 
         # If a load fails for a known, user-facing reason, store it here.
         # The UI can surface it without a stack trace.
@@ -159,10 +163,14 @@ class ParetoDataLoader:
         total_configs = len(configs_data)
         
         # Parse ALL configs first (we need to find the best ones)
+        # NOTE: We cache config_data temporarily during parsing
+        temp_cache = {}
         for idx, config_data in enumerate(configs_data):
             try:
                 metrics = self._parse_config(idx, config_data)
                 self.configs.append(metrics)
+                # Temporary cache - will be filtered after selection
+                temp_cache[idx] = config_data
                 parsed_count += 1
                 
                 # Report progress every 100 configs
@@ -180,6 +188,14 @@ class ParetoDataLoader:
         # Select top N configs based on load_strategy
         total_parsed = len(self.configs)
         self.configs = self._select_top_configs_by_strategy(self.configs, load_strategy, max_count=max_configs)
+        
+        # Cache ONLY the selected configs (saves memory!)
+        for config in self.configs:
+            if config.config_index in temp_cache:
+                self.raw_configs_cache[config.config_index] = temp_cache[config.config_index]
+        
+        # Clear temp cache to free memory
+        temp_cache.clear()
         
         # Compute Pareto front based on objectives (optimized)
         self._compute_pareto_front_fast()
@@ -392,7 +408,7 @@ class ParetoDataLoader:
         for c in view_configs:
             c.is_pareto = False
         
-        # Compute Pareto front for this view only
+        # Compute Pareto front for this view (now optimized for large datasets)
         self._compute_pareto_front_for_configs(view_configs)
         
         return view_configs
@@ -400,6 +416,7 @@ class ParetoDataLoader:
     def _compute_pareto_front_for_configs(self, configs: List[ConfigMetrics]):
         """
         Compute Pareto front for given config list (modifies is_pareto flag in-place)
+        Uses efficient Skyline algorithm for large datasets
         
         Args:
             configs: List of configs to compute Pareto front for
@@ -414,27 +431,30 @@ class ParetoDataLoader:
         # Extract objectives (minimize all)
         objective_keys = sorted(configs[0].objectives.keys())
         objectives = np.array([[c.objectives[key] for key in objective_keys] for c in configs])
+        n_points = len(configs)
         
-        # Find Pareto front - a point is Pareto optimal if no other point dominates it
-        # Point j dominates point i if: obj_j <= obj_i for all objectives AND obj_j < obj_i for at least one
-        is_pareto = np.ones(len(configs), dtype=bool)
+        # EFFICIENT SKYLINE ALGORITHM for all dataset sizes
+        # Sort by first objective (helps prune dominated points early)
+        sorted_indices = np.argsort(objectives[:, 0])
+        is_pareto = np.zeros(n_points, dtype=bool)
         
-        for i in range(len(configs)):
-            if not is_pareto[i]:
-                continue  # Already marked as dominated
-                
-            # Check if any point dominates point i
-            for j in range(len(configs)):
-                if i == j or not is_pareto[j]:
-                    continue
-                    
-                # Check if j dominates i (j is better or equal in all, and strictly better in at least one)
-                better_equal = np.all(objectives[j] <= objectives[i])
-                strictly_better = np.any(objectives[j] < objectives[i])
+        # Process points in sorted order
+        for idx in sorted_indices:
+            # Check if current point is dominated by any already-found Pareto point
+            is_dominated = False
+            
+            for pareto_idx in np.where(is_pareto)[0]:
+                # Check if pareto_idx dominates idx
+                # (all objectives better or equal, at least one strictly better)
+                better_equal = np.all(objectives[pareto_idx] <= objectives[idx])
+                strictly_better = np.any(objectives[pareto_idx] < objectives[idx])
                 
                 if better_equal and strictly_better:
-                    is_pareto[i] = False
+                    is_dominated = True
                     break
+            
+            if not is_dominated:
+                is_pareto[idx] = True
         
         # Mark Pareto configs
         for i, config in enumerate(configs):
@@ -629,23 +649,21 @@ class ParetoDataLoader:
             with open(template_file, 'r') as f:
                 full_config = json.load(f)
             
-            # Load optimized bot params + metrics from all_results.bin at config_index
-            with open(self.all_results_path, 'rb') as f:
-                unpacker = msgpack.Unpacker(f, raw=False, max_buffer_size=2**31-1)
-                for idx, config_data in enumerate(unpacker):
-                    if idx == config_index:
-                        # Merge bot params (keep missing params from pareto template)
-                        if 'bot' in config_data:
-                            for side in ['long', 'short']:
-                                if side in config_data['bot']:
-                                    if side in full_config['bot']:
-                                        full_config['bot'][side].update(config_data['bot'][side])
-                                    else:
-                                        full_config['bot'][side] = config_data['bot'][side]
-                        
-                        # Cache and return
-                        self.pareto_configs_cache[config_index] = full_config
-                        return full_config
+            # Get config_data from cache (avoids re-reading entire file!)
+            config_data = self.raw_configs_cache.get(config_index)
+            if config_data:
+                # Merge bot params (keep missing params from pareto template)
+                if 'bot' in config_data:
+                    for side in ['long', 'short']:
+                        if side in config_data['bot']:
+                            if side in full_config['bot']:
+                                full_config['bot'][side].update(config_data['bot'][side])
+                            else:
+                                full_config['bot'][side] = config_data['bot'][side]
+                
+                # Cache and return
+                self.pareto_configs_cache[config_index] = full_config
+                return full_config
             
             return None
             

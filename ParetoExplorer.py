@@ -78,6 +78,17 @@ class ParetoExplorer:
                 st.session_state['max_configs'] = 2000
         
         # Initialize two-stage loading state
+        # RESET to fast mode when results_path changes!
+        if 'last_results_path' not in st.session_state or st.session_state['last_results_path'] != self.results_path:
+            st.session_state['all_results_loaded'] = False
+            st.session_state['last_results_path'] = self.results_path
+            # Clear resource cache when path changes
+            ParetoExplorer._load_data.clear()
+            # Clear view configs cache
+            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('view_configs_')]
+            for k in keys_to_delete:
+                del st.session_state[k]
+        
         if 'all_results_loaded' not in st.session_state:
             st.session_state['all_results_loaded'] = False
         
@@ -139,7 +150,20 @@ class ParetoExplorer:
         self._render_sidebar(load_stats)
         
         # Get view slice AFTER sidebar is rendered (uses slider state)
-        self.view_configs = self._get_view_configs()
+        # CACHE this expensive operation - only recompute if slider or results_path changed!
+        view_range = st.session_state.get('view_range_slider', (0, 500))
+        cache_key = f"view_configs_{self.results_path}_{view_range[0]}_{view_range[1]}"
+        
+        if cache_key not in st.session_state:
+            self.view_configs = self._get_view_configs()
+            st.session_state[cache_key] = self.view_configs
+            # Clean up old cache entries for different results_path or view_range
+            keys_to_delete = [k for k in st.session_state.keys() 
+                            if k.startswith('view_configs_') and k != cache_key]
+            for k in keys_to_delete:
+                del st.session_state[k]
+        else:
+            self.view_configs = st.session_state[cache_key]
         
         # Temporarily replace loader.configs with view for visualizations
         # This will be used by all visualization methods
@@ -2121,7 +2145,7 @@ class ParetoExplorer:
                 fig = self.viz.plot_pareto_scatter_2d(
                     x_metric=display_metrics[0],
                     y_metric=display_metrics[1],
-                    color_metric='drawdown_worst_usd' if 'drawdown_worst_usd' in self.loader.configs[0].suite_metrics else None,
+                    color_metric='drawdown_worst_usd' if 'drawdown_worst_usd' in self.view_configs[0].suite_metrics else None,
                     show_all=True
                 )
                 event = st.plotly_chart(fig, width='stretch', on_select="rerun", key='preview_2d')
