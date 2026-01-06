@@ -176,8 +176,14 @@ class ParetoVisualizations:
                 hovertemplate=f'<b>🎯 Best Match Config #%{{customdata[0]}}</b><br>{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>'
             ))
         
+        # Build title
+        if title_prefix:
+            title = f"{title_prefix}: {x_metric} vs {y_metric}"
+        else:
+            title = f"{x_metric} vs {y_metric}"
+        
         fig.update_layout(
-            title=f"{title_prefix}: {x_metric} vs {y_metric}" if title_prefix else None,
+            title=title,
             xaxis_title=x_metric.replace('_', ' ').title(),
             yaxis_title=y_metric.replace('_', ' ').title(),
             height=600,
