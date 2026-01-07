@@ -18,7 +18,23 @@ from User import Users
 import shutil
 import datetime
 import BacktestV7
-from Config import ConfigV7, Bounds, Logging, SHARED_METRICS, CURRENCY_METRICS, get_all_metrics_list, is_currency_metric, ALLOWED_OVERRIDES, get_aggregate_metrics, ConfigV7Editor
+from Config import (
+    ConfigV7,
+    Bounds,
+    Logging,
+    SHARED_METRICS,
+    CURRENCY_METRICS,
+    get_all_metrics_list,
+    get_metrics_by_group,
+    get_metric_groups,
+    get_metric_group,
+    get_limits_type_help_text,
+    get_limits_metric_list_help_text,
+    is_currency_metric,
+    ALLOWED_OVERRIDES,
+    get_aggregate_metrics,
+    ConfigV7Editor,
+)
 from PBCoinData import normalize_symbol
 import logging
 import os
@@ -1394,103 +1410,54 @@ class OptimizeV7Item(ConfigV7Editor):
     # scoring
     @st.fragment
     def fragment_scoring(self):
+        def _normalize_scoring_list(items):
+            if not items:
+                return []
+
+            normalized = []
+            for item in items:
+                if not isinstance(item, str):
+                    continue
+                if item.startswith("btc_"):
+                    base = item[4:]
+                    if base in CURRENCY_METRICS:
+                        item = f"{base}_btc"
+                elif item.startswith("usd_"):
+                    base = item[4:]
+                    if base in CURRENCY_METRICS:
+                        item = f"{base}_usd"
+                normalized.append(item)
+
+            # de-dup, preserve order
+            out = []
+            seen = set()
+            for x in normalized:
+                if x not in seen:
+                    out.append(x)
+                    seen.add(x)
+            return out
+
         if "edit_opt_v7_scoring" in st.session_state:
-            if st.session_state.edit_opt_v7_scoring != self.config.optimize.scoring:
-                self.config.optimize.scoring = st.session_state.edit_opt_v7_scoring
+            normalized = _normalize_scoring_list(st.session_state.edit_opt_v7_scoring)
+            if normalized != st.session_state.edit_opt_v7_scoring:
+                st.session_state.edit_opt_v7_scoring = normalized
+            if normalized != self.config.optimize.scoring:
+                self.config.optimize.scoring = normalized
         else:
-            st.session_state.edit_opt_v7_scoring = self.config.optimize.scoring
+            st.session_state.edit_opt_v7_scoring = _normalize_scoring_list(self.config.optimize.scoring)
+
+        # Use centralized metric definitions (avoids maintaining a second list here)
+        options = set(get_all_metrics_list())
+        for m in CURRENCY_METRICS:
+            options.add(f"{m}_usd")
+            options.add(f"{m}_btc")
+
+        # Backward-compat: include whatever is already selected in existing configs
+        options.update(st.session_state.edit_opt_v7_scoring or [])
+
         st.multiselect(
-            "scoring", 
-            [
-            "adg",
-            "adg_per_exposure_long",
-            "adg_per_exposure_short",
-            "adg_w",
-            "adg_w_per_exposure_long",
-            "adg_w_per_exposure_short",
-            "btc_adg",
-            "btc_adg_per_exposure_long",
-            "btc_adg_per_exposure_short",
-            "btc_adg_w",
-            "btc_adg_w_per_exposure_long",
-            "btc_adg_w_per_exposure_short",
-            "btc_calmar_ratio",
-            "btc_calmar_ratio_w",
-            "btc_drawdown_worst",
-            "btc_drawdown_worst_mean_1pct",
-            "btc_equity_balance_diff_neg_max",
-            "btc_equity_balance_diff_neg_mean",
-            "btc_equity_balance_diff_pos_max",
-            "btc_equity_balance_diff_pos_mean",
-            "btc_equity_choppiness",
-            "btc_equity_choppiness_w",
-            "btc_equity_jerkiness",
-            "btc_equity_jerkiness_w",
-            "btc_expected_shortfall_1pct",
-            "btc_exponential_fit_error",
-            "btc_exponential_fit_error_w",
-            "btc_gain",
-            "btc_gain_per_exposure_long",
-            "btc_gain_per_exposure_short",
-            "btc_loss_profit_ratio",
-            "btc_loss_profit_ratio_w",
-            "btc_mdg",
-            "btc_mdg_per_exposure_long",
-            "btc_mdg_per_exposure_short",
-            "btc_mdg_w",
-            "btc_mdg_w_per_exposure_long",
-            "btc_mdg_w_per_exposure_short",
-            "btc_omega_ratio",
-            "btc_omega_ratio_w",
-            "btc_sharpe_ratio",
-            "btc_sharpe_ratio_w",
-            "btc_sortino_ratio",
-            "btc_sortino_ratio_w",
-            "btc_sterling_ratio",
-            "btc_sterling_ratio_w",
-            "calmar_ratio",
-            "calmar_ratio_w",
-            "drawdown_worst",
-            "drawdown_worst_mean_1pct",
-            "equity_balance_diff_neg_max",
-            "equity_balance_diff_neg_mean",
-            "equity_balance_diff_pos_max",
-            "equity_balance_diff_pos_mean",
-            "equity_choppiness",
-            "equity_choppiness_w",
-            "equity_jerkiness",
-            "equity_jerkiness_w",
-            "expected_shortfall_1pct",
-            "exponential_fit_error",
-            "exponential_fit_error_w",
-            "flat_btc_balance_hours",
-            "gain",
-            "gain_per_exposure_long",
-            "gain_per_exposure_short",
-            "loss_profit_ratio",
-            "loss_profit_ratio_w",
-            "mdg",
-            "mdg_per_exposure_long",
-            "mdg_per_exposure_short",
-            "mdg_w",
-            "mdg_w_per_exposure_long",
-            "mdg_w_per_exposure_short",
-            "omega_ratio",
-            "omega_ratio_w",
-            "position_held_hours_max",
-            "position_held_hours_mean",
-            "position_held_hours_median",
-            "position_unchanged_hours_max",
-            "positions_held_per_day",
-            "sharpe_ratio",
-            "sharpe_ratio_w",
-            "sortino_ratio",
-            "sortino_ratio_w",
-            "sterling_ratio",
-            "sterling_ratio_w",
-            "volume_pct_per_day_avg",
-            "volume_pct_per_day_avg_w",
-            ], 
+            "scoring",
+            sorted(options),
             key="edit_opt_v7_scoring",
             help=pbgui_help.scoring,
         )
@@ -4899,6 +4866,8 @@ class OptimizeV7Item(ConfigV7Editor):
         else:
             value = entry.get("value", 0)
             return f"{metric}{stat_str} {penalize_if} {value}"
+
+    # Limits metric filtering is driven by docs-aligned groups from Config metric registry.
     
     def _edit_single_limit(self, entry: dict, idx: int, base_metrics: list, currency_metrics_set: set, currency_options: list, penalize_options: list, stat_options: list):
         """UI for editing a single limit entry with split metric/currency selection."""
@@ -4908,28 +4877,85 @@ class OptimizeV7Item(ConfigV7Editor):
         current_full_metric = entry.get("metric", base_metrics[0])
         current_base = current_full_metric
         current_currency = "usd"
-        for suffix in ('_usd', '_btc'):
-            if current_full_metric.endswith(suffix):
-                base = current_full_metric[:-len(suffix)]
-                if is_currency_metric(base):
-                    current_base = base
-                    current_currency = suffix[1:]  # Remove leading underscore
-                    break
+
+        # PB7-style canonicalization handling for legacy config values:
+        # - usd_X / btc_X prefixes
+        # - currency metrics without _usd/_btc suffix default to _usd
+        for prefix, currency in (("usd_", "usd"), ("btc_", "btc")):
+            if isinstance(current_full_metric, str) and current_full_metric.startswith(prefix):
+                core = current_full_metric[len(prefix):]
+                if core in SHARED_METRICS:
+                    current_base = core
+                    current_currency = "usd"
+                elif is_currency_metric(core):
+                    current_base = core
+                    current_currency = currency
+                break
+        else:
+            if isinstance(current_full_metric, str):
+                for suffix in ("_usd", "_btc"):
+                    if current_full_metric.endswith(suffix):
+                        base = current_full_metric[:-len(suffix)]
+                        if is_currency_metric(base):
+                            current_base = base
+                            current_currency = suffix[1:]  # Remove leading underscore
+                            break
+                else:
+                    if is_currency_metric(current_full_metric):
+                        current_base = current_full_metric
+                        current_currency = "usd"
         
         # Get current values
         current_penalize = entry.get("penalize_if", "greater_than")
         current_stat = entry.get("stat", "")
         is_range = current_penalize in ("outside_range", "inside_range")
+
+        LIMIT_TYPE_OPTIONS = ["all"] + list(get_metric_groups())
+        if "edit_limit_metric_type" not in st.session_state:
+            st.session_state.edit_limit_metric_type = get_metric_group(current_base) or "all"
+
+        filtered_base_metrics = get_metrics_by_group(st.session_state.edit_limit_metric_type, include_weighted=True)
+        if not filtered_base_metrics:
+            filtered_base_metrics = list(base_metrics)
+        if current_base not in filtered_base_metrics:
+            current_base = filtered_base_metrics[0]
+            st.session_state.edit_limit_base_metric = current_base
         
         # Dynamic column layout
         if is_range:
-            col1, col2, col3, col4, col5, col6 = st.columns([1.5, 0.6, 1, 0.6, 0.8, 0.8])
+            col_type, col1, col2, col3, col4, col5, col6 = st.columns([0.9, 1.5, 0.6, 1, 0.6, 0.8, 0.8])
         else:
-            col1, col2, col3, col4, col5 = st.columns([1.5, 0.6, 1, 0.6, 1])
+            col_type, col1, col2, col3, col4, col5 = st.columns([0.9, 1.5, 0.6, 1, 0.6, 1])
+
+        with col_type:
+            selected_type = st.selectbox(
+                "Type",
+                LIMIT_TYPE_OPTIONS,
+                key="edit_limit_metric_type",
+                help=get_limits_type_help_text(),
+            )
+            if selected_type == "all":
+                filtered_base_metrics = list(base_metrics)
+            else:
+                filtered_base_metrics = get_metrics_by_group(selected_type, include_weighted=True)
+                if not filtered_base_metrics:
+                    filtered_base_metrics = list(base_metrics)
+            if st.session_state.get("edit_limit_base_metric", current_base) not in filtered_base_metrics:
+                st.session_state.edit_limit_base_metric = filtered_base_metrics[0]
+                current_base = filtered_base_metrics[0]
         
         with col1:
-            base_idx = base_metrics.index(current_base) if current_base in base_metrics else 0
-            new_base = st.selectbox("Metric", base_metrics, index=base_idx, key="edit_limit_base_metric", help=pbgui_help.limits)
+            base_idx = filtered_base_metrics.index(current_base) if current_base in filtered_base_metrics else 0
+            new_base = st.selectbox(
+                "Metric",
+                filtered_base_metrics,
+                index=base_idx,
+                key="edit_limit_base_metric",
+                help=get_limits_metric_list_help_text(
+                    st.session_state.get("edit_limit_metric_type", "all"),
+                    include_weighted=True,
+                ),
+            )
         
         # Check if newly selected base is a currency metric
         new_is_currency = is_currency_metric(new_base)
@@ -5000,20 +5026,57 @@ class OptimizeV7Item(ConfigV7Editor):
     def _add_new_limit_ui(self, base_metrics: list, currency_metrics_set: set, currency_options: list, penalize_options: list, stat_options: list):
         """UI for adding a new limit with split metric/currency selection."""
         st.subheader("Add New Limit")
+
+        LIMIT_TYPE_OPTIONS = ["all"] + list(get_metric_groups())
+        if "add_limit_metric_type" not in st.session_state:
+            st.session_state.add_limit_metric_type = "all"
+        if st.session_state.add_limit_metric_type == "all":
+            filtered_base_metrics = list(base_metrics)
+        else:
+            filtered_base_metrics = get_metrics_by_group(st.session_state.add_limit_metric_type, include_weighted=True)
+            if not filtered_base_metrics:
+                filtered_base_metrics = list(base_metrics)
+        if st.session_state.get("add_limit_base_metric") not in filtered_base_metrics:
+            st.session_state.add_limit_base_metric = filtered_base_metrics[0]
         
         # Check if currently selected base metric is a currency metric
-        current_base = st.session_state.get("add_limit_base_metric", base_metrics[0])
+        current_base = st.session_state.get("add_limit_base_metric", filtered_base_metrics[0])
         is_currency = is_currency_metric(current_base)
         is_range = st.session_state.get("add_limit_penalize", "greater_than") in ("outside_range", "inside_range")
         
         # Dynamic column layout
         if is_range:
-            col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 0.4, 0.7, 0.4, 0.6, 0.6, 0.6], vertical_alignment="bottom")
+            col_type, col1, col2, col3, col4, col5, col6, col7 = st.columns([0.7, 1, 0.4, 0.7, 0.4, 0.6, 0.6, 0.6], vertical_alignment="bottom")
         else:
-            col1, col2, col3, col4, col5, col6 = st.columns([1.2, 0.5, 0.9, 0.5, 2.3, 0.6], vertical_alignment="bottom")
+            col_type, col1, col2, col3, col4, col5, col6 = st.columns([0.7, 1.2, 0.5, 0.9, 0.5, 2.3, 0.6], vertical_alignment="bottom")
+
+        with col_type:
+            selected_type = st.selectbox(
+                "Type",
+                LIMIT_TYPE_OPTIONS,
+                key="add_limit_metric_type",
+                help=get_limits_type_help_text(),
+            )
+            if selected_type == "all":
+                filtered_base_metrics = list(base_metrics)
+            else:
+                filtered_base_metrics = get_metrics_by_group(selected_type, include_weighted=True)
+                if not filtered_base_metrics:
+                    filtered_base_metrics = list(base_metrics)
+            if st.session_state.get("add_limit_base_metric") not in filtered_base_metrics:
+                st.session_state.add_limit_base_metric = filtered_base_metrics[0]
+                current_base = filtered_base_metrics[0]
         
         with col1:
-            new_base = st.selectbox("Metric", base_metrics, key="add_limit_base_metric", help=pbgui_help.limits)
+            new_base = st.selectbox(
+                "Metric",
+                filtered_base_metrics,
+                key="add_limit_base_metric",
+                help=get_limits_metric_list_help_text(
+                    st.session_state.get("add_limit_metric_type", "all"),
+                    include_weighted=True,
+                ),
+            )
         
         # Recheck after selectbox - it may have changed
         is_currency = is_currency_metric(new_base)

@@ -11,39 +11,444 @@ from Exchange import Exchange, V7
 from PBCoinData import CoinData, normalize_symbol
 from time import sleep
 import math
+from dataclasses import dataclass
 
 # ============================================================================
-# Metrics Definitions (Centralized)
+# Metrics Definitions (Docs-aligned Registry)
 # ============================================================================
 
-# Currency metrics that need _usd or _btc suffix
-CURRENCY_METRICS = {
-    "adg", "adg_per_exposure_long", "adg_per_exposure_short", "adg_w",
-    "adg_w_per_exposure_long", "adg_w_per_exposure_short", "calmar_ratio",
-    "calmar_ratio_w", "drawdown_worst", "drawdown_worst_mean_1pct",
-    "equity_balance_diff_neg_max", "equity_balance_diff_neg_mean",
-    "equity_balance_diff_pos_max", "equity_balance_diff_pos_mean",
-    "equity_choppiness", "equity_choppiness_w", "equity_jerkiness",
-    "equity_jerkiness_w", "peak_recovery_hours_equity", "expected_shortfall_1pct",
-    "exponential_fit_error", "exponential_fit_error_w", "gain",
-    "gain_per_exposure_long", "gain_per_exposure_short", "mdg",
-    "mdg_per_exposure_long", "mdg_per_exposure_short", "mdg_w",
-    "mdg_w_per_exposure_long", "mdg_w_per_exposure_short", "omega_ratio",
-    "omega_ratio_w", "sharpe_ratio", "sharpe_ratio_w", "sortino_ratio",
-    "sortino_ratio_w", "sterling_ratio", "sterling_ratio_w",
+# Group labels aligned with Passivbot docs:
+# - https://github.com/enarjord/passivbot/blob/master/docs/optimizing.md (Performance Metrics)
+# - https://github.com/enarjord/passivbot/blob/master/docs/metrics.md
+METRIC_GROUP_ORDER = [
+    "Returns & Growth",
+    "Risk Metrics",
+    "Ratios & Efficiency",
+    "Position & Execution Metrics",
+    "Equity Curve Quality",
+    "Other",
+]
+
+
+# Short descriptions for metric groups (used as UI help/tooltip text).
+METRIC_GROUP_DESCRIPTIONS: dict[str, str] = {
+    "Returns & Growth": "Return/growth metrics (gain, ADG/MDG, exposure-normalized variants).",
+    "Risk Metrics": "Risk and downside metrics (drawdowns, expected shortfall, equity/balance divergence).",
+    "Ratios & Efficiency": "Risk-adjusted and efficiency ratios (Sharpe/Sortino/Omega/Calmar/Sterling, loss-profit).",
+    "Position & Execution Metrics": "Trading activity and holding/execution characteristics (positions/day, hold times, volume, recovery).",
+    "Equity Curve Quality": "Equity curve smoothness/fit quality (choppiness, jerkiness, exponential fit error).",
+    "Other": "Miscellaneous metrics.",
 }
 
-# Shared metrics (no suffix needed)
-SHARED_METRICS = {
-    "positions_held_per_day", "positions_held_per_day_w",
-    "position_held_hours_mean", "position_held_hours_max",
-    "position_held_hours_median", "position_unchanged_hours_max",
-    "volume_pct_per_day_avg", "volume_pct_per_day_avg_w",
-    "loss_profit_ratio", "loss_profit_ratio_w",
-    "peak_recovery_hours_pnl", "adg_pnl", "adg_pnl_w",
-    "mdg_pnl", "mdg_pnl_w", "sharpe_ratio_pnl", "sharpe_ratio_pnl_w",
-    "sortino_ratio_pnl", "sortino_ratio_pnl_w",
+
+@dataclass(frozen=True)
+class MetricDef:
+    group: str
+    has_currency: bool
+    weighted_variant: str | None = None
+    aliases: tuple[str, ...] = ()
+    description: str = ""
+
+
+# Registry keys are the canonical (denomination-less) metric names used in configs.
+# Weighted variants are represented via `weighted_variant` (so the UI can derive them
+# without duplicating string logic).
+METRIC_REGISTRY: dict[str, MetricDef] = {
+    # Returns & Growth
+    "gain": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        description="Terminal equity divided by starting equity.",
+    ),
+    "adg": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        weighted_variant="adg_w",
+        description="Average daily gain (smoothed) and its recency-weighted variant.",
+    ),
+    "mdg": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        weighted_variant="mdg_w",
+        description="Median daily gain and its recency-weighted variant.",
+    ),
+    "adg_pnl": MetricDef(
+        group="Returns & Growth",
+        has_currency=False,
+        weighted_variant="adg_pnl_w",
+        description="Daily realized PnL ratio (collateral-agnostic) and weighted variant.",
+    ),
+    "mdg_pnl": MetricDef(
+        group="Returns & Growth",
+        has_currency=False,
+        weighted_variant="mdg_pnl_w",
+        description="Median of daily realized PnL ratios (collateral-agnostic) and weighted variant.",
+    ),
+    "adg_per_exposure_long": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        weighted_variant="adg_w_per_exposure_long",
+        description="ADG normalized by long exposure limit (plus weighted variant).",
+    ),
+    "adg_per_exposure_short": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        weighted_variant="adg_w_per_exposure_short",
+        description="ADG normalized by short exposure limit (plus weighted variant).",
+    ),
+    "mdg_per_exposure_long": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        weighted_variant="mdg_w_per_exposure_long",
+        description="MDG normalized by long exposure limit (plus weighted variant).",
+    ),
+    "mdg_per_exposure_short": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        weighted_variant="mdg_w_per_exposure_short",
+        description="MDG normalized by short exposure limit (plus weighted variant).",
+    ),
+    "gain_per_exposure_long": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        description="Gain normalized by long exposure limit.",
+    ),
+    "gain_per_exposure_short": MetricDef(
+        group="Returns & Growth",
+        has_currency=True,
+        description="Gain normalized by short exposure limit.",
+    ),
+
+    # Risk Metrics
+    "drawdown_worst": MetricDef(
+        group="Risk Metrics",
+        has_currency=True,
+        description="Maximum peak-to-trough drawdown.",
+    ),
+    "drawdown_worst_mean_1pct": MetricDef(
+        group="Risk Metrics",
+        has_currency=True,
+        description="Mean of worst 1% daily drawdowns.",
+    ),
+    "expected_shortfall_1pct": MetricDef(
+        group="Risk Metrics",
+        has_currency=True,
+        description="Average of worst 1% daily losses (CVaR).",
+    ),
+    "equity_balance_diff_neg_max": MetricDef(
+        group="Risk Metrics",
+        has_currency=True,
+        description="Largest negative (equity-balance)/balance divergence.",
+    ),
+    "equity_balance_diff_neg_mean": MetricDef(
+        group="Risk Metrics",
+        has_currency=True,
+        description="Average negative (equity-balance)/balance divergence.",
+    ),
+    "equity_balance_diff_pos_max": MetricDef(
+        group="Risk Metrics",
+        has_currency=True,
+        description="Largest positive (equity-balance)/balance divergence.",
+    ),
+    "equity_balance_diff_pos_mean": MetricDef(
+        group="Risk Metrics",
+        has_currency=True,
+        description="Average positive (equity-balance)/balance divergence.",
+    ),
+
+    # Ratios & Efficiency
+    "sharpe_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="sharpe_ratio_w",
+        description="Return-to-volatility ratio and its recency-weighted variant.",
+    ),
+    "sortino_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="sortino_ratio_w",
+        description="Return-to-downside-volatility ratio and its recency-weighted variant.",
+    ),
+    "omega_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="omega_ratio_w",
+        description="Sum of positive returns divided by absolute sum of negative returns (plus weighted variant).",
+    ),
+    "sterling_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="sterling_ratio_w",
+        description="Return divided by average of worst 1% drawdowns (plus weighted variant).",
+    ),
+    "calmar_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="calmar_ratio_w",
+        description="Return divided by maximum drawdown (plus weighted variant).",
+    ),
+    "loss_profit_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="loss_profit_ratio_w",
+        description="Loss-to-profit efficiency ratio (plus weighted variant).",
+    ),
+    "sharpe_ratio_pnl": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="sharpe_ratio_pnl_w",
+        description="Sharpe ratio computed on realized daily PnL ratios (plus weighted variant).",
+    ),
+    "sortino_ratio_pnl": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="sortino_ratio_pnl_w",
+        description="Sortino ratio computed on realized daily PnL ratios (plus weighted variant).",
+    ),
+
+    # Position & Execution Metrics
+    "positions_held_per_day": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        weighted_variant="positions_held_per_day_w",
+        description="Average number of positions opened per day (plus weighted variant).",
+    ),
+    "position_held_hours_mean": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Mean holding time (hours).",
+    ),
+    "position_held_hours_median": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Median holding time (hours).",
+    ),
+    "position_held_hours_max": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Maximum holding time (hours).",
+    ),
+    "position_unchanged_hours_max": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Longest span without modifying an open position (hours).",
+    ),
+    "volume_pct_per_day_avg": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        weighted_variant="volume_pct_per_day_avg_w",
+        description="Average daily traded volume as % of balance (plus weighted variant).",
+    ),
+    "peak_recovery_hours_equity": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=True,
+        description="Longest time until equity makes a new peak (hours).",
+    ),
+    "peak_recovery_hours_pnl": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Longest time until cumulative realized PnL makes a new peak (hours).",
+    ),
+
+    # Equity Curve Quality
+    "equity_choppiness": MetricDef(
+        group="Equity Curve Quality",
+        has_currency=True,
+        weighted_variant="equity_choppiness_w",
+        description="Equity curve total variation (lower is smoother) and weighted variant.",
+    ),
+    "equity_jerkiness": MetricDef(
+        group="Equity Curve Quality",
+        has_currency=True,
+        weighted_variant="equity_jerkiness_w",
+        description="Mean absolute second derivative of equity (lower is smoother) and weighted variant.",
+    ),
+    "exponential_fit_error": MetricDef(
+        group="Equity Curve Quality",
+        has_currency=True,
+        weighted_variant="exponential_fit_error_w",
+        description="Log-linear equity fit error (lower is better) and weighted variant.",
+    ),
 }
+
+
+def _build_metric_lookup() -> dict[str, MetricDef]:
+    lookup: dict[str, MetricDef] = {}
+    for name, spec in METRIC_REGISTRY.items():
+        lookup[name] = spec
+        if spec.weighted_variant:
+            lookup[spec.weighted_variant] = spec
+
+        # Optional legacy aliases (PB7 canonicalize_metric_name supports usd_*/btc_* prefixes)
+        aliases = list(spec.aliases)
+        aliases.extend([f"usd_{name}", f"btc_{name}"])
+        if spec.weighted_variant:
+            aliases.extend([f"usd_{spec.weighted_variant}", f"btc_{spec.weighted_variant}"])
+        for alias in aliases:
+            lookup.setdefault(alias, spec)
+    return lookup
+
+
+_METRIC_LOOKUP = _build_metric_lookup()
+
+
+def get_metric_def(metric: str) -> MetricDef | None:
+    """Return metric definition for a base metric or its weighted/legacy alias."""
+    if not isinstance(metric, str):
+        return None
+    return _METRIC_LOOKUP.get(metric)
+
+
+def get_metric_group(metric: str) -> str | None:
+    spec = get_metric_def(metric)
+    return spec.group if spec else None
+
+
+def get_metric_groups() -> list[str]:
+    """Return docs-aligned metric groups in stable order (excluding 'Other' if unused)."""
+    groups_present = {spec.group for spec in METRIC_REGISTRY.values()}
+    ordered = [g for g in METRIC_GROUP_ORDER if g in groups_present]
+    # If we ever have groups outside the known order, append them deterministically.
+    extras = sorted(groups_present.difference(ordered))
+    return ordered + extras
+
+
+def get_metric_group_description(group: str) -> str:
+    if not isinstance(group, str) or not group:
+        return ""
+    return METRIC_GROUP_DESCRIPTIONS.get(group, "")
+
+
+def get_metric_description(metric: str) -> str:
+    """Return description for a metric name (handles weighted variants and currency suffixes)."""
+    if not isinstance(metric, str) or not metric:
+        return ""
+
+    # Allow passing full metric names like `gain_usd`/`gain_btc`.
+    base = metric
+    if base.endswith("_usd") or base.endswith("_btc"):
+        base = base[:-4]
+
+    spec = get_metric_def(base)
+    return spec.description if spec and spec.description else ""
+
+
+def get_metric_help_text(metric: str) -> str:
+    """Help text for a metric selectbox: include group + description when available."""
+    if not isinstance(metric, str) or not metric:
+        return ""
+
+    # Use canonicalized name to tolerate legacy prefixes when called from other contexts.
+    canon = canonicalize_metric_name(metric)
+    base = canon
+    if base.endswith("_usd") or base.endswith("_btc"):
+        base = base[:-4]
+
+    spec = get_metric_def(base)
+    if not spec:
+        return ""
+    desc = spec.description or ""
+    return f"{spec.group}: {desc}" if desc else spec.group
+
+
+def get_limits_type_help_text() -> str:
+    """Help text for the Limits 'Type' selectbox."""
+    lines: list[str] = [
+        "Type filters the Metric list.",
+        "all: show all metrics",
+        "",
+        "Groups:",
+    ]
+    for group in get_metric_groups():
+        desc = get_metric_group_description(group)
+        lines.append(f"- {group}: {desc}" if desc else f"- {group}")
+    return "\n".join(lines)
+
+
+def get_limits_metric_list_help_text(selected_type: str, *, include_weighted: bool = True) -> str:
+    """Help text for the Limits 'Metric' selectbox showing available metrics for current Type.
+
+    Format is `metric = description` with aligned `=`.
+    """
+
+    def _clean_desc(desc: str) -> str:
+        # Keep it compact: no embedded newlines, no repeated weighted-variant explanations.
+        if not desc:
+            return ""
+        desc = " ".join(str(desc).split())
+        for phrase in (
+            " and its recency-weighted variant.",
+            " (recency-weighted variant).",
+            " (plus weighted variant).",
+            " plus weighted variant.",
+            " and weighted variant.",
+            " (weighted variant).",
+        ):
+            desc = desc.replace(phrase, "")
+        desc = " ".join(desc.split()).strip()
+        # Restore a trailing period if we removed the end.
+        if desc and desc[-1] not in ".!?":
+            desc += "."
+        return desc
+
+    def _describe_metric(name: str) -> str:
+        spec = get_metric_def(name)
+        if not spec or not spec.description:
+            return ""
+        # For both base + weighted metrics, show the same base description.
+        return _clean_desc(spec.description)
+
+    group = selected_type or "all"
+    metrics = get_metrics_by_group(group, include_weighted=include_weighted)
+
+    if group == "all":
+        header_lines = [f"Available metrics (all) ({len(metrics)}):"]
+    else:
+        header_lines = [f"Available metrics ({group}) ({len(metrics)}):"]
+
+    if not metrics:
+        return "\n".join(header_lines)
+
+    # Use a markdown table so the '=' column aligns visually even in proportional fonts.
+    table_lines: list[str] = [
+        "| Metric | | Description |",
+        "|---|:--:|---|",
+    ]
+    for m in metrics:
+        desc = _describe_metric(m)
+        table_lines.append(f"| `{m}` | = | {desc} |")
+
+    footer = "Legend: metrics containing `_w` are recency-weighted variants."
+    return "\n".join(header_lines + ["", *table_lines, "", footer])
+
+
+def get_metrics_by_group(group: str, *, include_weighted: bool = True) -> list[str]:
+    """Return canonical metric names belonging to a group.
+
+    If include_weighted is True, include the weighted variants as separate selectable metrics.
+    """
+    if not group:
+        return []
+    if group == "all":
+        return get_all_metrics_list()
+    out: list[str] = []
+    for name, spec in METRIC_REGISTRY.items():
+        if spec.group != group:
+            continue
+        out.append(name)
+        if include_weighted and spec.weighted_variant:
+            out.append(spec.weighted_variant)
+    return sorted(set(out))
+
+
+# Derived sets used throughout PBGui (kept for backward compatibility)
+CURRENCY_METRICS: set[str] = set()
+SHARED_METRICS: set[str] = set()
+for name, spec in METRIC_REGISTRY.items():
+    target = CURRENCY_METRICS if spec.has_currency else SHARED_METRICS
+    target.add(name)
+    if spec.weighted_variant:
+        target.add(spec.weighted_variant)
 
 def get_all_metrics_with_currency():
     """Get all valid metrics including currency suffixes (for limits)."""
@@ -54,7 +459,7 @@ def get_all_metrics_with_currency():
     return all_metrics
 
 def get_all_metrics_list():
-    """Get sorted list of base metrics (for UI selection)."""
+    """Get sorted list of base metrics for UI selection (includes weighted variants)."""
     return sorted(list(SHARED_METRICS) + list(CURRENCY_METRICS))
 
 def get_aggregate_metrics():
@@ -90,6 +495,34 @@ def get_aggregate_metrics():
 def is_currency_metric(metric_base):
     """Check if a metric requires currency suffix (_usd or _btc)."""
     return metric_base in CURRENCY_METRICS
+
+
+def canonicalize_metric_name(metric: str) -> str:
+    """Canonicalize metric names like PB7 `canonicalize_metric_name`.
+
+    - Keep explicit `_usd`/`_btc` suffixes.
+    - Convert legacy `usd_foo`/`btc_foo` prefixes.
+    - Default bare currency metrics to `_usd`.
+    """
+    if not isinstance(metric, str):
+        return metric
+    if metric.endswith("_usd") or metric.endswith("_btc"):
+        return metric
+
+    for prefix, suffix in (("usd_", "usd"), ("btc_", "btc")):
+        if metric.startswith(prefix):
+            core = metric[len(prefix):]
+            if core in SHARED_METRICS:
+                return core
+            return f"{core}_{suffix}"
+
+    if metric in SHARED_METRICS:
+        return metric
+
+    if metric in CURRENCY_METRICS:
+        return f"{metric}_usd"
+
+    return metric
 
 # ============================================================================
 # Bot Parameter Overrides
@@ -2328,8 +2761,6 @@ class Live:
         self._time_in_force = "good_till_cancelled"
         self._warmup_ratio = 0.2
         self._max_warmup_minutes = 0
-        self._warmup_jitter_seconds = 30.0
-        self._max_concurrent_api_requests = None
         self._candle_lock_timeout_seconds = 10
         self._balance_override = None
         self._balance_hysteresis_snap_pct = 0.02
@@ -2360,8 +2791,6 @@ class Live:
             "time_in_force": self._time_in_force,
             "warmup_ratio": self._warmup_ratio,
             "max_warmup_minutes": self._max_warmup_minutes,
-            "warmup_jitter_seconds": self._warmup_jitter_seconds,
-            "max_concurrent_api_requests": self._max_concurrent_api_requests,
             "candle_lock_timeout_seconds": self._candle_lock_timeout_seconds,
             "balance_override": self._balance_override,
             "balance_hysteresis_snap_pct": self._balance_hysteresis_snap_pct,
@@ -2423,10 +2852,6 @@ class Live:
             self._warmup_ratio = new_live["warmup_ratio"]
         if "max_warmup_minutes" in new_live:
             self.max_warmup_minutes = new_live["max_warmup_minutes"]
-        if "warmup_jitter_seconds" in new_live:
-            self.warmup_jitter_seconds = new_live["warmup_jitter_seconds"]
-        if "max_concurrent_api_requests" in new_live:
-            self.max_concurrent_api_requests = new_live["max_concurrent_api_requests"]
         if "candle_lock_timeout_seconds" in new_live:
             self.candle_lock_timeout_seconds = new_live["candle_lock_timeout_seconds"]
         if "balance_override" in new_live:
@@ -2484,10 +2909,6 @@ class Live:
     def warmup_ratio(self): return self._warmup_ratio
     @property
     def max_warmup_minutes(self): return self._max_warmup_minutes
-    @property
-    def warmup_jitter_seconds(self): return self._warmup_jitter_seconds
-    @property
-    def max_concurrent_api_requests(self): return self._max_concurrent_api_requests
     @property
     def candle_lock_timeout_seconds(self): return self._candle_lock_timeout_seconds
     @property
@@ -2593,14 +3014,6 @@ class Live:
     def max_warmup_minutes(self, new_max_warmup_minutes):
         self._max_warmup_minutes = new_max_warmup_minutes
         self._live["max_warmup_minutes"] = self._max_warmup_minutes
-    @warmup_jitter_seconds.setter
-    def warmup_jitter_seconds(self, new_warmup_jitter_seconds):
-        self._warmup_jitter_seconds = new_warmup_jitter_seconds
-        self._live["warmup_jitter_seconds"] = self._warmup_jitter_seconds
-    @max_concurrent_api_requests.setter
-    def max_concurrent_api_requests(self, new_max_concurrent_api_requests):
-        self._max_concurrent_api_requests = new_max_concurrent_api_requests
-        self._live["max_concurrent_api_requests"] = self._max_concurrent_api_requests
     @candle_lock_timeout_seconds.setter
     def candle_lock_timeout_seconds(self, new_candle_lock_timeout_seconds):
         self._candle_lock_timeout_seconds = new_candle_lock_timeout_seconds
@@ -2754,7 +3167,16 @@ class Optimize:
         if isinstance(new_limits, dict):
             self._limits = self._convert_legacy_limits(new_limits)
         elif isinstance(new_limits, list):
-            self._limits = new_limits
+            normalized = []
+            for entry in new_limits:
+                if isinstance(entry, dict) and isinstance(entry.get("metric"), str):
+                    canon = canonicalize_metric_name(entry["metric"])
+                    if canon != entry["metric"]:
+                        patched = entry.copy()
+                        patched["metric"] = canon
+                        entry = patched
+                normalized.append(entry)
+            self._limits = normalized
         else:
             self._limits = []
         self._optimize["limits"] = self._limits
