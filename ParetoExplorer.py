@@ -181,9 +181,17 @@ class ParetoExplorer:
             self._render_sidebar(load_stats)
         
         # Get view slice AFTER sidebar is rendered (uses slider state)
-        # CACHE this expensive operation - only recompute if slider or results_path changed!
-        view_range = st.session_state.get('view_range_slider', (0, 500))
-        cache_key = f"view_configs_{self.results_path}_{view_range[0]}_{view_range[1]}"
+        # CACHE this expensive operation, but the cache key must depend on mode/loader to avoid
+        # reusing a stale list of ConfigMetrics objects when switching between fast/full modes.
+        all_results_loaded = st.session_state.get('all_results_loaded', False)
+        cache_token = load_result.get("cache_token")
+        if all_results_loaded:
+            view_range = st.session_state.get('view_range_slider', (0, 500))
+        else:
+            # Fast mode ignores view_range_slider; keep key stable even if slider lingers in session state.
+            view_range = (0, -1)
+
+        cache_key = f"view_configs_{self.results_path}_{int(all_results_loaded)}_{view_range[0]}_{view_range[1]}_{cache_token}"
         
         with timer.section("get_view_configs"):
             if cache_key not in st.session_state:
@@ -368,6 +376,10 @@ class ParetoExplorer:
         
         def _set_all_results_loaded(value: bool):
             st.session_state['all_results_loaded'] = value
+            # Clear cached view slices to avoid reusing stale ConfigMetrics objects when switching modes.
+            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('view_configs_')]
+            for k in keys_to_delete:
+                del st.session_state[k]
 
         with st.sidebar:
             # === DATA SOURCE SECTION ===
@@ -2158,6 +2170,7 @@ class ParetoExplorer:
         st.caption("💡 Click on any point to view config details or start a backtest")
         
         # Config counts for charts
+        # Note: we update this later to match the plotted (x,y) Pareto frontier when possible.
         pareto_in_view = sum(1 for c in self.view_configs if c.is_pareto)
         
         # Metric weight toggle (session state)
@@ -2186,6 +2199,30 @@ class ParetoExplorer:
                         display_metrics.append(metric)  # Fallback to unweighted
                 else:
                     display_metrics.append(metric)
+
+        # If scoring contains < 2 metrics, pick a sensible second axis so the chart isn't empty.
+        if len(display_metrics) < 2:
+            available_metrics = []
+            if self.view_configs and getattr(self.view_configs[0], 'suite_metrics', None):
+                available_metrics = list(self.view_configs[0].suite_metrics.keys())
+            elif self.loader.configs and getattr(self.loader.configs[0], 'suite_metrics', None):
+                available_metrics = list(self.loader.configs[0].suite_metrics.keys())
+
+            preferred_fallbacks = [
+                # Prefer return metrics in the currently selected weighted/unweighted flavor
+                'adg_w_usd' if use_weighted else 'adg_usd',
+                'mdg_w_usd' if use_weighted else 'mdg_usd',
+                'gain_usd',
+                'adg_pnl_w' if use_weighted else 'adg_pnl',
+                'mdg_pnl_w' if use_weighted else 'mdg_pnl',
+                # As a last resort, any drawdown metric gives a readable tradeoff
+                'drawdown_worst_usd',
+            ]
+            for m in preferred_fallbacks:
+                if m in available_metrics and m not in display_metrics:
+                    display_metrics.append(m)
+                if len(display_metrics) >= 2:
+                    break
         else:
             # Use unweighted versions
             display_metrics = []
@@ -2268,6 +2305,8 @@ class ParetoExplorer:
                                         self._show_config_details(clicked_config_index, key_prefix="cc_2d")
                     except Exception as e:
                         st.warning(f"⚠️ Click handling error: {e}")
+            else:
+                st.info("ℹ️ Not enough metrics to plot a 2D preview chart for this run.")
         
         with col2:
             col_title, col_help = st.columns([3, 1])
@@ -2651,11 +2690,15 @@ class ParetoExplorer:
         all_results_just_loaded = (not st.session_state['prev_all_results_loaded']) and current_all_results_loaded
         
         # Compute weighted score for Pareto configs
-        pareto_configs = self.loader.get_pareto_configs()
+        pareto_configs = [c for c in (self.loader.get_pareto_configs() or []) if c is not None]
         
         if not pareto_configs:
             st.warning("⚠️ No Pareto configs found - using all configs")
-            pareto_configs = self.loader.configs[:100]  # Fallback: top 100
+            pareto_configs = [c for c in (self.loader.configs or [])[:100] if c is not None]  # Fallback: top 100
+
+        if not pareto_configs:
+            st.error("❌ No configs available to compute a best match")
+            return
         
         # Now we have configs to work with
         scoring_metrics = self.loader.scoring_metrics if self.loader.scoring_metrics else ['adg_w_usd']
@@ -2663,6 +2706,18 @@ class ParetoExplorer:
         
         best_match = None
         best_score = -np.inf
+
+        # Precompute safe normalization denominator
+        try:
+            perf_values = [float(c.suite_metrics.get(primary_metric, 0.0) or 0.0) for c in pareto_configs]
+        except Exception:
+            perf_values = []
+        perf_max = max(perf_values) if perf_values else 0.0
+        perf_denom = perf_max if abs(perf_max) > 1e-12 else 1e-12
+
+        total_weight = float(perf_weight + risk_weight + robust_weight)
+        if total_weight <= 0.0:
+            total_weight = 1.0
         
         for config in pareto_configs:
             perf = config.suite_metrics.get(primary_metric, 0)
@@ -2670,24 +2725,42 @@ class ParetoExplorer:
             robust = self.loader.compute_overall_robustness(config)
             
             # Normalize to [0, 1]
-            perf_norm = perf / max(c.suite_metrics.get(primary_metric, 0.001) for c in pareto_configs)
+            try:
+                perf_norm = float(perf or 0.0) / perf_denom
+            except Exception:
+                perf_norm = 0.0
             
             # Weighted score
-            score = (perf_norm * perf_weight + risk * risk_weight + robust * robust_weight) / (perf_weight + risk_weight + robust_weight)
+            score = (perf_norm * perf_weight + risk * risk_weight + robust * robust_weight) / total_weight
+
+            # Ignore NaN scores (e.g., bad inputs)
+            try:
+                if not np.isfinite(score):
+                    continue
+            except Exception:
+                pass
             
             if score > best_score:
                 best_score = score
                 best_match = config
+
+        if best_match is None:
+            # Fallback: pick the first available config
+            best_match = pareto_configs[0]
+            best_score = float(best_score) if np.isfinite(best_score) else 0.0
         
         # Auto-select best match in session state
         # Update when: 1) first load, 2) sliders changed, 3) all_results just loaded
-        if 'pareto_selected_config' not in st.session_state or sliders_changed or all_results_just_loaded:
-            st.session_state['pareto_selected_config'] = best_match.config_index
-            st.session_state['pareto_selectbox_key'] = best_match.config_index
-            st.session_state['prev_slider_weights'] = current_weights
-            st.session_state['prev_all_results_loaded'] = current_all_results_loaded
-        
-        st.success(f"🎯 **Best Match for Your Preferences:** Config #{best_match.config_index} (Score: {best_score:.3f})")
+        if best_match is not None:
+            if 'pareto_selected_config' not in st.session_state or sliders_changed or all_results_just_loaded:
+                st.session_state['pareto_selected_config'] = best_match.config_index
+                st.session_state['pareto_selectbox_key'] = best_match.config_index
+                st.session_state['prev_slider_weights'] = current_weights
+                st.session_state['prev_all_results_loaded'] = current_all_results_loaded
+
+            st.success(f"🎯 **Best Match for Your Preferences:** Config #{best_match.config_index} (Score: {best_score:.3f})")
+        else:
+            st.warning("⚠️ Could not determine a best match")
         
         st.markdown("---")
         

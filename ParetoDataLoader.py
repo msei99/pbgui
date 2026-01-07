@@ -114,6 +114,52 @@ class ParetoDataLoader:
         base = self.all_results_path + ".scan_cache"
         return base + ".meta.json", base + ".npz"
 
+    @staticmethod
+    def _normalize_optimize_bounds(bounds: Dict) -> Dict[str, Tuple[float, float]]:
+        """Normalize PB7 optimize bounds to a simple (lower, upper) tuple per parameter.
+
+        PB7 may store bounds as e.g. [lower, upper, step].
+        This converts list/tuple/dict formats into (lower, upper) floats.
+        Unparseable entries are skipped.
+        """
+
+        def _to_pair(v):
+            if v is None:
+                return None
+            if isinstance(v, dict):
+                for lo_key, hi_key in (("lower", "upper"), ("min", "max"), ("lo", "hi")):
+                    if lo_key in v and hi_key in v:
+                        try:
+                            return float(v[lo_key]), float(v[hi_key])
+                        except Exception:
+                            return None
+                if "bounds" in v:
+                    return _to_pair(v.get("bounds"))
+                return None
+            if isinstance(v, (list, tuple)):
+                if len(v) < 2:
+                    return None
+                try:
+                    return float(v[0]), float(v[1])
+                except Exception:
+                    return None
+            return None
+
+        out: Dict[str, Tuple[float, float]] = {}
+        if not isinstance(bounds, dict):
+            return out
+        for k, v in bounds.items():
+            if not isinstance(k, str):
+                continue
+            pair = _to_pair(v)
+            if not pair:
+                continue
+            lo, hi = pair
+            if lo > hi:
+                lo, hi = hi, lo
+            out[k] = (lo, hi)
+        return out
+
     def _is_scan_cache_valid(self) -> bool:
         """Check if scan cache exists and matches current all_results.bin (mtime+size)."""
         meta_path, npz_path = self._scan_cache_paths()
@@ -260,7 +306,7 @@ class ParetoDataLoader:
                 try:
                     optimize_config = first_obj.get('optimize', {}) or {}
                     self.scoring_metrics = optimize_config.get('scoring', []) or []
-                    self.optimize_bounds = optimize_config.get('bounds', {}) or {}
+                    self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                     self.optimize_limits = optimize_config.get('limits', []) or []
                 except Exception:
                     pass
@@ -293,7 +339,7 @@ class ParetoDataLoader:
                 # Restore globals from cache
                 self.scoring_metrics = meta.get("scoring_metrics") or []
                 self.scenario_labels = meta.get("scenario_labels") or []
-                self.optimize_bounds = meta.get("optimize_bounds") or {}
+                self.optimize_bounds = self._normalize_optimize_bounds(meta.get("optimize_bounds") or {})
                 self.optimize_limits = meta.get("optimize_limits") or []
                 self.backtest_scenarios = meta.get("backtest_scenarios") or []
 
@@ -535,7 +581,7 @@ class ParetoDataLoader:
                 optimize_config = config_data.get('optimize', {}) or {}
                 self.scoring_metrics = optimize_config.get('scoring', []) or []
                 if not self.optimize_bounds:
-                    self.optimize_bounds = optimize_config.get('bounds', {}) or {}
+                    self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                     self.optimize_limits = optimize_config.get('limits', []) or []
 
             if not self.backtest_scenarios and 'backtest' in config_data:
@@ -1185,14 +1231,19 @@ class ParetoDataLoader:
     
     def get_view_slice(self, start_rank: int, end_rank: int) -> List[ConfigMetrics]:
         """
-        Get configs in rank range and compute Pareto front for this slice
+                Get configs in rank range.
+
+                IMPORTANT:
+                - This must be fast: it's used by the UI slider.
+                - It must not recompute Pareto or mutate `is_pareto` flags.
+                    Pareto membership is computed once when loading (based on objectives / pareto hashes).
         
         Args:
             start_rank: First rank to include (0-indexed)
             end_rank: Last rank to include (exclusive, like Python slicing)
         
         Returns:
-            List of configs in range with Pareto front computed for this slice
+            List of configs in range
         """
         # Use _full_configs if available (prevents corruption from repeated filtering)
         source_configs = getattr(self, '_full_configs', self.configs)
@@ -1205,14 +1256,7 @@ class ParetoDataLoader:
             return []
         
         view_configs = source_configs[start_idx:end_idx]
-        
-        # Reset all Pareto flags in the slice
-        for c in view_configs:
-            c.is_pareto = False
-        
-        # Compute Pareto front for this view (now optimized for large datasets)
-        self._compute_pareto_front_for_configs(view_configs)
-        
+
         return view_configs
     
     def _compute_pareto_front_for_configs(self, configs: List[ConfigMetrics]):
@@ -1351,23 +1395,101 @@ class ParetoDataLoader:
         return True
     
     def _compute_pareto_front_fast(self):
+        """Compute Pareto front for the full loaded set.
+
+        - Prefer feasible solutions (`constraint_violation` ~ 0).
+        - Compute a true Pareto front using the objective vector stored in `metrics.objectives`.
+        - All objectives are treated as minimization (PB7 typically encodes maximization as negative objectives).
         """
-        Fast Pareto-optimal computation using sorting
-        For single-objective (constraint_violation), just take configs with CV=0 or minimum CV
-        """
-        # Sort by constraint_violation (ascending - lower is better)
-        sorted_configs = sorted(self.configs, key=lambda c: c.constraint_violation)
-        
-        # If we have multiple objectives in the future, use proper Pareto logic
-        # For now: mark configs with minimum constraint_violation as Pareto
-        if sorted_configs:
-            min_cv = sorted_configs[0].constraint_violation
-            
-            # Mark all configs with CV within 1% of minimum as Pareto
-            threshold = min_cv * 1.01
-            for config in self.configs:
-                if config.constraint_violation <= threshold:
-                    config.is_pareto = True
+
+        # Reset
+        for c in self.configs:
+            c.is_pareto = False
+
+        if not self.configs:
+            return
+
+        eps_cv = 1e-12
+        feasible = [c for c in self.configs if float(getattr(c, "constraint_violation", 0.0) or 0.0) <= eps_cv]
+        candidates = feasible
+        if not candidates:
+            min_cv = min(float(getattr(c, "constraint_violation", 0.0) or 0.0) for c in self.configs)
+            candidates = [c for c in self.configs if float(getattr(c, "constraint_violation", 0.0) or 0.0) <= min_cv + eps_cv]
+
+        if not candidates:
+            return
+
+        # Determine objective keys
+        first_obj = candidates[0].objectives if isinstance(getattr(candidates[0], "objectives", None), dict) else {}
+        objective_keys = sorted(first_obj.keys())
+        if not objective_keys:
+            # No objectives available: best we can do is mark the feasible/min-cv group.
+            for c in candidates:
+                c.is_pareto = True
+            return
+
+        # Filter candidates to those with numeric objective values for all keys.
+        valid: List[ConfigMetrics] = []
+        obj_rows = []
+        for c in candidates:
+            o = c.objectives if isinstance(getattr(c, "objectives", None), dict) else {}
+            row = []
+            ok = True
+            for k in objective_keys:
+                try:
+                    row.append(float(o[k]))
+                except Exception:
+                    ok = False
+                    break
+            if ok:
+                valid.append(c)
+                obj_rows.append(row)
+
+        if not valid:
+            for c in candidates:
+                c.is_pareto = True
+            return
+
+        # 1D objective: Pareto front = minimum objective value.
+        if len(objective_keys) == 1:
+            vals = [r[0] for r in obj_rows]
+            best = min(vals)
+            tol = 1e-12 if best == 0 else abs(best) * 1e-12
+            for c, v in zip(valid, vals):
+                if v <= best + tol:
+                    c.is_pareto = True
+            return
+
+        objectives = np.asarray(obj_rows, dtype=float)
+        n_points = len(valid)
+        sorted_indices = np.argsort(objectives[:, 0])
+        is_pareto = np.zeros(n_points, dtype=bool)
+
+        # Maintain the current Pareto set explicitly and test dominance in vectorized form.
+        # This avoids the Python-level nested loop over previously-marked Pareto indices.
+        pareto_objs = np.empty((0, objectives.shape[1]), dtype=float)
+        pareto_idxs = np.empty((0,), dtype=np.int32)
+
+        for idx in sorted_indices:
+            p = objectives[idx]
+
+            if pareto_objs.shape[0]:
+                dominates_p = np.all(pareto_objs <= p, axis=1) & np.any(pareto_objs < p, axis=1)
+                if np.any(dominates_p):
+                    continue
+
+                dominated_by_p = np.all(p <= pareto_objs, axis=1) & np.any(p < pareto_objs, axis=1)
+                if np.any(dominated_by_p):
+                    keep = ~dominated_by_p
+                    pareto_objs = pareto_objs[keep]
+                    pareto_idxs = pareto_idxs[keep]
+
+            pareto_objs = np.vstack([pareto_objs, p])
+            pareto_idxs = np.append(pareto_idxs, np.int32(idx))
+            is_pareto[idx] = True
+
+        for i, config in enumerate(valid):
+            config.is_pareto = bool(is_pareto[i])
 
     def _iter_binary_file(self, progress_callback=None, with_offsets: bool = False, raw_mode: bool = False) -> Iterator[Any]:
         """
@@ -1727,7 +1849,7 @@ class ParetoDataLoader:
             optimize_config = config_data.get('optimize', {}) or {}
             self.scoring_metrics = optimize_config.get('scoring', []) or []
             if not self.optimize_bounds:
-                self.optimize_bounds = optimize_config.get('bounds', {}) or {}
+                self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                 self.optimize_limits = optimize_config.get('limits', []) or []
 
         if not self.backtest_scenarios and 'backtest' in config_data:
@@ -1921,7 +2043,7 @@ class ParetoDataLoader:
             
             # Extract global optimize settings (first time only)
             if not self.optimize_bounds:
-                self.optimize_bounds = optimize_config.get('bounds', {})
+                self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                 self.optimize_limits = optimize_config.get('limits', [])
         
         # Extract backtest scenarios (first time only)
@@ -2063,7 +2185,7 @@ class ParetoDataLoader:
                 
                 # Extract global optimize settings
                 if not self.optimize_bounds:
-                    self.optimize_bounds = optimize_config.get('bounds', {})
+                    self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                     self.optimize_limits = optimize_config.get('limits', [])
             
             # Extract backtest scenarios (first time only)
@@ -2381,21 +2503,56 @@ class ParetoDataLoader:
         # Take only top N
         top_configs = [c for c, score in scored_configs[:top_n]]
 
+        def _bounds_to_pair(v):
+            """Return (lower, upper) as floats for various bounds formats.
+
+            PB7 optimize bounds may be stored as:
+            - [lower, upper]
+            - [lower, upper, step]
+            - (lower, upper)
+            - {'lower': x, 'upper': y} / {'min': x, 'max': y}
+            """
+            if v is None:
+                return None
+            if isinstance(v, dict):
+                for lo_key, hi_key in (("lower", "upper"), ("min", "max"), ("lo", "hi")):
+                    if lo_key in v and hi_key in v:
+                        try:
+                            return float(v[lo_key]), float(v[hi_key])
+                        except Exception:
+                            return None
+                if "bounds" in v:
+                    return _bounds_to_pair(v.get("bounds"))
+                return None
+            if isinstance(v, (list, tuple)):
+                if len(v) < 2:
+                    return None
+                # Common PB7 format: [lower, upper, step]
+                try:
+                    return float(v[0]), float(v[1])
+                except Exception:
+                    return None
+            return None
+
         # Parameter analysis requires bot params
         for cfg in top_configs:
             self.ensure_bot_params(cfg)
         
         # Check if long/short are enabled by looking at key parameters
-        long_enabled = (
-            self.optimize_bounds.get('long_n_positions', (0, 0))[1] > 0 or
-            self.optimize_bounds.get('long_total_wallet_exposure_limit', (0, 0))[1] > 0
-        )
-        short_enabled = (
-            self.optimize_bounds.get('short_n_positions', (0, 0))[1] > 0 or
-            self.optimize_bounds.get('short_total_wallet_exposure_limit', (0, 0))[1] > 0
-        )
+        long_np = _bounds_to_pair(self.optimize_bounds.get('long_n_positions')) or (0.0, 0.0)
+        long_twel = _bounds_to_pair(self.optimize_bounds.get('long_total_wallet_exposure_limit')) or (0.0, 0.0)
+        short_np = _bounds_to_pair(self.optimize_bounds.get('short_n_positions')) or (0.0, 0.0)
+        short_twel = _bounds_to_pair(self.optimize_bounds.get('short_total_wallet_exposure_limit')) or (0.0, 0.0)
+        long_enabled = (long_np[1] > 0) or (long_twel[1] > 0)
+        short_enabled = (short_np[1] > 0) or (short_twel[1] > 0)
         
-        for param_name, (lower, upper) in self.optimize_bounds.items():
+        for param_name, bounds in self.optimize_bounds.items():
+            pair = _bounds_to_pair(bounds)
+            if not pair:
+                continue
+            lower, upper = pair
+            if lower > upper:
+                lower, upper = upper, lower
             # Skip disabled side (long/short)
             if param_name.startswith('long_') and not long_enabled:
                 continue

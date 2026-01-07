@@ -24,6 +24,42 @@ class ParetoVisualizations:
         """
         self.loader = loader
         self.color_palette = px.colors.qualitative.Set3
+
+    @staticmethod
+    def _pareto_mask(values: np.ndarray, maximize: bool = True) -> np.ndarray:
+        """Return boolean mask for non-dominated points.
+
+        Args:
+            values: shape (n_points, n_dims)
+            maximize: if True, higher is better in every dimension.
+        """
+        values = np.asarray(values, dtype=float)
+        if values.ndim != 2 or values.shape[0] == 0:
+            return np.zeros((values.shape[0],), dtype=bool)
+
+        # Convert maximize to minimize by negation.
+        obj = (-values) if maximize else values
+
+        n_points = obj.shape[0]
+        if n_points == 1:
+            return np.array([True], dtype=bool)
+
+        # Simple skyline algorithm: sort by first objective (ascending) and prune.
+        sorted_indices = np.argsort(obj[:, 0])
+        is_pareto = np.zeros(n_points, dtype=bool)
+
+        for idx in sorted_indices:
+            is_dominated = False
+            for pareto_idx in np.where(is_pareto)[0]:
+                better_equal = np.all(obj[pareto_idx] <= obj[idx])
+                strictly_better = np.any(obj[pareto_idx] < obj[idx])
+                if better_equal and strictly_better:
+                    is_dominated = True
+                    break
+            if not is_dominated:
+                is_pareto[idx] = True
+
+        return is_pareto
         
     def plot_pareto_scatter_2d(self, 
                                x_metric: str, 
@@ -74,6 +110,8 @@ class ParetoVisualizations:
             )
         
         # Separate into Pareto and non-Pareto
+        # IMPORTANT: Do not recompute Pareto based on plotted axes.
+        # Stars always reflect the actual Pareto set (`is_pareto`) from the loader/run.
         pareto_configs = [c for c in configs if c.is_pareto]
         non_pareto_configs = [c for c in configs if not c.is_pareto]
         
@@ -176,11 +214,13 @@ class ParetoVisualizations:
                 hovertemplate=f'<b>🎯 Best Match Config #%{{customdata[0]}}</b><br>{x_metric}: %{{x:.6f}}<br>{y_metric}: %{{y:.6f}}<extra></extra>'
             ))
         
-        # Build title
+        # Build title (include counts)
+        n_total = len(configs)
+        n_pareto = len(pareto_configs)
         if title_prefix:
-            title = f"{title_prefix}: {x_metric} vs {y_metric}"
+            title = f"{title_prefix}: {x_metric} vs {y_metric} (n={n_total:,}, pareto={n_pareto:,})"
         else:
-            title = f"{x_metric} vs {y_metric}"
+            title = f"{x_metric} vs {y_metric} (n={n_total:,}, pareto={n_pareto:,})"
         
         fig.update_layout(
             title=title,
@@ -225,6 +265,7 @@ class ParetoVisualizations:
             configs_to_use = self.loader.configs
         else:
             configs_to_use = self.loader.get_pareto_configs()
+
         
         df = pd.DataFrame([{
             'config_index': c.config_index,
@@ -304,7 +345,7 @@ class ParetoVisualizations:
                 ))
         
         fig.update_layout(
-            title=f"3D Pareto Space: {x_metric} vs {y_metric} vs {z_metric}",
+            title=f"3D Pareto Space: {x_metric} vs {y_metric} vs {z_metric} (n={len(df):,}, pareto={len(pareto_df):,})",
             scene=dict(
                 xaxis_title=x_metric.replace('_', ' ').title(),
                 yaxis_title=y_metric.replace('_', ' ').title(),
