@@ -577,11 +577,13 @@ class ParetoDataLoader:
             return metrics_block.get('stats', {}) or {}
 
         def _ensure_globals_from_config_data(config_data: Dict) -> None:
-            if not self.scoring_metrics and 'optimize' in config_data:
+            if 'optimize' in config_data:
                 optimize_config = config_data.get('optimize', {}) or {}
-                self.scoring_metrics = optimize_config.get('scoring', []) or []
+                if not self.scoring_metrics:
+                    self.scoring_metrics = optimize_config.get('scoring', []) or []
                 if not self.optimize_bounds:
                     self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
+                if not self.optimize_limits:
                     self.optimize_limits = optimize_config.get('limits', []) or []
 
             if not self.backtest_scenarios and 'backtest' in config_data:
@@ -1558,26 +1560,62 @@ class ParetoDataLoader:
         Compute config hash (simplified - uses results_filename if available)
         In real implementation, would hash the bot parameters
         """
-        # Try to extract hash from results_filename or results_dir
-        results_dir = config_data.get('results_dir')
-        if results_dir is None and isinstance(config_data, dict):
-            results_dir = config_data.get(b'results_dir')
-        if isinstance(results_dir, bytes):
-            try:
-                results_dir = results_dir.decode('utf-8', errors='ignore')
-            except Exception:
-                results_dir = ''
+        def _get_field(name: str):
+            if not isinstance(config_data, dict):
+                return None
+            v = config_data.get(name)
+            if v is None:
+                v = config_data.get(name.encode('utf-8', errors='ignore'))
+            if isinstance(v, bytes):
+                try:
+                    v = v.decode('utf-8', errors='ignore')
+                except Exception:
+                    v = ''
+            return v
+
+        # Prefer a stable, explicit identifier when present.
+        results_filename = _get_field('results_filename')
+        if isinstance(results_filename, str) and results_filename:
+            # Typically something like "<hash>.json" or "<hash>".
+            base = os.path.basename(results_filename)
+            return base[:-5] if base.endswith('.json') else base
+
+        results_dir = _get_field('results_dir')
         if isinstance(results_dir, str) and results_dir:
             return os.path.basename(results_dir)
 
-        # Fallback: deterministic-ish hash of bot params
-        bot = None
-        if isinstance(config_data, dict):
-            bot = config_data.get('bot')
-            if bot is None:
-                bot = config_data.get(b'bot')
+        # Fallback: stable hash of bot params.
+        # IMPORTANT: must be deterministic across raw msgpack (bytes keys) and decoded dicts.
+        bot = _get_field('bot')
         try:
-            payload = repr(bot).encode('utf-8', errors='ignore')
+            bot_norm = self._deep_decode_bytes(bot)
+
+            def _to_jsonable(x: Any) -> Any:
+                if isinstance(x, dict):
+                    # sort keys for deterministic output
+                    out = {}
+                    for k in sorted(x.keys(), key=lambda kk: str(kk)):
+                        out[str(k)] = _to_jsonable(x[k])
+                    return out
+                if isinstance(x, (list, tuple)):
+                    return [_to_jsonable(v) for v in x]
+                if isinstance(x, bytes):
+                    try:
+                        return x.decode('utf-8', errors='ignore')
+                    except Exception:
+                        return ''
+                # normalize numpy scalars etc.
+                try:
+                    if hasattr(x, 'item') and callable(x.item):
+                        return _to_jsonable(x.item())
+                except Exception:
+                    pass
+                if isinstance(x, (str, int, float, bool)) or x is None:
+                    return x
+                return str(x)
+
+            payload_obj = _to_jsonable(bot_norm)
+            payload = json.dumps(payload_obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
             return f"config_{hashlib.sha1(payload).hexdigest()[:12]}"
         except Exception:
             return "config_unknown"

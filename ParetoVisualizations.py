@@ -576,7 +576,9 @@ class ParetoVisualizations:
         # Filter out problematic parameters/metrics before computing correlation.
         df_corr = df[params + metrics].apply(pd.to_numeric, errors='coerce')
 
-        min_non_null = max(10, int(len(df_corr) * 0.01))
+        # With small Pareto sets (fast mode), requiring >=10 samples hides the heatmap entirely.
+        # Use an adaptive threshold: at least 3 samples, capped at 10.
+        min_non_null = min(10, max(3, int(len(df_corr) * 0.01)))
 
         def _is_usable_series(series: pd.Series) -> bool:
             series = series.dropna()
@@ -1250,7 +1252,7 @@ class ParetoVisualizations:
         
         return fig
     
-    def plot_parameter_bounds_distance(self, top_n: int = 15) -> go.Figure:
+    def plot_parameter_bounds_distance(self, top_n: int = 15, bounds_info: dict | None = None) -> go.Figure:
         """
         Bar chart showing parameters at or near bounds
         
@@ -1260,7 +1262,8 @@ class ParetoVisualizations:
         Returns:
             Plotly figure
         """
-        bounds_info = self.loader.get_parameters_at_bounds(tolerance=0.1)
+        if bounds_info is None:
+            bounds_info = self.loader.get_parameters_at_bounds(tolerance=0.1)
         
         # Merge parameter names from both lower and upper bounds
         at_bounds = list(bounds_info['at_lower'].keys()) + list(bounds_info['at_upper'].keys())
