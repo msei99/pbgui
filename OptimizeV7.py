@@ -31,6 +31,7 @@ from Config import (
     get_limits_type_help_text,
     get_limits_metric_list_help_text,
     is_currency_metric,
+    canonicalize_metric_name,
     ALLOWED_OVERRIDES,
     get_aggregate_metrics,
     ConfigV7Editor,
@@ -1418,15 +1419,7 @@ class OptimizeV7Item(ConfigV7Editor):
             for item in items:
                 if not isinstance(item, str):
                     continue
-                if item.startswith("btc_"):
-                    base = item[4:]
-                    if base in CURRENCY_METRICS:
-                        item = f"{base}_btc"
-                elif item.startswith("usd_"):
-                    base = item[4:]
-                    if base in CURRENCY_METRICS:
-                        item = f"{base}_usd"
-                normalized.append(item)
+                normalized.append(canonicalize_metric_name(item))
 
             # de-dup, preserve order
             out = []
@@ -1455,12 +1448,78 @@ class OptimizeV7Item(ConfigV7Editor):
         # Backward-compat: include whatever is already selected in existing configs
         options.update(st.session_state.edit_opt_v7_scoring or [])
 
-        st.multiselect(
-            "scoring",
-            sorted(options),
-            key="edit_opt_v7_scoring",
-            help=pbgui_help.scoring,
+        col_type, col_metric, col_currency, col_add, col_scoring = st.columns(
+            [1, 1, 0.5, 0.5, 3],
+            vertical_alignment="bottom",
         )
+
+        TYPE_OPTIONS = ["all"] + list(get_metric_groups())
+        CURRENCY_OPTIONS = ["usd", "btc"]
+
+        with col_type:
+            selected_type = st.selectbox(
+                "Type",
+                TYPE_OPTIONS,
+                key="add_scoring_metric_type",
+                help=get_limits_type_help_text(),
+            )
+
+        if selected_type == "all":
+            filtered_base_metrics = list(get_all_metrics_list())
+        else:
+            filtered_base_metrics = get_metrics_by_group(selected_type, include_weighted=True)
+            if not filtered_base_metrics:
+                filtered_base_metrics = list(get_all_metrics_list())
+
+        if st.session_state.get("add_scoring_base_metric") not in filtered_base_metrics:
+            st.session_state.add_scoring_base_metric = filtered_base_metrics[0]
+
+        with col_metric:
+            new_base = st.selectbox(
+                "Metric",
+                filtered_base_metrics,
+                key="add_scoring_base_metric",
+                help=get_limits_metric_list_help_text(
+                    st.session_state.get("add_scoring_metric_type", "all"),
+                    include_weighted=True,
+                ),
+            )
+
+        with col_currency:
+            if is_currency_metric(new_base):
+                new_currency = st.selectbox(
+                    "Currency",
+                    CURRENCY_OPTIONS,
+                    key="add_scoring_currency",
+                    help=pbgui_help.limit_currency,
+                )
+            else:
+                st.write("")
+                new_currency = None
+
+        with col_add:
+            add_pressed = st.button("➕", key="add_scoring_button", help="Add selected metric to scoring")
+
+        if add_pressed:
+            metric_to_add = (
+                f"{new_base}_{st.session_state.get('add_scoring_currency', 'usd')}"
+                if is_currency_metric(new_base)
+                else new_base
+            )
+            updated = list(st.session_state.edit_opt_v7_scoring or [])
+            updated.append(metric_to_add)
+            updated = _normalize_scoring_list(updated)
+            st.session_state.edit_opt_v7_scoring = updated
+            self.config.optimize.scoring = updated
+            st.rerun()
+
+        with col_scoring:
+            st.multiselect(
+                "scoring",
+                sorted(options),
+                key="edit_opt_v7_scoring",
+                help=pbgui_help.scoring,
+            )
 
     # filters
     def fragment_filter_coins(self):
