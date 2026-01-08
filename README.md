@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.47
+# v1.48
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,13 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.48 (08-01-2026)
+- Add: Scoring builder UI for PBv7 Optimize.
+- Improve: Pareto Explorer correctness, caching, and performance.
+- Improve: Metrics registry and optimizer limits tooltips.
+- Fix: Deep Intelligence Evolution metric selectbox no longer loses options after selection (fast/full mode).
+- Improve: Deep Intelligence parameter influence heatmap now renders in fast mode (small samples).
 
 ## v1.47 (06-01-2026)
 - Improve: Pareto Explorer performance and stability for large `all_results.bin` (less recomputation, faster load paths).
