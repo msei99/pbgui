@@ -3614,7 +3614,7 @@ class ParetoExplorer:
             default_tab = "parameters"
 
         active_tab = st.segmented_control(
-            "",
+            "Deep Intelligence tabs",
             tab_keys,
             default=default_tab,
             format_func=_format_tab,
@@ -3702,13 +3702,17 @@ class ParetoExplorer:
                         """
                     )
             
-            fig = self.viz.plot_parameter_bounds_distance(top_n=15)
-            st.plotly_chart(fig, width='stretch')
-            
             bounds_info = self.loader.get_parameters_at_bounds(tolerance=0.1)
-            
-            if bounds_info['at_lower'] or bounds_info['at_upper']:
-                st.warning(f"**{len(bounds_info['at_lower']) + len(bounds_info['at_upper'])} parameters are near bounds!** Consider extending search space.")
+
+            if not bounds_info.get('at_lower') and not bounds_info.get('at_upper'):
+                st.caption("No parameters near bounds detected (or data unavailable).")
+            else:
+                fig = self.viz.plot_parameter_bounds_distance(top_n=15, bounds_info=bounds_info)
+                st.plotly_chart(fig, width='stretch')
+                st.warning(
+                    f"**{len(bounds_info['at_lower']) + len(bounds_info['at_upper'])} parameters are near bounds!** "
+                    "Consider extending search space."
+                )
 
         elif active_tab == "scenarios":
             # Title and guide
@@ -3852,33 +3856,58 @@ class ParetoExplorer:
                                    help="Switch between USD and BTC denominated metrics",
                                    key='use_btc_evolution')
             
-            # Get all available metrics and filter them
-            pareto_configs = self.loader.get_pareto_configs()
-            if pareto_configs and pareto_configs[0].suite_metrics:
-                available_metrics = list(pareto_configs[0].suite_metrics.keys())
+            # Get all available metrics and filter them.
+            # IMPORTANT: Do not depend on `get_pareto_configs()` here.
+            # In full mode the current view slice may temporarily contain 0 Pareto members,
+            # which would collapse the metric list to just `scoring_metrics`.
+            metrics_cache_key = f"evolution_metrics_superset::{self.results_path}::{int(st.session_state.get('all_results_loaded', False))}"
+            if metrics_cache_key in st.session_state:
+                available_metrics = st.session_state[metrics_cache_key]
             else:
-                available_metrics = self.loader.scoring_metrics if self.loader.scoring_metrics else ['adg_w_usd']
+                available_metrics = []
+                for c in (self.loader.configs or []):
+                    suite = getattr(c, 'suite_metrics', None)
+                    if isinstance(suite, dict) and suite:
+                        available_metrics = list(suite.keys())
+                        break
+                if not available_metrics:
+                    available_metrics = self.loader.scoring_metrics if self.loader.scoring_metrics else ['adg_w_usd']
+                # Preserve order (do not sort) to keep a predictable UI.
+                st.session_state[metrics_cache_key] = list(available_metrics)
             
             # Filter metrics based on toggles
+            available_set = set(available_metrics)
             filtered_metrics = []
             for metric in available_metrics:
-                # Check currency
-                if use_btc and not metric.endswith('_btc'):
-                    continue
-                if not use_btc and not metric.endswith('_usd') and ('_usd' in available_metrics or '_btc' in available_metrics):
-                    # Skip if it's a currency metric but wrong currency
-                    if metric.replace('_usd', '_btc') in available_metrics or metric.replace('_btc', '_usd') in available_metrics:
+                # Check currency variants (only for currency-suffixed metrics)
+                is_usd = metric.endswith('_usd') or metric.endswith('_w_usd')
+                is_btc = metric.endswith('_btc') or metric.endswith('_w_btc')
+
+                if use_btc and is_usd:
+                    btc_version = metric.replace('_usd', '_btc').replace('_w_usd', '_w_btc')
+                    if btc_version in available_set:
                         continue
-                
-                # Check weighted
-                if use_weighted and '_w_' not in metric and not metric.endswith('_w_usd') and not metric.endswith('_w_btc'):
-                    # Check if weighted version exists
-                    weighted_version = metric.replace('_usd', '_w_usd').replace('_btc', '_w_btc')
-                    if weighted_version in available_metrics:
+                if (not use_btc) and is_btc:
+                    usd_version = metric.replace('_btc', '_usd').replace('_w_btc', '_w_usd')
+                    if usd_version in available_set:
                         continue
-                if not use_weighted and ('_w_' in metric or metric.endswith('_w_usd') or metric.endswith('_w_btc')):
-                    continue
-                
+
+                # Check weighted variants (only meaningful for currency metrics)
+                if use_weighted:
+                    if is_usd and not metric.endswith('_w_usd'):
+                        weighted_version = metric.replace('_usd', '_w_usd')
+                        if weighted_version in available_set:
+                            continue
+                    if is_btc and not metric.endswith('_w_btc'):
+                        weighted_version = metric.replace('_btc', '_w_btc')
+                        if weighted_version in available_set:
+                            continue
+                else:
+                    if metric.endswith('_w_usd') and metric.replace('_w_usd', '_usd') in available_set:
+                        continue
+                    if metric.endswith('_w_btc') and metric.replace('_w_btc', '_btc') in available_set:
+                        continue
+
                 filtered_metrics.append(metric)
             
             # Fallback if no metrics match
@@ -3894,6 +3923,13 @@ class ParetoExplorer:
                 if pref in filtered_metrics:
                     default_index = filtered_metrics.index(pref)
                     break
+
+            # Guard against Streamlit widget-state invalidation:
+            # if the selected metric isn't in the recomputed option list, Streamlit can
+            # behave oddly across reruns. Force a valid selection before rendering.
+            current_metric = st.session_state.get('evolution_metric')
+            if current_metric is not None and current_metric not in filtered_metrics:
+                st.session_state['evolution_metric'] = filtered_metrics[default_index] if filtered_metrics else None
             
             selected_metric = st.selectbox(
                 "Select Metric:", 
