@@ -3,6 +3,7 @@ import hjson
 import pprint
 import configparser
 from pathlib import Path
+import subprocess
 
 def save_ini(section : str, parameter : str, value : str):
     pb_config = configparser.ConfigParser()
@@ -71,3 +72,41 @@ def load_symbols_from_ini(exchange: str, market_type: str):
         return eval(pb_config.get("exchanges", f'{exchange}.{market_type}'))
     else:
         return []
+
+
+def list_remote_git_branches(remote_url: str, timeout_sec: int = 20) -> list[str]:
+    """Return branch names from a remote URL (e.g. https://github.com/<user>/passivbot.git).
+
+    Uses `git ls-remote --heads` and parses refs/heads/*.
+    """
+    remote_url = (remote_url or "").strip()
+    if not remote_url:
+        return []
+
+    try:
+        res = subprocess.run(
+            ["git", "ls-remote", "--heads", remote_url],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"Timeout fetching remote branches ({timeout_sec}s).") from e
+    except Exception as e:
+        raise RuntimeError("Failed to run git to fetch remote branches.") from e
+
+    if res.returncode != 0:
+        msg = (res.stderr or "").strip() or "git ls-remote failed"
+        raise RuntimeError(msg)
+
+    branches: list[str] = []
+    for line in (res.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        ref = parts[1]
+        if ref.startswith("refs/heads/"):
+            branches.append(ref[len("refs/heads/"):])
+
+    return sorted(set(branches))

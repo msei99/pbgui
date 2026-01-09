@@ -12,6 +12,8 @@ import shlex
 import getpass
 import concurrent.futures
 
+from pbgui_purefunc import list_remote_git_branches
+
 
 def list_vps():
     vpsmanager = st.session_state.vpsmanager
@@ -911,6 +913,7 @@ def manage_master():
                     st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
 
                     with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
+                        st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
                         st.text_input(
                             "PB7 remote URL (optional)",
                             key="pb7_remote_url_master",
@@ -923,6 +926,52 @@ def manage_master():
                             key="pb7_remote_name_master",
                             help="Git remote name to use for the URL above (e.g. msei99).",
                         )
+
+                        remote_url_master = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                        cache_key_master = "pb7_remote_branches_cache_master"
+                        if cache_key_master not in st.session_state:
+                            st.session_state[cache_key_master] = {}
+                        branches_cache_master = st.session_state[cache_key_master]
+
+                        def _load_remote_branches_master():
+                            url = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                            if not url:
+                                return
+                            try:
+                                with st.spinner("Loading remote branches..."):
+                                    branches_cache_master[url] = list_remote_git_branches(url)
+                            except Exception as e:
+                                st.error(f"Failed to load remote branches: {e}")
+
+                        st.button(
+                            "🔎 Load branches from URL",
+                            key="load_pb7_remote_branches_master",
+                            disabled=not bool(remote_url_master),
+                            on_click=_load_remote_branches_master,
+                            help="Fetch branches with git ls-remote. Use this after changing the URL.",
+                        )
+
+                        remote_branches_master = branches_cache_master.get(remote_url_master) if remote_url_master else None
+
+                        def _set_manual_branch_from_pick_master():
+                            picked = (st.session_state.get("pb7_remote_branch_pick_master") or "").strip()
+                            if picked:
+                                st.session_state["pb7_branch_manual_master"] = picked
+
+                        if remote_url_master:
+                            if remote_branches_master is None:
+                                st.info("Enter URL, then click 'Load branches from URL'.")
+                            elif not remote_branches_master:
+                                st.warning("No branches found on this remote URL.")
+                            else:
+                                st.selectbox(
+                                    "Remote branch (from URL)",
+                                    options=[""] + remote_branches_master,
+                                    index=0,
+                                    key="pb7_remote_branch_pick_master",
+                                    on_change=_set_manual_branch_from_pick_master,
+                                    help="Pick a branch to auto-fill the manual branch field below.",
+                                )
                         st.text_input(
                             "Branch name (manual, optional)",
                             key="pb7_branch_manual_master",
@@ -1835,6 +1884,7 @@ def manage_vps():
                         st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
 
                         with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
+                            st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
                             st.text_input(
                                 "PB7 remote URL (optional)",
                                 key=f"pb7_remote_url_vps_{vps.hostname}",
@@ -1847,6 +1897,52 @@ def manage_vps():
                                 key=f"pb7_remote_name_vps_{vps.hostname}",
                                 help="Git remote name to use for the URL above (e.g. msei99).",
                             )
+
+                            remote_url_vps = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                            cache_key_vps = f"pb7_remote_branches_cache_vps_{vps.hostname}"
+                            if cache_key_vps not in st.session_state:
+                                st.session_state[cache_key_vps] = {}
+                            branches_cache_vps = st.session_state[cache_key_vps]
+
+                            def _load_remote_branches_vps():
+                                url = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                                if not url:
+                                    return
+                                try:
+                                    with st.spinner("Loading remote branches..."):
+                                        branches_cache_vps[url] = list_remote_git_branches(url)
+                                except Exception as e:
+                                    st.error(f"Failed to load remote branches: {e}")
+
+                            st.button(
+                                "🔎 Load branches from URL",
+                                key=f"load_pb7_remote_branches_vps_{vps.hostname}",
+                                disabled=not bool(remote_url_vps),
+                                on_click=_load_remote_branches_vps,
+                                help="Fetch branches with git ls-remote. Use this after changing the URL.",
+                            )
+
+                            remote_branches_vps = branches_cache_vps.get(remote_url_vps) if remote_url_vps else None
+
+                            def _set_manual_branch_from_pick_vps():
+                                picked = (st.session_state.get(f"pb7_remote_branch_pick_vps_{vps.hostname}") or "").strip()
+                                if picked:
+                                    st.session_state[f"pb7_branch_manual_vps_{vps.hostname}"] = picked
+
+                            if remote_url_vps:
+                                if remote_branches_vps is None:
+                                    st.info("Enter URL, then click 'Load branches from URL'.")
+                                elif not remote_branches_vps:
+                                    st.warning("No branches found on this remote URL.")
+                                else:
+                                    st.selectbox(
+                                        "Remote branch (from URL)",
+                                        options=[""] + remote_branches_vps,
+                                        index=0,
+                                        key=f"pb7_remote_branch_pick_vps_{vps.hostname}",
+                                        on_change=_set_manual_branch_from_pick_vps,
+                                        help="Pick a branch to auto-fill the manual branch field below.",
+                                    )
                             st.text_input(
                                 "Branch name (manual, optional)",
                                 key=f"pb7_branch_manual_vps_{vps.hostname}",
