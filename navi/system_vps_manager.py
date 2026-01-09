@@ -912,6 +912,16 @@ def manage_master():
                     # Current state display
                     st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
 
+                    # Always-visible summary (so users don't lose the configured URL when expander is closed)
+                    remote_url_summary = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                    remote_name_summary = (st.session_state.get("pb7_remote_name_master") or "msei99").strip() or "msei99"
+                    manual_branch_summary = (st.session_state.get("pb7_branch_manual_master") or "").strip()
+                    if remote_url_summary or manual_branch_summary:
+                        st.caption(
+                            f"Fork remote: `{remote_name_summary}` {remote_url_summary or '—'}"
+                            + (f" | Manual branch: `{manual_branch_summary}`" if manual_branch_summary else "")
+                        )
+
                     with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                         st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
                         st.text_input(
@@ -1882,6 +1892,16 @@ def manage_vps():
                     if available_branches:
                         # Current state display
                         st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
+
+                        # Always-visible summary (so users don't lose the configured URL when expander is closed)
+                        remote_url_summary = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                        remote_name_summary = (st.session_state.get(f"pb7_remote_name_vps_{vps.hostname}") or "msei99").strip() or "msei99"
+                        manual_branch_summary = (st.session_state.get(f"pb7_branch_manual_vps_{vps.hostname}") or "").strip()
+                        if remote_url_summary or manual_branch_summary:
+                            st.caption(
+                                f"Fork remote: `{remote_name_summary}` {remote_url_summary or '—'}"
+                                + (f" | Manual branch: `{manual_branch_summary}`" if manual_branch_summary else "")
+                            )
 
                         with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                             st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
