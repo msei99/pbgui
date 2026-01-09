@@ -15,6 +15,8 @@
     user: "{{ user }}"
     target_branch: "{{ pb7_branch }}"
     target_commit: "{{ pb7_commit | default('') }}"
+    remote_name: "{{ pb7_remote_name | default('origin') }}"
+    remote_url: "{{ pb7_remote_url | default('') }}"
 
   tasks:
     - name: display facts
@@ -28,8 +30,22 @@
         pbgdir: "{{ ansible_env.HOME + '/software/pbgui' }}"
         pb7dir: "{{ ansible_env.HOME + '/software/pb7' }}"
 
-    - name: Fetch from origin
-      command: git fetch origin
+    - name: Ensure custom remote exists (optional)
+      shell: |
+        set -e
+        if [ -n "{{ remote_url }}" ]; then
+          if git remote get-url "{{ remote_name }}" >/dev/null 2>&1; then
+            git remote set-url "{{ remote_name }}" "{{ remote_url }}"
+          else
+            git remote add "{{ remote_name }}" "{{ remote_url }}"
+          fi
+        fi
+      args:
+        chdir: "{{ pb7dir }}"
+      changed_when: false
+
+    - name: Fetch from selected remote
+      command: git fetch "{{ remote_name }}"
       args:
         chdir: "{{ pb7dir }}"
       changed_when: false
@@ -55,7 +71,7 @@
       changed_when: false
 
     - name: Create and checkout local branch from remote if it doesn't exist
-      command: git checkout -b "{{ target_branch }}" --track "origin/{{ target_branch }}"
+      command: git checkout -b "{{ target_branch }}" --track "{{ remote_name }}/{{ target_branch }}"
       args:
         chdir: "{{ pb7dir }}"
       when: branch_exists.rc != 0
@@ -77,7 +93,7 @@
       notify: restart pb7
 
     - name: Pull latest changes (only if no specific commit provided)
-      command: git pull
+      command: git pull "{{ remote_name }}" "{{ target_branch }}"
       args:
         chdir: "{{ pb7dir }}"
       when: target_commit == ""

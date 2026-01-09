@@ -12,6 +12,8 @@ import shlex
 import getpass
 import concurrent.futures
 
+from pbgui_purefunc import list_remote_git_branches, list_git_remotes, get_git_remote_url
+
 
 def list_vps():
     vpsmanager = st.session_state.vpsmanager
@@ -909,6 +911,136 @@ def manage_master():
                 if available_branches:
                     # Current state display
                     st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
+
+                    # Read remotes from configured pb7dir (no persistence to pbgui.ini)
+                    pb7_repo_dir = getattr(pbremote.local_run, "pb7dir", "")
+                    known_remotes: list[str] = []
+                    default_remote_name = ""
+                    if pb7_repo_dir:
+                        known_remotes = list_git_remotes(pb7_repo_dir)
+                        default_remote_name = "fork" if "fork" in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
+
+                    # Derive an effective remote name/url even if session_state was cleared
+                    if "pb7_remote_name_master" not in st.session_state:
+                        st.session_state["pb7_remote_name_master"] = default_remote_name
+                    remote_name_effective = (st.session_state.get("pb7_remote_name_master") or "").strip() or default_remote_name
+                    remote_url_override = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                    remote_url_effective = remote_url_override or (get_git_remote_url(pb7_repo_dir, remote_name_effective) if (pb7_repo_dir and remote_name_effective) else "")
+
+                    # Always-visible summary (so users don't lose the configured URL when expander is closed)
+                    remote_url_summary = remote_url_effective
+                    remote_name_summary = remote_name_effective or "(not set)"
+                    manual_branch_summary = (st.session_state.get("pb7_branch_manual_master") or "").strip()
+                    if remote_url_summary or manual_branch_summary:
+                        st.caption(
+                            f"Fork remote: `{remote_name_summary}` {remote_url_summary or '—'}"
+                            + (f" | Manual branch: `{manual_branch_summary}`" if manual_branch_summary else "")
+                        )
+
+                    with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
+                        st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
+                        if st.button("✅ Switch to upstream master", key="pb7_switch_upstream_master", width="stretch"):
+                            vpsmanager.command = "master-switch-pb7-branch"
+                            vpsmanager.command_text = "Switch PB7 to origin/master"
+                            vpsmanager.update_master(
+                                debug=st.session_state.setup_debug,
+                                extra_vars={"pb7_branch": "master"},
+                            )
+                            if 'master_pb7_commits_loaded' in st.session_state:
+                                del st.session_state.master_pb7_commits_loaded
+                            st.session_state.pb7_branch_switched = True
+                            del st.session_state.manage_master
+                            st.session_state.view_update_master = True
+                            st.rerun()
+
+                        if known_remotes:
+                            def _on_change_remote_master():
+                                # Clear override URL so git-config URL is shown
+                                st.session_state["pb7_remote_url_master"] = ""
+
+                            idx = known_remotes.index(remote_name_effective) if remote_name_effective in known_remotes else 0
+                            st.selectbox(
+                                "PB7 remote (from pb7dir)",
+                                options=known_remotes,
+                                index=idx,
+                                key="pb7_remote_name_master",
+                                on_change=_on_change_remote_master,
+                                help="Select an existing git remote from your PB7 directory. The URL is read from git config.",
+                            )
+                            st.text_input(
+                                "PB7 remote URL (effective)",
+                                value=remote_url_effective,
+                                disabled=True,
+                                key="pb7_remote_url_master_effective",
+                            )
+                        else:
+                            st.text_input(
+                                "PB7 remote name",
+                                key="pb7_remote_name_master",
+                                help="Git remote name to use for the URL above (e.g. msei99).",
+                            )
+                            st.text_input(
+                                "PB7 remote URL (optional)",
+                                key="pb7_remote_url_master",
+                                placeholder="https://github.com/<user>/passivbot.git",
+                                help="If set, PBGui will fetch PB7 from this remote before switching branches. Useful for checking out PR/fork branches.",
+                            )
+
+                        remote_url_master = remote_url_effective
+                        cache_key_master = "pb7_remote_branches_cache_master"
+                        if cache_key_master not in st.session_state:
+                            st.session_state[cache_key_master] = {}
+                        branches_cache_master = st.session_state[cache_key_master]
+
+                        def _load_remote_branches_master():
+                            url = remote_url_effective
+                            if not url:
+                                return
+                            try:
+                                with st.spinner("Loading remote branches..."):
+                                    branches_cache_master[url] = list_remote_git_branches(url)
+                            except Exception as e:
+                                st.error(f"Failed to load remote branches: {e}")
+
+                        st.button(
+                            "🔎 Load branches from URL",
+                            key="load_pb7_remote_branches_master",
+                            disabled=not bool(remote_url_master),
+                            on_click=_load_remote_branches_master,
+                            help="Fetch branches with git ls-remote. Use this after changing the URL.",
+                        )
+
+                        remote_branches_master = branches_cache_master.get(remote_url_master) if remote_url_master else None
+
+                        def _set_manual_branch_from_pick_master():
+                            picked = (st.session_state.get("pb7_remote_branch_pick_master") or "").strip()
+                            if picked:
+                                st.session_state["pb7_branch_manual_master"] = picked
+
+                        if remote_url_master:
+                            if remote_branches_master is None:
+                                st.info("Enter URL, then click 'Load branches from URL'.")
+                            elif not remote_branches_master:
+                                st.warning("No branches found on this remote URL.")
+                            else:
+                                st.selectbox(
+                                    "Remote branch (from URL)",
+                                    options=[""] + remote_branches_master,
+                                    index=0,
+                                    key="pb7_remote_branch_pick_master",
+                                    on_change=_set_manual_branch_from_pick_master,
+                                    help="Pick a branch to auto-fill the manual branch field below.",
+                                )
+                        st.text_input(
+                            "Branch name (manual, optional)",
+                            key="pb7_branch_manual_master",
+                            help="Use this if the branch isn't in the dropdown (e.g. fix/ohlcv-selfheal).",
+                        )
+                        st.text_input(
+                            "Commit hash (optional)",
+                            key="pb7_commit_manual_master",
+                            help="Optional: full commit hash to reset to after switching.",
+                        )
                     
                     col1, col2 = st.columns(2)
                     
@@ -984,140 +1116,143 @@ def manage_master():
                                 st.rerun(scope="fragment")
                     
                     with col2:
-                        # Commit selector for the selected branch
-                        if selected_branch in pbremote.local_run.pb7_branches_data:
-                            commits = pbremote.local_run.pb7_branches_data[selected_branch]
-                            
-                            # Create commit labels (shortened for selectbox)
+                        manual_branch = (st.session_state.get("pb7_branch_manual_master") or "").strip()
+                        effective_branch = manual_branch or selected_branch
+                        manual_commit = (st.session_state.get("pb7_commit_manual_master") or "").strip()
+
+                        # Default: HEAD (latest)
+                        selected_commit_label = "HEAD (latest)"
+                        selected_commit_hash = current_commit_full
+
+                        # Commit selector (only when we have origin history for the branch and no manual override)
+                        if (not manual_branch) and effective_branch in pbremote.local_run.pb7_branches_data:
+                            commits = pbremote.local_run.pb7_branches_data[effective_branch]
+
                             commit_options = []
                             for c in commits:
-                                is_current = (c['full'] == current_commit_full and selected_branch == current_branch)
+                                is_current = (c['full'] == current_commit_full and effective_branch == current_branch)
                                 prefix = "🔹 CURRENT: " if is_current else ""
-                                # Use first line only for selectbox display, shorten to 50 chars
-                                # Replace newlines with space to prevent selectbox breaking
                                 first_line = c['message'].split('\n')[0].replace('\n', ' ').replace('\r', ' ')
                                 short_msg = first_line[:50] + "..." if len(first_line) > 50 else first_line
                                 label = f"{prefix}{c['short']} | {short_msg} | {c['date']} | {c['author']}"
                                 commit_options.append(label)
-                            
-                            # Find current commit index for default selection
-                            if selected_branch == current_branch:
+
+                            if effective_branch == current_branch:
                                 try:
                                     current_commit_index = next(i for i, c in enumerate(commits) if c['full'] == current_commit_full)
-                                    # Add 1 to account for HEAD option
                                     current_commit_index = current_commit_index + 1
                                 except StopIteration:
                                     current_commit_index = 0
                             else:
-                                # Different branch selected - default to HEAD
                                 current_commit_index = 0
-                            
+
                             selected_commit_label = st.selectbox(
                                 f"Target Commit ({len(commits)} loaded - optional, leave at HEAD for latest)",
                                 options=["HEAD (latest)"] + commit_options,
                                 index=current_commit_index,
                                 key="pb7_commit_selector",
-                                help="HEAD (latest) = Stay on branch tip and get updates with git pull (recommended). Select a specific commit to create a detached HEAD state (no updates)."
+                                help="HEAD (latest) = Stay on branch tip and get updates with git pull (recommended). Select a specific commit to create a detached HEAD state (no updates).",
                             )
-                            
-                            # Extract selected commit details
+
                             if selected_commit_label != "HEAD (latest)":
                                 selected_commit_idx = commit_options.index(selected_commit_label)
                                 selected_commit_data = commits[selected_commit_idx]
                                 selected_commit_hash = selected_commit_data['full']
-                            
-                                # Show commit details with message in tooltip
-                                st.markdown(f"**Commit:** `{selected_commit_data['short']}` | **Author:** {selected_commit_data['author']} | **Date:** {selected_commit_data['date']}")
+                                st.markdown(
+                                    f"**Commit:** `{selected_commit_data['short']}` | **Author:** {selected_commit_data['author']} | **Date:** {selected_commit_data['date']}"
+                                )
                                 st.markdown(f"**Full Hash:** `{selected_commit_data['full']}`")
-                                # Show first line of message, full message in tooltip
                                 short_message = selected_commit_data['message'].split('\n')[0]
                                 st.markdown(f"**Message:** {short_message}", help=selected_commit_data['message'])
-                            else:
-                                # HEAD selected
-                                selected_commit_hash = current_commit_full
-                            
-                            # Switch button
-                            branch_changed = selected_branch != current_branch
-                            commit_changed = (selected_commit_label != "HEAD (latest)" and selected_commit_hash != current_commit_full)
-                            
-                            # Check if we're behind origin (need git pull)
-                            # Trigger when: same branch AND (HEAD selected OR selected commit is current local HEAD)
-                            is_behind_origin = False
-                            if selected_branch == current_branch:
-                                # Check if selecting HEAD or if selecting the current commit (which is local HEAD)
-                                selecting_head = (selected_commit_label == "HEAD (latest)" or selected_commit_hash == current_commit_full)
-                                if selecting_head:
-                                    # Compare local HEAD with origin HEAD
-                                    if selected_branch in pbremote.local_run.pb7_branches_data:
-                                        branch_commits = pbremote.local_run.pb7_branches_data[selected_branch]
-                                        if branch_commits and len(branch_commits) > 0:
-                                            origin_head = branch_commits[0]['full']
-                                            if current_commit_full != origin_head:
-                                                is_behind_origin = True
-                                                selected_commit_hash = origin_head  # Update to origin HEAD
-                            
-                            # Check if already on target
-                            is_on_target = (selected_branch == current_branch and not commit_changed and not is_behind_origin)
-                            
-                            # Determine button text based on action
-                            if is_behind_origin:
-                                button_text = "⬆️ Update"
-                            elif branch_changed:
-                                button_text = "🔀 Switch Branch"
-                            elif commit_changed:
-                                button_text = "📍 Switch Commit"
-                            else:
-                                button_text = "🔀 Switch Branch"  # Fallback
-                            
-                            # Status text and button in one row
-                            status_col, btn_col = st.columns([3, 1])
-                            
-                            # Calculate commits_behind if needed
-                            commits_behind = 0
-                            if is_behind_origin:
-                                for i, c in enumerate(pbremote.local_run.pb7_branches_data[selected_branch]):
-                                    if c['full'] == current_commit_full:
-                                        commits_behind = i
-                                        break
-                            
-                            with status_col:
-                                if is_on_target:
-                                    st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
-                                elif is_behind_origin:
-                                    if commits_behind > 0:
-                                        st.warning(f"⚠️ Local `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
-                                    else:
-                                        st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
-                                else:
-                                    if branch_changed:
-                                        st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
-                                    elif commit_changed:
-                                        st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
-                            
-                            with btn_col:
-                                button_disabled = is_on_target or (is_behind_origin and commits_behind == 0)
-                                if st.button(button_text, disabled=button_disabled, type="primary", key="switch_pb7_branch_master"):
-                                    vpsmanager.command = "master-switch-pb7-branch"
-                                    vpsmanager.command_text = f"Switch PB7 to {selected_branch}"
-                                    if selected_commit_label != "HEAD (latest)":
-                                        vpsmanager.command_text += f" @ {selected_commit_hash[:7]}"
-                                    # Pass branch and commit to Ansible playbook
-                                    extra_vars = {'pb7_branch': selected_branch}
-                                    if selected_commit_label != "HEAD (latest)":
-                                        extra_vars['pb7_commit'] = selected_commit_hash
-                                    vpsmanager.update_master(
-                                        debug=st.session_state.setup_debug,
-                                        extra_vars=extra_vars
-                                    )
-                                    # Clear cached branch data to force reload after update
-                                    if 'master_pb7_commits_loaded' in st.session_state:
-                                        del st.session_state.master_pb7_commits_loaded
-                                    st.session_state.pb7_branch_switched = True
-                                    del st.session_state.manage_master
-                                    st.session_state.view_update_master = True
-                                    st.rerun()
                         else:
-                            st.error(f"No commits found for branch: {selected_branch}")
+                            # Manual branch and/or no origin history loaded for this branch.
+                            if manual_commit:
+                                selected_commit_label = "Manual commit"
+                                selected_commit_hash = manual_commit
+                                st.markdown(f"**Commit:** `{manual_commit[:7]}`")
+
+                        branch_changed = effective_branch != current_branch
+                        commit_changed = (
+                            selected_commit_label != "HEAD (latest)"
+                            and selected_commit_hash
+                            and selected_commit_hash != current_commit_full
+                        )
+
+                        # Origin-behind check only makes sense for origin-known branches (no manual branch override)
+                        is_behind_origin = False
+                        commits_behind = 0
+                        if (
+                            (not manual_branch)
+                            and effective_branch == current_branch
+                            and effective_branch in pbremote.local_run.pb7_branches_data
+                        ):
+                            selecting_head = (selected_commit_label == "HEAD (latest)" or selected_commit_hash == current_commit_full)
+                            if selecting_head:
+                                branch_commits = pbremote.local_run.pb7_branches_data[effective_branch]
+                                if branch_commits:
+                                    origin_head = branch_commits[0]['full']
+                                    if current_commit_full != origin_head:
+                                        is_behind_origin = True
+                                        for i, c in enumerate(branch_commits):
+                                            if c['full'] == current_commit_full:
+                                                commits_behind = i
+                                                break
+
+                        is_on_target = (effective_branch == current_branch and not commit_changed and not is_behind_origin)
+
+                        if is_behind_origin:
+                            button_text = "⬆️ Update"
+                        elif branch_changed:
+                            button_text = "🔀 Switch Branch"
+                        elif commit_changed:
+                            button_text = "📍 Switch Commit"
+                        else:
+                            button_text = "🔀 Switch Branch"
+
+                        status_col, btn_col = st.columns([3, 1])
+                        with status_col:
+                            if is_on_target:
+                                st.success(f"✅ Already on branch `{effective_branch}` at the latest commit")
+                            elif is_behind_origin:
+                                st.warning(
+                                    f"⚠️ Local `{effective_branch}` is {commits_behind} commit(s) behind origin. Click to update."
+                                    if commits_behind > 0
+                                    else f"⚠️ Local `{effective_branch}` is behind origin. Click to update."
+                                )
+                            else:
+                                if branch_changed:
+                                    st.warning(f"⚠️ This will switch from `{current_branch}` to `{effective_branch}`")
+                                elif commit_changed:
+                                    st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
+
+                        with btn_col:
+                            button_disabled = is_on_target
+                            if st.button(button_text, disabled=button_disabled, type="primary", key="switch_pb7_branch_master"):
+                                vpsmanager.command = "master-switch-pb7-branch"
+                                vpsmanager.command_text = f"Switch PB7 to {effective_branch}"
+                                if selected_commit_label != "HEAD (latest)" and selected_commit_hash:
+                                    vpsmanager.command_text += f" @ {selected_commit_hash[:7]}"
+
+                                extra_vars = {"pb7_branch": effective_branch}
+                                if selected_commit_label != "HEAD (latest)" and selected_commit_hash:
+                                    extra_vars["pb7_commit"] = selected_commit_hash
+
+                                remote_url = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                                remote_name = (st.session_state.get("pb7_remote_name_master") or "msei99").strip()
+                                if remote_url:
+                                    extra_vars["pb7_remote_url"] = remote_url
+                                    extra_vars["pb7_remote_name"] = remote_name or "msei99"
+
+                                vpsmanager.update_master(
+                                    debug=st.session_state.setup_debug,
+                                    extra_vars=extra_vars,
+                                )
+                                if 'master_pb7_commits_loaded' in st.session_state:
+                                    del st.session_state.master_pb7_commits_loaded
+                                st.session_state.pb7_branch_switched = True
+                                del st.session_state.manage_master
+                                st.session_state.view_update_master = True
+                                st.rerun()
                 else:
                     st.warning("⚠️ No PB7 branch history loaded. Click 🔄 Refresh in sidebar to load branch data.")
         
@@ -1806,6 +1941,129 @@ def manage_vps():
                     if available_branches:
                         # Current state display
                         st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
+
+                        # Always-visible summary (so users don't lose the configured URL when expander is closed)
+                        pb7_repo_dir = getattr(pbremote.local_run, "pb7dir", "")
+                        remote_name_state = (st.session_state.get(f"pb7_remote_name_vps_{vps.hostname}") or "").strip() or "origin"
+                        remote_url_override = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                        derived_url = get_git_remote_url(pb7_repo_dir, remote_name_state) if (pb7_repo_dir and remote_name_state) else ""
+                        remote_url_effective = remote_url_override or derived_url
+                        remote_url_summary = remote_url_effective
+                        remote_name_summary = remote_name_state
+                        manual_branch_summary = (st.session_state.get(f"pb7_branch_manual_vps_{vps.hostname}") or "").strip()
+                        if remote_url_summary or manual_branch_summary:
+                            st.caption(
+                                f"Fork remote: `{remote_name_summary}` {remote_url_summary or '—'}"
+                                + (f" | Manual branch: `{manual_branch_summary}`" if manual_branch_summary else "")
+                            )
+
+                        with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
+                            st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
+                            if st.button("✅ Switch VPS to upstream master", key=f"pb7_switch_upstream_master_vps_{vps.hostname}", width="stretch"):
+                                vps.command = "vps-switch-pb7-branch"
+                                vps.command_text = "Switch PB7 to origin/master"
+                                vpsmanager.update_vps(
+                                    vps,
+                                    debug=st.session_state.setup_debug,
+                                    extra_vars={"pb7_branch": "master"},
+                                )
+                                if 'vps_pb7_commits_loaded' in st.session_state:
+                                    del st.session_state.vps_pb7_commits_loaded
+                                st.session_state.pb7_branch_switched_vps = vps.hostname
+                                st.session_state.view_update = vps
+                                del st.session_state.manage_vps
+                                st.rerun()
+
+                            # Prefer picking a known remote name (no typing). URL is read from local pb7dir git config if present.
+                            remote_options = []
+                            if pb7_repo_dir:
+                                remote_options = list_git_remotes(pb7_repo_dir)
+                            for opt in ("origin", "fork"):
+                                if opt not in remote_options:
+                                    remote_options.append(opt)
+
+                            def _on_change_remote_vps():
+                                st.session_state[f"pb7_remote_url_vps_{vps.hostname}"] = ""
+
+                            idx = remote_options.index(remote_name_state) if remote_name_state in remote_options else 0
+                            st.selectbox(
+                                "PB7 remote name",
+                                options=remote_options,
+                                index=idx,
+                                key=f"pb7_remote_name_vps_{vps.hostname}",
+                                on_change=_on_change_remote_vps,
+                                help="Select remote name. If URL is empty, PBGui shows the URL from local pb7dir git config.",
+                            )
+
+                            st.text_input(
+                                "PB7 remote URL (effective)",
+                                value=remote_url_effective,
+                                disabled=True,
+                                key=f"pb7_remote_url_vps_effective_{vps.hostname}",
+                            )
+
+                            st.text_input(
+                                "PB7 remote URL (optional)",
+                                key=f"pb7_remote_url_vps_{vps.hostname}",
+                                placeholder="https://github.com/<user>/passivbot.git",
+                                help="If set, the VPS will fetch PB7 from this remote before switching branches.",
+                            )
+
+                            remote_url_vps = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip() or remote_url_effective
+                            cache_key_vps = f"pb7_remote_branches_cache_vps_{vps.hostname}"
+                            if cache_key_vps not in st.session_state:
+                                st.session_state[cache_key_vps] = {}
+                            branches_cache_vps = st.session_state[cache_key_vps]
+
+                            def _load_remote_branches_vps():
+                                url = remote_url_effective
+                                if not url:
+                                    return
+                                try:
+                                    with st.spinner("Loading remote branches..."):
+                                        branches_cache_vps[url] = list_remote_git_branches(url)
+                                except Exception as e:
+                                    st.error(f"Failed to load remote branches: {e}")
+
+                            st.button(
+                                "🔎 Load branches from URL",
+                                key=f"load_pb7_remote_branches_vps_{vps.hostname}",
+                                disabled=not bool(remote_url_vps),
+                                on_click=_load_remote_branches_vps,
+                                help="Fetch branches with git ls-remote. Use this after changing the URL.",
+                            )
+
+                            remote_branches_vps = branches_cache_vps.get(remote_url_vps) if remote_url_vps else None
+
+                            def _set_manual_branch_from_pick_vps():
+                                picked = (st.session_state.get(f"pb7_remote_branch_pick_vps_{vps.hostname}") or "").strip()
+                                if picked:
+                                    st.session_state[f"pb7_branch_manual_vps_{vps.hostname}"] = picked
+
+                            if remote_url_vps:
+                                if remote_branches_vps is None:
+                                    st.info("Enter URL, then click 'Load branches from URL'.")
+                                elif not remote_branches_vps:
+                                    st.warning("No branches found on this remote URL.")
+                                else:
+                                    st.selectbox(
+                                        "Remote branch (from URL)",
+                                        options=[""] + remote_branches_vps,
+                                        index=0,
+                                        key=f"pb7_remote_branch_pick_vps_{vps.hostname}",
+                                        on_change=_set_manual_branch_from_pick_vps,
+                                        help="Pick a branch to auto-fill the manual branch field below.",
+                                    )
+                            st.text_input(
+                                "Branch name (manual, optional)",
+                                key=f"pb7_branch_manual_vps_{vps.hostname}",
+                                help="Use this if the branch isn't in the dropdown (e.g. fix/ohlcv-selfheal).",
+                            )
+                            st.text_input(
+                                "Commit hash (optional)",
+                                key=f"pb7_commit_manual_vps_{vps.hostname}",
+                                help="Optional: full commit hash to reset to after switching.",
+                            )
                         
                         col1, col2 = st.columns(2)
                         
@@ -1858,144 +2116,140 @@ def manage_vps():
                                     st.rerun(scope="fragment")
                         
                         with col2:
-                            # Commit selector for the selected branch
-                            if selected_branch in pbremote.local_run.pb7_branches_data:
-                                commits = pbremote.local_run.pb7_branches_data[selected_branch]
-                                
-                                # Create commit labels (shortened for selectbox)
+                            manual_branch = (st.session_state.get(f"pb7_branch_manual_vps_{vps.hostname}") or "").strip()
+                            effective_branch = manual_branch or selected_branch
+                            manual_commit = (st.session_state.get(f"pb7_commit_manual_vps_{vps.hostname}") or "").strip()
+
+                            selected_commit_label = "HEAD (latest)"
+                            selected_commit_hash = current_commit_full
+
+                            if (not manual_branch) and effective_branch in pbremote.local_run.pb7_branches_data:
+                                commits = pbremote.local_run.pb7_branches_data[effective_branch]
+
                                 commit_options = []
                                 for c in commits:
-                                    is_current = (c['full'] == current_commit_full and selected_branch == current_branch)
+                                    is_current = (c['full'] == current_commit_full and effective_branch == current_branch)
                                     prefix = "🔹 CURRENT: " if is_current else ""
-                                    # Use first line only for selectbox display, shorten to 50 chars
-                                    # Replace newlines with space to prevent selectbox breaking
                                     first_line = c['message'].split('\n')[0].replace('\n', ' ').replace('\r', ' ')
                                     short_msg = first_line[:50] + "..." if len(first_line) > 50 else first_line
                                     label = f"{prefix}{c['short']} | {short_msg} | {c['date']} | {c['author']}"
                                     commit_options.append(label)
-                                
-                                # Find current commit index for default selection
-                                if selected_branch == current_branch:
+
+                                if effective_branch == current_branch:
                                     try:
                                         current_commit_index = next(i for i, c in enumerate(commits) if c['full'] == current_commit_full)
-                                        # Add 1 to account for HEAD option
                                         current_commit_index = current_commit_index + 1
                                     except StopIteration:
                                         current_commit_index = 0
                                 else:
-                                    # Different branch selected - default to HEAD
                                     current_commit_index = 0
-                                
+
                                 selected_commit_label = st.selectbox(
                                     f"Target Commit ({len(commits)} loaded - optional, leave at HEAD for latest)",
                                     options=["HEAD (latest)"] + commit_options,
                                     index=current_commit_index,
                                     key="vps_pb7_commit_selector",
-                                    help="HEAD (latest) = Stay on branch tip and get updates with git pull (recommended). Select a specific commit to create a detached HEAD state (no updates)."
+                                    help="HEAD (latest) = Stay on branch tip and get updates with git pull (recommended). Select a specific commit to create a detached HEAD state (no updates).",
                                 )
-                                
-                                # Extract selected commit details
+
                                 if selected_commit_label != "HEAD (latest)":
                                     selected_commit_idx = commit_options.index(selected_commit_label)
                                     selected_commit_data = commits[selected_commit_idx]
                                     selected_commit_hash = selected_commit_data['full']
-                                
-                                    # Show commit details with message in tooltip
-                                    st.markdown(f"**Commit:** `{selected_commit_data['short']}` | **Author:** {selected_commit_data['author']} | **Date:** {selected_commit_data['date']}")
+                                    st.markdown(
+                                        f"**Commit:** `{selected_commit_data['short']}` | **Author:** {selected_commit_data['author']} | **Date:** {selected_commit_data['date']}"
+                                    )
                                     st.markdown(f"**Full Hash:** `{selected_commit_data['full']}`")
-                                    # Show first line of message, full message in tooltip
                                     short_message = selected_commit_data['message'].split('\n')[0]
                                     st.markdown(f"**Message:** {short_message}", help=selected_commit_data['message'])
-                                else:
-                                    # HEAD selected
-                                    selected_commit_hash = current_commit_full
-                                
-                                # Switch button
-                                branch_changed = selected_branch != current_branch
-                                commit_changed = (selected_commit_label != "HEAD (latest)" and selected_commit_hash != current_commit_full)
-                                
-                                # Check if VPS is behind origin (need git pull)
-                                # Trigger when: same branch AND (HEAD selected OR selected commit is current VPS HEAD)
-                                is_behind_origin = False
-                                if selected_branch == current_branch:
-                                    # Check if selecting HEAD or if selecting the current commit (which is VPS HEAD)
-                                    selecting_head = (selected_commit_label == "HEAD (latest)" or selected_commit_hash == current_commit_full)
-                                    if selecting_head:
-                                        # Compare VPS HEAD with origin HEAD
-                                        if selected_branch in pbremote.local_run.pb7_branches_data:
-                                            branch_commits = pbremote.local_run.pb7_branches_data[selected_branch]
-                                            if branch_commits and len(branch_commits) > 0:
-                                                origin_head = branch_commits[0]['full']
-                                                if current_commit_full and current_commit_full != origin_head:
-                                                    is_behind_origin = True
-                                                    selected_commit_hash = origin_head  # Update to origin HEAD
-                                
-                                # Check if already on target
-                                is_on_target = (selected_branch == current_branch and not commit_changed and not is_behind_origin)
-                                
-                                # Determine button text based on action
-                                if is_behind_origin:
-                                    button_text = "⬆️ Update"
-                                elif branch_changed:
-                                    button_text = "🔀 Switch Branch"
-                                elif commit_changed:
-                                    button_text = "📍 Switch Commit"
-                                else:
-                                    button_text = "🔀 Switch Branch"  # Fallback
-                                
-                                # Status text and button in one row
-                                status_col, btn_col = st.columns([3, 1])
-                                
-                                # Calculate commits_behind if needed
-                                commits_behind = 0
-                                if is_behind_origin:
-                                    for i, c in enumerate(pbremote.local_run.pb7_branches_data[selected_branch]):
-                                        if c['full'] == current_commit_full:
-                                            commits_behind = i
-                                            break
-                                
-                                with status_col:
-                                    if is_on_target:
-                                        st.success(f"✅ Already on branch `{selected_branch}` at the latest commit")
-                                    elif is_behind_origin:
-                                        if commits_behind > 0:
-                                            st.warning(f"⚠️ VPS `{selected_branch}` is {commits_behind} commit(s) behind origin. Click to update.")
-                                        else:
-                                            # commits_behind is 0 because current commit is older than the loaded commits
-                                            st.warning(f"⚠️ VPS `{selected_branch}` is behind origin (current commit not in recent history). Click to update.")
-                                    else:
-                                        if branch_changed:
-                                            st.warning(f"⚠️ This will switch from `{current_branch}` to `{selected_branch}`")
-                                        elif commit_changed:
-                                            st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
-                                
-                                with btn_col:
-                                    # Button should be disabled only when already on target
-                                    # If behind origin, button should be enabled regardless of commits_behind
-                                    button_disabled = is_on_target
-                                    if st.button(button_text, disabled=button_disabled, type="primary", key="switch_pb7_branch_vps"):
-                                        vps.command = "vps-switch-pb7-branch"
-                                        vps.command_text = f"Switch PB7 to {selected_branch}"
-                                        if selected_commit_label != "HEAD (latest)":
-                                            vps.command_text += f" @ {selected_commit_hash[:7]}"
-                                        # Pass branch and commit to Ansible playbook
-                                        extra_vars = {'pb7_branch': selected_branch}
-                                        if selected_commit_label != "HEAD (latest)":
-                                            extra_vars['pb7_commit'] = selected_commit_hash
-                                        vpsmanager.update_vps(
-                                            vps,
-                                            debug=st.session_state.setup_debug,
-                                            extra_vars=extra_vars
-                                        )
-                                        # Clear cached branch data to force reload after update
-                                        if 'vps_pb7_commits_loaded' in st.session_state:
-                                            del st.session_state.vps_pb7_commits_loaded
-                                        st.session_state.pb7_branch_switched_vps = vps.hostname
-                                        st.session_state.view_update = vps
-                                        del st.session_state.manage_vps
-                                        st.rerun()
                             else:
-                                st.error(f"No commits found for branch: {selected_branch}")
+                                if manual_commit:
+                                    selected_commit_label = "Manual commit"
+                                    selected_commit_hash = manual_commit
+                                    st.markdown(f"**Commit:** `{manual_commit[:7]}`")
+
+                            branch_changed = effective_branch != current_branch
+                            commit_changed = (
+                                selected_commit_label != "HEAD (latest)"
+                                and selected_commit_hash
+                                and selected_commit_hash != current_commit_full
+                            )
+
+                            is_behind_origin = False
+                            commits_behind = 0
+                            if (
+                                (not manual_branch)
+                                and effective_branch == current_branch
+                                and effective_branch in pbremote.local_run.pb7_branches_data
+                            ):
+                                selecting_head = (selected_commit_label == "HEAD (latest)" or selected_commit_hash == current_commit_full)
+                                if selecting_head:
+                                    branch_commits = pbremote.local_run.pb7_branches_data[effective_branch]
+                                    if branch_commits:
+                                        origin_head = branch_commits[0]['full']
+                                        if current_commit_full and current_commit_full != origin_head:
+                                            is_behind_origin = True
+                                            for i, c in enumerate(branch_commits):
+                                                if c['full'] == current_commit_full:
+                                                    commits_behind = i
+                                                    break
+
+                            is_on_target = (effective_branch == current_branch and not commit_changed and not is_behind_origin)
+
+                            if is_behind_origin:
+                                button_text = "⬆️ Update"
+                            elif branch_changed:
+                                button_text = "🔀 Switch Branch"
+                            elif commit_changed:
+                                button_text = "📍 Switch Commit"
+                            else:
+                                button_text = "🔀 Switch Branch"
+
+                            status_col, btn_col = st.columns([3, 1])
+                            with status_col:
+                                if is_on_target:
+                                    st.success(f"✅ Already on branch `{effective_branch}` at the latest commit")
+                                elif is_behind_origin:
+                                    st.warning(
+                                        f"⚠️ VPS `{effective_branch}` is {commits_behind} commit(s) behind origin. Click to update."
+                                        if commits_behind > 0
+                                        else f"⚠️ VPS `{effective_branch}` is behind origin. Click to update."
+                                    )
+                                else:
+                                    if branch_changed:
+                                        st.warning(f"⚠️ This will switch from `{current_branch}` to `{effective_branch}`")
+                                    elif commit_changed:
+                                        st.warning(f"⚠️ This will switch to commit `{selected_commit_hash[:7]}`")
+
+                            with btn_col:
+                                button_disabled = is_on_target
+                                if st.button(button_text, disabled=button_disabled, type="primary", key="switch_pb7_branch_vps"):
+                                    vps.command = "vps-switch-pb7-branch"
+                                    vps.command_text = f"Switch PB7 to {effective_branch}"
+                                    if selected_commit_label != "HEAD (latest)" and selected_commit_hash:
+                                        vps.command_text += f" @ {selected_commit_hash[:7]}"
+
+                                    extra_vars = {"pb7_branch": effective_branch}
+                                    if selected_commit_label != "HEAD (latest)" and selected_commit_hash:
+                                        extra_vars["pb7_commit"] = selected_commit_hash
+
+                                    remote_url = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                                    remote_name = (st.session_state.get(f"pb7_remote_name_vps_{vps.hostname}") or "msei99").strip()
+                                    if remote_url:
+                                        extra_vars["pb7_remote_url"] = remote_url
+                                        extra_vars["pb7_remote_name"] = remote_name or "msei99"
+
+                                    vpsmanager.update_vps(
+                                        vps,
+                                        debug=st.session_state.setup_debug,
+                                        extra_vars=extra_vars,
+                                    )
+                                    if 'vps_pb7_commits_loaded' in st.session_state:
+                                        del st.session_state.vps_pb7_commits_loaded
+                                    st.session_state.pb7_branch_switched_vps = vps.hostname
+                                    st.session_state.view_update = vps
+                                    del st.session_state.manage_vps
+                                    st.rerun()
                     else:
                         st.warning("⚠️ No PB7 branch history loaded. Click 🔄 Refresh in sidebar to load branch data.")
             
