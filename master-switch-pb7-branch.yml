@@ -19,6 +19,8 @@
     pb7venv: "{{ pb7venv }}"
     target_branch: "{{ pb7_branch }}"
     target_commit: "{{ pb7_commit | default('') }}"
+    remote_name: "{{ pb7_remote_name | default('origin') }}"
+    remote_url: "{{ pb7_remote_url | default('') }}"
 
   tasks:
     - name: display facts
@@ -26,8 +28,23 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Fetch from origin
-      command: git fetch origin
+    - name: Ensure custom remote exists (optional)
+      shell: |
+        set -e
+        if [ -n "{{ remote_url }}" ]; then
+          if git remote get-url "{{ remote_name }}" >/dev/null 2>&1; then
+            git remote set-url "{{ remote_name }}" "{{ remote_url }}"
+          else
+            git remote add "{{ remote_name }}" "{{ remote_url }}"
+          fi
+        fi
+      args:
+        chdir: "{{ pb7dir }}"
+      when: pb7dir != ""
+      changed_when: false
+
+    - name: Fetch from selected remote
+      command: git fetch "{{ remote_name }}"
       args:
         chdir: "{{ pb7dir }}"
       when: pb7dir != ""
@@ -45,11 +62,26 @@
         msg: "Uncommitted changes detected in PB7. Please commit or stash changes before switching branches."
       when: git_status.stdout != ""
 
-    - name: Checkout target branch
+    - name: Check if branch exists locally
+      command: git show-ref --verify --quiet "refs/heads/{{ target_branch }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      register: branch_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Create and checkout local branch from remote if it doesn't exist
+      command: git checkout -b "{{ target_branch }}" --track "{{ remote_name }}/{{ target_branch }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      when: branch_exists.rc != 0
+      notify: restart pb7
+
+    - name: Checkout target branch (if already exists locally)
       command: git checkout "{{ target_branch }}"
       args:
         chdir: "{{ pb7dir }}"
-      register: checkout_result
+      when: branch_exists.rc == 0
       notify: restart pb7
 
     - name: Reset to specific commit if provided (stays on branch)
@@ -61,7 +93,7 @@
       notify: restart pb7
 
     - name: Pull latest changes (only if no specific commit provided)
-      command: git pull
+      command: git pull "{{ remote_name }}" "{{ target_branch }}"
       args:
         chdir: "{{ pb7dir }}"
       when: target_commit == ""
