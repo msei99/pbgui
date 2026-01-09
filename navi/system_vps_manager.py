@@ -939,29 +939,19 @@ def manage_master():
 
                     with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                         st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
-                        col_quick1, col_quick2 = st.columns(2)
-                        with col_quick1:
-                            if st.button("⬅️ Use upstream (origin)", key="pb7_use_upstream_origin_master", width="stretch"):
-                                st.session_state["pb7_remote_name_master"] = "origin"
-                                st.session_state["pb7_remote_url_master"] = ""  # use git config
-                                st.session_state["pb7_branch_manual_master"] = ""
-                                st.session_state["pb7_commit_manual_master"] = ""
-                                st.session_state.pb7_expander_open = True
-                                st.rerun()
-                        with col_quick2:
-                            if st.button("✅ Switch to upstream master", key="pb7_switch_upstream_master", width="stretch"):
-                                vpsmanager.command = "master-switch-pb7-branch"
-                                vpsmanager.command_text = "Switch PB7 to origin/master"
-                                vpsmanager.update_master(
-                                    debug=st.session_state.setup_debug,
-                                    extra_vars={"pb7_branch": "master"},
-                                )
-                                if 'master_pb7_commits_loaded' in st.session_state:
-                                    del st.session_state.master_pb7_commits_loaded
-                                st.session_state.pb7_branch_switched = True
-                                del st.session_state.manage_master
-                                st.session_state.view_update_master = True
-                                st.rerun()
+                        if st.button("✅ Switch to upstream master", key="pb7_switch_upstream_master", width="stretch"):
+                            vpsmanager.command = "master-switch-pb7-branch"
+                            vpsmanager.command_text = "Switch PB7 to origin/master"
+                            vpsmanager.update_master(
+                                debug=st.session_state.setup_debug,
+                                extra_vars={"pb7_branch": "master"},
+                            )
+                            if 'master_pb7_commits_loaded' in st.session_state:
+                                del st.session_state.master_pb7_commits_loaded
+                            st.session_state.pb7_branch_switched = True
+                            del st.session_state.manage_master
+                            st.session_state.view_update_master = True
+                            st.rerun()
 
                         if known_remotes:
                             def _on_change_remote_master():
@@ -1969,29 +1959,20 @@ def manage_vps():
 
                         with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                             st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
-                            col_quick1, col_quick2 = st.columns(2)
-                            with col_quick1:
-                                if st.button("⬅️ Use upstream (origin)", key=f"pb7_use_upstream_origin_vps_{vps.hostname}", width="stretch"):
-                                    st.session_state[f"pb7_remote_name_vps_{vps.hostname}"] = "origin"
-                                    st.session_state[f"pb7_remote_url_vps_{vps.hostname}"] = ""
-                                    st.session_state[f"pb7_branch_manual_vps_{vps.hostname}"] = ""
-                                    st.session_state[f"pb7_commit_manual_vps_{vps.hostname}"] = ""
-                                    st.rerun(scope="fragment")
-                            with col_quick2:
-                                if st.button("✅ Switch VPS to upstream master", key=f"pb7_switch_upstream_master_vps_{vps.hostname}", width="stretch"):
-                                    vps.command = "vps-switch-pb7-branch"
-                                    vps.command_text = "Switch PB7 to origin/master"
-                                    vpsmanager.update_vps(
-                                        vps,
-                                        debug=st.session_state.setup_debug,
-                                        extra_vars={"pb7_branch": "master"},
-                                    )
-                                    if 'vps_pb7_commits_loaded' in st.session_state:
-                                        del st.session_state.vps_pb7_commits_loaded
-                                    st.session_state.pb7_branch_switched_vps = vps.hostname
-                                    st.session_state.view_update = vps
-                                    del st.session_state.manage_vps
-                                    st.rerun()
+                            if st.button("✅ Switch VPS to upstream master", key=f"pb7_switch_upstream_master_vps_{vps.hostname}", width="stretch"):
+                                vps.command = "vps-switch-pb7-branch"
+                                vps.command_text = "Switch PB7 to origin/master"
+                                vpsmanager.update_vps(
+                                    vps,
+                                    debug=st.session_state.setup_debug,
+                                    extra_vars={"pb7_branch": "master"},
+                                )
+                                if 'vps_pb7_commits_loaded' in st.session_state:
+                                    del st.session_state.vps_pb7_commits_loaded
+                                st.session_state.pb7_branch_switched_vps = vps.hostname
+                                st.session_state.view_update = vps
+                                del st.session_state.manage_vps
+                                st.rerun()
 
                             # Prefer picking a known remote name (no typing). URL is read from local pb7dir git config if present.
                             remote_options = []
