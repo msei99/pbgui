@@ -12,7 +12,7 @@ import shlex
 import getpass
 import concurrent.futures
 
-from pbgui_purefunc import list_remote_git_branches
+from pbgui_purefunc import list_remote_git_branches, list_git_remotes, get_git_remote_url
 
 
 def list_vps():
@@ -912,9 +912,24 @@ def manage_master():
                     # Current state display
                     st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
 
+                    # Read remotes from configured pb7dir (no persistence to pbgui.ini)
+                    pb7_repo_dir = getattr(pbremote.local_run, "pb7dir", "")
+                    known_remotes: list[str] = []
+                    default_remote_name = ""
+                    if pb7_repo_dir:
+                        known_remotes = list_git_remotes(pb7_repo_dir)
+                        default_remote_name = "fork" if "fork" in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
+
+                    # Derive an effective remote name/url even if session_state was cleared
+                    if "pb7_remote_name_master" not in st.session_state:
+                        st.session_state["pb7_remote_name_master"] = default_remote_name
+                    remote_name_effective = (st.session_state.get("pb7_remote_name_master") or "").strip() or default_remote_name
+                    remote_url_override = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                    remote_url_effective = remote_url_override or (get_git_remote_url(pb7_repo_dir, remote_name_effective) if (pb7_repo_dir and remote_name_effective) else "")
+
                     # Always-visible summary (so users don't lose the configured URL when expander is closed)
-                    remote_url_summary = (st.session_state.get("pb7_remote_url_master") or "").strip()
-                    remote_name_summary = (st.session_state.get("pb7_remote_name_master") or "msei99").strip() or "msei99"
+                    remote_url_summary = remote_url_effective
+                    remote_name_summary = remote_name_effective or "(not set)"
                     manual_branch_summary = (st.session_state.get("pb7_branch_manual_master") or "").strip()
                     if remote_url_summary or manual_branch_summary:
                         st.caption(
@@ -924,27 +939,71 @@ def manage_master():
 
                     with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                         st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
-                        st.text_input(
-                            "PB7 remote URL (optional)",
-                            key="pb7_remote_url_master",
-                            placeholder="https://github.com/<user>/passivbot.git",
-                            help="If set, PBGui will fetch PB7 from this remote before switching branches. Useful for checking out PR/fork branches.",
-                        )
-                        st.text_input(
-                            "PB7 remote name",
-                            value="msei99",
-                            key="pb7_remote_name_master",
-                            help="Git remote name to use for the URL above (e.g. msei99).",
-                        )
+                        col_quick1, col_quick2 = st.columns(2)
+                        with col_quick1:
+                            if st.button("⬅️ Use upstream (origin)", key="pb7_use_upstream_origin_master", width="stretch"):
+                                st.session_state["pb7_remote_name_master"] = "origin"
+                                st.session_state["pb7_remote_url_master"] = ""  # use git config
+                                st.session_state["pb7_branch_manual_master"] = ""
+                                st.session_state["pb7_commit_manual_master"] = ""
+                                st.session_state.pb7_expander_open = True
+                                st.rerun()
+                        with col_quick2:
+                            if st.button("✅ Switch to upstream master", key="pb7_switch_upstream_master", width="stretch"):
+                                vpsmanager.command = "master-switch-pb7-branch"
+                                vpsmanager.command_text = "Switch PB7 to origin/master"
+                                vpsmanager.update_master(
+                                    debug=st.session_state.setup_debug,
+                                    extra_vars={"pb7_branch": "master"},
+                                )
+                                if 'master_pb7_commits_loaded' in st.session_state:
+                                    del st.session_state.master_pb7_commits_loaded
+                                st.session_state.pb7_branch_switched = True
+                                del st.session_state.manage_master
+                                st.session_state.view_update_master = True
+                                st.rerun()
 
-                        remote_url_master = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                        if known_remotes:
+                            def _on_change_remote_master():
+                                # Clear override URL so git-config URL is shown
+                                st.session_state["pb7_remote_url_master"] = ""
+
+                            idx = known_remotes.index(remote_name_effective) if remote_name_effective in known_remotes else 0
+                            st.selectbox(
+                                "PB7 remote (from pb7dir)",
+                                options=known_remotes,
+                                index=idx,
+                                key="pb7_remote_name_master",
+                                on_change=_on_change_remote_master,
+                                help="Select an existing git remote from your PB7 directory. The URL is read from git config.",
+                            )
+                            st.text_input(
+                                "PB7 remote URL (effective)",
+                                value=remote_url_effective,
+                                disabled=True,
+                                key="pb7_remote_url_master_effective",
+                            )
+                        else:
+                            st.text_input(
+                                "PB7 remote name",
+                                key="pb7_remote_name_master",
+                                help="Git remote name to use for the URL above (e.g. msei99).",
+                            )
+                            st.text_input(
+                                "PB7 remote URL (optional)",
+                                key="pb7_remote_url_master",
+                                placeholder="https://github.com/<user>/passivbot.git",
+                                help="If set, PBGui will fetch PB7 from this remote before switching branches. Useful for checking out PR/fork branches.",
+                            )
+
+                        remote_url_master = remote_url_effective
                         cache_key_master = "pb7_remote_branches_cache_master"
                         if cache_key_master not in st.session_state:
                             st.session_state[cache_key_master] = {}
                         branches_cache_master = st.session_state[cache_key_master]
 
                         def _load_remote_branches_master():
-                            url = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                            url = remote_url_effective
                             if not url:
                                 return
                             try:
@@ -1894,8 +1953,13 @@ def manage_vps():
                         st.info(f"📍 **Current:** {current_branch} @ {current_commit_full[:7] if current_commit_full else 'unknown'}")
 
                         # Always-visible summary (so users don't lose the configured URL when expander is closed)
-                        remote_url_summary = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
-                        remote_name_summary = (st.session_state.get(f"pb7_remote_name_vps_{vps.hostname}") or "msei99").strip() or "msei99"
+                        pb7_repo_dir = getattr(pbremote.local_run, "pb7dir", "")
+                        remote_name_state = (st.session_state.get(f"pb7_remote_name_vps_{vps.hostname}") or "").strip() or "origin"
+                        remote_url_override = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                        derived_url = get_git_remote_url(pb7_repo_dir, remote_name_state) if (pb7_repo_dir and remote_name_state) else ""
+                        remote_url_effective = remote_url_override or derived_url
+                        remote_url_summary = remote_url_effective
+                        remote_name_summary = remote_name_state
                         manual_branch_summary = (st.session_state.get(f"pb7_branch_manual_vps_{vps.hostname}") or "").strip()
                         if remote_url_summary or manual_branch_summary:
                             st.caption(
@@ -1905,27 +1969,73 @@ def manage_vps():
 
                         with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                             st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
+                            col_quick1, col_quick2 = st.columns(2)
+                            with col_quick1:
+                                if st.button("⬅️ Use upstream (origin)", key=f"pb7_use_upstream_origin_vps_{vps.hostname}", width="stretch"):
+                                    st.session_state[f"pb7_remote_name_vps_{vps.hostname}"] = "origin"
+                                    st.session_state[f"pb7_remote_url_vps_{vps.hostname}"] = ""
+                                    st.session_state[f"pb7_branch_manual_vps_{vps.hostname}"] = ""
+                                    st.session_state[f"pb7_commit_manual_vps_{vps.hostname}"] = ""
+                                    st.rerun(scope="fragment")
+                            with col_quick2:
+                                if st.button("✅ Switch VPS to upstream master", key=f"pb7_switch_upstream_master_vps_{vps.hostname}", width="stretch"):
+                                    vps.command = "vps-switch-pb7-branch"
+                                    vps.command_text = "Switch PB7 to origin/master"
+                                    vpsmanager.update_vps(
+                                        vps,
+                                        debug=st.session_state.setup_debug,
+                                        extra_vars={"pb7_branch": "master"},
+                                    )
+                                    if 'vps_pb7_commits_loaded' in st.session_state:
+                                        del st.session_state.vps_pb7_commits_loaded
+                                    st.session_state.pb7_branch_switched_vps = vps.hostname
+                                    st.session_state.view_update = vps
+                                    del st.session_state.manage_vps
+                                    st.rerun()
+
+                            # Prefer picking a known remote name (no typing). URL is read from local pb7dir git config if present.
+                            remote_options = []
+                            if pb7_repo_dir:
+                                remote_options = list_git_remotes(pb7_repo_dir)
+                            for opt in ("origin", "fork"):
+                                if opt not in remote_options:
+                                    remote_options.append(opt)
+
+                            def _on_change_remote_vps():
+                                st.session_state[f"pb7_remote_url_vps_{vps.hostname}"] = ""
+
+                            idx = remote_options.index(remote_name_state) if remote_name_state in remote_options else 0
+                            st.selectbox(
+                                "PB7 remote name",
+                                options=remote_options,
+                                index=idx,
+                                key=f"pb7_remote_name_vps_{vps.hostname}",
+                                on_change=_on_change_remote_vps,
+                                help="Select remote name. If URL is empty, PBGui shows the URL from local pb7dir git config.",
+                            )
+
+                            st.text_input(
+                                "PB7 remote URL (effective)",
+                                value=remote_url_effective,
+                                disabled=True,
+                                key=f"pb7_remote_url_vps_effective_{vps.hostname}",
+                            )
+
                             st.text_input(
                                 "PB7 remote URL (optional)",
                                 key=f"pb7_remote_url_vps_{vps.hostname}",
                                 placeholder="https://github.com/<user>/passivbot.git",
                                 help="If set, the VPS will fetch PB7 from this remote before switching branches.",
                             )
-                            st.text_input(
-                                "PB7 remote name",
-                                value="msei99",
-                                key=f"pb7_remote_name_vps_{vps.hostname}",
-                                help="Git remote name to use for the URL above (e.g. msei99).",
-                            )
 
-                            remote_url_vps = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                            remote_url_vps = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip() or remote_url_effective
                             cache_key_vps = f"pb7_remote_branches_cache_vps_{vps.hostname}"
                             if cache_key_vps not in st.session_state:
                                 st.session_state[cache_key_vps] = {}
                             branches_cache_vps = st.session_state[cache_key_vps]
 
                             def _load_remote_branches_vps():
-                                url = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip()
+                                url = remote_url_effective
                                 if not url:
                                     return
                                 try:
