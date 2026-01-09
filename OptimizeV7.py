@@ -331,6 +331,19 @@ class OptimizeV7Queue:
             if any("OptimizeV7.py" in sub for sub in cmdline):
                 return process
 
+    @staticmethod
+    def _exchange_to_str(exchange_value) -> str:
+        if exchange_value is None:
+            return ""
+        if isinstance(exchange_value, (list, tuple, set)):
+            return ",".join(str(x) for x in exchange_value)
+        if isinstance(exchange_value, dict):
+            try:
+                return json.dumps(exchange_value, sort_keys=True)
+            except Exception:
+                return str(exchange_value)
+        return str(exchange_value)
+
     def refresh(self):
         # Remove items from d that are not in items anymore
         self.d = [item for item in self.d if item.get('filename') in [i.filename for i in self.items]]
@@ -348,7 +361,7 @@ class OptimizeV7Queue:
                     'name': item.name,
                     'filename': item.filename,
                     'Time': datetime.datetime.fromtimestamp(Path(f'{PBGDIR}/data/opt_v7_queue/{item.filename}.json').stat().st_mtime),
-                    'exchange': item.exchange,
+                    'exchange': self._exchange_to_str(item.exchange),
                     'finish': item.is_finish(),
                     'item': item,
                 })
