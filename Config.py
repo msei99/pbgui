@@ -3054,7 +3054,7 @@ class Optimize:
         self._write_all_results = True
 
         self._optimize = {
-            "bounds": self._bounds._bounds,
+            "bounds": self._bounds.bounds,
             "compress_results_file": self._compress_results_file,
             "crossover_probability": self._crossover_probability,
             "crossover_eta": self._crossover_eta,
@@ -3077,7 +3077,12 @@ class Optimize:
         return str(self._optimize)
 
     @property
-    def optimize(self): return self._optimize
+    def optimize(self):
+        # Ensure bounds are always exported in PB7-compatible form.
+        # This avoids stale optimize["bounds"] when bounds were loaded as [lo, hi]
+        # and later edited in the UI to include a positive step.
+        self._optimize["bounds"] = self._bounds.bounds
+        return self._optimize
     @optimize.setter
     def optimize(self, new_optimize):
         if "bounds" in new_optimize:
@@ -3886,7 +3891,36 @@ class Bounds:
         return str(self._bounds)
 
     @property
-    def bounds(self): return self._bounds
+    def bounds(self):
+        """Return bounds for export.
+
+        PB7 supports bounds in the forms:
+        - [low, high] (continuous)
+        - [low, high, step] (grid) where step must be > 0
+
+        PBGui historically stores step=0.0 to mean "disabled".
+        When exporting, omit the step element unless it is strictly > 0.
+        """
+
+        exported = {}
+        for key, val in self._bounds.items():
+            if isinstance(val, (list, tuple)) and len(val) >= 2:
+                lo, hi = val[0], val[1]
+                if len(val) >= 3:
+                    step = val[2]
+                    try:
+                        step_f = float(step)
+                    except Exception:
+                        step_f = 0.0
+                    if step_f > 0.0:
+                        exported[key] = [lo, hi, step]
+                    else:
+                        exported[key] = [lo, hi]
+                else:
+                    exported[key] = [lo, hi]
+            else:
+                exported[key] = val
+        return exported
     
     @bounds.setter
     def bounds(self, new_bounds):
@@ -6965,6 +6999,8 @@ class ConfigV7():
     def config(self):
         # Dynamically update backtest to ensure suite/scenarios are current
         self._config["backtest"] = self._backtest.backtest
+        # Ensure optimize export is current (bounds filtering + step persistence).
+        self._config["optimize"] = self._optimize.optimize
         return self._config
     @config.setter
     def config(self, new_value):
