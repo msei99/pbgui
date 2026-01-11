@@ -2759,7 +2759,11 @@ class Live:
         self._price_distance_threshold = 0.002
         self._recv_window_ms = 5000
         self._time_in_force = "good_till_cancelled"
+        # PB7 live defaults (see pb7/src/config_utils.py)
+        self._warmup_jitter_seconds = 30.0
         self._warmup_ratio = 0.2
+        # PBGui uses 0 to mean unlimited (PB7 treats 0 like None)
+        self._max_concurrent_api_requests = 0
         self._max_warmup_minutes = 0
         self._candle_lock_timeout_seconds = 10
         self._balance_override = None
@@ -2789,7 +2793,9 @@ class Live:
             "price_distance_threshold": self._price_distance_threshold,
             "recv_window_ms": self._recv_window_ms,
             "time_in_force": self._time_in_force,
+            "warmup_jitter_seconds": self._warmup_jitter_seconds,
             "warmup_ratio": self._warmup_ratio,
+            "max_concurrent_api_requests": self._max_concurrent_api_requests,
             "max_warmup_minutes": self._max_warmup_minutes,
             "candle_lock_timeout_seconds": self._candle_lock_timeout_seconds,
             "balance_override": self._balance_override,
@@ -2848,8 +2854,12 @@ class Live:
             self.recv_window_ms = new_live["recv_window_ms"]
         if "time_in_force" in new_live:
             self.time_in_force = new_live["time_in_force"]
+        if "warmup_jitter_seconds" in new_live:
+            self.warmup_jitter_seconds = new_live["warmup_jitter_seconds"]
         if "warmup_ratio" in new_live:
-            self._warmup_ratio = new_live["warmup_ratio"]
+            self.warmup_ratio = new_live["warmup_ratio"]
+        if "max_concurrent_api_requests" in new_live:
+            self.max_concurrent_api_requests = new_live["max_concurrent_api_requests"]
         if "max_warmup_minutes" in new_live:
             self.max_warmup_minutes = new_live["max_warmup_minutes"]
         if "candle_lock_timeout_seconds" in new_live:
@@ -2906,7 +2916,11 @@ class Live:
     @property
     def time_in_force(self): return self._time_in_force
     @property
+    def warmup_jitter_seconds(self): return self._warmup_jitter_seconds
+    @property
     def warmup_ratio(self): return self._warmup_ratio
+    @property
+    def max_concurrent_api_requests(self): return self._max_concurrent_api_requests
     @property
     def max_warmup_minutes(self): return self._max_warmup_minutes
     @property
@@ -3006,10 +3020,21 @@ class Live:
     def time_in_force(self, new_time_in_force):
         self._time_in_force = new_time_in_force
         self._live["time_in_force"] = self._time_in_force
+    @warmup_jitter_seconds.setter
+    def warmup_jitter_seconds(self, new_warmup_jitter_seconds):
+        self._warmup_jitter_seconds = new_warmup_jitter_seconds
+        self._live["warmup_jitter_seconds"] = self._warmup_jitter_seconds
     @warmup_ratio.setter
     def warmup_ratio(self, new_warmup_ratio):
         self._warmup_ratio = new_warmup_ratio
         self._live["warmup_ratio"] = self._warmup_ratio
+    @max_concurrent_api_requests.setter
+    def max_concurrent_api_requests(self, new_max_concurrent_api_requests):
+        if new_max_concurrent_api_requests in (None, ""):
+            self._max_concurrent_api_requests = 0
+        else:
+            self._max_concurrent_api_requests = max(0, int(new_max_concurrent_api_requests))
+        self._live["max_concurrent_api_requests"] = self._max_concurrent_api_requests
     @max_warmup_minutes.setter
     def max_warmup_minutes(self, new_max_warmup_minutes):
         self._max_warmup_minutes = new_max_warmup_minutes
