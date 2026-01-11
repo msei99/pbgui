@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.48
+# v1.49
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,13 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.49 (11-01-2026)
+- Add: PB7 switch supports custom remotes and remote branch browsing.
+- Improve: VPS Manager allows overriding PB7 remote URL (effective).
+- Fix: OptimizeV7 queue now shows the correct exchange per job.
+- Fix: Optimize bounds export now includes the `step` value (prevents missing/zero-step warnings in PB7).
+- Add: PB7 live config parameters `warmup_jitter_seconds` and `max_concurrent_api_requests`.
 
 ## v1.48 (08-01-2026)
 - Add: Scoring builder UI for PBv7 Optimize.
