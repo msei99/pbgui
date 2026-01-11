@@ -1418,6 +1418,18 @@ warmup_ratio = """
     for example, warmups ~20% of the deepest lookback, capped by backtest.max_warmup_minutes
     ```"""
 
+warmup_jitter_seconds = """
+    ```
+    Random delay (seconds) added to warmup-related scheduling to avoid multiple bots syncing their activity.
+    Set to 0 to disable.
+    ```"""
+
+max_concurrent_api_requests = """
+    ```
+    Optional hard limit for concurrent exchange API requests.
+    Set to 0 to disable (unlimited).
+    ```"""
+
 combine_ohlcvs = """
     ```
     When true, build a single "combined" dataset by taking the best-quality feed

@@ -176,6 +176,22 @@ class V7Instance():
         st.number_input("warmup_ratio", min_value=0.0, step=0.1, max_value=1.0, format="%.2f", key="edit_run_v7_warmup_ratio", help=pbgui_help.warmup_ratio)
 
     @st.fragment
+    def fragment_warmup_jitter_seconds(self):
+        if "edit_run_v7_warmup_jitter_seconds" in st.session_state:
+            if st.session_state.edit_run_v7_warmup_jitter_seconds != self.config.live.warmup_jitter_seconds:
+                self.config.live.warmup_jitter_seconds = st.session_state.edit_run_v7_warmup_jitter_seconds
+        else:
+            st.session_state.edit_run_v7_warmup_jitter_seconds = float(round(self.config.live.warmup_jitter_seconds, 1))
+        st.number_input(
+            "warmup_jitter_seconds",
+            min_value=0.0,
+            step=1.0,
+            format="%.1f",
+            key="edit_run_v7_warmup_jitter_seconds",
+            help=pbgui_help.warmup_jitter_seconds,
+        )
+
+    @st.fragment
     def fragment_max_warmup_minutes(self):
         if "edit_run_v7_max_warmup_minutes" in st.session_state:
             if st.session_state.edit_run_v7_max_warmup_minutes != self.config.live.max_warmup_minutes:
@@ -183,6 +199,22 @@ class V7Instance():
         else:
             st.session_state.edit_run_v7_max_warmup_minutes = self.config.live.max_warmup_minutes
         st.number_input("max_warmup_minutes", min_value=0, step=100, format="%.d", key="edit_run_v7_max_warmup_minutes", help=pbgui_help.max_warmup_minutes)
+
+    @st.fragment
+    def fragment_max_concurrent_api_requests(self):
+        if "edit_run_v7_max_concurrent_api_requests" in st.session_state:
+            if int(st.session_state.edit_run_v7_max_concurrent_api_requests) != self.config.live.max_concurrent_api_requests:
+                self.config.live.max_concurrent_api_requests = int(st.session_state.edit_run_v7_max_concurrent_api_requests)
+        else:
+            st.session_state.edit_run_v7_max_concurrent_api_requests = int(self.config.live.max_concurrent_api_requests)
+        st.number_input(
+            "max_concurrent_api_requests",
+            min_value=0,
+            step=1,
+            format="%d",
+            key="edit_run_v7_max_concurrent_api_requests",
+            help=pbgui_help.max_concurrent_api_requests,
+        )
 
     @st.fragment
     def fragment_memory_snapshot_interval_minutes(self):
@@ -630,6 +662,12 @@ class V7Instance():
                 self.fragment_memory_snapshot_interval_minutes()
             with col4:
                 self.fragment_volume_refresh_info_threshold_seconds()
+
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                self.fragment_warmup_jitter_seconds()
+            with col2:
+                self.fragment_max_concurrent_api_requests()
 
         #Filters
         self.fragment_filter_coins()
