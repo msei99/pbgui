@@ -924,8 +924,13 @@ def manage_master():
                     if "pb7_remote_name_master" not in st.session_state:
                         st.session_state["pb7_remote_name_master"] = default_remote_name
                     remote_name_effective = (st.session_state.get("pb7_remote_name_master") or "").strip() or default_remote_name
+                    derived_remote_url = (
+                        get_git_remote_url(pb7_repo_dir, remote_name_effective)
+                        if (pb7_repo_dir and remote_name_effective)
+                        else ""
+                    )
                     remote_url_override = (st.session_state.get("pb7_remote_url_master") or "").strip()
-                    remote_url_effective = remote_url_override or (get_git_remote_url(pb7_repo_dir, remote_name_effective) if (pb7_repo_dir and remote_name_effective) else "")
+                    remote_url_effective = remote_url_override or derived_remote_url
 
                     # Always-visible summary (so users don't lose the configured URL when expander is closed)
                     remote_url_summary = remote_url_effective
@@ -969,9 +974,10 @@ def manage_master():
                             )
                             st.text_input(
                                 "PB7 remote URL (effective)",
-                                value=remote_url_effective,
-                                disabled=True,
-                                key="pb7_remote_url_master_effective",
+                                key="pb7_remote_url_master",
+                                value=remote_url_override,
+                                placeholder=derived_remote_url or "",
+                                help="Optional override. Leave empty to use the selected remote's URL from git config.",
                             )
                         else:
                             st.text_input(
@@ -986,6 +992,9 @@ def manage_master():
                                 help="If set, PBGui will fetch PB7 from this remote before switching branches. Useful for checking out PR/fork branches.",
                             )
 
+                        # Recompute effective URL after potential override edits
+                        remote_url_override = (st.session_state.get("pb7_remote_url_master") or "").strip()
+                        remote_url_effective = remote_url_override or derived_remote_url
                         remote_url_master = remote_url_effective
                         cache_key_master = "pb7_remote_branches_cache_master"
                         if cache_key_master not in st.session_state:
@@ -993,7 +1002,7 @@ def manage_master():
                         branches_cache_master = st.session_state[cache_key_master]
 
                         def _load_remote_branches_master():
-                            url = remote_url_effective
+                            url = remote_url_master
                             if not url:
                                 return
                             try:
@@ -1997,26 +2006,20 @@ def manage_vps():
 
                             st.text_input(
                                 "PB7 remote URL (effective)",
-                                value=remote_url_effective,
-                                disabled=True,
-                                key=f"pb7_remote_url_vps_effective_{vps.hostname}",
-                            )
-
-                            st.text_input(
-                                "PB7 remote URL (optional)",
                                 key=f"pb7_remote_url_vps_{vps.hostname}",
-                                placeholder="https://github.com/<user>/passivbot.git",
-                                help="If set, the VPS will fetch PB7 from this remote before switching branches.",
+                                value=remote_url_override,
+                                placeholder=derived_url or "https://github.com/<user>/passivbot.git",
+                                help="Optional override. Leave empty to use the selected remote's URL from local pb7dir git config.",
                             )
 
-                            remote_url_vps = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip() or remote_url_effective
+                            remote_url_vps = (st.session_state.get(f"pb7_remote_url_vps_{vps.hostname}") or "").strip() or derived_url
                             cache_key_vps = f"pb7_remote_branches_cache_vps_{vps.hostname}"
                             if cache_key_vps not in st.session_state:
                                 st.session_state[cache_key_vps] = {}
                             branches_cache_vps = st.session_state[cache_key_vps]
 
                             def _load_remote_branches_vps():
-                                url = remote_url_effective
+                                url = remote_url_vps
                                 if not url:
                                     return
                                 try:
