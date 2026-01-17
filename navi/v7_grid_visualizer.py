@@ -1824,6 +1824,74 @@ def _update_trailing_bundle_from_price_short(tb: TrailingPriceBundle, price: flo
     return tb
 
 
+def _infer_hist_base_tf_minutes(hist_df: pd.DataFrame) -> int:
+    """Infer base candle timeframe from a datetime index."""
+    if hist_df is None or hist_df.empty:
+        return 1
+    try:
+        idx = pd.to_datetime(hist_df.index)
+        if len(idx) < 2:
+            return 1
+        deltas = (idx[1: min(len(idx), 500)] - idx[: min(len(idx) - 1, 499)]).total_seconds()
+        deltas = [d for d in deltas if d and d > 0]
+        if not deltas:
+            return 1
+        tf = int(round(float(np.median(deltas)) / 60.0))
+        return max(1, tf)
+    except Exception:
+        return 1
+
+
+def _slice_hist_df_for_modeb(
+    hist_df: pd.DataFrame,
+    *,
+    trade_start_time: pd.Timestamp,
+    end_time: pd.Timestamp,
+    include_prev_candle: bool = True,
+) -> pd.DataFrame:
+    """Slice historical candles for Mode B.
+
+    We include one candle before `trade_start_time` (when possible) so that the
+    first active candle can compute orders from a previous-minute state, which
+    matches the PB7 backtest semantics used in the Mode B simulator.
+    """
+    if hist_df is None or hist_df.empty:
+        return pd.DataFrame()
+    try:
+        df = hist_df.sort_index()
+    except Exception:
+        df = hist_df
+
+    start = pd.to_datetime(trade_start_time)
+    end = pd.to_datetime(end_time)
+    if include_prev_candle:
+        tf_mins = _infer_hist_base_tf_minutes(df)
+        start = start - pd.Timedelta(minutes=int(tf_mins))
+
+    try:
+        return df.loc[start:end].copy()
+    except Exception:
+        # Fallback: return full df if slicing fails
+        return df.copy()
+
+
+def _get_modeb_starting_state(data, side: Side) -> tuple[Position, float]:
+    """Return (starting_position, starting_balance) for Mode B simulation."""
+    try:
+        if side == Side.Long:
+            pos = getattr(data, "position_long_enty", None)
+            sp = getattr(data, "state_params_long", None) or getattr(data, "state_params", None)
+        else:
+            pos = getattr(data, "position_short_entry", None)
+            sp = getattr(data, "state_params_short", None) or getattr(data, "state_params", None)
+        if pos is None:
+            pos = Position(size=0.0, price=0.0)
+        bal = float(getattr(sp, "balance", 0.0) or 0.0)
+        return (Position(size=float(pos.size), price=float(pos.price)), bal)
+    except Exception:
+        return (Position(size=0.0, price=0.0), 0.0)
+
+
 def _simulate_backtest_over_historical_candles(
     *,
     pbr,
@@ -5132,6 +5200,109 @@ def create_plotly_graph(side: OrderType, data: GVData):
     except Exception:
         pass
 
+    # Historical simulation fill markers (B/S) on the chart
+    try:
+        sim_enabled = bool(st.session_state.get("gv_hist_sim_enabled", False))
+        is_datetime_axis = isinstance(plot_x[0], (pd.Timestamp, datetime.datetime, np.datetime64))
+        if sim_enabled and is_datetime_axis:
+            fills = list(
+                getattr(data, "historical_sim_fills_long" if side == Side.Long else "historical_sim_fills_short", []) or []
+            )
+
+            buy_x: list = []
+            buy_y: list[float] = []
+            buy_custom: list[list] = []
+            sell_x: list = []
+            sell_y: list[float] = []
+            sell_custom: list[list] = []
+
+            for ord_idx, f in enumerate(fills, start=0):
+                if not isinstance(f, dict):
+                    continue
+                ts = f.get("timestamp")
+                px = f.get("price")
+                qty = f.get("qty")
+                if ts is None or px is None or qty is None:
+                    continue
+                try:
+                    ts_dt = pd.to_datetime(ts)
+                    px_f = float(px)
+                    qty_f = float(qty)
+                except Exception:
+                    continue
+                if not math.isfinite(px_f) or not math.isfinite(qty_f) or qty_f == 0.0:
+                    continue
+
+                event = str(f.get("event", "") or "")
+                order_type = str(f.get("order_type", "") or "")
+                abs_qty = abs(qty_f)
+
+                is_buy = qty_f > 0.0
+                if is_buy:
+                    buy_x.append(ts_dt)
+                    buy_y.append(px_f)
+                    buy_custom.append([int(ord_idx), abs_qty, event, order_type])
+                else:
+                    sell_x.append(ts_dt)
+                    sell_y.append(px_f)
+                    sell_custom.append([int(ord_idx), abs_qty, event, order_type])
+
+            if buy_x:
+                fig.add_trace(
+                    go.Scatter(
+                        x=buy_x,
+                        y=buy_y,
+                        mode="markers+text",
+                        name="Fills (B)",
+                        text=["B"] * len(buy_x),
+                        textposition="middle center",
+                        textfont=dict(color="white", size=10),
+                        marker=dict(
+                            symbol="circle",
+                            size=16,
+                            color="rgba(0, 200, 0, 1.0)",
+                            line=dict(color="rgba(0, 0, 0, 0.7)", width=1),
+                        ),
+                        customdata=buy_custom,
+                        hovertemplate=(
+                            "Buy #%{customdata[0]} (%{customdata[2]})<br>"
+                            "qty=%{customdata[1]:.6f}<br>"
+                            "price=%{y:.6f}<br>"
+                            "type=%{customdata[3]}<br>"
+                            "%{x|%Y-%m-%d %H:%M}<extra></extra>"
+                        ),
+                    )
+                )
+
+            if sell_x:
+                fig.add_trace(
+                    go.Scatter(
+                        x=sell_x,
+                        y=sell_y,
+                        mode="markers+text",
+                        name="Fills (S)",
+                        text=["S"] * len(sell_x),
+                        textposition="middle center",
+                        textfont=dict(color="white", size=10),
+                        marker=dict(
+                            symbol="circle",
+                            size=16,
+                            color="rgba(220, 0, 0, 1.0)",
+                            line=dict(color="rgba(0, 0, 0, 0.7)", width=1),
+                        ),
+                        customdata=sell_custom,
+                        hovertemplate=(
+                            "Sell #%{customdata[0]} (%{customdata[2]})<br>"
+                            "qty=%{customdata[1]:.6f}<br>"
+                            "price=%{y:.6f}<br>"
+                            "type=%{customdata[3]}<br>"
+                            "%{x|%Y-%m-%d %H:%M}<extra></extra>"
+                        ),
+                    )
+                )
+    except Exception:
+        pass
+
     # Render the figure using Streamlit
     st.plotly_chart(fig, width="stretch")
 
@@ -6003,6 +6174,14 @@ def show_visualizer():
             # (So users can see whether subsequent candles hit the computed grid.)
             # Assumes 1m candles (1440 per day).
             context_candles = int(context_days * 1440)
+            # If historical simulation is enabled, ensure we plot enough forward candles to cover the sim horizon.
+            try:
+                if bool(st.session_state.get("gv_hist_sim_enabled", False)):
+                    sim_max_candles = int(st.session_state.get("gv_hist_sim_max_candles", 2000) or 2000)
+                    if sim_max_candles > 0:
+                        context_candles = max(int(context_candles), int(sim_max_candles))
+            except Exception:
+                pass
             available_candles = len(hist_df)
 
             remaining_candles = max(0, available_candles - idx)
@@ -6392,37 +6571,35 @@ def show_visualizer():
             if sel_exc and sel_coin and trade_start_time is not None:
                 hist_df_full = load_historical_ohlcv_v7(sel_exc, sel_coin)
                 if hist_df_full is not None and not hist_df_full.empty:
-                    warmup_minutes = _compute_warmup_minutes_for_mode_c(
-                        data.normal_bot_params_long,
-                        data.normal_bot_params_short,
-                        warmup_ratio=0.2,
-                        max_warmup_minutes=0.0,
+                    base_tf_mins = _infer_hist_base_tf_minutes(hist_df_full)
+                    sim_end = trade_start_time + pd.Timedelta(minutes=int(base_tf_mins) * max(0, int(sim_max_candles) - 1))
+                    sim_df = _slice_hist_df_for_modeb(
+                        hist_df_full,
+                        trade_start_time=trade_start_time,
+                        end_time=sim_end,
+                        include_prev_candle=True,
                     )
-                    warm_start = trade_start_time - pd.Timedelta(minutes=int(warmup_minutes))
-                    sim_end = trade_start_time + pd.Timedelta(minutes=max(0, int(sim_max_candles) - 1))
-                    try:
-                        sim_df = hist_df_full.loc[warm_start:sim_end].copy()
-                    except Exception:
-                        sim_df = hist_df_full.copy()
             elif data.historical_candles is not None:
                 # Fallback: use the precomputed slice only (no warmup)
                 sim_df = _historical_dict_to_df(data.historical_candles)
 
             if not sim_df.empty:
                 if long_active:
-                    events = _simulate_backtest_over_historical_candles(
+                    sp0, bal0 = _get_modeb_starting_state(data, Side.Long)
+                    events, _frames_ignored = _simulate_backtest_over_historical_candles_replay(
                         pbr=pbr,
                         pb7_src=pb7_src,
                         side=Side.Long,
                         candles=sim_df,
                         exchange_params=data.exchange_params,
                         bot_params=data.normal_bot_params_long,
-                        starting_position=data.position_long_enty,
-                        balance=float((data.state_params_long or data.state_params).balance),
+                        starting_position=sp0,
+                        balance=float(bal0),
                         maker_fee=float(_derive_exchange_fees_from_market(sel_exc, sel_coin).get("maker_fee", 0.0) or 0.0),
                         trade_start_time=trade_start_time,
                         max_orders=sim_max_orders,
-                        max_candles=sim_max_candles,
+                        max_candles=int(len(sim_df)),
+                        frame_every_n_candles=max(1, int(len(sim_df)) + 1),
                     )
                     data.historical_sim_fills_long = events
                     data.historical_sim_entries_long = []
@@ -6433,19 +6610,21 @@ def show_visualizer():
                     data.historical_sim_fills_long = []
 
                 if short_active:
-                    events = _simulate_backtest_over_historical_candles(
+                    sp0, bal0 = _get_modeb_starting_state(data, Side.Short)
+                    events, _frames_ignored = _simulate_backtest_over_historical_candles_replay(
                         pbr=pbr,
                         pb7_src=pb7_src,
                         side=Side.Short,
                         candles=sim_df,
                         exchange_params=data.exchange_params,
                         bot_params=data.normal_bot_params_short,
-                        starting_position=data.position_short_entry,
-                        balance=float((data.state_params_short or data.state_params).balance),
+                        starting_position=sp0,
+                        balance=float(bal0),
                         maker_fee=float(_derive_exchange_fees_from_market(sel_exc, sel_coin).get("maker_fee", 0.0) or 0.0),
                         trade_start_time=trade_start_time,
                         max_orders=sim_max_orders,
-                        max_candles=sim_max_candles,
+                        max_candles=int(len(sim_df)),
+                        frame_every_n_candles=max(1, int(len(sim_df)) + 1),
                     )
                     data.historical_sim_fills_short = events
                     data.historical_sim_entries_short = []
@@ -7495,12 +7674,23 @@ def generate_animation_v7_modeb(
         if int(step_mins) == 240:
             # 60 x 4h candles = 10 days of lookback.
             ctx_days = max(ctx_days, 10.0)
-        warm_start = start_time - datetime.timedelta(days=ctx_days)
+        warm_start_plot = start_time - datetime.timedelta(days=ctx_days)
 
-        # Slice required candles only
-        sim_df = hist_df.loc[(hist_df.index >= warm_start) & (hist_df.index <= end_time)].copy()
-        if sim_df.empty:
+        # Plot source may include context before the simulated trading start.
+        plot_df = hist_df.loc[(hist_df.index >= warm_start_plot) & (hist_df.index <= end_time)].copy()
+        if plot_df.empty:
             st.error("No candles for the selected time window.")
+            return
+
+        # Simulation candles must match the Mode B simulation routine/inputs.
+        sim_df = _slice_hist_df_for_modeb(
+            hist_df,
+            trade_start_time=start_time,
+            end_time=end_time,
+            include_prev_candle=True,
+        )
+        if sim_df is None or sim_df.empty or len(sim_df) < 2:
+            st.error("Not enough candles for Mode B simulation.")
             return
 
         # Infer base timeframe (minutes) for translating step_mins into candle steps
@@ -7559,6 +7749,12 @@ def generate_animation_v7_modeb(
             def _sim_cb(frac: float, msg: str) -> None:
                 _progress(0.0 + 0.6 * float(frac), f"Mode B: {msg}")
 
+            starting_pos, starting_bal = _get_modeb_starting_state(data_template, side_obj)
+            try:
+                max_orders = int(st.session_state.get("gv_hist_sim_max_orders", 50000) or 50000)
+            except Exception:
+                max_orders = 50000
+
             sim_events, replay_frames = _simulate_backtest_over_historical_candles_replay(
                 pbr=pbr,
                 pb7_src=_pb7_src_dir(),
@@ -7566,11 +7762,11 @@ def generate_animation_v7_modeb(
                 candles=sim_df,
                 exchange_params=data_template.exchange_params,
                 bot_params=bp,
-                starting_position=Position(size=0.0, price=0.0),
-                balance=float(data_template.state_params.balance),
+                starting_position=starting_pos,
+                balance=float(starting_bal),
                 maker_fee=maker_fee,
                 trade_start_time=start_time,
-                max_orders=50000,
+                max_orders=max_orders,
                 max_candles=int(len(sim_df)),
                 frame_every_n_candles=fe,
                 progress_cb=_sim_cb,
@@ -7583,6 +7779,24 @@ def generate_animation_v7_modeb(
             st.error("No frames generated.")
             return
 
+        # Precompute fills table for marker rendering (fills may occur between sampled frames).
+        sim_events_df = pd.DataFrame(sim_events or [])
+        try:
+            if not sim_events_df.empty and "timestamp" in sim_events_df.columns:
+                sim_events_df["timestamp"] = pd.to_datetime(sim_events_df["timestamp"])
+                sim_events_df = sim_events_df.sort_values("timestamp").reset_index(drop=True)
+                sim_events_df["ord_idx"] = np.arange(0, len(sim_events_df), dtype=int)
+        except Exception:
+            sim_events_df = pd.DataFrame(columns=["timestamp", "event", "price", "qty", "order_type", "pos_size"])
+
+        try:
+            if sim_events_df.empty:
+                st.caption("Mode B: no fills in simulation window.")
+            else:
+                st.caption(f"Mode B: simulated fills: {len(sim_events_df)}")
+        except Exception:
+            pass
+
         # Build a timestamp index so the movie can start at `start_time` (not at warmup frames).
         try:
             replay_ts = pd.to_datetime([fr.get("timestamp") for fr in replay_frames])
@@ -7594,7 +7808,7 @@ def generate_animation_v7_modeb(
 
         # Indicators for plotting (small window only)
         df_calc = calculate_v7_indicators(
-            sim_df,
+            plot_df,
             float(bp.ema_span_0),
             float(bp.ema_span_1),
             float(bp.entry_volatility_ema_span_hours),
@@ -7705,13 +7919,23 @@ def generate_animation_v7_modeb(
             except Exception:
                 pass
 
-            ctx_start = current_time - datetime.timedelta(minutes=int(window_mins))
+            # Tie the plotted candle window to the chosen replay state timestamp.
+            # With coarse stepping, the nearest captured replay frame can lag behind `current_time`.
+            # If we plot candles beyond the state timestamp, pending close grids (especially trailing closes)
+            # appear "too early" relative to the visible candles.
+            upper_time = ts
+            try:
+                if pd.notna(current_time) and pd.notna(ts):
+                    upper_time = min(pd.to_datetime(current_time), pd.to_datetime(ts))
+            except Exception:
+                upper_time = ts
+
+            ctx_start = pd.to_datetime(upper_time) - datetime.timedelta(minutes=int(window_mins))
             # Grow the viewport from start_time until we reach the target visible candles,
             # then roll (oldest candles disappear to the left).
             if ctx_start < start_time:
                 ctx_start = start_time
 
-            upper_time = current_time
             try:
                 if not df_plot_source.empty and upper_time > df_plot_source.index.max():
                     upper_time = df_plot_source.index.max()
@@ -7831,16 +8055,149 @@ def generate_animation_v7_modeb(
                     width=3,
                 )
 
-            fill_rows = list(fr.get("fills") or [])
-            fill_x = [ts for _ in fill_rows]
-            fill_y = [float(r.get("price", 0.0) or 0.0) for r in fill_rows]
-            fill_color = ["red" if str(r.get("event")) == "entry" else "green" for r in fill_rows]
+            # Executed fills up to current_time within the viewport.
+            # Important: the movie candle series may be resampled (e.g. 5m/4h), so we snap fill timestamps
+            # to the displayed candle bins to avoid markers appearing between candles.
+            # Hover should still show the *real* fill timestamp/price, not the snapped/clamped plot coords.
+            fill_x: list = []
+            fill_y: list[float] = []
+            fill_text: list[str] = []
+            fill_color: list[str] = []
+            fill_custom: list[list] = []
+            try:
+                if not sim_events_df.empty:
+                    x0 = pd.to_datetime(df_window_plot.index[0])
+                    x1 = pd.to_datetime(upper_time)
+                    # Include one extra candle-bin on the left so fills that snap into the first
+                    # visible candle (but happened slightly earlier) are still shown.
+                    try:
+                        x0_filter = x0 - pd.Timedelta(minutes=int(opt_res_mins))
+                    except Exception:
+                        x0_filter = x0
+                    exec_df = sim_events_df[(sim_events_df["timestamp"] >= x0_filter) & (sim_events_df["timestamp"] <= x1)].copy()
+                    # Keep payload bounded
+                    if len(exec_df) > 3000:
+                        exec_df = exec_df.iloc[-3000:]
+
+                    # For 4h movie candles we label bins on the right edge; otherwise default resample is left.
+                    align_method = "backfill" if (int(step_mins) == 240 and int(opt_res_mins) == 240) else "pad"
+                    # If multiple fills snap to the same plotted candle bin, stack markers slightly so earlier
+                    # ones don't get hidden under later ones (common with 4h candles).
+                    stack_counts: dict[tuple, int] = {}
+
+                    def _stack_step(n: int) -> int:
+                        # 0, +1, -1, +2, -2, ...
+                        if n <= 0:
+                            return 0
+                        k = (n + 1) // 2
+                        return k if (n % 2) == 1 else -k
+
+                    # Jitter within candle bin to show markers horizontally side-by-side.
+                    # Use a small fraction of the plotted candle width.
+                    try:
+                        _bin_secs = max(1.0, float(opt_res_mins) * 60.0)
+                    except Exception:
+                        _bin_secs = 60.0
+                    _jitter_secs = max(1.0, _bin_secs * 0.06)
+                    for _, r in exec_df.iterrows():
+                        try:
+                            ts_fill = pd.to_datetime(r.get("timestamp"))
+                            px = float(r.get("price") or 0.0)
+                            qty = float(r.get("qty") or 0.0)
+                        except Exception:
+                            continue
+                        if px <= 0.0 or qty == 0.0 or (not math.isfinite(px)) or (not math.isfinite(qty)):
+                            continue
+
+                        # Snap X to the plotted candle index and clamp Y into candle [low, high]
+                        x_plot = ts_fill
+                        y_plot = float(px)
+                        lo = None
+                        hi = None
+                        try:
+                            ii = int(df_window_plot.index.get_indexer([ts_fill], method=align_method)[0])
+                            if ii < 0:
+                                ii = int(df_window_plot.index.get_indexer([ts_fill], method="nearest")[0])
+                            if 0 <= ii < len(df_window_plot):
+                                x_plot = df_window_plot.index[ii]
+                                lo = float(df_window_plot.iloc[ii].get("low", y_plot) or y_plot)
+                                hi = float(df_window_plot.iloc[ii].get("high", y_plot) or y_plot)
+                                if math.isfinite(lo) and math.isfinite(hi):
+                                    if lo > hi:
+                                        lo, hi = hi, lo
+                                    y_plot = float(min(max(y_plot, lo), hi))
+                        except Exception:
+                            pass
+
+                        is_buy = float(qty) > 0.0
+
+                        # Jitter overlapping markers within the same candle bin and side, horizontally.
+                        try:
+                            x_bin = pd.to_datetime(x_plot)
+                            key = (x_bin, bool(is_buy))
+                            n = int(stack_counts.get(key, 0))
+                            stack_counts[key] = n + 1
+                            off = int(_stack_step(n))
+                            if off != 0:
+                                xj = x_bin + pd.Timedelta(seconds=int(off * _jitter_secs))
+                                # Keep within the candle bin so it still visually belongs to this candle.
+                                if align_method == "backfill":
+                                    bin_start = x_bin - pd.Timedelta(minutes=int(opt_res_mins))
+                                    bin_end = x_bin
+                                else:
+                                    bin_start = x_bin
+                                    bin_end = x_bin + pd.Timedelta(minutes=int(opt_res_mins))
+                                eps = pd.Timedelta(seconds=1)
+                                if xj < (bin_start + eps):
+                                    xj = bin_start + eps
+                                if xj > (bin_end - eps):
+                                    xj = bin_end - eps
+                                x_plot = xj
+                        except Exception:
+                            pass
+
+                        fill_x.append(x_plot)
+                        fill_y.append(y_plot)
+                        fill_text.append("B" if is_buy else "S")
+                        fill_color.append("rgba(0, 200, 0, 1.0)" if is_buy else "rgba(220, 0, 0, 1.0)")
+                        try:
+                            ord_idx = int(r.get("ord_idx") or 0)
+                        except Exception:
+                            ord_idx = 0
+                        fill_custom.append([
+                            ord_idx,
+                            abs(float(qty)),
+                            str(r.get("event", "") or ""),
+                            str(r.get("order_type", "") or ""),
+                            str(ts_fill),
+                            float(px),
+                        ])
+            except Exception:
+                pass
+
             trace_fills = go.Scatter(
                 x=fill_x,
                 y=fill_y,
-                mode="markers",
-                marker=dict(size=10, color=fill_color),
-                name="Fills",
+                mode="markers+text",
+                name="Fills (B/S)",
+                showlegend=True,
+                text=fill_text,
+                textposition="middle center",
+                textfont=dict(color="white", size=12),
+                marker=dict(
+                    symbol="circle",
+                    size=18,
+                    color=fill_color,
+                    line=dict(color="rgba(0, 0, 0, 0.7)", width=1),
+                ),
+                customdata=fill_custom,
+                hovertemplate=(
+                    "%{text} #%{customdata[0]} (%{customdata[2]})<br>"
+                    "qty=%{customdata[1]:.6f}<br>"
+                    "price=%{customdata[5]:.6f}<br>"
+                    "type=%{customdata[3]}<br>"
+                    "%{customdata[4]}<extra></extra>"
+                ),
             )
 
             cols = [c for c in ["ema_0", "ema_1", "ema_2"] if c in df_window_plot.columns]
@@ -8093,6 +8450,13 @@ def generate_animation_v7_modec(
             return
 
         try:
+            price_step_stack = float(getattr(data_template.exchange_params, "price_step", 0.0) or 0.0)
+        except Exception:
+            price_step_stack = 0.0
+        if (not math.isfinite(price_step_stack)) or price_step_stack < 0.0:
+            price_step_stack = 0.0
+
+        try:
             pbr = _get_passivbot_rust(_pb7_src_dir())
         except Exception:
             pbr = None
@@ -8239,6 +8603,7 @@ def generate_animation_v7_modec(
 
         try:
             fills_df = fills_df.sort_values("timestamp").reset_index(drop=True)
+            fills_df["ord_idx"] = np.arange(0, len(fills_df), dtype=int)
         except Exception:
             pass
 
@@ -8486,7 +8851,147 @@ def generate_animation_v7_modec(
                 xaxis=dict(range=[df_window_plot.index[0], df_window_plot.index[-1]]),
                 yaxis=dict(range=[y_min_frame, y_max_frame]),
             )
-            fig_frames.append(go.Frame(data=[trace_up_entries, trace_up_closes], layout=frame_layout, name=str(i), traces=[3, 4]))
+            # Executed fills up to current_time (B/S markers)
+            # Snap to plotted candle bins to avoid X-misalignment when candle series is resampled.
+            # Hover should still show the *real* fill timestamp/price, not the snapped/clamped plot coords.
+            exec_x: list = []
+            exec_y: list[float] = []
+            exec_text: list[str] = []
+            exec_color: list[str] = []
+            exec_custom: list[list] = []
+            try:
+                if not fills_df.empty and "timestamp" in fills_df.columns:
+                    x0 = pd.to_datetime(df_window_plot.index[0])
+                    x1 = pd.to_datetime(current_time)
+                    try:
+                        x0_filter = x0 - pd.Timedelta(minutes=int(opt_res_mins))
+                    except Exception:
+                        x0_filter = x0
+                    mask_exec = (fills_df["timestamp"] >= x0_filter) & (fills_df["timestamp"] <= x1)
+                    exec_df = fills_df.loc[mask_exec]
+                    # Keep payload bounded
+                    if len(exec_df) > 5000:
+                        exec_df = exec_df.iloc[-5000:]
+
+                    align_method = "backfill" if (int(step_mins) == 240 and int(opt_res_mins) == 240) else "pad"
+                    stack_counts: dict[tuple, int] = {}
+
+                    def _stack_step(n: int) -> int:
+                        if n <= 0:
+                            return 0
+                        k = (n + 1) // 2
+                        return k if (n % 2) == 1 else -k
+
+                    try:
+                        _bin_secs = max(1.0, float(opt_res_mins) * 60.0)
+                    except Exception:
+                        _bin_secs = 60.0
+                    _jitter_secs = max(1.0, _bin_secs * 0.06)
+                    for _, rr in exec_df.iterrows():
+                        try:
+                            ts_fill = pd.to_datetime(rr.get("timestamp"))
+                            px = float(rr.get("price") or 0.0)
+                            qty = float(rr.get("qty") or 0.0)
+                        except Exception:
+                            continue
+                        if px <= 0.0 or qty == 0.0 or (not math.isfinite(px)) or (not math.isfinite(qty)):
+                            continue
+
+                        x_plot = ts_fill
+                        y_plot = float(px)
+                        lo = None
+                        hi = None
+                        try:
+                            ii = int(df_window_plot.index.get_indexer([ts_fill], method=align_method)[0])
+                            if ii < 0:
+                                ii = int(df_window_plot.index.get_indexer([ts_fill], method="nearest")[0])
+                            if 0 <= ii < len(df_window_plot):
+                                x_plot = df_window_plot.index[ii]
+                                lo = float(df_window_plot.iloc[ii].get("low", y_plot) or y_plot)
+                                hi = float(df_window_plot.iloc[ii].get("high", y_plot) or y_plot)
+                                if math.isfinite(lo) and math.isfinite(hi):
+                                    if lo > hi:
+                                        lo, hi = hi, lo
+                                    y_plot = float(min(max(y_plot, lo), hi))
+                        except Exception:
+                            pass
+
+                        is_buy = float(qty) > 0.0
+
+                        # Jitter overlapping markers within the same candle bin and side, horizontally.
+                        try:
+                            x_bin = pd.to_datetime(x_plot)
+                            key = (x_bin, bool(is_buy))
+                            n = int(stack_counts.get(key, 0))
+                            stack_counts[key] = n + 1
+                            off = int(_stack_step(n))
+                            if off != 0:
+                                xj = x_bin + pd.Timedelta(seconds=int(off * _jitter_secs))
+                                if align_method == "backfill":
+                                    bin_start = x_bin - pd.Timedelta(minutes=int(opt_res_mins))
+                                    bin_end = x_bin
+                                else:
+                                    bin_start = x_bin
+                                    bin_end = x_bin + pd.Timedelta(minutes=int(opt_res_mins))
+                                eps = pd.Timedelta(seconds=1)
+                                if xj < (bin_start + eps):
+                                    xj = bin_start + eps
+                                if xj > (bin_end - eps):
+                                    xj = bin_end - eps
+                                x_plot = xj
+                        except Exception:
+                            pass
+
+                        exec_x.append(x_plot)
+                        exec_y.append(y_plot)
+                        exec_text.append("B" if is_buy else "S")
+                        exec_color.append("rgba(0, 200, 0, 1.0)" if is_buy else "rgba(220, 0, 0, 1.0)")
+                        try:
+                            ord_idx = int(rr.get("ord_idx") or 0)
+                        except Exception:
+                            ord_idx = 0
+                        exec_custom.append([
+                            ord_idx,
+                            abs(float(qty)),
+                            str(rr.get("event", "") or ""),
+                            str(rr.get("order_type", "") or ""),
+                            str(ts_fill),
+                            float(px),
+                        ])
+            except Exception:
+                pass
+
+            trace_exec = go.Scatter(
+                x=exec_x,
+                y=exec_y,
+                mode="markers+text",
+                name="Fills (B/S)",
+                text=exec_text,
+                textposition="middle center",
+                textfont=dict(color="white", size=12),
+                marker=dict(
+                    symbol="circle",
+                    size=18,
+                    color=exec_color,
+                    line=dict(color="rgba(0, 0, 0, 0.7)", width=1),
+                ),
+                customdata=exec_custom,
+                hovertemplate=(
+                    "%{text} #%{customdata[0]} (%{customdata[2]})<br>"
+                    "qty=%{customdata[1]:.6f}<br>"
+                    "price=%{customdata[5]:.6f}<br>"
+                    "type=%{customdata[3]}<br>"
+                    "%{customdata[4]}<extra></extra>"
+                ),
+            )
+
+            # Expand y-range for executed fills as well
+            try:
+                y_vals.extend([float(v) for v in exec_y if v is not None])
+            except Exception:
+                pass
+
+            fig_frames.append(go.Frame(data=[trace_up_entries, trace_up_closes, trace_exec], layout=frame_layout, name=str(i), traces=[3, 4, 5]))
 
         if not fig_frames:
             st.error("No frames generated")
@@ -8550,7 +9055,7 @@ def generate_animation_v7_modec(
         )
 
         init_dynamic = list(init_frame.data) if init_frame.data is not None else []
-        while len(init_dynamic) < 2:
+        while len(init_dynamic) < 3:
             init_dynamic.append(go.Scatter(x=[], y=[]))
 
         init_data = [
@@ -8559,6 +9064,7 @@ def generate_animation_v7_modec(
             trace_ema_low_static,
             init_dynamic[0],
             init_dynamic[1],
+            init_dynamic[2],
         ]
 
         # Playback speed: UI timing only (do not scale with candle timeframe).
