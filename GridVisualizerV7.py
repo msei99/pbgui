@@ -49,6 +49,8 @@ class Order:
     qty: float = 0.0
     price: float = 0.0
     order_type: OrderType = OrderType.Default
+    # Optional: preserve PB7/Rust order type (snake) for display in GridVis tables.
+    order_type_str: str = ""
 
     @staticmethod
     def default():
@@ -74,6 +76,9 @@ class StateParams:
     balance: float = 0.0
     order_book: OrderBook = field(default_factory=OrderBook)
     ema_bands: EmaBands = field(default_factory=EmaBands)
+    # PB7 rust calc expects a precomputed volatility scalar.
+    # In GridVis we allow manually setting it for live preview.
+    entry_volatility_logrange_ema_1h: float = 0.0
 
     def clone(self):
         # Returns a new StateParams with copied fields
@@ -85,44 +90,92 @@ class StateParams:
 
 @dataclass
 class BotParams:
-    wallet_exposure_limit: float = 0.0
+    total_wallet_exposure_limit: float = 0.0
     n_positions:float = 0.0
     entry_initial_qty_pct: float = 0.0
     entry_initial_ema_dist: float = 0.0
     entry_grid_spacing_pct: float = 0.0
-    entry_grid_spacing_weight: float = 0.0
+    entry_grid_spacing_we_weight: float = 0.0
+    entry_grid_spacing_volatility_weight: float = 0.0
     entry_grid_double_down_factor: float = 0.0
     entry_trailing_threshold_pct: float = 0.0
+    entry_trailing_threshold_we_weight: float = 0.0
+    entry_trailing_threshold_volatility_weight: float = 0.0
     entry_trailing_retracement_pct: float = 0.0
+    entry_trailing_retracement_we_weight: float = 0.0
+    entry_trailing_retracement_volatility_weight: float = 0.0
+    entry_trailing_double_down_factor: float = 0.0
     entry_trailing_grid_ratio: float = 0.0
 
-    close_grid_min_markup: float = 0.0
-    close_grid_markup_range: float = 0.0
+    ema_span_0: float = 0.0
+    ema_span_1: float = 0.0
+    entry_volatility_ema_span_hours: float = 0.0
+    filter_volatility_ema_span: float = 0.0
+    filter_volatility_drop_pct: float = 0.0
+    filter_volume_drop_pct: float = 0.0
+    filter_volume_ema_span: float = 0.0
+    unstuck_close_pct: float = 0.0
+    unstuck_ema_dist: float = 0.0
+    unstuck_loss_allowance_pct: float = 0.0
+    unstuck_threshold: float = 0.0
+
+    risk_we_excess_allowance_pct: float = 0.0
+
+    close_grid_markup_end: float = 0.0
+    close_grid_markup_start: float = 0.0
     close_grid_qty_pct: float = 0.0
     close_trailing_threshold_pct: float = 0.0
     close_trailing_retracement_pct: float = 0.0
     close_trailing_qty_pct: float = 0.0
     close_trailing_grid_ratio: float = 0.0
 
+    risk_wel_enforcer_threshold: float = 1.0
+    risk_twel_enforcer_threshold: float = 1.0
+
     def clone(self):
         return BotParams(
-            wallet_exposure_limit=self.wallet_exposure_limit,
+            total_wallet_exposure_limit=self.total_wallet_exposure_limit,
+            n_positions=self.n_positions,
             entry_initial_qty_pct=self.entry_initial_qty_pct,
             entry_initial_ema_dist=self.entry_initial_ema_dist,
             entry_grid_spacing_pct=self.entry_grid_spacing_pct,
-            entry_grid_spacing_weight=self.entry_grid_spacing_weight,
+            entry_grid_spacing_we_weight=self.entry_grid_spacing_we_weight,
+            entry_grid_spacing_volatility_weight=self.entry_grid_spacing_volatility_weight,
             entry_grid_double_down_factor=self.entry_grid_double_down_factor,
             entry_trailing_threshold_pct=self.entry_trailing_threshold_pct,
+            entry_trailing_threshold_we_weight=self.entry_trailing_threshold_we_weight,
+            entry_trailing_threshold_volatility_weight=self.entry_trailing_threshold_volatility_weight,
             entry_trailing_retracement_pct=self.entry_trailing_retracement_pct,
+            entry_trailing_retracement_we_weight=self.entry_trailing_retracement_we_weight,
+            entry_trailing_retracement_volatility_weight=self.entry_trailing_retracement_volatility_weight,
+            entry_trailing_double_down_factor=self.entry_trailing_double_down_factor,
             entry_trailing_grid_ratio=self.entry_trailing_grid_ratio,
 
-            close_grid_min_markup=self.close_grid_min_markup,
-            close_grid_markup_range=self.close_grid_markup_range,
+            ema_span_0=self.ema_span_0,
+            ema_span_1=self.ema_span_1,
+            entry_volatility_ema_span_hours=self.entry_volatility_ema_span_hours,
+            filter_volatility_ema_span=self.filter_volatility_ema_span,
+            filter_volatility_drop_pct=self.filter_volatility_drop_pct,
+            filter_volume_drop_pct=self.filter_volume_drop_pct,
+            filter_volume_ema_span=self.filter_volume_ema_span,
+            unstuck_close_pct=self.unstuck_close_pct,
+            unstuck_ema_dist=self.unstuck_ema_dist,
+            unstuck_loss_allowance_pct=self.unstuck_loss_allowance_pct,
+            unstuck_threshold=self.unstuck_threshold,
+
+            risk_we_excess_allowance_pct=self.risk_we_excess_allowance_pct,
+
+            close_grid_markup_end=self.close_grid_markup_end,
+            close_grid_markup_start=self.close_grid_markup_start,
             close_grid_qty_pct=self.close_grid_qty_pct,
             close_trailing_threshold_pct=self.close_trailing_threshold_pct,
             close_trailing_retracement_pct=self.close_trailing_retracement_pct,
             close_trailing_qty_pct=self.close_trailing_qty_pct,
             close_trailing_grid_ratio=self.close_trailing_grid_ratio,
+
+            risk_wel_enforcer_threshold=self.risk_wel_enforcer_threshold,
+            risk_twel_enforcer_threshold=self.risk_twel_enforcer_threshold,
+
         )
 
 @dataclass
