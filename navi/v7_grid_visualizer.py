@@ -5306,6 +5306,41 @@ def create_plotly_graph(side: OrderType, data: GVData):
     # Render the figure using Streamlit
     st.plotly_chart(fig, width="stretch")
 
+    # Fills table under the chart
+    try:
+        sim_enabled = bool(st.session_state.get("gv_hist_sim_enabled", False))
+        if sim_enabled:
+            fills = list(getattr(data, "historical_sim_fills_long" if side == Side.Long else "historical_sim_fills_short", []) or [])
+            if fills:
+                df_fills = pd.DataFrame(fills)
+                if not df_fills.empty:
+                    if "timestamp" in df_fills.columns:
+                        df_fills["timestamp"] = pd.to_datetime(df_fills["timestamp"])
+                        df_fills = df_fills.sort_values("timestamp").reset_index(drop=True)
+                    df_fills.insert(0, "ord_idx", np.arange(0, len(df_fills), dtype=int))
+                    cols = [
+                        c
+                        for c in [
+                            "ord_idx",
+                            "timestamp",
+                            "event",
+                            "qty",
+                            "price",
+                            "order_type",
+                            "fee_paid",
+                            "wallet_balance",
+                            "pos_size",
+                        ]
+                        if c in df_fills.columns
+                    ]
+                    if cols:
+                        df_fills = df_fills[cols]
+                    if len(df_fills) > 5000:
+                        df_fills = df_fills.iloc[-5000:]
+                    st.dataframe(df_fills, use_container_width=True, height=250)
+    except Exception:
+        pass
+
     # Trailing context (bundle + derived trigger lines)
     if bot_params is not None:
         tb = data.trailing_price_bundle
@@ -8131,15 +8166,18 @@ def generate_animation_v7_modeb(
 
                         is_buy = float(qty) > 0.0
 
-                        # Jitter overlapping markers within the same candle bin and side, horizontally.
+                        # Jitter markers horizontally within the candle bin.
+                        # Always separate buys vs sells (buy left, sell right), then stack within each side.
                         try:
                             x_bin = pd.to_datetime(x_plot)
                             key = (x_bin, bool(is_buy))
                             n = int(stack_counts.get(key, 0))
                             stack_counts[key] = n + 1
                             off = int(_stack_step(n))
-                            if off != 0:
-                                xj = x_bin + pd.Timedelta(seconds=int(off * _jitter_secs))
+                            base = (-0.5 if is_buy else 0.5)
+                            total_off = float(base) + float(off)
+                            if total_off != 0.0:
+                                xj = x_bin + pd.Timedelta(seconds=int(total_off * _jitter_secs))
                                 # Keep within the candle bin so it still visually belongs to this candle.
                                 if align_method == "backfill":
                                     bin_start = x_bin - pd.Timedelta(minutes=int(opt_res_mins))
@@ -8239,7 +8277,14 @@ def generate_animation_v7_modeb(
                 y_max_frame = max(y_vals) * 1.005
 
             frame_layout = dict(
-                xaxis=dict(range=[df_window_plot.index[0], df_window_plot.index[-1]]),
+                xaxis=dict(
+                    range=[
+                        (df_window_plot.index[0] - pd.Timedelta(minutes=int(opt_res_mins)))
+                        if (int(step_mins) == 240 and int(opt_res_mins) == 240)
+                        else df_window_plot.index[0],
+                        df_window_plot.index[-1],
+                    ]
+                ),
                 yaxis=dict(range=[y_min_frame, y_max_frame]),
             )
             fig_frames.append(go.Frame(data=frame_data, layout=frame_layout, name=str(i), traces=[3, 4, 5, 6, 7]))
@@ -8339,9 +8384,9 @@ def generate_animation_v7_modeb(
                     direction="left",
                     showactive=False,
                     x=0.01,
-                    y=1.06,
+                    y=0.02,
                     xanchor="left",
-                    yanchor="top",
+                    yanchor="bottom",
                     pad={"r": 10, "t": 10},
                     buttons=[
                         dict(
@@ -8417,6 +8462,37 @@ def generate_animation_v7_modeb(
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+
+        # Fills table under the chart
+        try:
+            if sim_events_df is not None and not sim_events_df.empty:
+                df_fills = sim_events_df.copy()
+                try:
+                    df_fills = df_fills[(df_fills["timestamp"] >= pd.to_datetime(start_time)) & (df_fills["timestamp"] <= pd.to_datetime(end_time))]
+                except Exception:
+                    pass
+                cols = [
+                    c
+                    for c in [
+                        "ord_idx",
+                        "timestamp",
+                        "event",
+                        "qty",
+                        "price",
+                        "order_type",
+                        "fee_paid",
+                        "wallet_balance",
+                        "pos_size",
+                    ]
+                    if c in df_fills.columns
+                ]
+                if cols:
+                    df_fills = df_fills[cols]
+                if len(df_fills) > 5000:
+                    df_fills = df_fills.iloc[-5000:]
+                st.dataframe(df_fills, use_container_width=True, height=250)
+        except Exception:
+            pass
 
 
 def generate_animation_v7_modec(
@@ -8848,7 +8924,14 @@ def generate_animation_v7_modec(
                 y_max_frame = max(y_vals) * 1.005
 
             frame_layout = dict(
-                xaxis=dict(range=[df_window_plot.index[0], df_window_plot.index[-1]]),
+                xaxis=dict(
+                    range=[
+                        (df_window_plot.index[0] - pd.Timedelta(minutes=int(opt_res_mins)))
+                        if (int(step_mins) == 240 and int(opt_res_mins) == 240)
+                        else df_window_plot.index[0],
+                        df_window_plot.index[-1],
+                    ]
+                ),
                 yaxis=dict(range=[y_min_frame, y_max_frame]),
             )
             # Executed fills up to current_time (B/S markers)
@@ -8918,15 +9001,18 @@ def generate_animation_v7_modec(
 
                         is_buy = float(qty) > 0.0
 
-                        # Jitter overlapping markers within the same candle bin and side, horizontally.
+                        # Jitter markers horizontally within the candle bin.
+                        # Always separate buys vs sells (buy left, sell right), then stack within each side.
                         try:
                             x_bin = pd.to_datetime(x_plot)
                             key = (x_bin, bool(is_buy))
                             n = int(stack_counts.get(key, 0))
                             stack_counts[key] = n + 1
                             off = int(_stack_step(n))
-                            if off != 0:
-                                xj = x_bin + pd.Timedelta(seconds=int(off * _jitter_secs))
+                            base = (-0.5 if is_buy else 0.5)
+                            total_off = float(base) + float(off)
+                            if total_off != 0.0:
+                                xj = x_bin + pd.Timedelta(seconds=int(total_off * _jitter_secs))
                                 if align_method == "backfill":
                                     bin_start = x_bin - pd.Timedelta(minutes=int(opt_res_mins))
                                     bin_end = x_bin
@@ -9083,9 +9169,9 @@ def generate_animation_v7_modec(
                     direction="left",
                     showactive=False,
                     x=0.01,
-                    y=1.06,
+                    y=0.02,
                     xanchor="left",
-                    yanchor="top",
+                    yanchor="bottom",
                     pad={"r": 10, "t": 10},
                     buttons=[
                         dict(
@@ -9161,6 +9247,33 @@ def generate_animation_v7_modec(
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+
+        # Fills table under the chart
+        try:
+            if fills_df is not None and not fills_df.empty:
+                df_fills = fills_df.copy()
+                cols = [
+                    c
+                    for c in [
+                        "ord_idx",
+                        "timestamp",
+                        "event",
+                        "qty",
+                        "price",
+                        "order_type",
+                        "fee_paid",
+                        "wallet_balance",
+                        "pos_size",
+                    ]
+                    if c in df_fills.columns
+                ]
+                if cols:
+                    df_fills = df_fills[cols]
+                if len(df_fills) > 5000:
+                    df_fills = df_fills.iloc[-5000:]
+                st.dataframe(df_fills, use_container_width=True, height=250)
+        except Exception:
+            pass
 
 
 def _calc_entries_rust_ani(pbr, side, data, bp, pos, override_state_json=None):
