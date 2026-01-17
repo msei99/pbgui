@@ -3966,155 +3966,8 @@ def create_plotly_graph(side: OrderType, data: GVData):
             if bid > 0.0 and ask > 0.0:
                 start_price = (bid + ask) / 2.0
 
-    # --- Plotly-native slider demo (Rust-only)
-    # This slider updates ONLY the plot (client-side). Tables remain as computed server-side.
-    pbr_slider = _try_get_pbr()
-    # Option A uses Streamlit sliders. Plotly slider stays as an optional demo.
-    enable_plotly_demo = bool(st.session_state.get("gv_enable_plotly_demo", False))
-    # Rust-only: if PB7/Rust isn't available, disable the Plotly slider to avoid
-    # falling back to the self-built Python calc implementation.
-    enable_plotly_entry_spacing_slider = enable_plotly_demo and (pbr_slider is not None)
-
-    slider_param = str(st.session_state.get("gv_plotly_param", "entry_grid_spacing_pct"))
-    slider_min_mult = float(st.session_state.get("gv_plotly_min_mult", 0.7))
-    slider_max_mult = float(st.session_state.get("gv_plotly_max_mult", 1.3))
-    slider_steps = int(st.session_state.get("gv_plotly_steps", 31))
-    slider_steps = max(3, min(201, slider_steps))
-
-    def _rect_shape(y0: float, y1: float, fillcolor: str, opacity: float):
-        lo = float(min(y0, y1))
-        hi = float(max(y0, y1))
-        return dict(
-            type='rect',
-            xref='paper',
-            x0=0,
-            x1=1,
-            yref='y',
-            y0=lo,
-            y1=hi,
-            fillcolor=fillcolor,
-            opacity=opacity,
-            layer='below',
-            line_width=0,
-        )
-
-    def _line_shape(y: float, color: str, dash: str):
-        yy = float(y)
-        return dict(
-            type='line',
-            xref='paper',
-            x0=0,
-            x1=1,
-            yref='y',
-            y0=yy,
-            y1=yy,
-            line=dict(color=color, dash=dash, width=1),
-        )
-
-    def _shapes_for_step(entry_prices: list[float], close_prices: list[float], current_bot_params):
-        shapes: list[dict] = []
-
-        # Entry grid area (dynamic with spacing)
-        if entry_prices:
-            shapes.append(_rect_shape(min(entry_prices), max(entry_prices), 'red', 0.2))
-
-        # Close grid area (baseline)
-        shapes.append(_rect_shape(normal_close_grid_min, normal_close_grid_max, 'lightgreen', 0.2))
-
-        # Trailing areas - NOW DYNAMIC based on current_bot_params!
-        # Recalculate trailing area bounds using current threshold
-        if entry_mode == GridTrailingMode.GridFirst and side == Side.Long:
-            boundary_price = _get_grid_trailing_boundary(Side.Long, data, current_bot_params)
-            start_ref = boundary_price if boundary_price is not None else n_entry_min
-            gap_target = start_ref * (1.0 - current_bot_params.entry_trailing_threshold_pct)
-            dynamic_trailing_min = min(fg_entry_min, gap_target)
-            dynamic_trailing_max = start_ref
-            
-            if dynamic_trailing_min > 0 and dynamic_trailing_max > 0:
-                shapes.append(_rect_shape(dynamic_trailing_min, dynamic_trailing_max, 'rgba(200, 100, 0, 0.3)', 0.3))
-                
-        elif entry_mode == GridTrailingMode.GridFirst and side == Side.Short:
-            boundary_price = _get_grid_trailing_boundary(Side.Short, data, current_bot_params)
-            start_ref = boundary_price if boundary_price is not None else n_entry_max
-            gap_target = start_ref * (1.0 + current_bot_params.entry_trailing_threshold_pct)
-            dynamic_trailing_min = start_ref
-            dynamic_trailing_max = max(fg_entry_max, gap_target)
-            
-            if dynamic_trailing_min > 0 and dynamic_trailing_max > 0:
-                shapes.append(_rect_shape(dynamic_trailing_min, dynamic_trailing_max, 'rgba(200, 100, 0, 0.3)', 0.3))
-                
-        elif entry_mode == GridTrailingMode.TrailingFirst and side == Side.Long:
-            theo_start = start_price
-            threshold_target = theo_start * (1.0 - current_bot_params.entry_trailing_threshold_pct)
-            dynamic_trailing_max = max(fg_entry_max, theo_start)
-            dynamic_trailing_min = min(fg_entry_min, threshold_target)
-            
-            if dynamic_trailing_min > 0 and dynamic_trailing_max > 0:
-                shapes.append(_rect_shape(dynamic_trailing_min, dynamic_trailing_max, 'rgba(200, 100, 0, 0.3)', 0.3))
-                
-        elif entry_mode == GridTrailingMode.TrailingFirst and side == Side.Short:
-            theo_start = start_price
-            threshold_target = theo_start * (1.0 + current_bot_params.entry_trailing_threshold_pct)
-            dynamic_trailing_min = min(fg_entry_min, theo_start)
-            dynamic_trailing_max = max(fg_entry_max, threshold_target)
-            
-            if dynamic_trailing_min > 0 and dynamic_trailing_max > 0:
-                shapes.append(_rect_shape(dynamic_trailing_min, dynamic_trailing_max, 'rgba(200, 100, 0, 0.3)', 0.3))
-                
-        elif entry_mode == GridTrailingMode.TrailingOnly and side == Side.Long:
-            start_ref = start_price
-            gap_target = start_ref * (1.0 - current_bot_params.entry_trailing_threshold_pct)
-            dynamic_trailing_min = min(fg_entry_min, gap_target)
-            dynamic_trailing_max = max(fg_entry_max, start_ref)
-            
-            if dynamic_trailing_min > 0 and dynamic_trailing_max > 0:
-                shapes.append(_rect_shape(dynamic_trailing_min, dynamic_trailing_max, 'rgba(200, 100, 0, 0.3)', 0.3))
-                
-        elif entry_mode == GridTrailingMode.TrailingOnly and side == Side.Short:
-            start_ref = start_price
-            gap_target = start_ref * (1.0 + current_bot_params.entry_trailing_threshold_pct)
-            dynamic_trailing_min = min(fg_entry_min, start_ref)
-            dynamic_trailing_max = max(fg_entry_max, gap_target)
-            
-            if dynamic_trailing_min > 0 and dynamic_trailing_max > 0:
-                shapes.append(_rect_shape(dynamic_trailing_min, dynamic_trailing_max, 'rgba(200, 100, 0, 0.3)', 0.3))
-
-        # Close Trailing area (static for now)
-        if trailing_close_grid_min != 0 and trailing_close_grid_max != 0:
-            shapes.append(_rect_shape(trailing_close_grid_min, trailing_close_grid_max, 'blue', 0.2))
-
-        # Grid lines
-        for p in entry_prices:
-            shapes.append(_line_shape(p, 'rgba(255, 0, 0, 0.6)', 'dash'))
-        for p in close_prices:
-            shapes.append(_line_shape(p, 'rgba(0, 255, 0, 0.6)', 'dot'))
-
-        return shapes
-
-    def _calc_entry_prices_variant(
-        *,
-        entry_grid_spacing_pct: float | None = None,
-        entry_grid_double_down_factor: float | None = None,
-    ):
-        # Build entry position similar to GVData.prepare_data() logic
-        if side == Side.Long:
-            pos_entry = Position(size=0.0, price=data.position_long_enty.price)
-            bp = data.normal_bot_params_long.clone()
-        else:
-            pos_entry = Position(size=0.0, price=data.position_short_entry.price)
-            bp = data.normal_bot_params_short.clone()
-
-        if entry_grid_spacing_pct is not None:
-            bp.entry_grid_spacing_pct = float(entry_grid_spacing_pct)
-        if entry_grid_double_down_factor is not None:
-            bp.entry_grid_double_down_factor = float(entry_grid_double_down_factor)
-
-        # Rust-only: slider calculations must use PB7/Rust.
-        if pbr_slider is None:
-            return []
-        entries = _calc_entries_rust(pbr_slider, side, data, bp, pos_entry)
-
-        return [float(o.price) for o in entries if float(o.price) > 0.0]
+    # Plotly demo (client-side) removed.
+    enable_plotly_entry_spacing_slider = False
 
     # Extract entry and close prices (server-side computed baseline)
     normal_entry_prices = [o.price for o in normal_entry_orders]
@@ -5234,101 +5087,6 @@ def create_plotly_graph(side: OrderType, data: GVData):
         y_min -= y_padding
         y_max += y_padding
 
-    # Plotly slider (client-side, Rust-only)
-    if enable_plotly_entry_spacing_slider and bot_params is not None:
-        if slider_param == "entry_grid_double_down_factor":
-            base_value = float(bot_params.entry_grid_double_down_factor)
-            if base_value <= 0.0:
-                base_value = 1.2
-        else:
-            slider_param = "entry_grid_spacing_pct"
-            base_value = float(bot_params.entry_grid_spacing_pct)
-            if base_value <= 0.0:
-                base_value = 0.04
-
-        close_prices_baseline = [float(p) for p in normal_close_prices if float(p) > 0.0]
-        steps = []
-
-        # Adjustable steps around base (relative multipliers)
-        lo_mult = max(0.001, min(slider_min_mult, slider_max_mult))
-        hi_mult = max(lo_mult + 0.001, max(slider_min_mult, slider_max_mult))
-
-        # Domain clamp per parameter
-        if slider_param == "entry_grid_double_down_factor":
-            lo = max(0.01, base_value * lo_mult)
-            hi = max(lo + 0.01, base_value * hi_mult)
-            values = [round(float(x), 6) for x in np.linspace(lo, hi, slider_steps)]
-        else:
-            lo = max(0.000001, base_value * lo_mult)
-            hi = max(lo + 0.000001, base_value * hi_mult)
-            values = [round(float(x), 6) for x in np.linspace(lo, hi, slider_steps)]
-
-        values = sorted(set([round(base_value, 6)] + values))
-
-        shapes_by_step = []
-        ranges_by_step = []
-        for v in values:
-            # Clone bot_params and update with current slider value
-            bp_variant = bot_params.clone()
-            
-            if slider_param == "entry_grid_double_down_factor":
-                e_prices = _calc_entry_prices_variant(entry_grid_double_down_factor=v)
-                bp_variant.entry_grid_double_down_factor = v
-            else:
-                e_prices = _calc_entry_prices_variant(entry_grid_spacing_pct=v)
-                bp_variant.entry_grid_spacing_pct = v
-                
-            shapes = _shapes_for_step(e_prices, close_prices_baseline, bp_variant)
-            shapes_by_step.append(shapes)
-            
-            # Calculate Y-Range including Trailing Area bounds
-            # Extract all price points including trailing area min/max from shapes
-            all_prices_for_range = list(e_prices) + list(close_prices_baseline)
-            
-            # Find trailing area bounds from shapes (they are rect shapes with y0/y1)
-            for shape in shapes:
-                if shape.get('type') == 'rect' and 'y0' in shape and 'y1' in shape:
-                    all_prices_for_range.append(shape['y0'])
-                    all_prices_for_range.append(shape['y1'])
-            
-            if not all_prices_for_range:
-                all_prices_for_range = all_prices_for_min or [100.0]
-                
-            ranges_by_step.append([min(all_prices_for_range) - 15, max(all_prices_for_range) + 15])
-
-        # initialize with base twe
-        base_idx = values.index(round(base_value, 6)) if round(base_value, 6) in values else 0
-        fig.update_layout(shapes=shapes_by_step[base_idx])
-        y_min, y_max = ranges_by_step[base_idx]
-
-        for i, v in enumerate(values):
-            steps.append(
-                {
-                    "method": "relayout",
-                    "label": (f"dd {v:.3f}" if slider_param == "entry_grid_double_down_factor" else f"sp {v:.4f}"),
-                    "args": [
-                        {
-                            "shapes": shapes_by_step[i],
-                            "yaxis.range": ranges_by_step[i],
-                            "title.text": (
-                                f"📈 {title_side} Entry and Close Grids Visualization ({slider_param} {v:.6f})"
-                            ),
-                        }
-                    ],
-                }
-            )
-
-        fig.update_layout(
-            sliders=[
-                {
-                    "active": base_idx,
-                    "currentvalue": {"prefix": f"{slider_param}: "},
-                    "pad": {"t": 30},
-                    "steps": steps,
-                }
-            ]
-        )
-
     # Adjust Layout for Dark Mode
     fig.update_layout(
         template='plotly_dark',
@@ -5377,11 +5135,6 @@ def create_plotly_graph(side: OrderType, data: GVData):
 
     # Render the figure using Streamlit
     st.plotly_chart(fig, width="stretch")
-
-    if enable_plotly_entry_spacing_slider:
-        st.caption("Plotly slider updates the plot only (client-side, Rust-based). Tables below reflect the current server-side config.")
-    else:
-        st.caption("Plotly slider is disabled (requires PB7/Rust).")
 
     # Trailing context (bundle + derived trigger lines)
     if bot_params is not None:
@@ -6266,10 +6019,6 @@ def show_visualizer():
                         key="state_entry_volatility_logrange_ema_1h"
                     )
                 )
-
-        with st.expander("Plotly demo (client-side)", expanded=False):
-            st.checkbox("Enable Plotly demo slider", value=bool(st.session_state.get("gv_enable_plotly_demo", False)), key="gv_enable_plotly_demo")
-
     
     with col2:
         if data.isActive(Side.Long):
