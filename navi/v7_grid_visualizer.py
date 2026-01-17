@@ -3966,7 +3966,6 @@ def create_plotly_graph(side: OrderType, data: GVData):
             if bid > 0.0 and ask > 0.0:
                 start_price = (bid + ask) / 2.0
 
-    # Plotly demo (client-side) removed.
     enable_plotly_entry_spacing_slider = False
 
     # Extract entry and close prices (server-side computed baseline)
@@ -5376,7 +5375,13 @@ def show_visualizer():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        with st.expander("Historical Data Injection", expanded=False):
+        sel_exc = ""
+        sel_sym = ""
+        hist_df = None
+        min_day = None
+        max_day = None
+
+        with st.expander("Data (Exchange/Coin)", expanded=True):
             exchanges = get_available_exchanges_v7()
             cfg_exc = str(st.session_state.get("gv_hist_config_exchange", "") or "")
             if cfg_exc and cfg_exc not in exchanges:
@@ -5393,8 +5398,7 @@ def show_visualizer():
                     st.session_state.gv_hist_coin = str(cfg_coins[0])
                 else:
                     st.session_state.gv_hist_coin = ""
-            
-            sel_sym = ""
+
             if sel_exc:
                 cfg_coins = list(st.session_state.get("gv_hist_config_coins", []) or [])
                 if cfg_exc and str(sel_exc or "") == cfg_exc and cfg_coins:
@@ -5411,10 +5415,9 @@ def show_visualizer():
             else:
                 st.selectbox("Coin", [], disabled=True, key="gv_hist_coin")
 
-            hist_df = None
             if sel_exc and sel_sym:
                 hist_df = load_historical_ohlcv_v7(sel_exc, sel_sym)
-            
+
             if hist_df is not None and not hist_df.empty:
                 st.info(f"Loaded {len(hist_df)} candles for {sel_sym}")
 
@@ -5426,6 +5429,7 @@ def show_visualizer():
                         if _try_autofill_exchange_params(sel_exc, sel_sym, data):
                             st.session_state.gv_auto_exchange_params_last = key
                             # keep UI stable; no rerun needed
+
                 # Force day-based selection (00:00) for easier backtest-style stepping
                 min_time = hist_df.index.min().to_pydatetime()
                 max_time = hist_df.index.max().to_pydatetime()
@@ -5435,365 +5439,11 @@ def show_visualizer():
                 except Exception:
                     min_day = min_time
                     max_day = max_time
-                
-                # --- Playback Logic ---
-                # When exchange/coin changes, reset viz time so the chart updates immediately.
-                # Important: Streamlit widgets with a fixed `key` can keep their prior value and ignore
-                # programmatic session_state changes. Use a per-market slider key.
-                sel_key = f"{sel_exc}:{sel_sym}"
-                viz_slider_key = f"gv_viz_time__{sel_exc}__{sel_sym}"
-                viz_date_key = f"gv_start_date__{sel_exc}__{sel_sym}"
-                viz_sync_key = f"gv_time_sync__{sel_exc}__{sel_sym}"
-
-                if st.session_state.get("gv_viz_time_for") != sel_key:
-                    st.session_state.gv_viz_time = min_day
-                    st.session_state.gv_viz_time_for = sel_key
-
-                # Clamp + initialize the per-market slider state
-                try:
-                    cur_viz_time = st.session_state.get("gv_viz_time")
-                    if cur_viz_time is None or cur_viz_time < min_day or cur_viz_time > max_day:
-                        st.session_state.gv_viz_time = min_day
-                except Exception:
-                    st.session_state.gv_viz_time = min_day
-
-                try:
-                    cur_slider_time = st.session_state.get(viz_slider_key)
-                    if cur_slider_time is None or cur_slider_time < min_day or cur_slider_time > max_day:
-                        st.session_state[viz_slider_key] = st.session_state.gv_viz_time
-                except Exception:
-                    st.session_state[viz_slider_key] = st.session_state.gv_viz_time
-
-                # --- Bidirectional sync between Start Date and day-slider ---
-                # We only push changes from the control that changed since last run,
-                # otherwise Streamlit reruns would constantly overwrite the user's input.
-                try:
-                    if viz_date_key not in st.session_state or st.session_state.get(viz_date_key) is None:
-                        st.session_state[viz_date_key] = pd.to_datetime(st.session_state[viz_slider_key]).date()
-                except Exception:
-                    st.session_state[viz_date_key] = pd.to_datetime(min_day).date()
-
-                # Clamp date into available range
-                try:
-                    _min_d = pd.to_datetime(min_day).date()
-                    _max_d = pd.to_datetime(max_day).date()
-                    cur_date = st.session_state.get(viz_date_key)
-                    if cur_date < _min_d:
-                        cur_date = _min_d
-                    if cur_date > _max_d:
-                        cur_date = _max_d
-                    st.session_state[viz_date_key] = cur_date
-                except Exception:
-                    pass
-
-                try:
-                    cur_slider_date = pd.to_datetime(st.session_state.get(viz_slider_key)).date()
-                except Exception:
-                    cur_slider_date = pd.to_datetime(min_day).date()
-                    st.session_state[viz_slider_key] = min_day
-
-                sync = st.session_state.get(viz_sync_key) or {}
-                last_slider_date = sync.get("slider_date")
-                last_date_input = sync.get("date_input")
-
-                slider_changed = (last_slider_date is not None) and (cur_slider_date != last_slider_date)
-                date_changed = (last_date_input is not None) and (st.session_state.get(viz_date_key) != last_date_input)
-
-                if slider_changed and not date_changed:
-                    # User moved slider -> update date input
-                    st.session_state[viz_date_key] = cur_slider_date
-                elif date_changed and not slider_changed:
-                    # User changed date input -> update slider
-                    try:
-                        st.session_state[viz_slider_key] = datetime.datetime.combine(st.session_state[viz_date_key], datetime.time(0, 0))
-                    except Exception:
-                        st.session_state[viz_slider_key] = min_day
-                else:
-                    # First run or ambiguous: just reconcile mismatch by snapping slider to date input
-                    try:
-                        if cur_slider_date != st.session_state[viz_date_key]:
-                            st.session_state[viz_slider_key] = datetime.datetime.combine(st.session_state[viz_date_key], datetime.time(0, 0))
-                    except Exception:
-                        pass
-
-                start_date = st.date_input(
-                    "Start Date",
-                    value=st.session_state[viz_date_key],
-                    min_value=pd.to_datetime(min_day).date(),
-                    max_value=pd.to_datetime(max_day).date(),
-                    key=viz_date_key,
-                    help="Select the analysis/simulation start date. Time is fixed to 00:00.",
-                )
-                
-                sel_time = st.slider(
-                    "Select Time", 
-                    min_value=min_day, 
-                    max_value=max_day, 
-                    value=st.session_state[viz_slider_key],
-                    step=datetime.timedelta(days=1),
-                    format="YYYY-MM-DD 00:00",
-                    key=viz_slider_key,
-                )
-
-                # Record last values for next rerun
-                try:
-                    st.session_state[viz_sync_key] = {
-                        "slider_date": pd.to_datetime(sel_time).date(),
-                        "date_input": start_date,
-                    }
-                except Exception:
-                    pass
-
-                # Keep canonical state in sync
-                st.session_state.gv_viz_time = sel_time
-
-                # Make the selected analysis time available to plotting.
-                data.analysis_time = sel_time
-                
-
-                context_days = st.slider("Chart Context (Days)", min_value=0.5, max_value=60.0, value=5.0, step=0.5)
-
-                st.divider()
-                st.caption("Historical simulation (candle-walk)")
-                st.checkbox(
-                    "Simulate entry fills over historical candles",
-                    value=bool(st.session_state.get("gv_hist_sim_enabled", False)),
-                    key="gv_hist_sim_enabled",
-                    help="Walk forward candle-by-candle from the selected time, using Rust next-entry each step; records filled entry orders.",
-                )
-
-                st.radio(
-                    "Simulation mode",
-                    options=["Local (B)", "PB7 backtest engine (C)"],
-                    index=0 if str(st.session_state.get("gv_hist_sim_mode", "Local (B)")) == "Local (B)" else 1,
-                    key="gv_hist_sim_mode",
-                    horizontal=True,
-                    help="Local (B) uses the visualizer's candle-walk sim. PB7 (C) runs PB7's Rust backtest engine for apples-to-apples comparison.",
-                )
-                sim_col1, sim_col2 = st.columns(2)
-                with sim_col1:
-                    st.number_input(
-                        "Sim max candles",
-                        min_value=10,
-                        max_value=20000,
-                        value=int(st.session_state.get("gv_hist_sim_max_candles", 2000)),
-                        step=10,
-                        key="gv_hist_sim_max_candles",
-                    )
-                with sim_col2:
-                    st.number_input(
-                        "Sim max entry fills",
-                        min_value=1,
-                        max_value=2000,
-                        value=int(st.session_state.get("gv_hist_sim_max_orders", 200)),
-                        step=1,
-                        key="gv_hist_sim_max_orders",
-                    )
-
-                st.divider()
-                st.caption("Compare PB7 vs B vs C")
-                st.checkbox(
-                    "Show compare table (PB7 vs B vs C)",
-                    value=bool(st.session_state.get("gv_hist_compare_enabled", False)),
-                    key="gv_hist_compare_enabled",
-                    help="Loads PB7 backtest folder `fills.csv` and aligns it with Mode B and Mode C fills.",
-                )
-                st.text_input(
-                    "PB7 backtest folder (contains fills.csv)",
-                    value=str(st.session_state.get("gv_hist_compare_pb7_dir", "") or ""),
-                    key="gv_hist_compare_pb7_dir",
-                    help="Example: /home/mani/software/pb7/backtests/pbgui/<exchange>_<coin>USDT/<exchange>/YYYY-MM-DDTHH_MM_SS",
-                )
-                st.checkbox(
-                    "Use fills.csv time range for B/C",
-                    value=bool(st.session_state.get("gv_hist_compare_use_pb7_range", True)),
-                    key="gv_hist_compare_use_pb7_range",
-                    help="Runs Mode B and Mode C across the same start/end timestamps found in fills.csv (with warmup).",
-                )
-                st.checkbox(
-                    "Mismatches only",
-                    value=bool(st.session_state.get("gv_hist_compare_mismatches_only", True)),
-                    key="gv_hist_compare_mismatches_only",
-                )
-
-                long_active = data.isActive(Side.Long)
-                short_active = data.isActive(Side.Short)
-
-                def _ind_key(bp: BotParams):
-                    # Indicators used here depend on EMA spans and the volatility EMA span.
-                    ema_pair = tuple(sorted((float(bp.ema_span_0), float(bp.ema_span_1))))
-                    vol_span = float(bp.entry_volatility_ema_span_hours)
-                    return (ema_pair, vol_span)
-
-                both_active = long_active and short_active
-                same_indicators = both_active and (_ind_key(data.normal_bot_params_long) == _ind_key(data.normal_bot_params_short))
-
-                with st.expander("Movie / Animation Builder"):
-                    ani_col1, ani_col2, ani_col3 = st.columns(3)
-                    with ani_col1:
-                        ani_frames = st.number_input("Frames", min_value=10, max_value=5000, value=200)
-                    with ani_col2:
-                        ani_step_name = st.selectbox("Step Size", ["1m", "5m", "15m", "1h", "4h", "1d"], index=4)
-                        ani_steps_mins = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
-                        ani_step_min = ani_steps_mins[ani_step_name]
-                    with ani_col3:
-                        gen_movie = st.button("Generate Movie")
-
-                    st.radio(
-                        "Movie engine",
-                        options=["Local (B) – full grids", "PB7 backtest engine (C) – upcoming fills"],
-                        index=0 if str(st.session_state.get("gv_movie_engine", "Local (B) – full grids")) == "Local (B) – full grids" else 1,
-                        key="gv_movie_engine",
-                        horizontal=True,
-                        help="Mode B renders evolving entry/close grids + trailing. Mode C uses PB7's Rust backtest engine fills and previews the next fills (per position cycle) as horizontal lines; per-candle open order grids are not exposed by the engine.",
-                    )
-
-                    movie_out = st.container()
-                    if gen_movie:
-                        side_val = 1 if long_active else (2 if short_active else 1)
-                        if str(st.session_state.get("gv_movie_engine")) == "PB7 backtest engine (C) – upcoming fills":
-                            generate_animation_v7_modec(
-                                start_time=pd.to_datetime(sel_time),
-                                frames=int(ani_frames),
-                                step_mins=int(ani_step_min),
-                                hist_df=hist_df,
-                                exchange=str(sel_exc),
-                                symbol=str(sel_sym),
-                                context_days=float(context_days),
-                                side_val=int(side_val),
-                                data_template=data,
-                                output_container=movie_out,
-                            )
-                        else:
-                            generate_animation_v7_modeb(
-                                start_time=pd.to_datetime(sel_time),
-                                frames=int(ani_frames),
-                                step_mins=int(ani_step_min),
-                                hist_df=hist_df,
-                                exchange=str(sel_exc),
-                                symbol=str(sel_sym),
-                                context_days=float(context_days),
-                                side_val=int(side_val),
-                                data_template=data,
-                                output_container=movie_out,
-                            )
-                
-                # Automatically inject state based on slider
-                # Find closest row
-                # usage of get_indexer for nearest
-                idx = hist_df.index.get_indexer([sel_time], method='nearest')[0]
-                row_time = hist_df.index[idx]
-                
-                # Compute indicator-derived state(s) at this point.
-                # Rules:
-                # 1) Only compute for active sides.
-                # 2) If both active and indicator params are identical, compute once and reuse.
-                primary_bp = data.normal_bot_params_long if (long_active or not short_active) else data.normal_bot_params_short
-                other_bp = data.normal_bot_params_short if primary_bp is data.normal_bot_params_long else data.normal_bot_params_long
-
-                close_px = float(hist_df.iloc[idx]["close"])
-
-                df_primary = calculate_v7_indicators(
-                    hist_df,
-                    primary_bp.ema_span_0,
-                    primary_bp.ema_span_1,
-                    primary_bp.entry_volatility_ema_span_hours,
-                )
-                row_primary = df_primary.iloc[idx]
-
-                row_other = None
-                if both_active and (not same_indicators):
-                    df_other = calculate_v7_indicators(
-                        hist_df,
-                        other_bp.ema_span_0,
-                        other_bp.ema_span_1,
-                        other_bp.entry_volatility_ema_span_hours,
-                    )
-                    row_other = df_other.iloc[idx]
-
-                def _apply_derived(sp: StateParams, row_any) -> StateParams:
-                    sp.entry_volatility_logrange_ema_1h = float(row_any["volatility"])
-                    e0 = float(row_any.get("ema_0", close_px))
-                    e1 = float(row_any.get("ema_1", close_px))
-                    e2 = float(row_any.get("ema_2", close_px))
-                    sp.ema_bands.lower = float(min(e0, e1, e2))
-                    sp.ema_bands.upper = float(max(e0, e1, e2))
-                    sp.order_book.bid = close_px
-                    sp.order_book.ask = close_px
-                    return sp
-
-                # Per-side derived states
-                data.state_params_long = None
-                data.state_params_short = None
-
-                if long_active:
-                    sp_long = copy.deepcopy(data.state_params)
-                    row_long = row_primary if primary_bp is data.normal_bot_params_long else (row_primary if same_indicators else row_other)
-                    data.state_params_long = _apply_derived(sp_long, row_long)
-
-                if short_active:
-                    sp_short = copy.deepcopy(data.state_params)
-                    row_short = row_primary if primary_bp is data.normal_bot_params_short else (row_primary if same_indicators else row_other)
-                    data.state_params_short = _apply_derived(sp_short, row_short)
-
-                # Keep legacy/shared state in sync for any code paths still reading `data.state_params`.
-                _apply_derived(data.state_params, row_primary)
-                
-                # Also update trailing bundle to current price to avoid trailing logic using 100.0 vs 60k
-                data.trailing_price_bundle.max_since_open = close_px
-                data.trailing_price_bundle.min_since_open = close_px
-                data.trailing_price_bundle.max_since_min = close_px
-                data.trailing_price_bundle.min_since_max = close_px
-                
-                # Store historical slice for plotting.
-                # Intention: show candles FROM the selected time FOR the chosen context window.
-                # (So users can see whether subsequent candles hit the computed grid.)
-                # Assumes 1m candles (1440 per day).
-                context_candles = int(context_days * 1440)
-                available_candles = len(hist_df)
-
-                remaining_candles = max(0, available_candles - idx)
-                if context_candles > remaining_candles:
-                    st.warning(
-                        f"⚠️ Requested {context_days} days ({context_candles} candles) from selected time, "
-                        f"but only {remaining_candles} candles (~{remaining_candles/1440:.1f} days) are available. "
-                        "Displaying all available candles from selected time."
-                    )
-
-                end_slice = min(available_candles, idx + context_candles + 1)
-                slice_df = hist_df.iloc[idx:end_slice].copy()
-                
-                # Store as dict for serialization
-                slice_df.reset_index(inplace=True)
-                if "timestamp" not in slice_df.columns and "index" in slice_df.columns:
-                    slice_df.rename(columns={"index": "timestamp"}, inplace=True)
-                data.historical_candles = slice_df.to_dict(orient='list')
-
-                # Debug Info
-                with st.expander("Debug Data Inspection"):
-                    st.write(f"Ref Time: {row_time}")
-                    st.write(f"Ref Close: {close_px}")
-                    st.write(f"Active: long={long_active} short={short_active} | same_indicators={same_indicators}")
-                    st.write(f"Ref Vol (primary): {float(row_primary['volatility'])}")
-                    st.write(f"Slice Rows: {len(slice_df)}")
-                    st.write("Head:", slice_df.head(3))
-                    st.write("Tail:", slice_df.tail(3))
-
             else:
                 if sel_exc and sel_sym:
                     st.warning(f"No candles found for {sel_exc} / {sel_sym}.")
-                with st.expander("Movie / Animation Builder", expanded=False):
-                    st.info("Movie builder requires loaded OHLCV candles. Select an Exchange/Coin with available local history.", icon="ℹ️")
 
-
-        json_str = st.text_area("hidden",data.to_json(), height=1000, label_visibility = "collapsed")
-        if st.button("Apply"):
-            data = GVData.from_json(json_str)
-            st.session_state.v7_grid_visualizer_data = data
-            clear_v7_tuning_keys()
-            st.rerun()
-
-        with st.expander("Global State", expanded=True):
+        with st.expander("Exchange / State", expanded=False):
             st.caption("Exchange Parameters")
             st.checkbox(
                 "Auto-fill exchange params (best-effort)",
@@ -5918,6 +5568,7 @@ def show_visualizer():
                     )
                     st.caption("OHLCV disk sources (historical_data vs CandlestickManager cache)")
                     _render_debug_json(_ohlcv_source_debug(sel_exc, sel_coin))
+
             col_ep1, col_ep2 = st.columns(2)
             with col_ep1:
                 data.exchange_params.min_cost = st.number_input(
@@ -5995,9 +5646,9 @@ def show_visualizer():
                     )
             except Exception:
                 pass
-            
+
             st.divider()
-            
+
             # Additional State Params
             sp_col1, sp_col2 = st.columns(2)
             with sp_col1:
@@ -6006,7 +5657,7 @@ def show_visualizer():
                         "Wallet Balance (State)",
                         value=float(data.state_params.balance),
                         step=10.0,
-                        key="state_balance"
+                        key="state_balance",
                     )
                 )
             with sp_col2:
@@ -6016,9 +5667,378 @@ def show_visualizer():
                         value=float(data.state_params.entry_volatility_logrange_ema_1h),
                         step=0.01,
                         format="%.4f",
-                        key="state_entry_volatility_logrange_ema_1h"
+                        key="state_entry_volatility_logrange_ema_1h",
                     )
                 )
+
+        sel_time = None
+        context_days = 5.0
+        if hist_df is not None and not hist_df.empty and min_day is not None and max_day is not None:
+            with st.expander("Time & View", expanded=True):
+                # --- Playback Logic ---
+                # When exchange/coin changes, reset viz time so the chart updates immediately.
+                # Important: Streamlit widgets with a fixed `key` can keep their prior value and ignore
+                # programmatic session_state changes. Use a per-market slider key.
+                sel_key = f"{sel_exc}:{sel_sym}"
+                viz_slider_key = f"gv_viz_time__{sel_exc}__{sel_sym}"
+                viz_date_key = f"gv_start_date__{sel_exc}__{sel_sym}"
+                viz_sync_key = f"gv_time_sync__{sel_exc}__{sel_sym}"
+
+                if st.session_state.get("gv_viz_time_for") != sel_key:
+                    st.session_state.gv_viz_time = min_day
+                    st.session_state.gv_viz_time_for = sel_key
+
+                # Clamp + initialize the per-market slider state
+                try:
+                    cur_viz_time = st.session_state.get("gv_viz_time")
+                    if cur_viz_time is None or cur_viz_time < min_day or cur_viz_time > max_day:
+                        st.session_state.gv_viz_time = min_day
+                except Exception:
+                    st.session_state.gv_viz_time = min_day
+
+                try:
+                    cur_slider_time = st.session_state.get(viz_slider_key)
+                    if cur_slider_time is None or cur_slider_time < min_day or cur_slider_time > max_day:
+                        st.session_state[viz_slider_key] = st.session_state.gv_viz_time
+                except Exception:
+                    st.session_state[viz_slider_key] = st.session_state.gv_viz_time
+
+                # --- Bidirectional sync between Start Date and day-slider ---
+                # We only push changes from the control that changed since last run,
+                # otherwise Streamlit reruns would constantly overwrite the user's input.
+                try:
+                    if viz_date_key not in st.session_state or st.session_state.get(viz_date_key) is None:
+                        st.session_state[viz_date_key] = pd.to_datetime(st.session_state[viz_slider_key]).date()
+                except Exception:
+                    st.session_state[viz_date_key] = pd.to_datetime(min_day).date()
+
+                # Clamp date into available range
+                try:
+                    _min_d = pd.to_datetime(min_day).date()
+                    _max_d = pd.to_datetime(max_day).date()
+                    cur_date = st.session_state.get(viz_date_key)
+                    if cur_date < _min_d:
+                        cur_date = _min_d
+                    if cur_date > _max_d:
+                        cur_date = _max_d
+                    st.session_state[viz_date_key] = cur_date
+                except Exception:
+                    pass
+
+                try:
+                    cur_slider_date = pd.to_datetime(st.session_state.get(viz_slider_key)).date()
+                except Exception:
+                    cur_slider_date = pd.to_datetime(min_day).date()
+                    st.session_state[viz_slider_key] = min_day
+
+                sync = st.session_state.get(viz_sync_key) or {}
+                last_slider_date = sync.get("slider_date")
+                last_date_input = sync.get("date_input")
+
+                slider_changed = (last_slider_date is not None) and (cur_slider_date != last_slider_date)
+                date_changed = (last_date_input is not None) and (st.session_state.get(viz_date_key) != last_date_input)
+
+                if slider_changed and not date_changed:
+                    # User moved slider -> update date input
+                    st.session_state[viz_date_key] = cur_slider_date
+                elif date_changed and not slider_changed:
+                    # User changed date input -> update slider
+                    try:
+                        st.session_state[viz_slider_key] = datetime.datetime.combine(
+                            st.session_state[viz_date_key], datetime.time(0, 0)
+                        )
+                    except Exception:
+                        st.session_state[viz_slider_key] = min_day
+                else:
+                    # First run or ambiguous: just reconcile mismatch by snapping slider to date input
+                    try:
+                        if cur_slider_date != st.session_state[viz_date_key]:
+                            st.session_state[viz_slider_key] = datetime.datetime.combine(
+                                st.session_state[viz_date_key], datetime.time(0, 0)
+                            )
+                    except Exception:
+                        pass
+
+                start_date = st.date_input(
+                    "Start Date",
+                    value=st.session_state[viz_date_key],
+                    min_value=pd.to_datetime(min_day).date(),
+                    max_value=pd.to_datetime(max_day).date(),
+                    key=viz_date_key,
+                    help="Select the analysis/simulation start date. Time is fixed to 00:00.",
+                )
+
+                sel_time = st.slider(
+                    "Select Time",
+                    min_value=min_day,
+                    max_value=max_day,
+                    value=st.session_state[viz_slider_key],
+                    step=datetime.timedelta(days=1),
+                    format="YYYY-MM-DD 00:00",
+                    key=viz_slider_key,
+                )
+
+                # Record last values for next rerun
+                try:
+                    st.session_state[viz_sync_key] = {
+                        "slider_date": pd.to_datetime(sel_time).date(),
+                        "date_input": start_date,
+                    }
+                except Exception:
+                    pass
+
+                # Keep canonical state in sync
+                st.session_state.gv_viz_time = sel_time
+
+                # Make the selected analysis time available to plotting.
+                data.analysis_time = sel_time
+
+                context_days = st.slider(
+                    "Chart Context (Days)", min_value=0.5, max_value=60.0, value=5.0, step=0.5
+                )
+        else:
+            with st.expander("Time & View", expanded=True):
+                st.info("Select an Exchange/Coin with available local history.", icon="ℹ️")
+
+        with st.expander("Config (Raw JSON)", expanded=False):
+            json_str = st.text_area("hidden", data.to_json(), height=1000, label_visibility="collapsed")
+            if st.button("Apply"):
+                data = GVData.from_json(json_str)
+                st.session_state.v7_grid_visualizer_data = data
+                clear_v7_tuning_keys()
+                st.rerun()
+
+        if hist_df is not None and not hist_df.empty and sel_time is not None:
+            with st.expander("Simulation (Mode B/C)", expanded=False):
+                st.caption("Historical simulation (candle-walk)")
+                st.checkbox(
+                    "Simulate entry fills over historical candles",
+                    value=bool(st.session_state.get("gv_hist_sim_enabled", False)),
+                    key="gv_hist_sim_enabled",
+                    help="Walk forward candle-by-candle from the selected time, using Rust next-entry each step; records filled entry orders.",
+                )
+
+                st.radio(
+                    "Simulation mode",
+                    options=["Local (B)", "PB7 backtest engine (C)"],
+                    index=0 if str(st.session_state.get("gv_hist_sim_mode", "Local (B)")) == "Local (B)" else 1,
+                    key="gv_hist_sim_mode",
+                    horizontal=True,
+                    help="Local (B) uses the visualizer's candle-walk sim. PB7 (C) runs PB7's Rust backtest engine for apples-to-apples comparison.",
+                )
+                sim_col1, sim_col2 = st.columns(2)
+                with sim_col1:
+                    st.number_input(
+                        "Sim max candles",
+                        min_value=10,
+                        max_value=20000,
+                        value=int(st.session_state.get("gv_hist_sim_max_candles", 2000)),
+                        step=10,
+                        key="gv_hist_sim_max_candles",
+                    )
+                with sim_col2:
+                    st.number_input(
+                        "Sim max entry fills",
+                        min_value=1,
+                        max_value=2000,
+                        value=int(st.session_state.get("gv_hist_sim_max_orders", 200)),
+                        step=1,
+                        key="gv_hist_sim_max_orders",
+                    )
+
+            with st.expander("Compare PB7 vs B vs C", expanded=False):
+                st.checkbox(
+                    "Show compare table (PB7 vs B vs C)",
+                    value=bool(st.session_state.get("gv_hist_compare_enabled", False)),
+                    key="gv_hist_compare_enabled",
+                    help="Loads PB7 backtest folder `fills.csv` and aligns it with Mode B and Mode C fills.",
+                )
+                st.text_input(
+                    "PB7 backtest folder (contains fills.csv)",
+                    value=str(st.session_state.get("gv_hist_compare_pb7_dir", "") or ""),
+                    key="gv_hist_compare_pb7_dir",
+                    help="Example: /home/mani/software/pb7/backtests/pbgui/<exchange>_<coin>USDT/<exchange>/YYYY-MM-DDTHH_MM_SS",
+                )
+                st.checkbox(
+                    "Use fills.csv time range for B/C",
+                    value=bool(st.session_state.get("gv_hist_compare_use_pb7_range", True)),
+                    key="gv_hist_compare_use_pb7_range",
+                    help="Runs Mode B and Mode C across the same start/end timestamps found in fills.csv (with warmup).",
+                )
+                st.checkbox(
+                    "Mismatches only",
+                    value=bool(st.session_state.get("gv_hist_compare_mismatches_only", True)),
+                    key="gv_hist_compare_mismatches_only",
+                )
+
+            long_active = data.isActive(Side.Long)
+            short_active = data.isActive(Side.Short)
+
+            def _ind_key(bp: BotParams):
+                # Indicators used here depend on EMA spans and the volatility EMA span.
+                ema_pair = tuple(sorted((float(bp.ema_span_0), float(bp.ema_span_1))))
+                vol_span = float(bp.entry_volatility_ema_span_hours)
+                return (ema_pair, vol_span)
+
+            both_active = long_active and short_active
+            same_indicators = both_active and (_ind_key(data.normal_bot_params_long) == _ind_key(data.normal_bot_params_short))
+
+            with st.expander("Movie Builder", expanded=False):
+                ani_col1, ani_col2, ani_col3 = st.columns(3)
+                with ani_col1:
+                    ani_frames = st.number_input("Frames", min_value=10, max_value=5000, value=200)
+                with ani_col2:
+                    ani_step_name = st.selectbox("Step Size", ["1m", "5m", "15m", "1h", "4h", "1d"], index=4)
+                    ani_steps_mins = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+                    ani_step_min = ani_steps_mins[ani_step_name]
+                with ani_col3:
+                    gen_movie = st.button("Generate Movie")
+
+                st.radio(
+                    "Movie engine",
+                    options=["Local (B) – full grids", "PB7 backtest engine (C) – upcoming fills"],
+                    index=0 if str(st.session_state.get("gv_movie_engine", "Local (B) – full grids")) == "Local (B) – full grids" else 1,
+                    key="gv_movie_engine",
+                    horizontal=True,
+                    help="Mode B renders evolving entry/close grids + trailing. Mode C uses PB7's Rust backtest engine fills and previews the next fills (per position cycle) as horizontal lines; per-candle open order grids are not exposed by the engine.",
+                )
+
+                movie_out = st.container()
+                if gen_movie:
+                    side_val = 1 if long_active else (2 if short_active else 1)
+                    if str(st.session_state.get("gv_movie_engine")) == "PB7 backtest engine (C) – upcoming fills":
+                        generate_animation_v7_modec(
+                            start_time=pd.to_datetime(sel_time),
+                            frames=int(ani_frames),
+                            step_mins=int(ani_step_min),
+                            hist_df=hist_df,
+                            exchange=str(sel_exc),
+                            symbol=str(sel_sym),
+                            context_days=float(context_days),
+                            side_val=int(side_val),
+                            data_template=data,
+                            output_container=movie_out,
+                        )
+                    else:
+                        generate_animation_v7_modeb(
+                            start_time=pd.to_datetime(sel_time),
+                            frames=int(ani_frames),
+                            step_mins=int(ani_step_min),
+                            hist_df=hist_df,
+                            exchange=str(sel_exc),
+                            symbol=str(sel_sym),
+                            context_days=float(context_days),
+                            side_val=int(side_val),
+                            data_template=data,
+                            output_container=movie_out,
+                        )
+
+            # Automatically inject state based on slider
+            idx = hist_df.index.get_indexer([sel_time], method='nearest')[0]
+            row_time = hist_df.index[idx]
+
+            # Compute indicator-derived state(s) at this point.
+            # Rules:
+            # 1) Only compute for active sides.
+            # 2) If both active and indicator params are identical, compute once and reuse.
+            primary_bp = data.normal_bot_params_long if (long_active or not short_active) else data.normal_bot_params_short
+            other_bp = data.normal_bot_params_short if primary_bp is data.normal_bot_params_long else data.normal_bot_params_long
+
+            close_px = float(hist_df.iloc[idx]["close"])
+
+            df_primary = calculate_v7_indicators(
+                hist_df,
+                primary_bp.ema_span_0,
+                primary_bp.ema_span_1,
+                primary_bp.entry_volatility_ema_span_hours,
+            )
+            row_primary = df_primary.iloc[idx]
+
+            row_other = None
+            if both_active and (not same_indicators):
+                df_other = calculate_v7_indicators(
+                    hist_df,
+                    other_bp.ema_span_0,
+                    other_bp.ema_span_1,
+                    other_bp.entry_volatility_ema_span_hours,
+                )
+                row_other = df_other.iloc[idx]
+
+            def _apply_derived(sp: StateParams, row_any) -> StateParams:
+                sp.entry_volatility_logrange_ema_1h = float(row_any["volatility"])
+                e0 = float(row_any.get("ema_0", close_px))
+                e1 = float(row_any.get("ema_1", close_px))
+                e2 = float(row_any.get("ema_2", close_px))
+                sp.ema_bands.lower = float(min(e0, e1, e2))
+                sp.ema_bands.upper = float(max(e0, e1, e2))
+                sp.order_book.bid = close_px
+                sp.order_book.ask = close_px
+                return sp
+
+            # Per-side derived states
+            data.state_params_long = None
+            data.state_params_short = None
+
+            if long_active:
+                sp_long = copy.deepcopy(data.state_params)
+                row_long = row_primary if primary_bp is data.normal_bot_params_long else (row_primary if same_indicators else row_other)
+                data.state_params_long = _apply_derived(sp_long, row_long)
+
+            if short_active:
+                sp_short = copy.deepcopy(data.state_params)
+                row_short = row_primary if primary_bp is data.normal_bot_params_short else (row_primary if same_indicators else row_other)
+                data.state_params_short = _apply_derived(sp_short, row_short)
+
+            # Keep legacy/shared state in sync for any code paths still reading `data.state_params`.
+            _apply_derived(data.state_params, row_primary)
+
+            # Also update trailing bundle to current price to avoid trailing logic using 100.0 vs 60k
+            data.trailing_price_bundle.max_since_open = close_px
+            data.trailing_price_bundle.min_since_open = close_px
+            data.trailing_price_bundle.max_since_min = close_px
+            data.trailing_price_bundle.min_since_max = close_px
+
+            # Store historical slice for plotting.
+            # Intention: show candles FROM the selected time FOR the chosen context window.
+            # (So users can see whether subsequent candles hit the computed grid.)
+            # Assumes 1m candles (1440 per day).
+            context_candles = int(context_days * 1440)
+            available_candles = len(hist_df)
+
+            remaining_candles = max(0, available_candles - idx)
+            if context_candles > remaining_candles:
+                st.warning(
+                    f"⚠️ Requested {context_days} days ({context_candles} candles) from selected time, "
+                    f"but only {remaining_candles} candles (~{remaining_candles/1440:.1f} days) are available. "
+                    "Displaying all available candles from selected time."
+                )
+
+            end_slice = min(available_candles, idx + context_candles + 1)
+            slice_df = hist_df.iloc[idx:end_slice].copy()
+
+            # Store as dict for serialization
+            slice_df.reset_index(inplace=True)
+            if "timestamp" not in slice_df.columns and "index" in slice_df.columns:
+                slice_df.rename(columns={"index": "timestamp"}, inplace=True)
+            data.historical_candles = slice_df.to_dict(orient='list')
+
+            with st.expander("Debug", expanded=False):
+                st.write(f"Ref Time: {row_time}")
+                st.write(f"Ref Close: {close_px}")
+                st.write(f"Active: long={long_active} short={short_active} | same_indicators={same_indicators}")
+                st.write(f"Ref Vol (primary): {float(row_primary['volatility'])}")
+                st.write(f"Slice Rows: {len(slice_df)}")
+                st.write("Head:", slice_df.head(3))
+                st.write("Tail:", slice_df.tail(3))
+        else:
+            with st.expander("Simulation (Mode B/C)", expanded=False):
+                st.info("Requires loaded OHLCV candles.", icon="ℹ️")
+            with st.expander("Compare PB7 vs B vs C", expanded=False):
+                st.info("Requires loaded OHLCV candles.", icon="ℹ️")
+            with st.expander("Movie Builder", expanded=False):
+                st.info("Requires loaded OHLCV candles.", icon="ℹ️")
+            with st.expander("Debug", expanded=False):
+                st.info("Requires loaded OHLCV candles.", icon="ℹ️")
     
     with col2:
         if data.isActive(Side.Long):
