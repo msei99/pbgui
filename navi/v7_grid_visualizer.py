@@ -1,8 +1,59 @@
-import streamlit as st  # Streamlit library for creating web apps
+try:
+    import streamlit as st  # Streamlit library for creating web apps
+    _STREAMLIT_AVAILABLE = True
+except ModuleNotFoundError:  # pragma: no cover
+    _STREAMLIT_AVAILABLE = False
+
+    class _NoStreamlitCacheDecorator:
+        def __call__(self, func=None, **_kwargs):
+            if func is None:
+                def _deco(f):
+                    return f
+                return _deco
+            return func
+
+    class _StreamlitStub:
+        cache_resource = _NoStreamlitCacheDecorator()
+        cache_data = _NoStreamlitCacheDecorator()
+
+        def __getattr__(self, name: str):
+            raise RuntimeError(
+                f"streamlit is required for '{name}'. "
+                "Install streamlit or run via the Streamlit UI."
+            )
+
+    st = _StreamlitStub()  # type: ignore
 import time
 import math
 import datetime
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths, pb7dir
+try:
+    from pbgui_func import (
+        set_page_config,
+        is_session_state_not_initialized,
+        error_popup,
+        is_pb7_installed,
+        is_authenticted,
+        get_navi_paths,
+        pb7dir,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    # Allow importing this module for headless tooling (e.g. compare scripts)
+    # without requiring Streamlit/UI helpers.
+    def _requires_streamlit(*_args, **_kwargs):
+        raise RuntimeError("This function requires streamlit UI context")
+
+    set_page_config = _requires_streamlit
+    is_session_state_not_initialized = _requires_streamlit
+    error_popup = _requires_streamlit
+    is_pb7_installed = _requires_streamlit
+    is_authenticted = _requires_streamlit
+    get_navi_paths = _requires_streamlit
+
+    def pb7dir() -> str:
+        # Used by headless helpers as well; default to workspace-relative pb7.
+        import os as _os
+
+        return _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..", "pb7"))
 import numpy as np  # NumPy for numerical operations
 import pandas as pd  # Pandas for data manipulation and analysis
 try:
@@ -15,7 +66,11 @@ from typing import List, Any, Optional, Callable
 import copy
 import os
 import sys
-from Config import ConfigV7
+try:
+    from Config import ConfigV7
+except ModuleNotFoundError:  # pragma: no cover
+    class ConfigV7:  # type: ignore
+        pass
 import json
 from dataclasses import dataclass, field, asdict
 from typing import List
@@ -50,13 +105,16 @@ def get_GridTrailing_mode(trailing_grid_ratio: float) -> GridTrailingMode:
     return GridTrailingMode.Unknown 
 
 
-@st.cache_resource
-def _get_passivbot_rust(pb7_src_dir: str):
+def _import_passivbot_rust(pb7_src_dir: str):
     if pb7_src_dir and pb7_src_dir not in sys.path:
         sys.path.insert(0, pb7_src_dir)
     import passivbot_rust as pbr  # type: ignore
-
     return pbr
+
+
+@st.cache_resource
+def _get_passivbot_rust(pb7_src_dir: str):
+    return _import_passivbot_rust(pb7_src_dir)
 
 def get_available_exchanges_v7() -> List[str]:
     exchanges: set[str] = set()
@@ -654,7 +712,7 @@ def _ohlcv_source_debug(exchange: str, coin: str) -> dict:
         "cm_cache_candidates": cm_candidates,
         "historical_npy_counts": hist_counts,
         "cm_cache_npy_counts": cm_counts,
-        "merge_priority": "historical_data wins on overlapping timestamps",
+        "merge_priority": "PB7-style: legacy historical_data canonical; cm cache fills gaps",
     }
 
 @st.cache_data
@@ -665,8 +723,42 @@ def load_historical_ohlcv_v7(exchange: str, symbol: str) -> pd.DataFrame:
     - historical_data shards: 2D arrays (N, 6): [ts, o, h, l, c, v]
     - CandlestickManager cache shards: structured arrays with fields (ts,o,h,l,c,bv)
 
-    Merge priority: `pb7/historical_data` wins on overlapping timestamps.
+    Merge semantics (PB7 CandlestickManager-style):
+    - Legacy downloader shards (`historical_data/`) are canonical where present.
+    - Primary CandlestickManager cache (`caches/ohlcv/`) is used to fill legacy gaps.
+    - Conflicts are resolved deterministically (stable sort, keep last).
     """
+
+    def _dedupe_sort(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.sort_index(kind="stable")
+        return df[~df.index.duplicated(keep="last")]
+
+    def _archive_symbol_code(symbol_like: str) -> str:
+        """Best-effort PB7-style archive symbol code (typically BASEQUOTE)."""
+        s = str(symbol_like or "").strip()
+        if not s:
+            return ""
+
+        # ccxt-style: BASE/QUOTE or BASE/QUOTE:SETTLE
+        if "/" in s:
+            base, rest = s.split("/", 1)
+            quote = rest.split(":", 1)[0] if ":" in rest else rest
+            base = (base or "").replace("/", "").replace(":", "")
+            quote = (quote or "").replace("/", "").replace(":", "")
+            return f"{base}{quote}" if quote else base
+
+        # Some PB7 cache dirs use BASE_QUOTE:SETTLE (e.g. HYPE_USDT:USDT)
+        if ":" in s or "_" in s:
+            left = s.split(":", 1)[0]
+            if "_" in left:
+                base, quote = left.rsplit("_", 1)
+                if base and quote:
+                    return f"{base}{quote}"
+
+        # Fallback: already code-like
+        return s.replace("/", "").replace(":", "")
 
     def _df_from_npy(arr: np.ndarray) -> pd.DataFrame | None:
         try:
@@ -697,8 +789,21 @@ def load_historical_ohlcv_v7(exchange: str, symbol: str) -> pd.DataFrame:
                 return df
 
             if isinstance(arr, np.ndarray) and arr.ndim == 2 and arr.shape[1] >= 6:
-                df = pd.DataFrame(arr[:, :6], columns=["timestamp", "open", "high", "low", "close", "volume"])
-                df["timestamp"] = pd.to_datetime(df["timestamp"].astype("int64"), unit="ms")
+                # PB7 CandlestickManager converts legacy 2D arrays to float32 fields.
+                # Preserve that semantics to avoid drift from float64-quantized candles.
+                raw = np.asarray(arr[:, :6], dtype=np.float64)
+                ts = raw[:, 0].astype(np.int64)
+                ohlcv = raw[:, 1:6].astype(np.float32).astype(np.float64)
+                df = pd.DataFrame(
+                    {
+                        "timestamp": pd.to_datetime(ts, unit="ms"),
+                        "open": ohlcv[:, 0],
+                        "high": ohlcv[:, 1],
+                        "low": ohlcv[:, 2],
+                        "close": ohlcv[:, 3],
+                        "volume": ohlcv[:, 4],
+                    }
+                )
                 df.set_index("timestamp", inplace=True)
                 return df
         except Exception:
@@ -711,6 +816,16 @@ def load_historical_ohlcv_v7(exchange: str, symbol: str) -> pd.DataFrame:
     sym_raw = str(symbol or "").strip()
     coin_base = _coin_from_symbol_code(sym_raw)
     coin_candidates = [c for c in [sym_raw, coin_base] if c]
+
+    # Best-effort hint for deriving legacy sym_code dirs (e.g. HYPEUSDT).
+    # We may only get base coin from callers, so we also try to infer from the
+    # selected CandlestickManager cache dir name later.
+    sym_code_hint = sym_raw
+
+    # Only allow loose prefix matching (e.g., DOGE -> DOGEUSDT) when the user
+    # provided a non-base symbol (sym_raw != coin_base). If sym_raw already is a
+    # base coin (e.g. "HYPE"), do NOT match unrelated prefixes like "HYPEUSDT".
+    allow_prefix_match = bool(sym_raw and coin_base and sym_raw != coin_base)
 
     def _dir_matches_coin(d: str, coin: str) -> bool:
         if not d or not coin:
@@ -726,8 +841,9 @@ def load_historical_ohlcv_v7(exchange: str, symbol: str) -> pd.DataFrame:
             return True
         if d.startswith(f"{coin}-"):
             return True
-        # allow direct prefix match (e.g. DOGE matches DOGEUSDT)
-        if d.startswith(coin):
+        # allow direct prefix match (e.g. DOGE matches DOGEUSDT) only when requested
+        # symbol includes quote/suffix (sym_raw != coin_base)
+        if allow_prefix_match and d.startswith(coin):
             return True
         return False
 
@@ -770,6 +886,7 @@ def load_historical_ohlcv_v7(exchange: str, symbol: str) -> pd.DataFrame:
 
             if best is None:
                 best = candidates[0]
+            sym_code_hint = str(best)
             target_dir = os.path.join(cm_base, best)
 
         if target_dir and os.path.isdir(target_dir):
@@ -787,50 +904,71 @@ def load_historical_ohlcv_v7(exchange: str, symbol: str) -> pd.DataFrame:
                 if df_shard is not None and not df_shard.empty:
                     dfs_cm.append(df_shard)
 
-    # 2) Historical data: pb7/historical_data/ohlcvs_<exchange>/<symbol_code>/YYYY-MM-DD.npy
-    hist_root = os.path.join(pb7dir(), "historical_data", f"ohlcvs_{exchange}")
-    if os.path.isdir(hist_root):
-        hist_dirs: list[str] = []
+    # 2) Historical data: legacy downloader shards (PB7 CandlestickManager-style)
+    # - Primary legacy dir: pb7/historical_data/ohlcvs_<exchange>/<coin>/YYYY-MM-DD.npy
+    # - Extra legacy dirs for some exchanges (e.g. bybit sym_code, binanceusdm futures sym_code)
+    legacy_dir_candidates: list[str] = []
+    try:
+        coin_dir = os.path.join(pb7dir(), "historical_data", f"ohlcvs_{exchange}", coin_base)
+        if coin_base and os.path.isdir(coin_dir):
+            legacy_dir_candidates.append(coin_dir)
+    except Exception:
+        pass
+
+    try:
+        sym_code = _archive_symbol_code(sym_code_hint)
+    except Exception:
+        sym_code = ""
+
+    if str(exchange).lower() == "bybit" and sym_code and sym_code != coin_base:
         try:
-            for d in os.listdir(hist_root):
-                pdir = os.path.join(hist_root, d)
-                if not os.path.isdir(pdir) or d.startswith("."):
-                    continue
-                for c in coin_candidates:
-                    if _dir_matches_coin(d, c):
-                        hist_dirs.append(d)
-                        break
+            bybit_sym_dir = os.path.join(pb7dir(), "historical_data", "ohlcvs_bybit", sym_code)
+            if os.path.isdir(bybit_sym_dir):
+                legacy_dir_candidates.append(bybit_sym_dir)
         except Exception:
-            hist_dirs = []
+            pass
 
-        for d in hist_dirs:
-            hist_dir = os.path.join(hist_root, d)
-            try:
-                shard_files = sorted([f for f in os.listdir(hist_dir) if f.endswith(".npy") and not f.startswith(".")])
-            except Exception:
-                shard_files = []
-            for f in shard_files:
-                p = os.path.join(hist_dir, f)
-                try:
-                    arr = np.load(p)
-                except Exception:
-                    continue
-                df_shard = _df_from_npy(arr)
-                if df_shard is not None and not df_shard.empty:
-                    dfs_hist.append(df_shard)
+    if str(exchange).lower() == "binanceusdm" and sym_code:
+        try:
+            futures_sym_dir = os.path.join(pb7dir(), "historical_data", "ohlcvs_futures", sym_code)
+            if os.path.isdir(futures_sym_dir):
+                legacy_dir_candidates.append(futures_sym_dir)
+        except Exception:
+            pass
 
-    # Merge all sources, with historical_data last so it wins on overlaps
-    dfs: list[pd.DataFrame] = []
-    dfs.extend(dfs_cm)
-    dfs.extend(dfs_hist)
+    # Build date_key -> shard path mapping, preferring earlier dirs (PB7 uses setdefault).
+    legacy_shards: dict[str, str] = {}
+    for d in legacy_dir_candidates:
+        try:
+            for p in sorted([f for f in os.listdir(d) if f.endswith(".npy") and not f.startswith(".")]):
+                date_key = os.path.splitext(p)[0]
+                if len(date_key) == 10 and date_key[4] == "-" and date_key[7] == "-":
+                    legacy_shards.setdefault(date_key, os.path.join(d, p))
+        except Exception:
+            continue
 
-    if not dfs:
+    for date_key, path in sorted(legacy_shards.items()):
+        try:
+            arr = np.load(path)
+        except Exception:
+            continue
+        df_shard = _df_from_npy(arr)
+        if df_shard is not None and not df_shard.empty:
+            dfs_hist.append(df_shard)
+
+    primary_df = _dedupe_sort(pd.concat(dfs_cm)) if dfs_cm else pd.DataFrame()
+    legacy_df = _dedupe_sort(pd.concat(dfs_hist)) if dfs_hist else pd.DataFrame()
+
+    if legacy_df.empty and primary_df.empty:
         return pd.DataFrame()
+    if legacy_df.empty:
+        return primary_df
+    if primary_df.empty:
+        return legacy_df
 
-    full_df = pd.concat(dfs)
-    full_df.sort_index(inplace=True)
-    full_df = full_df[~full_df.index.duplicated(keep="last")]
-    return full_df
+    # Legacy canonical; primary fills gaps.
+    full_df = legacy_df.combine_first(primary_df)
+    return _dedupe_sort(full_df)
 
 @st.cache_data(show_spinner=False)
 def calculate_v7_indicators(df: pd.DataFrame, ema0: float, ema1: float, vol_span_hours: float):
@@ -870,6 +1008,228 @@ def calculate_v7_indicators(df: pd.DataFrame, ema0: float, ema1: float, vol_span
     return df
 
 
+def _any_trailing_enabled_for_backtest(bp: BotParams) -> bool:
+    """Match PB7 backtest `TrailingEnabled` logic.
+
+    PB7 updates trailing bundle only if either trailing_grid_ratio is non-zero.
+    """
+    try:
+        return float(getattr(bp, "close_trailing_grid_ratio", 0.0) or 0.0) != 0.0 or float(
+            getattr(bp, "entry_trailing_grid_ratio", 0.0) or 0.0
+        ) != 0.0
+    except Exception:
+        return False
+
+
+def _bot_params_dict_for_orchestrator_single_symbol(bp: BotParams, *, enabled: bool) -> dict:
+    """Build a PB7-compatible BotParams dict for orchestrator JSON API.
+
+    Ensures `wallet_exposure_limit` is populated and resolved for the 1-symbol case.
+    """
+    d = asdict(bp)
+    d.setdefault("wallet_exposure_limit", -1.0)
+    if not enabled:
+        d["n_positions"] = 0
+        d["total_wallet_exposure_limit"] = 0.0
+        d["wallet_exposure_limit"] = 0.0
+        return d
+
+    try:
+        wel = float(d.get("wallet_exposure_limit") if d.get("wallet_exposure_limit") is not None else -1.0)
+    except Exception:
+        wel = -1.0
+
+    if wel < 0.0:
+        try:
+            npos = int(d.get("n_positions") or 0)
+        except Exception:
+            npos = 0
+        try:
+            total = float(d.get("total_wallet_exposure_limit") or 0.0)
+        except Exception:
+            total = 0.0
+        # For a single tradable symbol, PB7 dynamic WEL resolves to total_wel / effective_n_positions.
+        enp = min(max(0, npos), 1) if npos else 0
+        d["wallet_exposure_limit"] = float(total / float(enp)) if enp else 0.0
+    return d
+
+
+def _prepare_orchestrator_ema_df(
+    candles: pd.DataFrame,
+    *,
+    bot_params_long: BotParams,
+    bot_params_short: BotParams,
+) -> pd.DataFrame:
+    """Compute EMA series needed by PB7 orchestrator input.
+
+    Matches PB7 backtest EMA semantics in `passivbot-rust/src/backtest.rs`:
+    - price/volume EMAs: recursive update ($adjust=False$ semantics) with init at first valid close/quote-volume.
+    - log-range EMAs: recursive update with init=0.
+    - 1h entry-volatility log-range EMA: updated on hour boundaries using the *previous hour* bucket.
+
+    Returns a DataFrame aligned to `candles.index`.
+    """
+    if candles is None or candles.empty:
+        return pd.DataFrame()
+    d = candles.copy()
+    for col in ("open", "high", "low", "close"):
+        if col not in d.columns:
+            return pd.DataFrame()
+
+    def _alpha_from_span(span: float) -> float:
+        try:
+            s = float(span)
+        except Exception:
+            s = 1.0
+        if not np.isfinite(s) or s <= 0.0:
+            s = 1.0
+        return float(2.0 / (s + 1.0))
+
+    def _ema_skip_nan(values: np.ndarray, *, alpha: float, init: float) -> np.ndarray:
+        """Recursive EMA update, skipping NaNs (keep previous), PB7-style."""
+        out_arr = np.empty(values.shape[0], dtype=np.float64)
+        prev = float(init)
+        one_minus = float(1.0 - float(alpha))
+        a = float(alpha)
+        for i, v in enumerate(values):
+            if np.isfinite(v) and np.isfinite(a) and a > 0.0:
+                prev = a * float(v) + one_minus * prev
+            out_arr[i] = prev
+        return out_arr
+
+    close = d["close"].astype("float64").to_numpy(copy=False)
+    high = d["high"].astype("float64").to_numpy(copy=False)
+    low = d["low"].astype("float64").to_numpy(copy=False)
+    vol_raw = (
+        d["volume"].astype("float64").to_numpy(copy=False)
+        if "volume" in d.columns
+        else np.zeros_like(close, dtype=np.float64)
+    )
+
+    # PB7 stores 1m OHLCV as float32 in numpy and reads as f64 in Rust.
+    # Quantize inputs here to reduce strict-threshold divergences.
+    try:
+        close = close.astype(np.float32).astype(np.float64)
+        high = high.astype(np.float32).astype(np.float64)
+        low = low.astype(np.float32).astype(np.float64)
+        vol_raw = vol_raw.astype(np.float32).astype(np.float64)
+    except Exception:
+        pass
+
+    # PB7 update_emas() skips all EMA updates if close/high/low are not finite.
+    update_ok = np.isfinite(close) & np.isfinite(high) & np.isfinite(low)
+
+    # Init index = first valid candle (matches PB7 first_valid_idx semantics best-effort).
+    if update_ok.any():
+        first_ok = int(np.argmax(update_ok))
+    else:
+        first_ok = 0
+    base_close = float(close[first_ok]) if np.isfinite(close[first_ok]) else 0.0
+    base_vol = float(max(0.0, vol_raw[first_ok])) if np.isfinite(vol_raw[first_ok]) else 0.0
+    hi0 = float(high[first_ok]) if np.isfinite(high[first_ok]) else float("nan")
+    lo0 = float(low[first_ok]) if np.isfinite(low[first_ok]) else float("nan")
+    if np.isfinite(hi0) and np.isfinite(lo0) and base_close > 0.0:
+        typical0 = (hi0 + lo0 + base_close) / 3.0
+    else:
+        typical0 = max(base_close, 1.0)
+    base_quote_vol = float(base_vol * typical0)
+
+    # Prepare update streams (NaN => skip update, keep previous)
+    close_upd = np.where(update_ok, close, np.nan)
+    vol_base = np.where(np.isfinite(vol_raw), np.maximum(0.0, vol_raw), 0.0)
+    typical = (high + low + close) / 3.0
+    # If typical is non-finite, fall back to close (PB7 falls back more aggressively only for init)
+    typical = np.where(np.isfinite(typical), typical, np.where(np.isfinite(close), close, 0.0))
+    quote_vol = vol_base * typical
+    quote_vol_upd = np.where(update_ok, quote_vol, np.nan)
+    log_range_vals = np.where(
+        (high > 0.0) & (low > 0.0) & np.isfinite(high) & np.isfinite(low),
+        np.log(high / low),
+        0.0,
+    )
+    log_range_upd = np.where(update_ok, log_range_vals, np.nan)
+
+    # 1m close EMAs (3 spans) per pside
+    e0l = float(getattr(bot_params_long, "ema_span_0", 1.0) or 1.0)
+    e1l = float(getattr(bot_params_long, "ema_span_1", 1.0) or 1.0)
+    e2l = float(max(1.0, float(e0l * e1l) ** 0.5))
+    e0s = float(getattr(bot_params_short, "ema_span_0", 1.0) or 1.0)
+    e1s = float(getattr(bot_params_short, "ema_span_1", 1.0) or 1.0)
+    e2s = float(max(1.0, float(e0s * e1s) ** 0.5))
+
+    out = pd.DataFrame(index=d.index)
+    out["ema_l0"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e0l), init=base_close)
+    out["ema_l1"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e1l), init=base_close)
+    out["ema_l2"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e2l), init=base_close)
+    out["ema_s0"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e0s), init=base_close)
+    out["ema_s1"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e1s), init=base_close)
+    out["ema_s2"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e2s), init=base_close)
+
+    # 1m volume/log-range EMAs (forager)
+    span_vol_l = float(getattr(bot_params_long, "filter_volume_ema_span", 1.0) or 1.0)
+    span_vol_s = float(getattr(bot_params_short, "filter_volume_ema_span", 1.0) or 1.0)
+    out["vol_ema_l"] = _ema_skip_nan(quote_vol_upd, alpha=_alpha_from_span(span_vol_l), init=base_quote_vol)
+    out["vol_ema_s"] = _ema_skip_nan(quote_vol_upd, alpha=_alpha_from_span(span_vol_s), init=base_quote_vol)
+
+    span_lr_l = float(getattr(bot_params_long, "filter_volatility_ema_span", 1.0) or 1.0)
+    span_lr_s = float(getattr(bot_params_short, "filter_volatility_ema_span", 1.0) or 1.0)
+    out["lr_ema_l"] = _ema_skip_nan(log_range_upd, alpha=_alpha_from_span(span_lr_l), init=0.0)
+    out["lr_ema_s"] = _ema_skip_nan(log_range_upd, alpha=_alpha_from_span(span_lr_s), init=0.0)
+
+    # 1h log-range EMA for entry volatility (updated on hour boundary using previous-hour bucket)
+    def _entry_volatility_h1_series(span_hours: float) -> np.ndarray:
+        try:
+            span_h = float(span_hours or 0.0)
+        except Exception:
+            span_h = 0.0
+        if span_h <= 0.0 or not np.isfinite(span_h):
+            return np.zeros_like(close, dtype=np.float64)
+
+        a = float(2.0 / (span_h + 1.0))
+        one_minus = 1.0 - a
+        out_arr = np.zeros_like(close, dtype=np.float64)
+        prev = 0.0
+
+        # timestamps aligned to epoch hours (PB7 uses absolute ms)
+        try:
+            ts_ms = (d.index.view("int64") // 1_000_000).astype(np.int64)
+        except Exception:
+            return out_arr
+        hour_ms = (ts_ms // 3_600_000) * 3_600_000
+
+        last_boundary = int(hour_ms[0]) if hour_ms.size else 0
+        window_start = 0
+
+        for i in range(ts_ms.size):
+            hb = int(hour_ms[i])
+            if hb > last_boundary:
+                # update using previous window [window_start, i-1]
+                end = i - 1
+                if end >= window_start:
+                    hh = high[window_start : end + 1]
+                    ll = low[window_start : end + 1]
+                    mask = np.isfinite(hh) & np.isfinite(ll)
+                    if mask.any():
+                        hmax = float(np.max(hh[mask]))
+                        lmin = float(np.min(ll[mask]))
+                        if hmax > 0.0 and lmin > 0.0 and np.isfinite(hmax) and np.isfinite(lmin):
+                            lr = float(np.log(hmax / lmin))
+                            prev = a * lr + one_minus * prev
+                last_boundary = hb
+                window_start = i
+            out_arr[i] = prev
+        return out_arr
+
+    out["h1_lr_ema_l"] = _entry_volatility_h1_series(
+        float(getattr(bot_params_long, "entry_volatility_ema_span_hours", 0.0) or 0.0)
+    )
+    out["h1_lr_ema_s"] = _entry_volatility_h1_series(
+        float(getattr(bot_params_short, "entry_volatility_ema_span_hours", 0.0) or 0.0)
+    )
+
+    return out
+
+
 def _historical_dict_to_df(hist: Any) -> pd.DataFrame:
     """Convert `data.historical_candles` to a DataFrame indexed by timestamp."""
     if hist is None:
@@ -895,6 +1255,79 @@ def _historical_dict_to_df(hist: Any) -> pd.DataFrame:
         except Exception:
             pass
     return df
+
+
+def _standardize_ohlcv_1m_gaps(
+    df: pd.DataFrame,
+    *,
+    start_ts: pd.Timestamp | None = None,
+    end_ts: pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """PB7 CandlestickManager-style gap standardization for 1m candles.
+
+    - Synthesizes missing minutes as flat candles: o=h=l=c=prev_close, volume=0.
+    - Does NOT fill leading gaps before first real candle.
+    - Operates on the provided [start_ts, end_ts] window (inclusive), floored to minutes.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    for col in ("open", "high", "low", "close"):
+        if col not in df.columns:
+            return df
+
+    d = df.sort_index(kind="stable")
+    d = d[~d.index.duplicated(keep="last")]
+
+    first_real = d.index.min()
+    if pd.isna(first_real):
+        return d
+
+    if start_ts is None:
+        start_ts = first_real
+    if end_ts is None:
+        end_ts = d.index.max()
+    if pd.isna(end_ts):
+        return d
+
+    start_ts = pd.Timestamp(start_ts).floor("min")
+    end_ts = pd.Timestamp(end_ts).floor("min")
+    if end_ts < start_ts:
+        return d
+
+    # Do not create synthetic candles before first real data point.
+    effective_start = max(start_ts, pd.Timestamp(first_real).floor("min"))
+    if end_ts < effective_start:
+        # Requested window ends before first data.
+        return d.loc[effective_start:effective_start].iloc[:0]
+
+    full_index = pd.date_range(effective_start, end_ts, freq="1min")
+
+    # Seed close from the last candle strictly before effective_start if the first minute is missing.
+    prev_close = None
+    try:
+        prev_rows = d.loc[: effective_start - pd.Timedelta(minutes=1)]
+        if not prev_rows.empty:
+            prev_close = float(prev_rows["close"].iloc[-1])
+    except Exception:
+        prev_close = None
+
+    window = d.loc[:end_ts].reindex(full_index)
+    close = window["close"].astype("float64")
+    if prev_close is not None and (close.empty or pd.isna(close.iloc[0])):
+        close.iloc[0] = float(prev_close)
+    close = close.ffill()
+
+    # Where the original row was missing, synthesize OHLC from prev_close.
+    missing = window["close"].isna()
+    out = window.copy()
+    out.loc[missing, "open"] = close.loc[missing]
+    out.loc[missing, "high"] = close.loc[missing]
+    out.loc[missing, "low"] = close.loc[missing]
+    out.loc[missing, "close"] = close.loc[missing]
+    if "volume" in out.columns:
+        out.loc[out["volume"].isna(), "volume"] = 0.0
+    return out
 
 
 def _reset_trailing_bundle(tb: TrailingPriceBundle, price: float) -> TrailingPriceBundle:
@@ -1049,9 +1482,20 @@ def _compute_warmup_minutes_for_mode_c_from_config(
     for key in bound_keys_hours:
         max_minutes = max(max_minutes, _extract_bound_max(bounds, key) * 60.0)
 
-    live = config.get("live") or {}
-    warmup_ratio = _to_float(live.get("warmup_ratio"))
-    limit = _to_float(live.get("max_warmup_minutes"))
+    # PB7 backtests define warmup settings under `backtest`.
+    # Keep a fallback to `live` for older configs.
+    backtest_cfg = config.get("backtest") or {}
+    live_cfg = config.get("live") or {}
+
+    warmup_ratio = _to_float(backtest_cfg.get("warmup_ratio"))
+    if warmup_ratio <= 0.0:
+        warmup_ratio = _to_float(live_cfg.get("warmup_ratio"))
+    if warmup_ratio <= 0.0:
+        warmup_ratio = 0.2
+
+    limit = _to_float(backtest_cfg.get("max_warmup_minutes"))
+    if limit <= 0.0:
+        limit = _to_float(live_cfg.get("max_warmup_minutes"))
 
     if not math.isfinite(max_minutes):
         return 0
@@ -1303,19 +1747,15 @@ def _compare_fills_pb7_b_c(
         dc, how="outer", on=["k_ts", "k_ot", "k_p", "k_q"]
     )
 
-    # Prefer PB7 timestamp/type/price/qty for display, else B, else C
-    def _coalesce(*cols: str) -> Any:
-        for c in cols:
-            if c in m.columns:
-                v = m[c]
-                if v.notna().any():
-                    return v
-        return None
+    # Prefer PB7 timestamp/type/price/qty for display, else B, else C (row-wise).
+    # NOTE: must be per-row, otherwise b_only/c_only rows appear blank.
+    def _s(col: str) -> pd.Series:
+        return m[col] if col in m.columns else pd.Series(pd.NA, index=m.index)
 
-    m["timestamp"] = _coalesce("pb7_timestamp", "b_timestamp", "c_timestamp")
-    m["order_type"] = _coalesce("pb7_order_type", "b_order_type", "c_order_type")
-    m["price"] = _coalesce("pb7_price", "b_price", "c_price")
-    m["qty"] = _coalesce("pb7_qty", "b_qty", "c_qty")
+    m["timestamp"] = _s("pb7_timestamp").combine_first(_s("b_timestamp")).combine_first(_s("c_timestamp"))
+    m["order_type"] = _s("pb7_order_type").combine_first(_s("b_order_type")).combine_first(_s("c_order_type"))
+    m["price"] = _s("pb7_price").combine_first(_s("b_price")).combine_first(_s("c_price"))
+    m["qty"] = _s("pb7_qty").combine_first(_s("b_qty")).combine_first(_s("c_qty"))
 
     m["in_pb7"] = m.get("pb7_order_type").notna() if "pb7_order_type" in m.columns else False
     m["in_b"] = m.get("b_order_type").notna() if "b_order_type" in m.columns else False
@@ -1475,45 +1915,15 @@ def _run_compare_from_pb7_backtest_dir(
     except Exception:
         candles = hist_df_full.copy()
 
-    # Run Mode B across the same candle slice
-    fees = _derive_exchange_fees_from_market(exchange, coin)
-    maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
+    # PB7 CandlestickManager standardizes gaps for 1m by synthesizing flat zero-volume candles.
+    # Apply the same semantics here for parity.
+    try:
+        candles = _standardize_ohlcv_1m_gaps(candles, start_ts=warm_start, end_ts=end_ts)
+    except Exception:
+        pass
+
     b_long: list[dict] = []
     b_short: list[dict] = []
-    try:
-        b_long = _simulate_backtest_over_historical_candles(
-            pbr=pbr,
-            pb7_src=pb7_src,
-            side=Side.Long,
-            candles=candles,
-            exchange_params=exchange_params,
-            bot_params=bp_long,
-            starting_position=Position(size=0.0, price=0.0),
-            balance=float(starting_balance),
-            maker_fee=maker_fee,
-            trade_start_time=trade_start_ts,
-            max_orders=int(max_orders),
-            max_candles=len(candles),
-        )
-    except Exception:
-        b_long = []
-    try:
-        b_short = _simulate_backtest_over_historical_candles(
-            pbr=pbr,
-            pb7_src=pb7_src,
-            side=Side.Short,
-            candles=candles,
-            exchange_params=exchange_params,
-            bot_params=bp_short,
-            starting_position=Position(size=0.0, price=0.0),
-            balance=float(starting_balance),
-            maker_fee=maker_fee,
-            trade_start_time=trade_start_ts,
-            max_orders=int(max_orders),
-            max_candles=len(candles),
-        )
-    except Exception:
-        b_short = []
 
     # Run Mode C starting from PB7 backtest start_date, but only compare within fills.csv window.
     try:
@@ -1566,6 +1976,41 @@ def _run_compare_from_pb7_backtest_dir(
         if c_min_ts is not None and pd.to_datetime(c_min_ts) <= pd.to_datetime(start_ts):
             break
 
+    # Mode B: orchestrator-driven candle-walk simulation (should match PB7 fills.csv semantics)
+    fees = {}
+    try:
+        fees = _derive_exchange_fees_from_market(exchange, coin)
+    except Exception:
+        fees = {}
+    try:
+        maker_fee = float((cfg.get("backtest") or {}).get("maker_fee") or 0.0)
+    except Exception:
+        maker_fee = 0.0
+    if not math.isfinite(maker_fee) or maker_fee <= 0.0:
+        try:
+            maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
+        except Exception:
+            maker_fee = 0.0
+
+    try:
+        b_long, b_short = _simulate_backtest_over_historical_candles_pair(
+            pbr=pbr,
+            pb7_src=pb7_src,
+            candles=candles,
+            exchange_params=exchange_params,
+            bot_params_long=bp_long,
+            bot_params_short=bp_short,
+            starting_position_long=Position(size=0.0, price=0.0),
+            starting_position_short=Position(size=0.0, price=0.0),
+            balance=float(starting_balance),
+            maker_fee=float(maker_fee),
+            trade_start_time=pd.to_datetime(trade_start_ts),
+            max_orders=int(max_orders),
+            max_candles=int(len(candles) if candles is not None else 0),
+        )
+    except Exception:
+        b_long, b_short = [], []
+
     # Filter B/C/PB7 events to the fills.csv time range
     def _filt(events: list[dict]) -> list[dict]:
         out: list[dict] = []
@@ -1592,6 +2037,8 @@ def _run_compare_from_pb7_backtest_dir(
         "trade_start_ts": trade_start_ts,
         "start_ts": start_ts,
         "end_ts": end_ts,
+        "price_step": float(getattr(exchange_params, "price_step", 0.0) or 0.0),
+        "qty_step": float(getattr(exchange_params, "qty_step", 0.0) or 0.0),
         "mode_c_warmup_used": c_warmup_used,
         "mode_c_attempts": c_attempts,
     }
@@ -1655,17 +2102,7 @@ def _run_pb7_engine_backtest_for_visualizer(
     closes = window["close"].astype("float64").to_numpy()
     vols = window["volume"].astype("float64").to_numpy()
 
-    # Boundary epsilon: PB7/Mode B treats wick touches at the exact price as fills.
-    # The Rust engine may effectively behave like strict inequalities at f64 boundaries;
-    # inflate highs / deflate lows by a tiny epsilon to make equality-touch fills deterministic.
-    try:
-        price_step = float(exchange_params.price_step or 0.0)
-    except Exception:
-        price_step = 0.0
-    eps = (price_step * 1e-6) if price_step > 0.0 else 1e-12
-    if math.isfinite(eps) and eps > 0.0:
-        highs = highs + eps
-        lows = lows - eps
+    # Keep strict candle boundaries (do not inflate highs/deflate lows).
 
     hlcvs = np.stack([highs, lows, closes, vols], axis=1).reshape((-1, 1, 4))
 
@@ -1899,7 +2336,8 @@ def _simulate_backtest_over_historical_candles(
     side: Side,
     candles: pd.DataFrame,
     exchange_params: ExchangeParams,
-    bot_params: BotParams,
+    bot_params_long: BotParams,
+    bot_params_short: BotParams,
     starting_position: Position,
     balance: float,
     maker_fee: float = 0.0,
@@ -1922,17 +2360,33 @@ def _simulate_backtest_over_historical_candles(
 
     if max_candles > 0 and len(candles) > max_candles:
         candles = candles.iloc[:max_candles].copy()
+    else:
+        candles = candles.copy()
+
+    # Parity note (PB7 vs Mode B): PB7 backtest uses f32-backed candle data.
+    # With strict fill checks (low < price, high > price), float64 vs float32 edge cases can
+    # flip a fill decision and then cascade into many downstream mismatches.
+    # Therefore we quantize OHLCV to float32 in Mode B.
+    for col in ("open", "high", "low", "close", "volume"):
+        if col in candles.columns:
+            try:
+                candles[col] = candles[col].astype(np.float32)
+            except Exception:
+                pass
 
     for col in ("open", "high", "low", "close"):
         if col not in candles.columns:
             return []
 
-    ind = calculate_v7_indicators(
+    # Build EMA bundle components needed by PB7 orchestrator.
+    # Note: Mode B uses prev-minute state; we will read EMAs from (i-1).
+    ema_df = _prepare_orchestrator_ema_df(
         candles,
-        float(bot_params.ema_span_0),
-        float(bot_params.ema_span_1),
-        float(bot_params.entry_volatility_ema_span_hours),
+        bot_params_long=bot_params_long,
+        bot_params_short=bot_params_short,
     )
+    if ema_df is None or ema_df.empty:
+        return []
 
     events: List[dict] = []
     pos = Position(size=float(starting_position.size), price=float(starting_position.price))
@@ -1945,236 +2399,521 @@ def _simulate_backtest_over_historical_candles(
     if c_mult <= 0.0:
         c_mult = 1.0
 
+    qty_step = float(getattr(exchange_params, "qty_step", 0.0) or 0.0)
+    if not math.isfinite(qty_step) or qty_step < 0.0:
+        qty_step = 0.0
+
     price_step = float(getattr(exchange_params, "price_step", 0.0) or 0.0)
     if not math.isfinite(price_step) or price_step < 0.0:
         price_step = 0.0
-    # Tiny epsilon to mimic f64 boundary behavior on strict inequalities.
-    # Use a fraction of price_step if available, otherwise fall back to a small absolute.
-    price_eps = (price_step * 1e-6) if price_step > 0.0 else 1e-12
+
+    # PB7 `TrailingPriceBundle::default()` uses `f64::MAX` for the two "min" fields.
+    # Use the same value (and keep it JSON-safe).
+    TRAILING_INF = float(getattr(sys, "float_info", None).max) if getattr(sys, "float_info", None) else 1.7976931348623157e308
 
     # PB7 TrailingPriceBundle::default(): min_since_open=inf, max_since_min=0, max_since_open=0, min_since_max=inf
-    tb = TrailingPriceBundle(float("inf"), 0.0, 0.0, float("inf"))
+    tb = TrailingPriceBundle(float(TRAILING_INF), 0.0, 0.0, float(TRAILING_INF))
 
-    ep_json = json.dumps(asdict(exchange_params), sort_keys=True)
-    bp_json = json.dumps(asdict(bot_params), sort_keys=True)
+    # Trailing bundle update only if grid_ratio != 0 (PB7 backtest behavior).
+    trailing_enabled = _any_trailing_enabled_for_backtest(bot_params_long) or _any_trailing_enabled_for_backtest(bot_params_short)
 
     def _pos_has_side_position(p: Position) -> bool:
-        if side == Side.Long:
-            return float(p.size) > 0.0
-        return float(p.size) < 0.0
+        try:
+            if side == Side.Long:
+                return float(p.size) > 0.0
+            return float(p.size) < 0.0
+        except Exception:
+            return False
 
     trade_start_time_pd = pd.to_datetime(trade_start_time) if trade_start_time is not None else None
 
-    if len(ind) < 2:
+    if len(candles.index) < 2:
         return events
 
-    ind_index = list(ind.index)
-    for i in range(1, len(ind_index)):
-        ts = ind_index[i]
-        row = ind.loc[ts]
-        prev_ts = ind_index[i - 1]
-        prev_row = ind.loc[prev_ts]
+    idx_list = list(candles.index)
+
+    pnl_cumsum_running = 0.0
+    pnl_cumsum_max = 0.0
+
+    def _pb7_update_trailing_bundle_with_candle(bundle: TrailingPriceBundle, high: float, low: float, close: float) -> TrailingPriceBundle:
+        # Mirrors pb7/passivbot-rust/src/trailing.rs::update_trailing_bundle_with_candle
+        if not (math.isfinite(high) and math.isfinite(low) and math.isfinite(close)):
+            return bundle
+        if float(low) < float(bundle.min_since_open):
+            bundle.min_since_open = float(low)
+            bundle.max_since_min = float(close)
+        else:
+            bundle.max_since_min = float(max(float(bundle.max_since_min), float(high)))
+        if float(high) > float(bundle.max_since_open):
+            bundle.max_since_open = float(high)
+            bundle.min_since_max = float(close)
+        else:
+            bundle.min_since_max = float(min(float(bundle.min_since_max), float(low)))
+        return bundle
+
+    def _pb7_reset_trailing_bundle(bundle: TrailingPriceBundle) -> TrailingPriceBundle:
+        bundle.min_since_open = float(TRAILING_INF)
+        bundle.max_since_min = 0.0
+        bundle.max_since_open = 0.0
+        bundle.min_since_max = float(TRAILING_INF)
+        return bundle
+
+    def _order_filled(low: float, high: float, qty: float, price: float, order_type: Optional[str] = None) -> bool:
+        # Parity note:
+        # - PB7: candle highs/lows are float32 (promoted to float64 for comparisons), and fill checks are strict.
+        # - Mode B must mirror this; otherwise “almost equal” cases differ.
+        # - Additionally: sell-side order prices coming from JSON can drift at the float boundary.
+        #   Quantize most sell-side prices to float32 to match PB7 edge behavior, BUT do NOT quantize
+        #   tick-rounded `close_grid*` prices (e.g. 36.923 -> 36.923000335...), which can delay fills.
+        try:
+            low32 = np.float32(float(low))
+            high32 = np.float32(float(high))
+            low = float(low32)
+            high = float(high32)
+        except Exception:
+            low32 = None
+            high32 = None
+        if qty > 0.0:
+            return float(low) < float(price)
+        if qty < 0.0:
+            # For most sell-side fills, quantize price to float32 to match PB7 candle/price precision edge cases.
+            # However, `close_grid*` prices are tick-rounded and must NOT be float32-quantized; otherwise a
+            # tick price like 36.923 becomes 36.923000335... and may become equal to candle high, delaying fills.
+            try:
+                if not (order_type and str(order_type).startswith("close_grid")):
+                    price = float(np.float32(float(price)))
+            except Exception:
+                pass
+            return float(high) > float(price)
+        return False
+
+    def _effective_min_cost(close_price: float) -> float:
+        try:
+            q = float(getattr(exchange_params, "min_qty", 0.0) or 0.0)
+            mc = float(getattr(exchange_params, "min_cost", 0.0) or 0.0)
+        except Exception:
+            q, mc = 0.0, 0.0
+        try:
+            return float(max(float(pbr.qty_to_cost(float(q), float(close_price), float(c_mult))), float(mc)))
+        except Exception:
+            return float(max(abs(q) * float(close_price) * float(c_mult), mc))
+
+    long_enabled = side == Side.Long
+    short_enabled = side == Side.Short
+
+    # PB7 orchestrator input includes:
+    # - per-symbol bot_params (after overrides)
+    # - global_bot_params from a *master* pair where n_positions is clamped to n_coins.
+    bp_long_symbol_dict = _bot_params_dict_for_orchestrator_single_symbol(bot_params_long, enabled=True)
+    bp_short_symbol_dict = _bot_params_dict_for_orchestrator_single_symbol(bot_params_short, enabled=True)
+    bp_long_master_dict = dict(bp_long_symbol_dict)
+    bp_short_master_dict = dict(bp_short_symbol_dict)
+    try:
+        bp_long_master_dict["n_positions"] = int(min(int(bp_long_master_dict.get("n_positions") or 0), 1))
+    except Exception:
+        pass
+    try:
+        bp_short_master_dict["n_positions"] = int(min(int(bp_short_master_dict.get("n_positions") or 0), 1))
+    except Exception:
+        pass
+
+    def _unstuck_allowance() -> tuple[float, float]:
+        # Mirrors PB7 backtest build_orchestrator_input: compute both long+short allowances from balance.
+        def _one(bp: BotParams) -> float:
+            try:
+                pct = float(getattr(bp, "unstuck_loss_allowance_pct", 0.0) or 0.0)
+                total_wel = float(getattr(bp, "total_wallet_exposure_limit", 0.0) or 0.0)
+            except Exception:
+                pct, total_wel = 0.0, 0.0
+            if pct <= 0.0 or total_wel <= 0.0:
+                return 0.0
+            try:
+                return float(
+                    pbr.calc_auto_unstuck_allowance(
+                        float(sim_balance),
+                        float(pct) * float(total_wel),
+                        float(pnl_cumsum_max),
+                        float(pnl_cumsum_running),
+                    )
+                )
+            except Exception:
+                return 0.0
+
+        return (_one(bot_params_long), _one(bot_params_short))
+
+    def _compute_orch_orders(
+        *,
+        ob_price: float,
+        ema_row: pd.Series,
+        position: Position,
+        trailing: TrailingPriceBundle,
+        next_low: float,
+        next_high: float,
+        tradable_now: bool,
+        tradable_next: bool,
+    ) -> tuple[list[dict], list[dict]]:
+        # Build minimal OrchestratorInput for 1 symbol.
+        ul, us = _unstuck_allowance()
+
+        # EMA bundle
+        m1_close: list[list[float]] = []
+        h1_log_range: list[list[float]] = []
+        m1_volume: list[list[float]] = []
+        m1_log_range: list[list[float]] = []
+
+        # PB7 passes both long+short EMA spans/values in the same timeframe bundle.
+        def _append_ema_close(bp: BotParams, prefix: str):
+            span0 = float(getattr(bp, "ema_span_0", 1.0) or 1.0)
+            span1 = float(getattr(bp, "ema_span_1", 1.0) or 1.0)
+            span2 = float(max(1.0, float(span0 * span1) ** 0.5))
+            span0 = max(1.0, float(span0))
+            span1 = max(1.0, float(span1))
+            span2 = max(1.0, float(span2))
+            if prefix == "l":
+                v0 = float(ema_row.get("ema_l0", ob_price) or ob_price)
+                v1 = float(ema_row.get("ema_l1", ob_price) or ob_price)
+                v2 = float(ema_row.get("ema_l2", ob_price) or ob_price)
+            else:
+                v0 = float(ema_row.get("ema_s0", ob_price) or ob_price)
+                v1 = float(ema_row.get("ema_s1", ob_price) or ob_price)
+                v2 = float(ema_row.get("ema_s2", ob_price) or ob_price)
+            pairs: list[tuple[float, float]] = [(span0, v0), (span1, v1), (span2, v2)]
+            pairs.sort(key=lambda x: x[0])
+            for s, v in pairs:
+                m1_close.append([float(s), float(v)])
+
+        _append_ema_close(bot_params_long, "l")
+        _append_ema_close(bot_params_short, "s")
+
+        # m1 volume/log-range (two entries: long + short)
+        m1_volume.append([
+            float(getattr(bot_params_long, "filter_volume_ema_span", 1.0) or 1.0),
+            float(ema_row.get("vol_ema_l", 0.0) or 0.0),
+        ])
+        m1_volume.append([
+            float(getattr(bot_params_short, "filter_volume_ema_span", 1.0) or 1.0),
+            float(ema_row.get("vol_ema_s", 0.0) or 0.0),
+        ])
+        m1_log_range.append([
+            float(getattr(bot_params_long, "filter_volatility_ema_span", 1.0) or 1.0),
+            float(ema_row.get("lr_ema_l", 0.0) or 0.0),
+        ])
+        m1_log_range.append([
+            float(getattr(bot_params_short, "filter_volatility_ema_span", 1.0) or 1.0),
+            float(ema_row.get("lr_ema_s", 0.0) or 0.0),
+        ])
+
+        # 1h log-range EMA (optional per-side span)
+        span_h_l = float(getattr(bot_params_long, "entry_volatility_ema_span_hours", 0.0) or 0.0)
+        if span_h_l > 0.0:
+            h1_log_range.append([float(span_h_l), float(ema_row.get("h1_lr_ema_l", 0.0) or 0.0)])
+        span_h_s = float(getattr(bot_params_short, "entry_volatility_ema_span_hours", 0.0) or 0.0)
+        if span_h_s > 0.0:
+            h1_log_range.append([float(span_h_s), float(ema_row.get("h1_lr_ema_s", 0.0) or 0.0)])
+
+        default_trailing = TrailingPriceBundle(float(TRAILING_INF), 0.0, 0.0, float(TRAILING_INF))
+        long_trailing = asdict(trailing) if (long_enabled and trailing is not None) else asdict(default_trailing)
+        short_trailing = asdict(trailing) if (short_enabled and trailing is not None) else asdict(default_trailing)
+
+        if not bool(tradable_next):
+            next_low = 0.0
+            next_high = 0.0
+
+        ob_p = float(ob_price)
+        if not math.isfinite(ob_p) or ob_p <= 0.0:
+            ob_p = float(np.finfo("float64").eps)
+
+        inp = {
+            "balance": float(sim_balance),
+            "global": {
+                "filter_by_min_effective_cost": False,
+                "unstuck_allowance_long": float(ul),
+                "unstuck_allowance_short": float(us),
+                "sort_global": False,
+                "global_bot_params": {"long": bp_long_master_dict, "short": bp_short_master_dict},
+            },
+            "symbols": [
+                {
+                    "symbol_idx": 0,
+                    "order_book": {"bid": float(ob_p), "ask": float(ob_p)},
+                    "exchange": {
+                        "qty_step": float(getattr(exchange_params, "qty_step", 0.0) or 0.0),
+                        "price_step": float(getattr(exchange_params, "price_step", 0.0) or 0.0),
+                        "min_qty": float(getattr(exchange_params, "min_qty", 0.0) or 0.0),
+                        "min_cost": float(getattr(exchange_params, "min_cost", 0.0) or 0.0),
+                        "c_mult": float(c_mult),
+                    },
+                    "tradable": bool(tradable_now),
+                    "next_candle": {"low": float(next_low), "high": float(next_high), "tradable": bool(tradable_next)},
+                    "effective_min_cost": float(_effective_min_cost(float(ob_p))),
+                    "emas": {
+                        "m1": {
+                            "close": m1_close,
+                            "volume": m1_volume,
+                            "log_range": m1_log_range,
+                        },
+                        "h1": {
+                            "close": [],
+                            "volume": [],
+                            "log_range": h1_log_range,
+                        },
+                    },
+                    "long": {
+                        "mode": None,
+                        "position": {"size": float(position.size if long_enabled else 0.0), "price": float(position.price if long_enabled else 0.0)},
+                        "trailing": long_trailing,
+                        "bot_params": bp_long_symbol_dict,
+                    },
+                    "short": {
+                        "mode": None,
+                        "position": {"size": float(position.size if short_enabled else 0.0), "price": float(position.price if short_enabled else 0.0)},
+                        "trailing": short_trailing,
+                        "bot_params": bp_short_symbol_dict,
+                    },
+                }
+            ],
+            "peek_hints": None,
+        }
+
+        out_json = pbr.compute_ideal_orders_json(json.dumps(inp))
+        out = json.loads(out_json)
+        orders = out.get("orders") or []
+        entries: list[dict] = []
+        closes: list[dict] = []
+        want_pside = "long" if side == Side.Long else "short"
+        for o in orders:
+            try:
+                if int(o.get("symbol_idx", -1)) != 0:
+                    continue
+                if str(o.get("pside")) != want_pside:
+                    continue
+                ot = str(o.get("order_type") or "")
+                rec = {
+                    "qty": float(o.get("qty") or 0.0),
+                    "price": float(o.get("price") or 0.0),
+                    "order_type": ot,
+                }
+                if ot.startswith("close_"):
+                    closes.append(rec)
+                else:
+                    entries.append(rec)
+            except Exception:
+                continue
+        return entries, closes
+
+    for i in range(1, len(idx_list)):
+        ts = idx_list[i]
+        row = candles.loc[ts]
+        prev_ts = idx_list[i - 1]
+        prev_row = candles.loc[prev_ts]
+        ema_prev = ema_df.loc[prev_ts] if prev_ts in ema_df.index else None
         if len(events) >= int(max_orders):
             break
 
         trading_active = True
+        prev_trading_active = True
         if trade_start_time_pd is not None:
             try:
                 trading_active = pd.to_datetime(ts) >= trade_start_time_pd
             except Exception:
                 trading_active = True
+            try:
+                prev_trading_active = pd.to_datetime(prev_ts) >= trade_start_time_pd
+            except Exception:
+                prev_trading_active = True
 
-        open_px = float(row["open"])
-        close_px = float(row["close"])
-        low_px = float(row["low"])
-        high_px = float(row["high"])
+        # PB7 uses float32-quantized candles stored in numpy and then read as f64.
+        # Mirror that here to avoid strict-inequality edge cases.
+        def _f32(x: float) -> float:
+            try:
+                return float(np.float32(float(x)))
+            except Exception:
+                return float(x)
 
-        # PB7 backtest effectively places orders based on previous minute state
-        # and then evaluates fills using the current candle's OHLC path.
-        prev_close_px = float(prev_row.get("close", open_px) or open_px)
-        vol = float(prev_row.get("volatility", 0.0) or 0.0)
-        ema0 = float(prev_row.get("ema_0", prev_close_px) or prev_close_px)
-        ema1 = float(prev_row.get("ema_1", prev_close_px) or prev_close_px)
-        ema2 = float(prev_row.get("ema_2", prev_close_px) or prev_close_px)
+        open_px = _f32(row["open"])
+        close_px = _f32(row["close"])
+        low_px = _f32(row["low"])
+        high_px = _f32(row["high"])
 
-        ema_lower = float(min(ema0, ema1, ema2))
-        ema_upper = float(max(ema0, ema1, ema2))
+        prev_close_px = _f32(prev_row.get("close", open_px) or open_px)
 
+        # next candle hint for orchestrator expansion = current candle range
+        next_low = float(low_px)
+        next_high = float(high_px)
+
+        # Orders are computed from prev-minute state.
         tb_local = copy.deepcopy(tb)
         filled_this_candle = False
 
-        def _pb7_update_trailing_bundle_with_candle(bundle: TrailingPriceBundle, high: float, low: float, close: float) -> TrailingPriceBundle:
-            # Mirrors pb7/passivbot-rust/src/trailing.rs::update_trailing_bundle_with_candle
-            if not (math.isfinite(high) and math.isfinite(low) and math.isfinite(close)):
-                return bundle
-            if float(low) < float(bundle.min_since_open):
-                bundle.min_since_open = float(low)
-                bundle.max_since_min = float(close)
-            else:
-                bundle.max_since_min = float(max(float(bundle.max_since_min), float(high)))
-            if float(high) > float(bundle.max_since_open):
-                bundle.max_since_open = float(high)
-                bundle.min_since_max = float(close)
-            else:
-                bundle.min_since_max = float(min(float(bundle.min_since_max), float(low)))
-            return bundle
-
-        def _pb7_reset_trailing_bundle(bundle: TrailingPriceBundle) -> TrailingPriceBundle:
-            bundle.min_since_open = float("inf")
-            bundle.max_since_min = 0.0
-            bundle.max_since_open = 0.0
-            bundle.min_since_max = float("inf")
-            return bundle
-
-        def _order_would_fill_is_buy(is_buy: bool, price: float, low: float, high: float) -> bool:
-            # Mirrors pb7/passivbot-rust/src/backtest.rs::order_filled
-            if is_buy:
-                return (float(low) < float(price)) or (abs(float(low) - float(price)) <= float(price_eps))
-            return (float(high) > float(price)) or (abs(float(high) - float(price)) <= float(price_eps))
-
-        def _entry_is_buy() -> bool:
-            return side == Side.Long
-
-        def _close_is_buy() -> bool:
-            return side == Side.Short
-
-        def _make_state_params(px: float) -> StateParams:
-            return StateParams(
-                balance=float(sim_balance),
-                order_book=OrderBook(bid=float(px), ask=float(px)),
-                ema_bands=EmaBands(lower=float(ema_lower), upper=float(ema_upper)),
-                entry_volatility_logrange_ema_1h=float(vol),
+        if trading_active and ema_prev is not None:
+            pending_entries, pending_closes = _compute_orch_orders(
+                ob_price=float(prev_close_px),
+                ema_row=ema_prev,
+                position=pos,
+                trailing=tb_local,
+                next_low=next_low,
+                next_high=next_high,
+                tradable_now=bool(prev_trading_active),
+                tradable_next=bool(trading_active),
             )
+        else:
+            pending_entries, pending_closes = ([], [])
 
-        def _recalc_entries(sp_for_calc: StateParams):
-            sp_json = json.dumps(asdict(sp_for_calc), sort_keys=True)
-            tb_json = json.dumps(asdict(tb_local), sort_keys=True)
-            raw_entries = _calc_entries_rust_cached(
-                pb7_src,
-                int(side.value),
-                ep_json,
-                sp_json,
-                tb_json,
-                bp_json,
-                float(pos.size),
-                float(pos.price),
-            )
-            entries: list[tuple[float, float, int]] = []
-            for q, p, t in (raw_entries or []):
-                try:
-                    entries.append((float(q), float(p), int(t)))
-                except Exception:
-                    continue
-            return entries
-
-        def _recalc_closes(sp_for_calc: StateParams):
-            if not _pos_has_side_position(pos) or float(pos.price) <= 0.0:
-                return []
-            sp_json = json.dumps(asdict(sp_for_calc), sort_keys=True)
-            tb_json = json.dumps(asdict(tb_local), sort_keys=True)
-            raw_closes = _calc_closes_rust_cached(
-                pb7_src,
-                int(side.value),
-                ep_json,
-                sp_json,
-                tb_json,
-                bp_json,
-                float(pos.size),
-                float(pos.price),
-            )
-            closes: list[tuple[float, float, int]] = []
-            for q, p, t in (raw_closes or []):
-                try:
-                    closes.append((float(q), float(p), int(t)))
-                except Exception:
-                    continue
-            return closes
-
-        # Pending orders for this candle are computed from previous-minute state.
-        sp_calc = _make_state_params(prev_close_px)
-        pending_entries = _recalc_entries(sp_calc) if trading_active else []
-        pending_closes = _recalc_closes(sp_calc) if trading_active else []
-
-        # Process closes first (PB7 behavior), collecting which ones would fill on this candle.
+        # Process closes first (PB7 behavior)
         if trading_active and pending_closes and _pos_has_side_position(pos):
-            closes_to_process = [c for c in pending_closes if _order_would_fill_is_buy(_close_is_buy(), c[1], low_px, high_px)]
-            for qc, pc, tc in closes_to_process:
+            for o in pending_closes:
                 if len(events) >= int(max_orders):
                     break
-                remaining = abs(float(pos.size))
-                fill_amt = min(abs(float(qc)), remaining)
-                if fill_amt <= 0.0:
+                q = float(o.get("qty") or 0.0)
+                p = float(o.get("price") or 0.0)
+                ot = str(o.get("order_type") or "")
+                if q == 0.0 or p <= 0.0:
+                    continue
+                if not _order_filled(low_px, high_px, q, p):
                     continue
 
-                if side == Side.Long:
-                    q_eff = -fill_amt
+                # PB7 close fill adjustment if order closes beyond remaining psize.
+                adj_qty = float(q)
+                try:
+                    if side == Side.Long:
+                        new_psize = float(pbr.round_(float(pos.size) + float(adj_qty), float(qty_step))) if qty_step > 0.0 else float(pos.size) + float(adj_qty)
+                        if new_psize < 0.0:
+                            new_psize = 0.0
+                            adj_qty = -float(pos.size)
+                    else:
+                        new_psize = float(pbr.round_(float(pos.size) + float(adj_qty), float(qty_step))) if qty_step > 0.0 else float(pos.size) + float(adj_qty)
+                        if new_psize > 0.0:
+                            new_psize = 0.0
+                            adj_qty = abs(float(pos.size))
+                except Exception:
+                    new_psize = float(pos.size) + float(adj_qty)
+
+                fee_paid = -float(pbr.qty_to_cost(float(adj_qty), float(p), float(c_mult))) * float(maker_fee)
+                pnl = float(pbr.calc_pnl_long(float(pos.price), float(p), float(adj_qty), float(c_mult))) if side == Side.Long else float(
+                    pbr.calc_pnl_short(float(pos.price), float(p), float(adj_qty), float(c_mult))
+                )
+                pnl_cumsum_running += float(pnl)
+                pnl_cumsum_max = max(float(pnl_cumsum_max), float(pnl_cumsum_running))
+                sim_balance += float(pnl) + float(fee_paid)
+
+                # PB7 removes the position when size hits 0 (Position::default => price=0).
+                if float(new_psize) == 0.0:
+                    pos = Position(size=0.0, price=0.0)
                 else:
-                    q_eff = +fill_amt
+                    pos = Position(size=float(new_psize), price=float(pos.price))
 
-                entry_price = float(pos.price)
-                if side == Side.Long:
-                    pnl = float(fill_amt) * (float(pc) - entry_price) * c_mult
-                else:
-                    pnl = float(fill_amt) * (entry_price - float(pc)) * c_mult
-                sim_balance += float(pnl)
-
-                # Fees: PB7 backtest charges fees on notional for each fill.
-                fee_paid = float(fill_amt) * float(pc) * c_mult * float(maker_fee)
-                if math.isfinite(fee_paid) and fee_paid > 0.0:
-                    sim_balance -= float(fee_paid)
-
-                typ_str = _order_type_to_str(pbr, int(tc))
-                pos = _apply_fill_to_position(position=pos, fill_qty=float(q_eff), fill_price=float(pc))
                 events.append(
                     {
                         "timestamp": pd.to_datetime(ts),
                         "event": "close",
-                        "qty": float(q_eff),
-                        "price": float(pc),
-                        "order_type": str(typ_str),
+                        "qty": float(adj_qty),
+                        "price": float(p),
+                        "order_type": ot,
                         "fee_paid": float(fee_paid),
                         "wallet_balance": float(sim_balance),
                         "pos_size": float(pos.size),
+                        "pos_price": float(pos.price),
+                        "pnl": float(pnl),
                     }
                 )
                 filled_this_candle = True
 
         # Process entries after closes.
         if trading_active and pending_entries:
-            entries_to_process = [e for e in pending_entries if _order_would_fill_is_buy(_entry_is_buy(), e[1], low_px, high_px)]
-            for qe, pe, te_id in entries_to_process:
+            for o in pending_entries:
                 if len(events) >= int(max_orders):
                     break
-                if qe == 0.0 or pe <= 0.0:
+                q = float(o.get("qty") or 0.0)
+                p = float(o.get("price") or 0.0)
+                ot = str(o.get("order_type") or "")
+                if q == 0.0 or p <= 0.0:
+                    continue
+                if not _order_filled(low_px, high_px, q, p):
                     continue
 
-                fee_paid = abs(float(qe)) * float(pe) * c_mult * float(maker_fee)
-                if math.isfinite(fee_paid) and fee_paid > 0.0:
-                    sim_balance -= float(fee_paid)
-                pos = _apply_fill_to_position(position=pos, fill_qty=float(qe), fill_price=float(pe))
+                fee_paid = -float(pbr.qty_to_cost(float(q), float(p), float(c_mult))) * float(maker_fee)
+                sim_balance += float(fee_paid)
+                try:
+                    new_psize, new_pprice = pbr.calc_new_psize_pprice(
+                        float(pos.size),
+                        float(pos.price),
+                        float(q),
+                        float(p),
+                        float(qty_step) if qty_step > 0.0 else 0.0,
+                    )
+                    pos = Position(size=float(new_psize), price=float(new_pprice))
+                except Exception:
+                    pos = _apply_fill_to_position(position=pos, fill_qty=float(q), fill_price=float(p))
+
                 events.append(
                     {
                         "timestamp": pd.to_datetime(ts),
                         "event": "entry",
-                        "qty": float(qe),
-                        "price": float(pe),
-                        "order_type": str(_order_type_to_str(pbr, int(te_id))),
+                        "qty": float(q),
+                        "price": float(p),
+                        "order_type": ot,
                         "fee_paid": float(fee_paid),
                         "wallet_balance": float(sim_balance),
                         "pos_size": float(pos.size),
+                        "pos_price": float(pos.price),
+                        "pnl": 0.0,
                     }
                 )
                 filled_this_candle = True
 
-        # PB7 trailing update happens after fills:
-        # - if any fill happened this candle, trailing bundle resets to default
-        # - otherwise, it updates using candle (high, low, close)
-        if filled_this_candle:
-            tb = _pb7_reset_trailing_bundle(tb_local)
+        # PB7 backtest: update trailing bundle only for symbols with an active position.
+        # Reset to default if any fill happened for the symbol during the candle; otherwise update with (high, low, close).
+        if trailing_enabled and _pos_has_side_position(pos):
+            if filled_this_candle:
+                tb = _pb7_reset_trailing_bundle(tb_local)
+            else:
+                tb = _pb7_update_trailing_bundle_with_candle(tb_local, float(high_px), float(low_px), float(close_px))
         else:
-            tb = _pb7_update_trailing_bundle_with_candle(tb_local, float(high_px), float(low_px), float(close_px))
+            tb = tb_local
 
     return events
+
+
+def _simulate_backtest_over_historical_candles_pair(
+    *,
+    pbr,
+    pb7_src: str,
+    candles: pd.DataFrame,
+    exchange_params: ExchangeParams,
+    bot_params_long: BotParams,
+    bot_params_short: BotParams,
+    starting_position_long: Position,
+    starting_position_short: Position,
+    balance: float,
+    maker_fee: float = 0.0,
+    trade_start_time: Optional[pd.Timestamp] = None,
+    max_orders: int = 200,
+    max_candles: int = 2000,
+) -> tuple[list[dict], list[dict]]:
+    """Mode B candle-walk simulation with shared balance across long+short.
+
+    Wrapper around `_simulate_backtest_over_historical_candles_pair_core` used by both compare and movie builder.
+    Returns (long_events, short_events).
+    """
+    ev_l, ev_s, _frames = _simulate_backtest_over_historical_candles_pair_core(
+        pbr=pbr,
+        pb7_src=pb7_src,
+        side_for_frames=Side.Long,
+        candles=candles,
+        exchange_params=exchange_params,
+        bot_params_long=bot_params_long,
+        bot_params_short=bot_params_short,
+        starting_position_long=starting_position_long,
+        starting_position_short=starting_position_short,
+        balance=balance,
+        maker_fee=maker_fee,
+        trade_start_time=trade_start_time,
+        max_orders=max_orders,
+        max_candles=max_candles,
+        capture_frames=False,
+        include_viz_grids=False,
+    )
+    return ev_l, ev_s
 
 
 def _simulate_backtest_over_historical_candles_replay(
@@ -2232,20 +2971,44 @@ def _simulate_backtest_over_historical_candles_replay(
     if c_mult <= 0.0:
         c_mult = 1.0
 
+    qty_step = float(getattr(exchange_params, "qty_step", 0.0) or 0.0)
+    if not math.isfinite(qty_step) or qty_step < 0.0:
+        qty_step = 0.0
+
     price_step = float(getattr(exchange_params, "price_step", 0.0) or 0.0)
     if not math.isfinite(price_step) or price_step < 0.0:
         price_step = 0.0
-    price_eps = (price_step * 1e-6) if price_step > 0.0 else 1e-12
+    price_eps = 0.0
+
+    def _snap_pos_size(psize: float) -> float:
+        psize = float(psize)
+        if not math.isfinite(psize):
+            return 0.0
+        if qty_step <= 0.0:
+            return 0.0 if abs(psize) <= 1e-12 else psize
+        try:
+            snapped = float(pbr.round_(float(psize), float(qty_step)))
+        except Exception:
+            ticks = int(round(psize / qty_step))
+            snapped = float(ticks) * float(qty_step)
+        if abs(snapped) < float(qty_step) * 0.5:
+            return 0.0
+        return snapped
 
     tb = TrailingPriceBundle(float("inf"), 0.0, 0.0, float("inf"))
 
     ep_json = json.dumps(asdict(exchange_params), sort_keys=True)
     bp_json = json.dumps(asdict(bot_params), sort_keys=True)
 
+    total_wel = float(getattr(bot_params, "total_wallet_exposure_limit", 0.0) or 0.0)
+    n_positions = int(getattr(bot_params, "n_positions", 0) or 0)
+    wel_per_pos = (total_wel / float(n_positions)) if n_positions else total_wel
+
     def _pos_has_side_position(p: Position) -> bool:
+        s = _snap_pos_size(float(p.size))
         if side == Side.Long:
-            return float(p.size) > 0.0
-        return float(p.size) < 0.0
+            return s > 0.0
+        return s < 0.0
 
     trade_start_time_pd = pd.to_datetime(trade_start_time) if trade_start_time is not None else None
 
@@ -2381,6 +3144,44 @@ def _simulate_backtest_over_historical_candles_replay(
                     closes.append((float(q), float(p), int(t)))
                 except Exception:
                     continue
+
+            # Add unstucking close order (PB7 v7) if triggered.
+            try:
+                cur_px = float(sp_for_calc.order_book.ask if side == Side.Long else sp_for_calc.order_book.bid)
+                allow_long = float(sim_balance) * float(getattr(bot_params, "unstuck_loss_allowance_pct", 0.0) or 0.0)
+                allow_short = 0.0
+                if side == Side.Short:
+                    allow_short, allow_long = allow_long, 0.0
+
+                pos_dict = {
+                    "idx": 0,
+                    "side": "long" if side == Side.Long else "short",
+                    "position_size": float(pos.size),
+                    "position_price": float(pos.price),
+                    "wallet_exposure_limit": float(wel_per_pos),
+                    "risk_we_excess_allowance_pct": float(getattr(bot_params, "risk_we_excess_allowance_pct", 0.0) or 0.0),
+                    "unstuck_threshold": float(getattr(bot_params, "unstuck_threshold", 0.0) or 0.0),
+                    "unstuck_close_pct": float(getattr(bot_params, "unstuck_close_pct", 0.0) or 0.0),
+                    "unstuck_ema_dist": float(getattr(bot_params, "unstuck_ema_dist", 0.0) or 0.0),
+                    "unstuck_loss_allowance_pct": float(getattr(bot_params, "unstuck_loss_allowance_pct", 0.0) or 0.0),
+                    "ema_band_upper": float(sp_for_calc.ema_bands.upper),
+                    "ema_band_lower": float(sp_for_calc.ema_bands.lower),
+                    "current_price": float(cur_px),
+                    "price_step": float(getattr(exchange_params, "price_step", 0.0) or 0.0),
+                    "qty_step": float(getattr(exchange_params, "qty_step", 0.0) or 0.0),
+                    "min_qty": float(getattr(exchange_params, "min_qty", 0.0) or 0.0),
+                    "min_cost": float(getattr(exchange_params, "min_cost", 0.0) or 0.0),
+                    "c_mult": float(getattr(exchange_params, "c_mult", 1.0) or 1.0),
+                }
+                unstuck = pbr.calc_unstucking_close_py(float(sim_balance), float(allow_long), float(allow_short), [pos_dict])
+                if unstuck is not None:
+                    q_u = float(unstuck[2])
+                    p_u = float(unstuck[3])
+                    t_u = int(unstuck[4])
+                    if math.isfinite(q_u) and math.isfinite(p_u) and q_u != 0.0 and p_u > 0.0:
+                        closes.append((q_u, p_u, t_u))
+            except Exception:
+                pass
             return closes
 
         sp_calc = _make_state_params(prev_close_px)
@@ -2416,6 +3217,7 @@ def _simulate_backtest_over_historical_candles_replay(
 
                 typ_str = _order_type_to_str(pbr, int(tc))
                 pos = _apply_fill_to_position(position=pos, fill_qty=float(q_eff), fill_price=float(pc))
+                pos = Position(size=_snap_pos_size(float(pos.size)), price=float(pos.price))
                 ev = {
                     "timestamp": pd.to_datetime(ts),
                     "event": "close",
@@ -2443,6 +3245,7 @@ def _simulate_backtest_over_historical_candles_replay(
                 if math.isfinite(fee_paid) and fee_paid > 0.0:
                     sim_balance -= float(fee_paid)
                 pos = _apply_fill_to_position(position=pos, fill_qty=float(qe), fill_price=float(pe))
+                pos = Position(size=_snap_pos_size(float(pos.size)), price=float(pos.price))
                 ev = {
                     "timestamp": pd.to_datetime(ts),
                     "event": "entry",
@@ -2557,6 +3360,884 @@ def _simulate_backtest_over_historical_candles_replay(
     return (events, frames)
 
 
+def _simulate_backtest_over_historical_candles_pair_core(
+    *,
+    pbr,
+    pb7_src: str,
+    side_for_frames: Side,
+    candles: pd.DataFrame,
+    exchange_params: ExchangeParams,
+    bot_params_long: BotParams,
+    bot_params_short: BotParams,
+    starting_position_long: Position,
+    starting_position_short: Position,
+    balance: float,
+    maker_fee: float = 0.0,
+    trade_start_time: Optional[pd.Timestamp] = None,
+    max_orders: int = 200,
+    max_candles: int = 2000,
+    capture_frames: bool = False,
+    frame_every_n_candles: int = 1,
+    capture_frames_from_time: Optional[pd.Timestamp] = None,
+    include_viz_grids: bool = False,
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Mode B candle-walk core using PB7 orchestrator (JSON API).
+
+    This is the "movie builder" variant of Mode B which must match PB7 backtest semantics:
+    - float32-backed candles (strict inequality fills)
+    - orchestrator-driven open orders (compute_ideal_orders_json)
+    - closes before entries
+    - shared balance (long+short)
+
+    Returns: (events_long, events_short, frames_for_selected_side)
+    """
+    events_long: list[dict] = []
+    events_short: list[dict] = []
+    frames: list[dict] = []
+
+    if candles is None or candles.empty:
+        return events_long, events_short, frames
+
+    try:
+        max_orders_i = int(max_orders)
+    except Exception:
+        max_orders_i = 0
+    if max_orders_i < 0:
+        max_orders_i = 0
+
+    try:
+        max_candles_i = int(max_candles)
+    except Exception:
+        max_candles_i = 0
+    if max_candles_i < 0:
+        max_candles_i = 0
+
+    if max_candles_i > 0 and len(candles) > max_candles_i:
+        candles = candles.iloc[:max_candles_i].copy()
+    else:
+        candles = candles.copy()
+
+    # Parity note (PB7 vs Mode B): PB7 backtest uses f32-backed candle data.
+    # See `_simulate_backtest_over_historical_candles_pair` for details.
+    for col in ("open", "high", "low", "close", "volume"):
+        if col in candles.columns:
+            try:
+                candles[col] = candles[col].astype(np.float32)
+            except Exception:
+                pass
+
+    ema_df = _prepare_orchestrator_ema_df(candles, bot_params_long=bot_params_long, bot_params_short=bot_params_short)
+
+    if include_viz_grids:
+        try:
+            ep_json = json.dumps(asdict(exchange_params), sort_keys=True)
+        except Exception:
+            ep_json = "{}"
+        try:
+            bp_json_long = json.dumps(asdict(bot_params_long), sort_keys=True)
+        except Exception:
+            bp_json_long = "{}"
+        try:
+            bp_json_short = json.dumps(asdict(bot_params_short), sort_keys=True)
+        except Exception:
+            bp_json_short = "{}"
+
+        def _calc_full_grids_for_viz(*, side: Side, px: float, ema_row: pd.Series, pos: Position, tb: TrailingPriceBundle, bal: float):
+            try:
+                if side == Side.Long:
+                    ema0 = float(ema_row.get("ema_l0", px) or px)
+                    ema1 = float(ema_row.get("ema_l1", px) or px)
+                    ema2 = float(ema_row.get("ema_l2", px) or px)
+                    vol = float(ema_row.get("h1_lr_ema_l", 0.0) or 0.0)
+                    bp_json = bp_json_long
+                else:
+                    ema0 = float(ema_row.get("ema_s0", px) or px)
+                    ema1 = float(ema_row.get("ema_s1", px) or px)
+                    ema2 = float(ema_row.get("ema_s2", px) or px)
+                    vol = float(ema_row.get("h1_lr_ema_s", 0.0) or 0.0)
+                    bp_json = bp_json_short
+
+                ema_lower = float(min(ema0, ema1, ema2))
+                ema_upper = float(max(ema0, ema1, ema2))
+                sp = StateParams(
+                    balance=float(bal),
+                    order_book=OrderBook(bid=float(px), ask=float(px)),
+                    ema_bands=EmaBands(lower=float(ema_lower), upper=float(ema_upper)),
+                    entry_volatility_logrange_ema_1h=float(vol),
+                )
+                sp_json = json.dumps(asdict(sp), sort_keys=True)
+                tb_json = json.dumps(asdict(tb), sort_keys=True)
+
+                raw_entries = _calc_entries_rust_cached(
+                    pb7_src,
+                    int(side.value),
+                    ep_json,
+                    sp_json,
+                    tb_json,
+                    bp_json,
+                    float(pos.size),
+                    float(pos.price),
+                )
+                entries: list[tuple[float, float, int]] = []
+                for q, p, t in (raw_entries or []):
+                    try:
+                        entries.append((float(q), float(p), int(t)))
+                    except Exception:
+                        continue
+                decoded_entries = _decode_rust_orders_for_debug(pbr, entries)
+
+                closes: list[tuple[float, float, int]] = []
+                if float(pos.size) != 0.0 and float(pos.price) > 0.0:
+                    raw_closes = _calc_closes_rust_cached(
+                        pb7_src,
+                        int(side.value),
+                        ep_json,
+                        sp_json,
+                        tb_json,
+                        bp_json,
+                        float(pos.size),
+                        float(pos.price),
+                    )
+                    for q, p, t in (raw_closes or []):
+                        try:
+                            closes.append((float(q), float(p), int(t)))
+                        except Exception:
+                            continue
+                decoded_closes = _decode_rust_orders_for_debug(pbr, closes)
+                return decoded_entries, decoded_closes
+            except Exception:
+                return [], []
+    else:
+        def _calc_full_grids_for_viz(*, side: Side, px: float, ema_row: pd.Series, pos: Position, tb: TrailingPriceBundle, bal: float):
+            return [], []
+
+    sim_balance = float(balance)
+    pos_long = Position(size=float(starting_position_long.size), price=float(starting_position_long.price))
+    pos_short = Position(size=float(starting_position_short.size), price=float(starting_position_short.price))
+
+    maker_fee = float(maker_fee or 0.0)
+    if not math.isfinite(maker_fee) or maker_fee < 0.0:
+        maker_fee = 0.0
+
+    qty_step = float(getattr(exchange_params, "qty_step", 0.0) or 0.0)
+    price_step = float(getattr(exchange_params, "price_step", 0.0) or 0.0)
+    c_mult = float(getattr(exchange_params, "c_mult", 1.0) or 1.0)
+    if not math.isfinite(qty_step) or qty_step < 0.0:
+        qty_step = 0.0
+    if not math.isfinite(price_step) or price_step < 0.0:
+        price_step = 0.0
+    if not math.isfinite(c_mult) or c_mult <= 0.0:
+        c_mult = 1.0
+
+    # PB7 `TrailingPriceBundle::default()` uses f64::MAX sentinels.
+    TRAILING_INF = float(getattr(sys, "float_info", None).max) if getattr(sys, "float_info", None) else 1.7976931348623157e308
+    tb_long = TrailingPriceBundle(float(TRAILING_INF), 0.0, 0.0, float(TRAILING_INF))
+    tb_short = TrailingPriceBundle(float(TRAILING_INF), 0.0, 0.0, float(TRAILING_INF))
+    trailing_enabled_long = _any_trailing_enabled_for_backtest(bot_params_long)
+    trailing_enabled_short = _any_trailing_enabled_for_backtest(bot_params_short)
+
+    idx_list = list(candles.index)
+    if len(idx_list) < 2:
+        return events_long, events_short, frames
+
+    trade_start_time_pd = pd.to_datetime(trade_start_time) if trade_start_time is not None else None
+    capture_from_pd = pd.to_datetime(capture_frames_from_time) if capture_frames_from_time is not None else None
+
+    pnl_cumsum_running = 0.0
+    pnl_cumsum_max = 0.0
+
+    def _pb7_update_trailing_bundle_with_candle(bundle: TrailingPriceBundle, high: float, low: float, close: float) -> TrailingPriceBundle:
+        if not (math.isfinite(high) and math.isfinite(low) and math.isfinite(close)):
+            return bundle
+        if float(low) < float(bundle.min_since_open):
+            bundle.min_since_open = float(low)
+            bundle.max_since_min = float(close)
+        else:
+            bundle.max_since_min = float(max(float(bundle.max_since_min), float(high)))
+        if float(high) > float(bundle.max_since_open):
+            bundle.max_since_open = float(high)
+            bundle.min_since_max = float(close)
+        else:
+            bundle.min_since_max = float(min(float(bundle.min_since_max), float(low)))
+        return bundle
+
+    def _pb7_reset_trailing_bundle(bundle: TrailingPriceBundle) -> TrailingPriceBundle:
+        bundle.min_since_open = float(TRAILING_INF)
+        bundle.max_since_min = 0.0
+        bundle.max_since_open = 0.0
+        bundle.min_since_max = float(TRAILING_INF)
+        return bundle
+
+    def _order_filled(low: float, high: float, qty: float, price: float, order_type: Optional[str] = None) -> bool:
+        # Strict inequality (PB7 backtest). See parity notes in `_simulate_backtest_over_historical_candles_pair`.
+        try:
+            low = float(np.float32(float(low)))
+            high = float(np.float32(float(high)))
+        except Exception:
+            pass
+        if qty > 0.0:
+            return float(low) < float(price)
+        if qty < 0.0:
+            try:
+                if not (order_type and str(order_type).startswith("close_grid")):
+                    price = float(np.float32(float(price)))
+            except Exception:
+                pass
+            return float(high) > float(price)
+        return False
+
+    def _effective_min_cost(close_price: float) -> float:
+        try:
+            q = float(getattr(exchange_params, "min_qty", 0.0) or 0.0)
+            mc = float(getattr(exchange_params, "min_cost", 0.0) or 0.0)
+        except Exception:
+            q, mc = 0.0, 0.0
+        try:
+            return float(max(float(pbr.qty_to_cost(float(q), float(close_price), float(c_mult))), float(mc)))
+        except Exception:
+            return float(max(abs(q) * float(close_price) * float(c_mult), mc))
+
+    bp_long_symbol_dict = _bot_params_dict_for_orchestrator_single_symbol(bot_params_long, enabled=True)
+    bp_short_symbol_dict = _bot_params_dict_for_orchestrator_single_symbol(bot_params_short, enabled=True)
+    bp_long_master_dict = dict(bp_long_symbol_dict)
+    bp_short_master_dict = dict(bp_short_symbol_dict)
+    try:
+        bp_long_master_dict["n_positions"] = int(min(int(bp_long_master_dict.get("n_positions") or 0), 1))
+    except Exception:
+        pass
+    try:
+        bp_short_master_dict["n_positions"] = int(min(int(bp_short_master_dict.get("n_positions") or 0), 1))
+    except Exception:
+        pass
+
+    def _unstuck_allowance() -> tuple[float, float]:
+        def _one(bp: BotParams) -> float:
+            try:
+                pct = float(getattr(bp, "unstuck_loss_allowance_pct", 0.0) or 0.0)
+                total_wel = float(getattr(bp, "total_wallet_exposure_limit", 0.0) or 0.0)
+            except Exception:
+                pct, total_wel = 0.0, 0.0
+            if pct <= 0.0 or total_wel <= 0.0:
+                return 0.0
+            try:
+                return float(
+                    pbr.calc_auto_unstuck_allowance(
+                        float(sim_balance),
+                        float(pct) * float(total_wel),
+                        float(pnl_cumsum_max),
+                        float(pnl_cumsum_running),
+                    )
+                )
+            except Exception:
+                return 0.0
+
+        return (_one(bot_params_long), _one(bot_params_short))
+
+    def _compute_orch_orders_pair(
+        *,
+        ob_price: float,
+        ema_row: pd.Series,
+        pos_l: Position,
+        pos_s: Position,
+        tb_l: TrailingPriceBundle,
+        tb_s: TrailingPriceBundle,
+        next_low: float,
+        next_high: float,
+        tradable_now: bool,
+        tradable_next: bool,
+    ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+        ul, us = _unstuck_allowance()
+
+        m1_close: list[list[float]] = []
+        h1_log_range: list[list[float]] = []
+        m1_volume: list[list[float]] = []
+        m1_log_range: list[list[float]] = []
+
+        def _append_ema_close(bp: BotParams, prefix: str):
+            span0 = float(getattr(bp, "ema_span_0", 1.0) or 1.0)
+            span1 = float(getattr(bp, "ema_span_1", 1.0) or 1.0)
+            span2 = float(max(1.0, float(span0 * span1) ** 0.5))
+            span0 = max(1.0, float(span0))
+            span1 = max(1.0, float(span1))
+            span2 = max(1.0, float(span2))
+            if prefix == "l":
+                v0 = float(ema_row.get("ema_l0", ob_price) or ob_price)
+                v1 = float(ema_row.get("ema_l1", ob_price) or ob_price)
+                v2 = float(ema_row.get("ema_l2", ob_price) or ob_price)
+            else:
+                v0 = float(ema_row.get("ema_s0", ob_price) or ob_price)
+                v1 = float(ema_row.get("ema_s1", ob_price) or ob_price)
+                v2 = float(ema_row.get("ema_s2", ob_price) or ob_price)
+            pairs: list[tuple[float, float]] = [(span0, v0), (span1, v1), (span2, v2)]
+            pairs.sort(key=lambda x: x[0])
+            for s, v in pairs:
+                m1_close.append([float(s), float(v)])
+
+        _append_ema_close(bot_params_long, "l")
+        _append_ema_close(bot_params_short, "s")
+
+        m1_volume.append([
+            float(getattr(bot_params_long, "filter_volume_ema_span", 1.0) or 1.0),
+            float(ema_row.get("vol_ema_l", 0.0) or 0.0),
+        ])
+        m1_volume.append([
+            float(getattr(bot_params_short, "filter_volume_ema_span", 1.0) or 1.0),
+            float(ema_row.get("vol_ema_s", 0.0) or 0.0),
+        ])
+        m1_log_range.append([
+            float(getattr(bot_params_long, "filter_volatility_ema_span", 1.0) or 1.0),
+            float(ema_row.get("lr_ema_l", 0.0) or 0.0),
+        ])
+        m1_log_range.append([
+            float(getattr(bot_params_short, "filter_volatility_ema_span", 1.0) or 1.0),
+            float(ema_row.get("lr_ema_s", 0.0) or 0.0),
+        ])
+
+        span_h_l = float(getattr(bot_params_long, "entry_volatility_ema_span_hours", 0.0) or 0.0)
+        if span_h_l > 0.0:
+            h1_log_range.append([float(span_h_l), float(ema_row.get("h1_lr_ema_l", 0.0) or 0.0)])
+        span_h_s = float(getattr(bot_params_short, "entry_volatility_ema_span_hours", 0.0) or 0.0)
+        if span_h_s > 0.0:
+            h1_log_range.append([float(span_h_s), float(ema_row.get("h1_lr_ema_s", 0.0) or 0.0)])
+
+        if not bool(tradable_next):
+            next_low = 0.0
+            next_high = 0.0
+
+        ob_p = float(ob_price)
+        if not math.isfinite(ob_p) or ob_p <= 0.0:
+            ob_p = float(np.finfo("float64").eps)
+
+        inp = {
+            "balance": float(sim_balance),
+            "global": {
+                "filter_by_min_effective_cost": False,
+                "unstuck_allowance_long": float(ul),
+                "unstuck_allowance_short": float(us),
+                "sort_global": False,
+                "global_bot_params": {"long": bp_long_master_dict, "short": bp_short_master_dict},
+            },
+            "symbols": [
+                {
+                    "symbol_idx": 0,
+                    "order_book": {"bid": float(ob_p), "ask": float(ob_p)},
+                    "exchange": {
+                        "qty_step": float(getattr(exchange_params, "qty_step", 0.0) or 0.0),
+                        "price_step": float(getattr(exchange_params, "price_step", 0.0) or 0.0),
+                        "min_qty": float(getattr(exchange_params, "min_qty", 0.0) or 0.0),
+                        "min_cost": float(getattr(exchange_params, "min_cost", 0.0) or 0.0),
+                        "c_mult": float(c_mult),
+                    },
+                    "tradable": bool(tradable_now),
+                    "next_candle": {"low": float(next_low), "high": float(next_high), "tradable": bool(tradable_next)},
+                    "effective_min_cost": float(_effective_min_cost(float(ob_p))),
+                    "emas": {
+                        "m1": {"close": m1_close, "volume": m1_volume, "log_range": m1_log_range},
+                        "h1": {"close": [], "volume": [], "log_range": h1_log_range},
+                    },
+                    "long": {
+                        "mode": None,
+                        "position": {"size": float(pos_l.size), "price": float(pos_l.price)},
+                        "trailing": asdict(tb_l),
+                        "bot_params": bp_long_symbol_dict,
+                    },
+                    "short": {
+                        "mode": None,
+                        "position": {"size": float(pos_s.size), "price": float(pos_s.price)},
+                        "trailing": asdict(tb_s),
+                        "bot_params": bp_short_symbol_dict,
+                    },
+                }
+            ],
+            "peek_hints": None,
+        }
+
+        out_json = pbr.compute_ideal_orders_json(json.dumps(inp))
+        out = json.loads(out_json)
+        orders = out.get("orders") or []
+
+        l_entries: list[dict] = []
+        l_closes: list[dict] = []
+        s_entries: list[dict] = []
+        s_closes: list[dict] = []
+        for o in orders:
+            try:
+                if int(o.get("symbol_idx", -1)) != 0:
+                    continue
+                pside = str(o.get("pside"))
+                ot = str(o.get("order_type") or "")
+                rec = {"qty": float(o.get("qty") or 0.0), "price": float(o.get("price") or 0.0), "order_type": ot}
+                if pside == "long":
+                    (l_closes if ot.startswith("close_") else l_entries).append(rec)
+                elif pside == "short":
+                    (s_closes if ot.startswith("close_") else s_entries).append(rec)
+            except Exception:
+                continue
+
+        return l_entries, l_closes, s_entries, s_closes
+
+    fe = max(1, int(frame_every_n_candles or 1))
+    candle_cap = int(max_candles_i) if int(max_candles_i) > 0 else int(len(idx_list))
+    total_steps = max(1, min(len(idx_list), int(candle_cap)) - 1)
+    progress_every = max(1, int(total_steps // 200))
+
+    for i in range(1, min(len(idx_list), int(candle_cap))):
+        if progress_cb is not None and (i == 1 or i == total_steps or (i % progress_every == 0)):
+            try:
+                progress_cb(min(1.0, float(i) / float(total_steps)), f"Simulating candles {i}/{total_steps}")
+            except Exception:
+                pass
+
+        ts = idx_list[i]
+        row = candles.loc[ts]
+        prev_ts = idx_list[i - 1]
+        prev_row = candles.loc[prev_ts]
+        ema_prev = ema_df.loc[prev_ts] if prev_ts in ema_df.index else None
+
+        if max_orders_i > 0 and (len(events_long) + len(events_short) >= int(max_orders_i)):
+            break
+
+        trading_active = True
+        prev_trading_active = True
+        if trade_start_time_pd is not None:
+            try:
+                trading_active = pd.to_datetime(ts) >= trade_start_time_pd
+            except Exception:
+                trading_active = True
+            try:
+                prev_trading_active = pd.to_datetime(prev_ts) >= trade_start_time_pd
+            except Exception:
+                prev_trading_active = True
+
+        def _f32(x: float) -> float:
+            try:
+                return float(np.float32(float(x)))
+            except Exception:
+                return float(x)
+
+        open_px = _f32(row.get("open", row["close"]))
+        close_px = _f32(row["close"])
+        low_px = _f32(row["low"])
+        high_px = _f32(row["high"])
+        prev_close_px = _f32(prev_row.get("close", close_px) or close_px)
+
+        # next candle hint (for current step relative to prev_ts) = current candle range
+        next_low = float(low_px)
+        next_high = float(high_px)
+
+        tb_l_local = copy.deepcopy(tb_long)
+        tb_s_local = copy.deepcopy(tb_short)
+        filled_long = False
+        filled_short = False
+
+        if trading_active and ema_prev is not None:
+            l_entries, l_closes, s_entries, s_closes = _compute_orch_orders_pair(
+                ob_price=float(prev_close_px),
+                ema_row=ema_prev,
+                pos_l=pos_long,
+                pos_s=pos_short,
+                tb_l=tb_l_local,
+                tb_s=tb_s_local,
+                next_low=next_low,
+                next_high=next_high,
+                tradable_now=bool(prev_trading_active),
+                tradable_next=bool(trading_active),
+            )
+        else:
+            l_entries, l_closes, s_entries, s_closes = ([], [], [], [])
+
+        # Select pending orders for frame (pre-candle)
+        if side_for_frames == Side.Long:
+            pending_entries_pre = list(l_entries or [])
+            pending_closes_pre = list(l_closes or [])
+            pos_before = {"size": float(pos_long.size), "price": float(pos_long.price)}
+        else:
+            pending_entries_pre = list(s_entries or [])
+            pending_closes_pre = list(s_closes or [])
+            pos_before = {"size": float(pos_short.size), "price": float(pos_short.price)}
+        bal_before = float(sim_balance)
+        tb_before = asdict(tb_long if side_for_frames == Side.Long else tb_short)
+        candle_fills: list[dict] = []
+
+        # Full-grid ladders for visualization (pre-candle state)
+        viz_entries_pre: list[dict] = []
+        viz_closes_pre: list[dict] = []
+        if capture_frames and include_viz_grids and trading_active and ema_prev is not None:
+            if side_for_frames == Side.Long:
+                viz_entries_pre, viz_closes_pre = _calc_full_grids_for_viz(
+                    side=Side.Long,
+                    px=float(prev_close_px),
+                    ema_row=ema_prev,
+                    pos=pos_long,
+                    tb=copy.deepcopy(tb_long),
+                    bal=float(sim_balance),
+                )
+            else:
+                viz_entries_pre, viz_closes_pre = _calc_full_grids_for_viz(
+                    side=Side.Short,
+                    px=float(prev_close_px),
+                    ema_row=ema_prev,
+                    pos=pos_short,
+                    tb=copy.deepcopy(tb_short),
+                    bal=float(sim_balance),
+                )
+
+        # --- closes first (PB7) ---
+        if trading_active and l_closes and float(pos_long.size) > 0.0:
+            for o in l_closes:
+                if max_orders_i > 0 and (len(events_long) + len(events_short) >= int(max_orders_i)):
+                    break
+                q = float(o.get("qty") or 0.0)
+                p = float(o.get("price") or 0.0)
+                ot = str(o.get("order_type") or "")
+                if q == 0.0 or p <= 0.0:
+                    continue
+                if not _order_filled(low_px, high_px, q, p, ot):
+                    continue
+
+                adj_qty = float(q)
+                try:
+                    new_psize = float(pbr.round_(float(pos_long.size) + float(adj_qty), float(qty_step))) if qty_step > 0.0 else float(pos_long.size) + float(adj_qty)
+                    if new_psize < 0.0:
+                        new_psize = 0.0
+                        adj_qty = -float(pos_long.size)
+                except Exception:
+                    new_psize = float(pos_long.size) + float(adj_qty)
+
+                fee_paid = -float(pbr.qty_to_cost(float(adj_qty), float(p), float(c_mult))) * float(maker_fee)
+                pnl = float(pbr.calc_pnl_long(float(pos_long.price), float(p), float(adj_qty), float(c_mult)))
+                pnl_cumsum_running += float(pnl)
+                pnl_cumsum_max = max(float(pnl_cumsum_max), float(pnl_cumsum_running))
+                sim_balance += float(pnl) + float(fee_paid)
+
+                if float(new_psize) == 0.0:
+                    pos_long = Position(size=0.0, price=0.0)
+                else:
+                    pos_long = Position(size=float(new_psize), price=float(pos_long.price))
+
+                ev = {
+                    "timestamp": pd.to_datetime(ts),
+                    "event": "close",
+                    "qty": float(adj_qty),
+                    "price": float(p),
+                    "order_type": ot,
+                    "fee_paid": float(fee_paid),
+                    "wallet_balance": float(sim_balance),
+                    "pos_size": float(pos_long.size),
+                    "pos_price": float(pos_long.price),
+                    "pnl": float(pnl),
+                }
+                events_long.append(ev)
+                if side_for_frames == Side.Long:
+                    candle_fills.append(ev)
+                filled_long = True
+
+        if trading_active and s_closes and float(pos_short.size) < 0.0:
+            for o in s_closes:
+                if max_orders_i > 0 and (len(events_long) + len(events_short) >= int(max_orders_i)):
+                    break
+                q = float(o.get("qty") or 0.0)
+                p = float(o.get("price") or 0.0)
+                ot = str(o.get("order_type") or "")
+                if q == 0.0 or p <= 0.0:
+                    continue
+                if not _order_filled(low_px, high_px, q, p, ot):
+                    continue
+
+                adj_qty = float(q)
+                try:
+                    new_psize = float(pbr.round_(float(pos_short.size) + float(adj_qty), float(qty_step))) if qty_step > 0.0 else float(pos_short.size) + float(adj_qty)
+                    if new_psize > 0.0:
+                        new_psize = 0.0
+                        adj_qty = abs(float(pos_short.size))
+                except Exception:
+                    new_psize = float(pos_short.size) + float(adj_qty)
+
+                fee_paid = -float(pbr.qty_to_cost(float(adj_qty), float(p), float(c_mult))) * float(maker_fee)
+                pnl = float(pbr.calc_pnl_short(float(pos_short.price), float(p), float(adj_qty), float(c_mult)))
+                pnl_cumsum_running += float(pnl)
+                pnl_cumsum_max = max(float(pnl_cumsum_max), float(pnl_cumsum_running))
+                sim_balance += float(pnl) + float(fee_paid)
+
+                if float(new_psize) == 0.0:
+                    pos_short = Position(size=0.0, price=0.0)
+                else:
+                    pos_short = Position(size=float(new_psize), price=float(pos_short.price))
+
+                ev = {
+                    "timestamp": pd.to_datetime(ts),
+                    "event": "close",
+                    "qty": float(adj_qty),
+                    "price": float(p),
+                    "order_type": ot,
+                    "fee_paid": float(fee_paid),
+                    "wallet_balance": float(sim_balance),
+                    "pos_size": float(pos_short.size),
+                    "pos_price": float(pos_short.price),
+                    "pnl": float(pnl),
+                }
+                events_short.append(ev)
+                if side_for_frames == Side.Short:
+                    candle_fills.append(ev)
+                filled_short = True
+
+        # --- entries after closes ---
+        if trading_active and l_entries:
+            for o in l_entries:
+                if max_orders_i > 0 and (len(events_long) + len(events_short) >= int(max_orders_i)):
+                    break
+                q = float(o.get("qty") or 0.0)
+                p = float(o.get("price") or 0.0)
+                ot = str(o.get("order_type") or "")
+                if q == 0.0 or p <= 0.0:
+                    continue
+                if not _order_filled(low_px, high_px, q, p, ot):
+                    continue
+
+                fee_paid = -float(pbr.qty_to_cost(float(q), float(p), float(c_mult))) * float(maker_fee)
+                sim_balance += float(fee_paid)
+                try:
+                    new_psize, new_pprice = pbr.calc_new_psize_pprice(
+                        float(pos_long.size),
+                        float(pos_long.price),
+                        float(q),
+                        float(p),
+                        float(getattr(exchange_params, "qty_step", 0.0) or 0.0),
+                    )
+                    pos_long = Position(size=float(new_psize), price=float(new_pprice))
+                except Exception:
+                    pos_long = _apply_fill_to_position(position=pos_long, fill_qty=float(q), fill_price=float(p))
+
+                ev = {
+                    "timestamp": pd.to_datetime(ts),
+                    "event": "entry",
+                    "qty": float(q),
+                    "price": float(p),
+                    "order_type": ot,
+                    "fee_paid": float(fee_paid),
+                    "wallet_balance": float(sim_balance),
+                    "pos_size": float(pos_long.size),
+                    "pos_price": float(pos_long.price),
+                    "pnl": 0.0,
+                }
+                events_long.append(ev)
+                if side_for_frames == Side.Long:
+                    candle_fills.append(ev)
+                filled_long = True
+
+        if trading_active and s_entries:
+            for o in s_entries:
+                if max_orders_i > 0 and (len(events_long) + len(events_short) >= int(max_orders_i)):
+                    break
+                q = float(o.get("qty") or 0.0)
+                p = float(o.get("price") or 0.0)
+                ot = str(o.get("order_type") or "")
+                if q == 0.0 or p <= 0.0:
+                    continue
+                if not _order_filled(low_px, high_px, q, p, ot):
+                    continue
+
+                fee_paid = -float(pbr.qty_to_cost(float(q), float(p), float(c_mult))) * float(maker_fee)
+                sim_balance += float(fee_paid)
+                try:
+                    new_psize, new_pprice = pbr.calc_new_psize_pprice(
+                        float(pos_short.size),
+                        float(pos_short.price),
+                        float(q),
+                        float(p),
+                        float(getattr(exchange_params, "qty_step", 0.0) or 0.0),
+                    )
+                    pos_short = Position(size=float(new_psize), price=float(new_pprice))
+                except Exception:
+                    pos_short = _apply_fill_to_position(position=pos_short, fill_qty=float(q), fill_price=float(p))
+
+                ev = {
+                    "timestamp": pd.to_datetime(ts),
+                    "event": "entry",
+                    "qty": float(q),
+                    "price": float(p),
+                    "order_type": ot,
+                    "fee_paid": float(fee_paid),
+                    "wallet_balance": float(sim_balance),
+                    "pos_size": float(pos_short.size),
+                    "pos_price": float(pos_short.price),
+                    "pnl": 0.0,
+                }
+                events_short.append(ev)
+                if side_for_frames == Side.Short:
+                    candle_fills.append(ev)
+                filled_short = True
+
+        # trailing updates are per-pside
+        if trailing_enabled_long and float(pos_long.size) > 0.0:
+            if filled_long:
+                tb_long = _pb7_reset_trailing_bundle(tb_l_local)
+            else:
+                tb_long = _pb7_update_trailing_bundle_with_candle(tb_l_local, float(high_px), float(low_px), float(close_px))
+        else:
+            tb_long = tb_l_local
+
+        if trailing_enabled_short and float(pos_short.size) < 0.0:
+            if filled_short:
+                tb_short = _pb7_reset_trailing_bundle(tb_s_local)
+            else:
+                tb_short = _pb7_update_trailing_bundle_with_candle(tb_s_local, float(high_px), float(low_px), float(close_px))
+        else:
+            tb_short = tb_s_local
+
+        # Capture frame (optionally skip early warmup frames)
+        if capture_frames and (i % fe) == 0:
+            if capture_from_pd is None or pd.to_datetime(ts) >= capture_from_pd:
+                # Compute POST-candle pending orders for immediate rendering.
+                pending_entries_post: list[dict] = []
+                pending_closes_post: list[dict] = []
+
+                # Use inputs matching the next candle step (i+1) if available.
+                if i + 1 < len(idx_list):
+                    next_ts = idx_list[i + 1]
+                    next_row = candles.loc[next_ts]
+                    next_low2 = float(_f32(next_row["low"]))
+                    next_high2 = float(_f32(next_row["high"]))
+                    next_trading_active = True
+                    if trade_start_time_pd is not None:
+                        try:
+                            next_trading_active = pd.to_datetime(next_ts) >= trade_start_time_pd
+                        except Exception:
+                            next_trading_active = True
+                else:
+                    next_low2 = float(low_px)
+                    next_high2 = float(high_px)
+                    next_trading_active = bool(trading_active)
+
+                ema_now = ema_df.loc[ts] if ts in ema_df.index else None
+                if bool(next_trading_active) and ema_now is not None:
+                    try:
+                        l_e2, l_c2, s_e2, s_c2 = _compute_orch_orders_pair(
+                            ob_price=float(close_px),
+                            ema_row=ema_now,
+                            pos_l=pos_long,
+                            pos_s=pos_short,
+                            tb_l=copy.deepcopy(tb_long),
+                            tb_s=copy.deepcopy(tb_short),
+                            next_low=float(next_low2),
+                            next_high=float(next_high2),
+                            tradable_now=bool(trading_active),
+                            tradable_next=bool(next_trading_active),
+                        )
+                        if side_for_frames == Side.Long:
+                            pending_entries_post = list(l_e2 or [])
+                            pending_closes_post = list(l_c2 or [])
+                        else:
+                            pending_entries_post = list(s_e2 or [])
+                            pending_closes_post = list(s_c2 or [])
+                    except Exception:
+                        pending_entries_post = []
+                        pending_closes_post = []
+
+                # Full-grid ladders for visualization (post-candle state)
+                viz_entries_post: list[dict] = []
+                viz_closes_post: list[dict] = []
+                if include_viz_grids and bool(next_trading_active) and ema_now is not None:
+                    if side_for_frames == Side.Long:
+                        viz_entries_post, viz_closes_post = _calc_full_grids_for_viz(
+                            side=Side.Long,
+                            px=float(close_px),
+                            ema_row=ema_now,
+                            pos=pos_long,
+                            tb=copy.deepcopy(tb_long),
+                            bal=float(sim_balance),
+                        )
+                    else:
+                        viz_entries_post, viz_closes_post = _calc_full_grids_for_viz(
+                            side=Side.Short,
+                            px=float(close_px),
+                            ema_row=ema_now,
+                            pos=pos_short,
+                            tb=copy.deepcopy(tb_short),
+                            bal=float(sim_balance),
+                        )
+
+                if side_for_frames == Side.Long:
+                    tb_after = asdict(tb_long)
+                    pos_after = {"size": float(pos_long.size), "price": float(pos_long.price)}
+                else:
+                    tb_after = asdict(tb_short)
+                    pos_after = {"size": float(pos_short.size), "price": float(pos_short.price)}
+
+                frames.append(
+                    {
+                        "timestamp": pd.to_datetime(ts),
+                        "trading_active": bool(trading_active),
+                        "candle": {"open": float(open_px), "high": float(high_px), "low": float(low_px), "close": float(close_px)},
+                        "pending_entries": list(pending_entries_pre),
+                        "pending_closes": list(pending_closes_pre),
+                        "pending_entries_post": list(pending_entries_post),
+                        "pending_closes_post": list(pending_closes_post),
+                        "viz_entries": list(viz_entries_pre),
+                        "viz_closes": list(viz_closes_pre),
+                        "viz_entries_post": list(viz_entries_post),
+                        "viz_closes_post": list(viz_closes_post),
+                        "fills": list(candle_fills),
+                        "tb_before": tb_before,
+                        "tb_after": tb_after,
+                        "pos_before": pos_before,
+                        "pos_after": pos_after,
+                        "balance_before": float(bal_before),
+                        "balance_after": float(sim_balance),
+                    }
+                )
+
+    return events_long, events_short, frames
+
+
+def _simulate_backtest_over_historical_candles_replay_orchestrator_pair(
+    *,
+    pbr,
+    pb7_src: str,
+    side_for_frames: Side,
+    candles: pd.DataFrame,
+    exchange_params: ExchangeParams,
+    bot_params_long: BotParams,
+    bot_params_short: BotParams,
+    starting_position_long: Position,
+    starting_position_short: Position,
+    balance: float,
+    maker_fee: float = 0.0,
+    trade_start_time: Optional[pd.Timestamp] = None,
+    max_orders: int = 200,
+    max_candles: int = 2000,
+    frame_every_n_candles: int = 1,
+    capture_frames_from_time: Optional[pd.Timestamp] = None,
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Movie-builder wrapper around the shared Mode B core.
+
+    Returns: (events_long, events_short, frames_for_selected_side).
+    """
+    return _simulate_backtest_over_historical_candles_pair_core(
+        pbr=pbr,
+        pb7_src=pb7_src,
+        side_for_frames=side_for_frames,
+        candles=candles,
+        exchange_params=exchange_params,
+        bot_params_long=bot_params_long,
+        bot_params_short=bot_params_short,
+        starting_position_long=starting_position_long,
+        starting_position_short=starting_position_short,
+        balance=balance,
+        maker_fee=maker_fee,
+        trade_start_time=trade_start_time,
+        max_orders=max_orders,
+        max_candles=max_candles,
+        capture_frames=True,
+        frame_every_n_candles=frame_every_n_candles,
+        capture_frames_from_time=capture_frames_from_time,
+        include_viz_grids=True,
+        progress_cb=progress_cb,
+    )
+
+
 def render_replay_backtest_v7(*, replay_frames: list[dict], hist_df: pd.DataFrame, symbol: str, context_days: float = 5.0) -> None:
     if not replay_frames:
         st.write("No replay frames.")
@@ -2605,8 +4286,23 @@ def render_replay_backtest_v7(*, replay_frames: list[dict], hist_df: pd.DataFram
             y_vals.extend([p, p, None])
         return go.Scatter(x=x_vals, y=y_vals, mode="lines", line=dict(color=color, width=1, dash="dot"), name=name)
 
-    entry_prices = [float(o.get("price")) for o in (fr.get("pending_entries") or []) if float(o.get("price", 0.0) or 0.0) > 0.0]
-    close_prices = [float(o.get("price")) for o in (fr.get("pending_closes") or []) if float(o.get("price", 0.0) or 0.0) > 0.0]
+    # Prefer visualization grids (full ladders), fallback to active pending orders.
+    pend_entries = list(
+        fr.get("viz_entries_post")
+        or fr.get("viz_entries")
+        or fr.get("pending_entries_post")
+        or fr.get("pending_entries")
+        or []
+    )
+    pend_closes = list(
+        fr.get("viz_closes_post")
+        or fr.get("viz_closes")
+        or fr.get("pending_closes_post")
+        or fr.get("pending_closes")
+        or []
+    )
+    entry_prices = [float(o.get("price")) for o in pend_entries if float(o.get("price", 0.0) or 0.0) > 0.0]
+    close_prices = [float(o.get("price")) for o in pend_closes if float(o.get("price", 0.0) or 0.0) > 0.0]
 
     fill_rows = list(fr.get("fills") or [])
     fill_x = [ts for _ in fill_rows]
@@ -3770,7 +5466,7 @@ def prepare_config() -> GVData:
     # If there's no ConfigV7 in the session, load (probably passed from another page)
     if "v7_grid_visualizer_config" in st.session_state:
         # Build GVData from v7 config
-        config_v7: ConfigV7 = st.session_state.v7_grid_visualizer_config
+        config_v7 = st.session_state.v7_grid_visualizer_config
 
         # Pre-fill Historical Data Injection from the config when coming from PBv7 Run.
         # We persist the config-derived exchange/coins in session_state so the UI can
@@ -5513,24 +7209,6 @@ def create_statistics(side: OrderType, data: GVData):
         else:
             st.write(f"**{title_side} Fills (Historical Simulation):** None")
 
-        if bool(st.session_state.get("gv_hist_compare_enabled", False)):
-            key = "long" if side == Side.Long else "short"
-            pb7_events = list(st.session_state.get(f"gv_compare_pb7_{key}", []) or [])
-            b_events = list(st.session_state.get(f"gv_compare_b_{key}", []) or [])
-            c_events = list(st.session_state.get(f"gv_compare_c_{key}", []) or [])
-
-            cmp_df = _compare_fills_pb7_b_c(
-                pb7_events=pb7_events,
-                b_events=b_events,
-                c_events=c_events,
-                price_step=float(getattr(data.exchange_params, "price_step", 0.0) or 0.0),
-                qty_step=float(getattr(data.exchange_params, "qty_step", 0.0) or 0.0),
-            )
-            if bool(st.session_state.get("gv_hist_compare_mismatches_only", True)) and not cmp_df.empty:
-                cmp_df = cmp_df[cmp_df["status"] != "match"].copy()
-            st.write(f"**{title_side} Compare (PB7 vs B vs C)**")
-            st.dataframe(cmp_df, width="stretch")
-
     # Calulate Total Wallet Exposure
     close_wallet_expore_sum = data.state_params.balance * wallet_exposure_limit
     close_twe_budegt = data.state_params.balance * wallet_exposure_limit
@@ -5579,6 +7257,9 @@ def show_visualizer():
 
     # Create columns for organizing parameters
     col1, col2, col3 = st.columns(3)
+
+    # Output placeholder for PB7 vs B vs C compare; filled later (after `data.prepare_data()`).
+    compare_out = None
     
     with col1:
         sel_exc = ""
@@ -6030,7 +7711,10 @@ def show_visualizer():
                     index=0 if str(st.session_state.get("gv_hist_sim_mode", "Local (B)")) == "Local (B)" else 1,
                     key="gv_hist_sim_mode",
                     horizontal=True,
-                    help="Local (B) uses the visualizer's candle-walk sim. PB7 (C) runs PB7's Rust backtest engine for apples-to-apples comparison.",
+                    help=(
+                        "Local (B): PBGui simuliert Candle-für-Candle (Orchestrator-Orders + lokale Fill-Regeln) und kann deshalb Grids/Trailing pro Candle anzeigen. "
+                        "PB7 (C): verwendet die echte PB7 Rust Backtest-Engine (Ground truth) für Vergleich – aber ohne per-Candle offene Grid-Ladder-Details."
+                    ),
                 )
                 sim_col1, sim_col2 = st.columns(2)
                 with sim_col1:
@@ -6077,6 +7761,9 @@ def show_visualizer():
                     key="gv_hist_compare_mismatches_only",
                 )
 
+                # Placeholder: rendered later in the same expander (after compute step further down).
+                compare_out = st.container()
+
             long_active = data.isActive(Side.Long)
             short_active = data.isActive(Side.Short)
 
@@ -6106,7 +7793,10 @@ def show_visualizer():
                     index=0 if str(st.session_state.get("gv_movie_engine", "Local (B) – full grids")) == "Local (B) – full grids" else 1,
                     key="gv_movie_engine",
                     horizontal=True,
-                    help="Mode B renders evolving entry/close grids + trailing. Mode C uses PB7's Rust backtest engine fills and previews the next fills (per position cycle) as horizontal lines; per-candle open order grids are not exposed by the engine.",
+                    help=(
+                        "Local (B): rendert die sich entwickelnden Entry/Close-Grids + Trailing (volle Grid-Ladders). "
+                        "PB7 (C): zeigt Fills aus der PB7 Backtest-Engine (Ground truth) und previewt kommende Fills; offene Grids pro Candle werden von der Engine nicht geliefert."
+                    ),
                 )
 
                 movie_out = st.container()
@@ -6138,6 +7828,22 @@ def show_visualizer():
                             data_template=data,
                             output_container=movie_out,
                         )
+                else:
+                    # Keep rendering the last generated movie on reruns until a new one is generated.
+                    with movie_out:
+                        if str(st.session_state.get("gv_movie_engine")) == "PB7 backtest engine (C) – upcoming fills":
+                            fig = st.session_state.get("gv_movie_fig_modec")
+                            df_fills = st.session_state.get("gv_movie_fills_modec")
+                        else:
+                            fig = st.session_state.get("gv_movie_fig_modeb")
+                            df_fills = st.session_state.get("gv_movie_fills_modeb")
+                        if fig is not None:
+                            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+                        try:
+                            if df_fills is not None and hasattr(df_fills, "empty") and not df_fills.empty:
+                                st.dataframe(df_fills, use_container_width=True, height=250)
+                        except Exception:
+                            pass
 
             # Automatically inject state based on slider
             idx = hist_df.index.get_indexer([sel_time], method='nearest')[0]
@@ -6676,107 +8382,6 @@ def show_visualizer():
                 data.historical_sim_fills_long = []
                 data.historical_sim_fills_short = []
 
-        # PB7 vs B vs C compare capture (stores into session_state; does not affect selected mode outputs)
-        if bool(st.session_state.get("gv_hist_compare_enabled", False)):
-            sel_exc = str(st.session_state.get("gv_hist_exchange", "") or "")
-            sel_coin = str(st.session_state.get("gv_hist_coin", "") or "")
-            trade_start_time = pd.to_datetime(data.analysis_time) if data.analysis_time is not None else None
-
-            pb7_dir = str(st.session_state.get("gv_hist_compare_pb7_dir", "") or "")
-            use_pb7_range = bool(st.session_state.get("gv_hist_compare_use_pb7_range", True))
-
-            if pb7_dir and use_pb7_range:
-                (pb7_long, pb7_short), (b_long, b_short), (c_long, c_short), meta = _run_compare_from_pb7_backtest_dir(
-                    pbr=pbr,
-                    pb7_src=pb7_src,
-                    backtest_dir=pb7_dir,
-                    max_orders=max(20000, int(sim_max_orders)),
-                )
-                st.session_state["gv_compare_meta"] = meta
-            else:
-                pb7_long, pb7_short = _load_pb7_fills_csv_to_events(pb7_dir) if pb7_dir else ([], [])
-
-                b_long: list[dict] = []
-                b_short: list[dict] = []
-                c_long: list[dict] = []
-                c_short: list[dict] = []
-
-                if sel_exc and sel_coin and trade_start_time is not None:
-                    # Prepare local sim_df (with warmup) for Mode B
-                    hist_df_full = load_historical_ohlcv_v7(sel_exc, sel_coin)
-                    sim_df = pd.DataFrame()
-                    if hist_df_full is not None and not hist_df_full.empty:
-                        warmup_minutes = _compute_warmup_minutes_for_mode_c(
-                            data.normal_bot_params_long,
-                            data.normal_bot_params_short,
-                            warmup_ratio=0.2,
-                            max_warmup_minutes=0.0,
-                        )
-                        warm_start = trade_start_time - pd.Timedelta(minutes=int(warmup_minutes))
-                        sim_end = trade_start_time + pd.Timedelta(minutes=max(0, int(sim_max_candles) - 1))
-                        try:
-                            sim_df = hist_df_full.loc[warm_start:sim_end].copy()
-                        except Exception:
-                            sim_df = hist_df_full.copy()
-
-                        # Mode C (PB7 engine)
-                        try:
-                            c_long, c_short = _run_pb7_engine_backtest_for_visualizer(
-                                pbr=pbr,
-                                exchange=sel_exc,
-                                coin=sel_coin,
-                                analysis_time=pd.to_datetime(data.analysis_time).to_pydatetime(),
-                                hist_df=hist_df_full,
-                                exchange_params=data.exchange_params,
-                                bot_params_long=data.normal_bot_params_long,
-                                bot_params_short=data.normal_bot_params_short,
-                                starting_balance=float(data.state_params.balance),
-                                max_candles_forward=sim_max_candles,
-                            )
-                        except Exception:
-                            c_long, c_short = [], []
-
-                        # Mode B (local)
-                        if not sim_df.empty:
-                            fees = _derive_exchange_fees_from_market(sel_exc, sel_coin)
-                            maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
-                            if long_active:
-                                b_long = _simulate_backtest_over_historical_candles(
-                                    pbr=pbr,
-                                    pb7_src=pb7_src,
-                                    side=Side.Long,
-                                    candles=sim_df,
-                                    exchange_params=data.exchange_params,
-                                    bot_params=data.normal_bot_params_long,
-                                    starting_position=data.position_long_enty,
-                                    balance=float((data.state_params_long or data.state_params).balance),
-                                    maker_fee=maker_fee,
-                                    trade_start_time=trade_start_time,
-                                    max_orders=sim_max_orders,
-                                    max_candles=sim_max_candles,
-                                )
-                            if short_active:
-                                b_short = _simulate_backtest_over_historical_candles(
-                                    pbr=pbr,
-                                    pb7_src=pb7_src,
-                                    side=Side.Short,
-                                    candles=sim_df,
-                                    exchange_params=data.exchange_params,
-                                    bot_params=data.normal_bot_params_short,
-                                    starting_position=data.position_short_entry,
-                                    balance=float((data.state_params_short or data.state_params).balance),
-                                    maker_fee=maker_fee,
-                                    trade_start_time=trade_start_time,
-                                    max_orders=sim_max_orders,
-                                    max_candles=sim_max_candles,
-                                )
-
-            st.session_state["gv_compare_pb7_long"] = pb7_long
-            st.session_state["gv_compare_pb7_short"] = pb7_short
-            st.session_state["gv_compare_b_long"] = b_long
-            st.session_state["gv_compare_b_short"] = b_short
-            st.session_state["gv_compare_c_long"] = c_long
-            st.session_state["gv_compare_c_short"] = c_short
     else:
         data.historical_sim_entries_long = []
         data.historical_sim_entries_short = []
@@ -6784,6 +8389,184 @@ def show_visualizer():
         data.historical_sim_closes_short = []
         data.historical_sim_fills_long = []
         data.historical_sim_fills_short = []
+
+    # PB7 vs B vs C compare: independent of simulation/movie; runs when checkbox is enabled.
+    if bool(st.session_state.get("gv_hist_compare_enabled", False)):
+        sel_exc = str(st.session_state.get("gv_hist_exchange", "") or "")
+        sel_coin = str(st.session_state.get("gv_hist_coin", "") or "")
+        trade_start_time = pd.to_datetime(data.analysis_time) if data.analysis_time is not None else None
+
+        pb7_dir = str(st.session_state.get("gv_hist_compare_pb7_dir", "") or "")
+        use_pb7_range = bool(st.session_state.get("gv_hist_compare_use_pb7_range", True))
+
+        compare_max_candles = 2000
+        compare_max_orders = 20000
+
+        pb7_long: list[dict] = []
+        pb7_short: list[dict] = []
+        b_long: list[dict] = []
+        b_short: list[dict] = []
+        c_long: list[dict] = []
+        c_short: list[dict] = []
+
+        if pb7_dir and use_pb7_range:
+            try:
+                (pb7_long, pb7_short), (b_long, b_short), (c_long, c_short), meta = _run_compare_from_pb7_backtest_dir(
+                    pbr=pbr,
+                    pb7_src=pb7_src,
+                    backtest_dir=pb7_dir,
+                    max_orders=int(compare_max_orders),
+                )
+                st.session_state["gv_compare_meta"] = meta
+            except Exception as e:
+                st.session_state["gv_compare_meta"] = {"error": str(e)}
+        else:
+            try:
+                pb7_long, pb7_short = _load_pb7_fills_csv_to_events(pb7_dir) if pb7_dir else ([], [])
+            except Exception:
+                pb7_long, pb7_short = [], []
+
+            if sel_exc and sel_coin and trade_start_time is not None:
+                hist_df_full = load_historical_ohlcv_v7(sel_exc, sel_coin)
+                if hist_df_full is not None and not hist_df_full.empty:
+                    warmup_minutes = _compute_warmup_minutes_for_mode_c(
+                        data.normal_bot_params_long,
+                        data.normal_bot_params_short,
+                        warmup_ratio=0.2,
+                        max_warmup_minutes=0.0,
+                    )
+                    warm_start = trade_start_time - pd.Timedelta(minutes=int(warmup_minutes))
+                    sim_end = trade_start_time + pd.Timedelta(minutes=max(0, int(compare_max_candles) - 1))
+                    try:
+                        sim_df = hist_df_full.loc[warm_start:sim_end].copy()
+                    except Exception:
+                        sim_df = hist_df_full.copy()
+
+                    # Mode C (PB7 engine)
+                    try:
+                        c_long, c_short = _run_pb7_engine_backtest_for_visualizer(
+                            pbr=pbr,
+                            exchange=sel_exc,
+                            coin=sel_coin,
+                            analysis_time=pd.to_datetime(data.analysis_time).to_pydatetime(),
+                            hist_df=hist_df_full,
+                            exchange_params=data.exchange_params,
+                            bot_params_long=data.normal_bot_params_long,
+                            bot_params_short=data.normal_bot_params_short,
+                            starting_balance=float(data.state_params.balance),
+                            max_candles_forward=int(compare_max_candles),
+                        )
+                    except Exception:
+                        c_long, c_short = [], []
+
+                    # Mode B (local)
+                    if not sim_df.empty:
+                        fees = _derive_exchange_fees_from_market(sel_exc, sel_coin)
+                        maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
+                        try:
+                            if long_active:
+                                b_long = _simulate_backtest_over_historical_candles(
+                                    pbr=pbr,
+                                    pb7_src=pb7_src,
+                                    side=Side.Long,
+                                    candles=sim_df,
+                                    exchange_params=data.exchange_params,
+                                    bot_params_long=data.normal_bot_params_long,
+                                    bot_params_short=data.normal_bot_params_short,
+                                    starting_position=data.position_long_enty,
+                                    balance=float((data.state_params_long or data.state_params).balance),
+                                    maker_fee=maker_fee,
+                                    trade_start_time=trade_start_time,
+                                    max_orders=int(compare_max_orders),
+                                    max_candles=int(compare_max_candles),
+                                )
+                        except Exception:
+                            b_long = []
+                        try:
+                            if short_active:
+                                b_short = _simulate_backtest_over_historical_candles(
+                                    pbr=pbr,
+                                    pb7_src=pb7_src,
+                                    side=Side.Short,
+                                    candles=sim_df,
+                                    exchange_params=data.exchange_params,
+                                    bot_params_long=data.normal_bot_params_long,
+                                    bot_params_short=data.normal_bot_params_short,
+                                    starting_position=data.position_short_entry,
+                                    balance=float((data.state_params_short or data.state_params).balance),
+                                    maker_fee=maker_fee,
+                                    trade_start_time=trade_start_time,
+                                    max_orders=int(compare_max_orders),
+                                    max_candles=int(compare_max_candles),
+                                )
+                        except Exception:
+                            b_short = []
+
+        st.session_state["gv_compare_pb7_long"] = pb7_long
+        st.session_state["gv_compare_pb7_short"] = pb7_short
+        st.session_state["gv_compare_b_long"] = b_long
+        st.session_state["gv_compare_b_short"] = b_short
+        st.session_state["gv_compare_c_long"] = c_long
+        st.session_state["gv_compare_c_short"] = c_short
+
+        # Render inside the Compare expander
+        try:
+            if compare_out is not None:
+                with compare_out:
+                    meta = st.session_state.get("gv_compare_meta")
+                    if meta:
+                        st.caption(f"Compare meta: {meta}")
+
+                    mismatches_only = bool(st.session_state.get("gv_hist_compare_mismatches_only", True))
+                    # Important: use the same tick sizes used to produce B/C events.
+                    # Using the current visualizer config's exchange_params can make everything look `pb7_only`.
+                    price_step = 0.0
+                    qty_step = 0.0
+                    try:
+                        if isinstance(meta, dict):
+                            price_step = float(meta.get("price_step") or 0.0)
+                            qty_step = float(meta.get("qty_step") or 0.0)
+                    except Exception:
+                        price_step = 0.0
+                        qty_step = 0.0
+                    if not price_step or not qty_step:
+                        try:
+                            sel_exc = str((meta or {}).get("exchange") or st.session_state.get("gv_hist_exchange") or "")
+                            sel_coin = str((meta or {}).get("coin") or st.session_state.get("gv_hist_coin") or "")
+                            if sel_exc and sel_coin:
+                                market_ep = _derive_exchange_params_from_market(sel_exc, sel_coin)
+                                price_step = float(market_ep.get("price_step") or price_step or 0.0)
+                                qty_step = float(market_ep.get("qty_step") or qty_step or 0.0)
+                        except Exception:
+                            pass
+                    if not price_step:
+                        price_step = float(getattr(data.exchange_params, "price_step", 0.0) or 0.0)
+                    if not qty_step:
+                        qty_step = float(getattr(data.exchange_params, "qty_step", 0.0) or 0.0)
+
+                    def _render_one(side_key: str, title: str):
+                        pb7_events = list(st.session_state.get(f"gv_compare_pb7_{side_key}", []) or [])
+                        b_events = list(st.session_state.get(f"gv_compare_b_{side_key}", []) or [])
+                        c_events = list(st.session_state.get(f"gv_compare_c_{side_key}", []) or [])
+                        if not (pb7_events or b_events or c_events):
+                            st.write(f"**{title}:** No events")
+                            return
+                        cmp_df = _compare_fills_pb7_b_c(
+                            pb7_events=pb7_events,
+                            b_events=b_events,
+                            c_events=c_events,
+                            price_step=price_step,
+                            qty_step=qty_step,
+                        )
+                        if mismatches_only and not cmp_df.empty:
+                            cmp_df = cmp_df[cmp_df["status"] != "match"].copy()
+                        st.write(f"**{title}**")
+                        st.dataframe(cmp_df, use_container_width=True)
+
+                    _render_one("long", "LONG")
+                    _render_one("short", "SHORT")
+        except Exception:
+            pass
 
     # --- DEBUG CAPTURE ---
     debug_rust_data = {}
@@ -7538,8 +9321,16 @@ def generate_animation_v7(start_time, frames, step_mins, hist_df, symbol, contex
                     x=df_window_plot.index, y=lower_band, mode='lines', line=dict(color='magenta', width=1), name='EMA Low'
                 )
     
-                trace_entries = make_grid_trace(entry_prices, 'rgba(255, 0, 0, 0.6)', 'Entry Grid', df_window_plot.index[0], df_window_plot.index[-1])
-                trace_closes = make_grid_trace(close_prices, 'rgba(0, 255, 0, 0.6)', 'Close Grid', df_window_plot.index[0], df_window_plot.index[-1])
+                x_left = df_window_plot.index[0]
+                try:
+                    if int(opt_res_mins) > 1:
+                        x_left = x_left - pd.Timedelta(minutes=int(opt_res_mins))
+                except Exception:
+                    pass
+                x_right = df_window_plot.index[-1]
+
+                trace_entries = make_grid_trace(entry_prices, 'rgba(255, 0, 0, 0.6)', 'Entry Grid', x_left, x_right)
+                trace_closes = make_grid_trace(close_prices, 'rgba(0, 255, 0, 0.6)', 'Close Grid', x_left, x_right)
                 
                 frame_data = [
                     trace_candle,
@@ -7573,7 +9364,7 @@ def generate_animation_v7(start_time, frames, step_mins, hist_df, symbol, contex
                     y_max_frame = max(y_vals) * 1.005
                 
                 frame_layout = dict(
-                    xaxis=dict(range=[df_window_plot.index[0], df_window_plot.index[-1]]),
+                    xaxis=dict(range=[x_left, x_right]),
                     yaxis=dict(range=[y_min_frame, y_max_frame])
                 )
                 
@@ -7784,28 +9575,77 @@ def generate_animation_v7_modeb(
             def _sim_cb(frac: float, msg: str) -> None:
                 _progress(0.0 + 0.6 * float(frac), f"Mode B: {msg}")
 
-            starting_pos, starting_bal = _get_modeb_starting_state(data_template, side_obj)
+            # If a PB7 backtest dir is provided (compare panel), run Mode B from backtest.start_date
+            # (with warmup) so the state at `start_time` matches PB7. Otherwise, simulate from start_time.
+            pb7_dir = str(st.session_state.get("gv_hist_compare_pb7_dir", "") or "")
+            trade_start_time_for_sim = start_time
+            sim_start_balance = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
+            bp_long_sim = data_template.normal_bot_params_long
+            bp_short_sim = data_template.normal_bot_params_short
             try:
-                max_orders = int(st.session_state.get("gv_hist_sim_max_orders", 50000) or 50000)
-            except Exception:
-                max_orders = 50000
+                if pb7_dir and os.path.isfile(os.path.join(os.path.expanduser(pb7_dir), "config.json")):
+                    cfg_path = os.path.join(os.path.expanduser(pb7_dir), "config.json")
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                    bt_start = ((cfg.get("backtest") or {}).get("start_date"))
+                    if bt_start:
+                        trade_start_time_for_sim = pd.to_datetime(str(bt_start))
+                    try:
+                        sim_start_balance = float((cfg.get("backtest") or {}).get("starting_balance") or sim_start_balance)
+                    except Exception:
+                        pass
+                    try:
+                        bot_cfg = cfg.get("bot") or {}
+                        bp_long_sim = BotParams(**(bot_cfg.get("long") or {}))
+                        bp_short_sim = BotParams(**(bot_cfg.get("short") or {}))
+                    except Exception:
+                        bp_long_sim = data_template.normal_bot_params_long
+                        bp_short_sim = data_template.normal_bot_params_short
 
-            sim_events, replay_frames = _simulate_backtest_over_historical_candles_replay(
+                    # Warmup + gap standardization for parity.
+                    try:
+                        warmup_minutes = int(_compute_warmup_minutes_for_mode_c_from_config(cfg, bp_long_sim, bp_short_sim))
+                    except Exception:
+                        warmup_minutes = int(_compute_warmup_minutes_for_mode_c(bp_long_sim, bp_short_sim))
+                    warm_start = pd.to_datetime(trade_start_time_for_sim) - pd.Timedelta(minutes=max(0, warmup_minutes))
+                    try:
+                        sim_df = hist_df.loc[warm_start:end_time].copy()
+                        sim_df = _standardize_ohlcv_1m_gaps(sim_df, start_ts=warm_start, end_ts=end_time)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Start from flat positions; running from trade_start_time_for_sim will build correct state.
+            starting_pos_long = Position(size=0.0, price=0.0)
+            starting_pos_short = Position(size=0.0, price=0.0)
+            # Movie Builder must not be capped by the "Simulation" panel's max fills.
+            # If user requests 200 frames @ 4h, we must simulate all fills needed for that full horizon.
+            max_orders = 0
+
+            # Capture frames only from (start_time - one step) to keep memory bounded.
+            capture_from = start_time - pd.Timedelta(minutes=int(step_mins) * 2)
+            ev_l, ev_s, replay_frames = _simulate_backtest_over_historical_candles_replay_orchestrator_pair(
                 pbr=pbr,
                 pb7_src=_pb7_src_dir(),
-                side=side_obj,
+                side_for_frames=side_obj,
                 candles=sim_df,
                 exchange_params=data_template.exchange_params,
-                bot_params=bp,
-                starting_position=starting_pos,
-                balance=float(starting_bal),
+                bot_params_long=bp_long_sim,
+                bot_params_short=bp_short_sim,
+                starting_position_long=starting_pos_long,
+                starting_position_short=starting_pos_short,
+                balance=float(sim_start_balance),
                 maker_fee=maker_fee,
-                trade_start_time=start_time,
+                trade_start_time=trade_start_time_for_sim,
                 max_orders=max_orders,
                 max_candles=int(len(sim_df)),
                 frame_every_n_candles=fe,
+                capture_frames_from_time=capture_from,
                 progress_cb=_sim_cb,
             )
+
+            sim_events = (ev_l or []) if side_obj == Side.Long else (ev_s or [])
         except Exception as e:
             st.error(f"Mode B simulation failed: {e}")
             return
@@ -7850,47 +9690,28 @@ def generate_animation_v7_modeb(
         )
 
         # Resample plot source to keep payload small
-        total_ctx_mins = float(ctx_days) * 1440.0
-        opt_res_mins = int(total_ctx_mins / 300.0)
-        if opt_res_mins < 1:
+        # Movie: build displayed candles exactly from the 1m source into the chosen step size.
+        # (Same behavior as the previous 4h special-case, but for all step sizes.)
+        try:
+            opt_res_mins = int(max(1, int(step_mins)))
+        except Exception:
             opt_res_mins = 1
 
-        # Keep visual candle resolution compatible with stepping.
-        # If we resample coarser than step_mins, 1m/5m playback appears to "not move" (candles barely change).
-        # Special case: for 4h stepping we want true 4h candles (240x1m -> 1 candle) aligned to start_time.
-        if int(step_mins) == 240:
-            opt_res_mins = 240
-        else:
-            try:
-                opt_res_mins = min(int(opt_res_mins), int(max(1, step_mins)))
-            except Exception:
-                pass
-
-        # Visible window: keep a roughly constant number of *visible candles*.
-        # For 4h playback, show 60 candles (10 days). For smaller steps keep the old 4h cap.
-        target_visible_candles = 60 if int(step_mins) == 240 else 600
+        # Visible window: default 60 candles (rolling window).
+        # For 1m playback, show 120 candles for more context.
+        target_visible_candles = 120 if int(opt_res_mins) == 1 else 60
         try:
             window_mins = int(target_visible_candles * int(opt_res_mins))
         except Exception:
             window_mins = int(target_visible_candles)
-        if int(step_mins) == 240:
-            # For 4h, base on candle count and don't clamp to 240 minutes.
-            window_mins = int(max(window_mins, int(step_mins) * 5))
-        else:
-            # Hard cap: show at most 4 hours worth of candles in the viewport.
-            max_visible_window_mins = 240
-            # Never exceed selected context_days; ensure at least a few steps are visible.
-            window_mins = int(min(float(total_ctx_mins), float(max_visible_window_mins), float(max(window_mins, int(step_mins) * 5))))
 
         if opt_res_mins > 1:
             agg_dict = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
             for c in df_calc.columns:
                 if c not in agg_dict:
                     agg_dict[c] = "last"
-            rs_kwargs = {}
-            if int(opt_res_mins) == 240 and int(step_mins) == 240:
-                # Completed 4h candles: bins end on (start_time + k*4h)
-                rs_kwargs = {"origin": pd.to_datetime(start_time), "label": "right", "closed": "right"}
+            # Completed step candles: bins end on (start_time + k*step)
+            rs_kwargs = {"origin": pd.to_datetime(start_time), "label": "right", "closed": "right"}
             df_plot_source = df_calc.resample(f"{opt_res_mins}min", **rs_kwargs).agg(agg_dict).dropna()
         else:
             df_plot_source = df_calc
@@ -7912,18 +9733,6 @@ def generate_animation_v7_modeb(
             )
 
         fig_frames = []
-
-        # For coarse stepping, close orders may appear and fill between sampled frames.
-        # Use simulated fills as a fallback to still show the next upcoming close level.
-        close_events_sorted: list[dict] = []
-        try:
-            if sim_events:
-                close_events_sorted = sorted(
-                    [e for e in sim_events if str(e.get("event")) == "close" and e.get("timestamp") is not None],
-                    key=lambda e: pd.to_datetime(e.get("timestamp")),
-                )
-        except Exception:
-            close_events_sorted = []
 
         # Movie frames are driven by the requested stepping starting at start_time.
         _progress(0.6, "Mode B: building frames...")
@@ -7983,13 +9792,25 @@ def generate_animation_v7_modeb(
             if df_window_plot is None or df_window_plot.empty:
                 continue
 
-            # Plot POST-candle pending orders (state for the next candle).
-            # This ensures close grids appear immediately after an entry fill.
-            pending_entries = list(fr.get("pending_entries_post") or fr.get("pending_entries") or [])
-            pending_closes = list(fr.get("pending_closes_post") or fr.get("pending_closes") or [])
+            # Plot PRE-candle grids (orders active during the visible candle interval).
+            # Prefer visualization grids (full ladders) so the movie shows all grid steps.
+            pending_entries = list(
+                fr.get("viz_entries")
+                or fr.get("pending_entries")
+                or fr.get("viz_entries_post")
+                or fr.get("pending_entries_post")
+                or []
+            )
+            pending_closes = list(
+                fr.get("viz_closes")
+                or fr.get("pending_closes")
+                or fr.get("viz_closes_post")
+                or fr.get("pending_closes_post")
+                or []
+            )
 
             entry_prices = [float(o.get("price")) for o in pending_entries if float(o.get("price", 0.0) or 0.0) > 0.0]
-            close_prices = [float(o.get("price")) for o in pending_closes if float(o.get("price", 0.0) or 0.0) > 0.0]
+            close_prices_all = [float(o.get("price")) for o in pending_closes if float(o.get("price", 0.0) or 0.0) > 0.0]
 
             # Next trailing highlight (if any)
             try:
@@ -8017,8 +9838,40 @@ def generate_animation_v7_modeb(
                         trailing_close_prices.append(float(o.get("price")))
                     except Exception:
                         pass
+
+            # Apply trailing-close gating to the Close Grid trace as well (not only the highlight line).
+            # This is the behavior the user expects: trailing closes should not be shown while price is on the
+            # "wrong" side and hasn't yet crossed in the fill direction.
+            gated_trailing_close_prices: list[float] = []
+            if trailing_close_prices:
+                try:
+                    # Cache per-level within this frame
+                    _dir_cache: dict[float, Optional[str]] = {}
+                    for p in trailing_close_prices:
+                        lvl = float(p)
+                        if lvl not in _dir_cache:
+                            _dir_cache[lvl] = _last_cross_direction_in_window(df_window_plot, lvl)
+                        last_dir = _dir_cache[lvl]
+                        if side_obj == Side.Long:
+                            if last_dir == "up":
+                                gated_trailing_close_prices.append(lvl)
+                        else:
+                            if last_dir == "down":
+                                gated_trailing_close_prices.append(lvl)
+                except Exception:
+                    gated_trailing_close_prices = list(trailing_close_prices)
+
+            non_trailing_close_prices = []
+            try:
+                trailing_set = set(float(x) for x in trailing_close_prices)
+                for p in close_prices_all:
+                    if float(p) not in trailing_set:
+                        non_trailing_close_prices.append(float(p))
+            except Exception:
+                non_trailing_close_prices = list(close_prices_all)
+
+            close_prices = non_trailing_close_prices + gated_trailing_close_prices
             next_trailing_close_price = None
-            next_trailing_close_is_fallback = False
             if trailing_close_prices:
                 # Side-aware: for Long pick the lowest close >= px; for Short pick the highest close <= px.
                 if side_obj == Side.Long:
@@ -8028,25 +9881,42 @@ def generate_animation_v7_modeb(
                     below = [p for p in trailing_close_prices if float(p) <= float(close_px) + float(price_eps)]
                     next_trailing_close_price = max(below) if below else min(trailing_close_prices, key=lambda p: abs(float(p) - float(close_px)))
 
-            # If no trailing close grid is present at this sampled frame, fall back to next close fill.
-            if next_trailing_close_price is None and close_events_sorted:
+            def _last_cross_direction_in_window(df_ohlc: pd.DataFrame, level: float) -> Optional[str]:
+                """Return 'up' or 'down' for the most recent cross of `level`.
+
+                Uses previous candle close vs current candle high/low, so intra-candle crosses are captured
+                even if the close doesn't cross the level.
+                """
                 try:
-                    pos_after = fr.get("pos_after") or {}
-                    pos_size = float(pos_after.get("size", 0.0) or 0.0)
-                    if abs(pos_size) <= 0.0:
-                        raise RuntimeError("no open position")
-                    cur_ts = pd.to_datetime(current_time)
-                    nxt = None
-                    for ev in close_events_sorted:
-                        ev_ts = pd.to_datetime(ev.get("timestamp"))
-                        if ev_ts >= cur_ts:
-                            nxt = ev
-                            break
-                    if nxt is not None:
-                        next_trailing_close_price = float(nxt.get("price"))
-                        next_trailing_close_is_fallback = True
+                    if df_ohlc is None or df_ohlc.empty:
+                        return None
+                    if not all(c in df_ohlc.columns for c in ("close", "high", "low")):
+                        return None
+
+                    close_s = pd.to_numeric(df_ohlc["close"], errors="coerce").astype(float)
+                    high_s = pd.to_numeric(df_ohlc["high"], errors="coerce").astype(float)
+                    low_s = pd.to_numeric(df_ohlc["low"], errors="coerce").astype(float)
+
+                    # Match Mode B fill semantics: float32-backed candles and strict inequality.
+                    close_s = close_s.astype(np.float32)
+                    high_s = high_s.astype(np.float32)
+                    low_s = low_s.astype(np.float32)
+                    prev_close = close_s.shift(1)
+                    lvl = np.float32(float(level))
+
+                    cross_up = (prev_close < lvl) & (high_s > lvl)
+                    cross_dn = (prev_close > lvl) & (low_s < lvl)
+                    if not (bool(cross_up.any()) or bool(cross_dn.any())):
+                        return None
+                    last_up = cross_up[cross_up].index.max() if bool(cross_up.any()) else None
+                    last_dn = cross_dn[cross_dn].index.max() if bool(cross_dn.any()) else None
+                    if last_up is None:
+                        return "down"
+                    if last_dn is None:
+                        return "up"
+                    return "up" if pd.to_datetime(last_up) >= pd.to_datetime(last_dn) else "down"
                 except Exception:
-                    pass
+                    return None
 
             # If the highlighted close (from actual pending orders) would have triggered on this candle, hide it.
             try:
@@ -8054,7 +9924,7 @@ def generate_animation_v7_modeb(
                 cl = float(fr.get("candle", {}).get("low"))
             except Exception:
                 ch, cl = None, None
-            if (not next_trailing_close_is_fallback) and next_trailing_close_price is not None and ch is not None and cl is not None:
+            if next_trailing_close_price is not None and ch is not None and cl is not None:
                 try:
                     if side_obj == Side.Long:
                         if float(ch) >= float(next_trailing_close_price) - float(price_eps):
@@ -8065,8 +9935,48 @@ def generate_animation_v7_modeb(
                 except Exception:
                     pass
 
-            trace_entries = make_grid_trace(entry_prices, "rgba(255, 0, 0, 0.6)", "Entry Grid", df_window_plot.index[0], df_window_plot.index[-1])
-            trace_closes = make_grid_trace(close_prices, "rgba(0, 255, 0, 0.6)", "Close Grid", df_window_plot.index[0], df_window_plot.index[-1])
+            # Movie UX: show trailing closes only after the most recent price-cross of that level in the fill direction.
+            # Example (Long close): if price was above, crossed down, then later crosses up again -> show from that up-cross.
+            if next_trailing_close_price is not None:
+                try:
+                    last_dir = _last_cross_direction_in_window(df_window_plot, float(next_trailing_close_price))
+                    if side_obj == Side.Long:
+                        # Require an up-cross; hide if last cross is down or there has been no cross yet.
+                        if last_dir != "up":
+                            next_trailing_close_price = None
+                    else:
+                        # Require a down-cross; hide if last cross is up or there has been no cross yet.
+                        if last_dir != "down":
+                            next_trailing_close_price = None
+                except Exception:
+                    pass
+
+            x_left = df_window_plot.index[0]
+            try:
+                if int(opt_res_mins) > 1:
+                    x_left = x_left - pd.Timedelta(minutes=int(opt_res_mins))
+            except Exception:
+                pass
+            x_right = df_window_plot.index[-1]
+
+            trace_entries = make_grid_trace(entry_prices, "rgba(255, 0, 0, 0.6)", "Entry Grid", x_left, x_right)
+            trace_closes = make_grid_trace(close_prices, "rgba(0, 255, 0, 0.6)", "Close Grid", x_left, x_right)
+
+            # Current price line: use the *plotted* candle close.
+            # The movie candles may be resampled (e.g. 5m/4h); using the 1m replay close would not match.
+            try:
+                current_price_plot = float(df_window_plot["close"].iloc[-1])
+            except Exception:
+                current_price_plot = float(close_px)
+
+            trace_current_price = go.Scatter(
+                x=[x_left, x_right],
+                y=[float(current_price_plot), float(current_price_plot)],
+                mode="lines",
+                line=dict(width=2),
+                name="Current Price",
+                showlegend=True,
+            )
 
             trace_next_trailing_entry = go.Scatter(x=[], y=[])
             if next_trailing_entry_price is not None:
@@ -8074,8 +9984,8 @@ def generate_animation_v7_modeb(
                     [float(next_trailing_entry_price)],
                     "rgba(255, 165, 0, 0.9)",
                     "Next Trailing Entry",
-                    df_window_plot.index[0],
-                    df_window_plot.index[-1],
+                    x_left,
+                    x_right,
                     width=3,
                 )
 
@@ -8085,8 +9995,8 @@ def generate_animation_v7_modeb(
                     [float(next_trailing_close_price)],
                     "rgba(0, 255, 255, 0.9)",
                     "Next Trailing Close",
-                    df_window_plot.index[0],
-                    df_window_plot.index[-1],
+                    x_left,
+                    x_right,
                     width=3,
                 )
 
@@ -8114,8 +10024,8 @@ def generate_animation_v7_modeb(
                     if len(exec_df) > 3000:
                         exec_df = exec_df.iloc[-3000:]
 
-                    # For 4h movie candles we label bins on the right edge; otherwise default resample is left.
-                    align_method = "backfill" if (int(step_mins) == 240 and int(opt_res_mins) == 240) else "pad"
+                    # Resampled candles are right-labeled (bin end). Snap fills into the corresponding bin.
+                    align_method = "backfill" if int(opt_res_mins) > 1 else "pad"
                     # If multiple fills snap to the same plotted candle bin, stack markers slightly so earlier
                     # ones don't get hidden under later ones (common with 4h candles).
                     stack_counts: dict[tuple, int] = {}
@@ -8251,6 +10161,7 @@ def generate_animation_v7_modeb(
             frame_data = [
                 trace_entries,
                 trace_closes,
+                trace_current_price,
                 trace_next_trailing_entry,
                 trace_next_trailing_close,
                 trace_fills,
@@ -8264,6 +10175,7 @@ def generate_animation_v7_modeb(
                 pass
             y_vals.extend([float(p) for p in entry_prices])
             y_vals.extend([float(p) for p in close_prices])
+            y_vals.append(float(current_price_plot))
             if next_trailing_entry_price is not None:
                 y_vals.append(float(next_trailing_entry_price))
             if next_trailing_close_price is not None:
@@ -8276,18 +10188,42 @@ def generate_animation_v7_modeb(
                 y_min_frame = min(y_vals) * 0.995
                 y_max_frame = max(y_vals) * 1.005
 
+            bal_now = None
+            try:
+                if fr.get("balance_after") is not None:
+                    bal_now = float(fr.get("balance_after"))
+                elif fr.get("balance_before") is not None:
+                    bal_now = float(fr.get("balance_before"))
+            except Exception:
+                bal_now = None
+            bal_text = ""
+            if bal_now is not None and math.isfinite(float(bal_now)):
+                bal_text = f"Wallet: {float(bal_now):.2f}"
+
+            ann = []
+            if bal_text:
+                ann = [
+                    dict(
+                        x=1.02,
+                        y=0.0,
+                        xref="paper",
+                        yref="paper",
+                        xanchor="left",
+                        yanchor="bottom",
+                        text=bal_text,
+                        showarrow=False,
+                        align="left",
+                        bgcolor="rgba(0,0,0,0.5)",
+                        font=dict(size=12),
+                    )
+                ]
+
             frame_layout = dict(
-                xaxis=dict(
-                    range=[
-                        (df_window_plot.index[0] - pd.Timedelta(minutes=int(opt_res_mins)))
-                        if (int(step_mins) == 240 and int(opt_res_mins) == 240)
-                        else df_window_plot.index[0],
-                        df_window_plot.index[-1],
-                    ]
-                ),
+                xaxis=dict(range=[x_left, x_right]),
                 yaxis=dict(range=[y_min_frame, y_max_frame]),
+                annotations=ann,
             )
-            fig_frames.append(go.Frame(data=frame_data, layout=frame_layout, name=str(i), traces=[3, 4, 5, 6, 7]))
+            fig_frames.append(go.Frame(data=frame_data, layout=frame_layout, name=str(i), traces=[3, 4, 5, 6, 7, 8]))
 
         if not fig_frames:
             st.error("No frames generated")
@@ -8315,7 +10251,7 @@ def generate_animation_v7_modeb(
         init_frame = fig_frames[initial_frame_idx]
 
         # Static plot source (candles + EMAs): match the requested simulation span.
-        # Start at start_time so the first 60 candles appear one-by-one.
+        # Start at start_time so the first visible candles appear one-by-one.
         df_static = df_plot_source.loc[(df_plot_source.index >= start_time) & (df_plot_source.index <= end_time)]
         if df_static is None or df_static.empty:
             df_static = df_plot_source
@@ -8354,7 +10290,7 @@ def generate_animation_v7_modeb(
 
         # Dynamic traces (initialized from the selected initial frame)
         init_dynamic = list(init_frame.data) if init_frame.data is not None else []
-        while len(init_dynamic) < 5:
+        while len(init_dynamic) < 6:
             init_dynamic.append(go.Scatter(x=[], y=[]))
 
         init_data = [
@@ -8366,6 +10302,7 @@ def generate_animation_v7_modeb(
             init_dynamic[2],
             init_dynamic[3],
             init_dynamic[4],
+            init_dynamic[5],
         ]
 
         # Playback speed: UI timing only (do not scale with candle timeframe).
@@ -8376,17 +10313,17 @@ def generate_animation_v7_modeb(
             xaxis=dict(type="date", rangeslider=dict(visible=False)),
             yaxis=dict(autorange=False, fixedrange=False),
             height=800,
-            margin=dict(l=50, r=50, t=70, b=140),
-            legend=dict(x=1, y=1, xanchor="right", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
+            margin=dict(l=50, r=260, t=70, b=170),
+            legend=dict(x=1.02, y=1, xanchor="left", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
             updatemenus=[
                 dict(
                     type="buttons",
                     direction="left",
                     showactive=False,
                     x=0.01,
-                    y=0.02,
+                    y=-0.06,
                     xanchor="left",
-                    yanchor="bottom",
+                    yanchor="top",
                     pad={"r": 10, "t": 10},
                     buttons=[
                         dict(
@@ -8397,6 +10334,7 @@ def generate_animation_v7_modeb(
                                 dict(
                                     frame=dict(duration=play_duration_ms, redraw=True),
                                     fromcurrent=True,
+                                    mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
                                 ),
                             ],
@@ -8407,8 +10345,9 @@ def generate_animation_v7_modeb(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=max(0, int(play_duration_ms * 0.5)), redraw=True),
+                                    frame=dict(duration=max(0, int(play_duration_ms * 0.75)), redraw=True),
                                     fromcurrent=True,
+                                    mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
                                 ),
                             ],
@@ -8421,6 +10360,20 @@ def generate_animation_v7_modeb(
                                 dict(
                                     frame=dict(duration=int(play_duration_ms * 2), redraw=True),
                                     fromcurrent=True,
+                                    mode="immediate",
+                                    transition=dict(duration=0, easing="linear"),
+                                ),
+                            ],
+                        ),
+                        dict(
+                            label="🐌 Very Slow",
+                            method="animate",
+                            args=[
+                                None,
+                                dict(
+                                    frame=dict(duration=int(play_duration_ms * 4), redraw=True),
+                                    fromcurrent=True,
+                                    mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
                                 ),
                             ],
@@ -8446,7 +10399,7 @@ def generate_animation_v7_modeb(
                     ],
                     transition=dict(duration=0),
                     x=0.01,
-                    y=-0.10,
+                    y=-0.15,
                     currentvalue=dict(font=dict(size=12), prefix="Frame: ", visible=True, xanchor="left"),
                     len=0.99,
                     pad={"b": 10, "t": 10},
@@ -8459,8 +10412,26 @@ def generate_animation_v7_modeb(
                 layout_args["xaxis"]["range"] = init_frame.layout["xaxis"]["range"]
             if "yaxis" in init_frame.layout and "range" in init_frame.layout["yaxis"]:
                 layout_args["yaxis"]["range"] = init_frame.layout["yaxis"]["range"]
+            try:
+                if "annotations" in init_frame.layout:
+                    layout_args["annotations"] = init_frame.layout["annotations"]
+            except Exception:
+                pass
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
+        try:
+            st.session_state["gv_movie_fig_modeb"] = fig
+            st.session_state["gv_movie_meta_modeb"] = {
+                "start_time": str(start_time),
+                "frames": int(frames),
+                "step_mins": int(step_mins),
+                "exchange": str(exchange),
+                "symbol": str(symbol),
+                "context_days": float(context_days),
+                "side_val": int(side_val),
+            }
+        except Exception:
+            pass
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
 
         # Fills table under the chart
@@ -8490,6 +10461,10 @@ def generate_animation_v7_modeb(
                     df_fills = df_fills[cols]
                 if len(df_fills) > 5000:
                     df_fills = df_fills.iloc[-5000:]
+                try:
+                    st.session_state["gv_movie_fills_modeb"] = df_fills
+                except Exception:
+                    pass
                 st.dataframe(df_fills, use_container_width=True, height=250)
         except Exception:
             pass
@@ -9161,17 +11136,17 @@ def generate_animation_v7_modec(
             xaxis=dict(type="date", rangeslider=dict(visible=False)),
             yaxis=dict(autorange=False, fixedrange=False),
             height=800,
-            margin=dict(l=50, r=50, t=70, b=140),
-            legend=dict(x=1, y=1, xanchor="right", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
+            margin=dict(l=50, r=260, t=70, b=170),
+            legend=dict(x=1.02, y=1, xanchor="left", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
             updatemenus=[
                 dict(
                     type="buttons",
                     direction="left",
                     showactive=False,
                     x=0.01,
-                    y=0.02,
+                    y=-0.06,
                     xanchor="left",
-                    yanchor="bottom",
+                    yanchor="top",
                     pad={"r": 10, "t": 10},
                     buttons=[
                         dict(
@@ -9182,6 +11157,7 @@ def generate_animation_v7_modec(
                                 dict(
                                     frame=dict(duration=play_duration_ms, redraw=True),
                                     fromcurrent=True,
+                                    mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
                                 ),
                             ],
@@ -9192,8 +11168,9 @@ def generate_animation_v7_modec(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=max(0, int(play_duration_ms * 0.5)), redraw=True),
+                                    frame=dict(duration=max(0, int(play_duration_ms * 0.75)), redraw=True),
                                     fromcurrent=True,
+                                    mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
                                 ),
                             ],
@@ -9206,6 +11183,20 @@ def generate_animation_v7_modec(
                                 dict(
                                     frame=dict(duration=int(play_duration_ms * 2), redraw=True),
                                     fromcurrent=True,
+                                    mode="immediate",
+                                    transition=dict(duration=0, easing="linear"),
+                                ),
+                            ],
+                        ),
+                        dict(
+                            label="🐌 Very Slow",
+                            method="animate",
+                            args=[
+                                None,
+                                dict(
+                                    frame=dict(duration=int(play_duration_ms * 4), redraw=True),
+                                    fromcurrent=True,
+                                    mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
                                 ),
                             ],
@@ -9231,7 +11222,7 @@ def generate_animation_v7_modec(
                     ],
                     transition=dict(duration=0),
                     x=0.01,
-                    y=-0.10,
+                    y=-0.15,
                     currentvalue=dict(font=dict(size=12), prefix="Frame: ", visible=True, xanchor="left"),
                     len=0.99,
                     pad={"b": 10, "t": 10},
@@ -9246,6 +11237,19 @@ def generate_animation_v7_modec(
                 layout_args["yaxis"]["range"] = init_frame.layout["yaxis"]["range"]
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
+        try:
+            st.session_state["gv_movie_fig_modec"] = fig
+            st.session_state["gv_movie_meta_modec"] = {
+                "start_time": str(start_time),
+                "frames": int(frames),
+                "step_mins": int(step_mins),
+                "exchange": str(exchange),
+                "symbol": str(symbol),
+                "context_days": float(context_days),
+                "side_val": int(side_val),
+            }
+        except Exception:
+            pass
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
 
         # Fills table under the chart
@@ -9271,6 +11275,10 @@ def generate_animation_v7_modec(
                     df_fills = df_fills[cols]
                 if len(df_fills) > 5000:
                     df_fills = df_fills.iloc[-5000:]
+                try:
+                    st.session_state["gv_movie_fills_modec"] = df_fills
+                except Exception:
+                    pass
                 st.dataframe(df_fills, use_container_width=True, height=250)
         except Exception:
             pass
