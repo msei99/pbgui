@@ -1,4 +1,7 @@
-import streamlit as st
+try:
+    import streamlit as st
+except ModuleNotFoundError:  # pragma: no cover
+    st = None  # type: ignore
 from enum import Enum
 from math import floor, ceil
 from dataclasses import dataclass, field, replace
