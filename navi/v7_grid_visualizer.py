@@ -1063,9 +1063,9 @@ def _prepare_orchestrator_ema_df(
     """Compute EMA series needed by PB7 orchestrator input.
 
     Matches PB7 backtest EMA semantics in `passivbot-rust/src/backtest.rs`:
-    - price/volume EMAs: recursive update ($adjust=False$ semantics) with init at first valid close/quote-volume.
-    - log-range EMAs: recursive update with init=0.
-    - 1h entry-volatility log-range EMA: updated on hour boundaries using the *previous hour* bucket.
+    - price/volume/log-range EMAs: bias-adjusted EMA update (`update_adjusted_ema`), equivalent to pandas `ewm(adjust=True)`.
+      PB7 maintains numerator/denominator state and returns `num/den`.
+    - 1h entry-volatility log-range EMA: bias-adjusted EMA updated on hour boundaries using the *previous hour* bucket.
 
     Returns a DataFrame aligned to `candles.index`.
     """
@@ -1085,16 +1085,34 @@ def _prepare_orchestrator_ema_df(
             s = 1.0
         return float(2.0 / (s + 1.0))
 
-    def _ema_skip_nan(values: np.ndarray, *, alpha: float, init: float) -> np.ndarray:
-        """Recursive EMA update, skipping NaNs (keep previous), PB7-style."""
+    def _adjusted_ema_skip_nan(values: np.ndarray, *, alpha: float, init_num: float, init_den: float) -> np.ndarray:
+        """PB7 `update_adjusted_ema` semantics, skipping non-finite values (keep previous num/den)."""
         out_arr = np.empty(values.shape[0], dtype=np.float64)
-        prev = float(init)
-        one_minus = float(1.0 - float(alpha))
         a = float(alpha)
+        num = float(init_num)
+        den = float(init_den)
+        one_minus = float(1.0 - a) if (math.isfinite(a) and a > 0.0) else 1.0
+        den_min_pos = float(getattr(sys, "float_info", None).min) if getattr(sys, "float_info", None) else 2.2250738585072014e-308
+
         for i, v in enumerate(values):
-            if np.isfinite(v) and np.isfinite(a) and a > 0.0:
-                prev = a * float(v) + one_minus * prev
-            out_arr[i] = prev
+            if not (math.isfinite(a) and a > 0.0):
+                out_arr[i] = (num / den) if (den > 0.0 and math.isfinite(den) and math.isfinite(num)) else float(v)
+                continue
+
+            if not np.isfinite(v):
+                out_arr[i] = (num / den) if (den > 0.0 and math.isfinite(den) and math.isfinite(num)) else float(v)
+                continue
+
+            new_num = a * float(v) + one_minus * num
+            new_den = a + one_minus * den
+            if (not math.isfinite(new_den)) or new_den <= den_min_pos:
+                num = a * float(v)
+                den = a
+                out_arr[i] = float(v)
+                continue
+            num = float(new_num)
+            den = float(new_den)
+            out_arr[i] = num / den
         return out_arr
 
     close = d["close"].astype("float64").to_numpy(copy=False)
@@ -1158,23 +1176,24 @@ def _prepare_orchestrator_ema_df(
     e2s = float(max(1.0, float(e0s * e1s) ** 0.5))
 
     out = pd.DataFrame(index=d.index)
-    out["ema_l0"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e0l), init=base_close)
-    out["ema_l1"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e1l), init=base_close)
-    out["ema_l2"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e2l), init=base_close)
-    out["ema_s0"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e0s), init=base_close)
-    out["ema_s1"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e1s), init=base_close)
-    out["ema_s2"] = _ema_skip_nan(close_upd, alpha=_alpha_from_span(e2s), init=base_close)
+    # PB7 initializes adjusted EMA state as: numerator=base_value, denominator=1.0.
+    out["ema_l0"] = _adjusted_ema_skip_nan(close_upd, alpha=_alpha_from_span(e0l), init_num=base_close, init_den=1.0)
+    out["ema_l1"] = _adjusted_ema_skip_nan(close_upd, alpha=_alpha_from_span(e1l), init_num=base_close, init_den=1.0)
+    out["ema_l2"] = _adjusted_ema_skip_nan(close_upd, alpha=_alpha_from_span(e2l), init_num=base_close, init_den=1.0)
+    out["ema_s0"] = _adjusted_ema_skip_nan(close_upd, alpha=_alpha_from_span(e0s), init_num=base_close, init_den=1.0)
+    out["ema_s1"] = _adjusted_ema_skip_nan(close_upd, alpha=_alpha_from_span(e1s), init_num=base_close, init_den=1.0)
+    out["ema_s2"] = _adjusted_ema_skip_nan(close_upd, alpha=_alpha_from_span(e2s), init_num=base_close, init_den=1.0)
 
     # 1m volume/log-range EMAs (forager)
     span_vol_l = float(getattr(bot_params_long, "filter_volume_ema_span", 1.0) or 1.0)
     span_vol_s = float(getattr(bot_params_short, "filter_volume_ema_span", 1.0) or 1.0)
-    out["vol_ema_l"] = _ema_skip_nan(quote_vol_upd, alpha=_alpha_from_span(span_vol_l), init=base_quote_vol)
-    out["vol_ema_s"] = _ema_skip_nan(quote_vol_upd, alpha=_alpha_from_span(span_vol_s), init=base_quote_vol)
+    out["vol_ema_l"] = _adjusted_ema_skip_nan(quote_vol_upd, alpha=_alpha_from_span(span_vol_l), init_num=base_quote_vol, init_den=1.0)
+    out["vol_ema_s"] = _adjusted_ema_skip_nan(quote_vol_upd, alpha=_alpha_from_span(span_vol_s), init_num=base_quote_vol, init_den=1.0)
 
     span_lr_l = float(getattr(bot_params_long, "filter_volatility_ema_span", 1.0) or 1.0)
     span_lr_s = float(getattr(bot_params_short, "filter_volatility_ema_span", 1.0) or 1.0)
-    out["lr_ema_l"] = _ema_skip_nan(log_range_upd, alpha=_alpha_from_span(span_lr_l), init=0.0)
-    out["lr_ema_s"] = _ema_skip_nan(log_range_upd, alpha=_alpha_from_span(span_lr_s), init=0.0)
+    out["lr_ema_l"] = _adjusted_ema_skip_nan(log_range_upd, alpha=_alpha_from_span(span_lr_l), init_num=0.0, init_den=1.0)
+    out["lr_ema_s"] = _adjusted_ema_skip_nan(log_range_upd, alpha=_alpha_from_span(span_lr_s), init_num=0.0, init_den=1.0)
 
     # 1h log-range EMA for entry volatility (updated on hour boundary using previous-hour bucket)
     def _entry_volatility_h1_series(span_hours: float) -> np.ndarray:
@@ -1188,7 +1207,9 @@ def _prepare_orchestrator_ema_df(
         a = float(2.0 / (span_h + 1.0))
         one_minus = 1.0 - a
         out_arr = np.zeros_like(close, dtype=np.float64)
-        prev = 0.0
+        num = 0.0
+        den = 1.0
+        den_min_pos = float(getattr(sys, "float_info", None).min) if getattr(sys, "float_info", None) else 2.2250738585072014e-308
 
         # timestamps aligned to epoch hours (PB7 uses absolute ms)
         try:
@@ -1214,10 +1235,17 @@ def _prepare_orchestrator_ema_df(
                         lmin = float(np.min(ll[mask]))
                         if hmax > 0.0 and lmin > 0.0 and np.isfinite(hmax) and np.isfinite(lmin):
                             lr = float(np.log(hmax / lmin))
-                            prev = a * lr + one_minus * prev
+                            new_num = a * lr + one_minus * num
+                            new_den = a + one_minus * den
+                            if (not math.isfinite(new_den)) or new_den <= den_min_pos:
+                                num = a * lr
+                                den = a
+                            else:
+                                num = float(new_num)
+                                den = float(new_den)
                 last_boundary = hb
                 window_start = i
-            out_arr[i] = prev
+            out_arr[i] = (num / den) if (den > 0.0 and math.isfinite(den) and math.isfinite(num)) else 0.0
         return out_arr
 
     out["h1_lr_ema_l"] = _entry_volatility_h1_series(
@@ -1328,6 +1356,63 @@ def _standardize_ohlcv_1m_gaps(
     if "volume" in out.columns:
         out.loc[out["volume"].isna(), "volume"] = 0.0
     return out
+
+
+def _find_1m_gaps(
+    df: pd.DataFrame,
+    *,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+) -> dict:
+    """Detect missing 1-minute candles in [start_ts, end_ts] (inclusive).
+
+    Returns dict with:
+      - has_gaps: bool
+      - missing_count: int
+      - first_missing: pd.Timestamp|None
+      - last_missing: pd.Timestamp|None
+      - sample_missing: list[pd.Timestamp] (up to 20)
+    """
+    try:
+        if df is None or df.empty:
+            return {
+                "has_gaps": True,
+                "missing_count": -1,
+                "first_missing": None,
+                "last_missing": None,
+                "sample_missing": [],
+            }
+
+        idx = pd.to_datetime(df.index)
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+
+        s = pd.Timestamp(start_ts).floor("min")
+        e = pd.Timestamp(end_ts).floor("min")
+        if e < s:
+            return {"has_gaps": False, "missing_count": 0, "first_missing": None, "last_missing": None, "sample_missing": []}
+
+        # Restrict to window.
+        present = pd.DatetimeIndex(idx[(idx >= s) & (idx <= e)]).floor("min")
+        present = present.drop_duplicates().sort_values()
+        full = pd.date_range(s, e, freq="1min")
+        missing = full.difference(present)
+        missing_count = int(len(missing))
+        return {
+            "has_gaps": missing_count > 0,
+            "missing_count": missing_count,
+            "first_missing": (missing[0] if missing_count else None),
+            "last_missing": (missing[-1] if missing_count else None),
+            "sample_missing": list(missing[:20]),
+        }
+    except Exception:
+        return {
+            "has_gaps": True,
+            "missing_count": -1,
+            "first_missing": None,
+            "last_missing": None,
+            "sample_missing": [],
+        }
 
 
 def _reset_trailing_bundle(tb: TrailingPriceBundle, price: float) -> TrailingPriceBundle:
@@ -1792,6 +1877,80 @@ def _compare_fills_pb7_b_c(
     return out
 
 
+def _compare_fills_b_c(
+    *,
+    b_events: list[dict],
+    c_events: list[dict],
+    price_step: float,
+    qty_step: float,
+) -> pd.DataFrame:
+    """Compare Mode B vs Mode C fills without PB7 fills.csv."""
+
+    def _to_ms(x: Any) -> int:
+        try:
+            return int(pd.Timestamp(x).value // 1_000_000)
+        except Exception:
+            return 0
+
+    def _tick(v: float, step: float) -> int:
+        if not step or not math.isfinite(step) or step <= 0.0:
+            return int(round(float(v) * 1e12))
+        try:
+            return int(round(float(v) / float(step)))
+        except Exception:
+            return 0
+
+    def _df(events: list[dict], prefix: str) -> pd.DataFrame:
+        if not events:
+            return pd.DataFrame(columns=["k_ts", "k_ot", "k_p", "k_q"])
+        d = pd.DataFrame(events)
+        if d.empty:
+            return pd.DataFrame(columns=["k_ts", "k_ot", "k_p", "k_q"])
+        d["k_ts"] = d["timestamp"].map(_to_ms)
+        d["k_ot"] = d["order_type"].astype(str)
+        d["k_p"] = d["price"].astype(float).map(lambda x: _tick(x, price_step))
+        d["k_q"] = d["qty"].astype(float).map(lambda x: _tick(x, qty_step))
+        keep = [
+            "timestamp",
+            "order_type",
+            "qty",
+            "price",
+            "pos_size",
+            "pos_price",
+            "wallet_balance",
+            "pnl",
+            "fee_paid",
+            "wallet_exposure",
+        ]
+        keep = [c for c in keep if c in d.columns]
+        d = d[["k_ts", "k_ot", "k_p", "k_q"] + keep].copy()
+        rename = {c: f"{prefix}_{c}" for c in keep}
+        d = d.rename(columns=rename)
+        return d
+
+    db = _df(b_events, "b")
+    dc = _df(c_events, "c")
+
+    m = db.merge(dc, how="outer", on=["k_ts", "k_ot", "k_p", "k_q"])
+
+    def _s(col: str) -> pd.Series:
+        return m[col] if col in m.columns else pd.Series(pd.NA, index=m.index)
+
+    m["timestamp"] = _s("b_timestamp").combine_first(_s("c_timestamp"))
+    m["order_type"] = _s("b_order_type").combine_first(_s("c_order_type"))
+    m["price"] = _s("b_price").combine_first(_s("c_price"))
+    m["qty"] = _s("b_qty").combine_first(_s("c_qty"))
+
+    m["in_b"] = m.get("b_order_type").notna() if "b_order_type" in m.columns else False
+    m["in_c"] = m.get("c_order_type").notna() if "c_order_type" in m.columns else False
+    m["status"] = np.where(m["in_b"] & m["in_c"], "match", np.where(m["in_b"], "b_only", "c_only"))
+
+    cols_front = ["timestamp", "order_type", "qty", "price", "status"]
+    cols_rest = [c for c in m.columns if c not in cols_front and not c.startswith("k_")]
+    out = m[cols_front + cols_rest].sort_values(by=["timestamp", "order_type"], kind="mergesort")
+    return out
+
+
 def _run_compare_from_pb7_backtest_dir(
     *,
     pbr: Any,
@@ -2065,12 +2224,6 @@ def _run_pb7_engine_backtest_for_visualizer(
     if hist_df is None or hist_df.empty:
         return [], []
 
-    # Determine requested start index (nearest minute candle)
-    try:
-        idx0 = int(hist_df.index.get_indexer([analysis_time], method="nearest")[0])
-    except Exception:
-        return [], []
-
     maker_fee, taker_fee = _infer_maker_taker_fees(exchange, coin)
     if warmup_minutes_override is not None:
         try:
@@ -2082,25 +2235,51 @@ def _run_pb7_engine_backtest_for_visualizer(
     else:
         warmup_minutes_req = _compute_warmup_minutes_for_mode_c(bot_params_long, bot_params_short)
 
-    start_idx = max(0, idx0 - int(warmup_minutes_req))
-    # Include warmup + forward window
-    end_idx = min(len(hist_df), idx0 + int(max_candles_forward))
-    if end_idx <= start_idx + 5:
-        end_idx = min(len(hist_df), start_idx + 6)
-
-    window = hist_df.iloc[start_idx:end_idx].copy()
-    if window.empty:
+    # Root-cause parity: slice by timestamps, then standardize gaps, then compute trade_start_index
+    # from the standardized index. If we computed trade_start_index before gap-filling, inserting
+    # missing minutes would shift trade start by 1+ candles and cascade into mismatched fills.
+    try:
+        analysis_ts = pd.Timestamp(analysis_time).floor("min")
+    except Exception:
         return [], []
 
-    # trade starts at the selected analysis index inside the window
-    trade_start_index = max(0, idx0 - start_idx)
+    start_ts = analysis_ts - pd.Timedelta(minutes=max(0, int(warmup_minutes_req)))
+    end_ts = analysis_ts + pd.Timedelta(minutes=max(0, int(max_candles_forward) - 1))
+    if end_ts < start_ts + pd.Timedelta(minutes=5):
+        end_ts = start_ts + pd.Timedelta(minutes=5)
+
+    try:
+        window = hist_df.loc[start_ts:end_ts].copy()
+    except Exception:
+        window = hist_df.copy()
+
+    if window is None or window.empty:
+        return [], []
+
+    try:
+        window = _standardize_ohlcv_1m_gaps(window, start_ts=start_ts, end_ts=end_ts)
+    except Exception:
+        pass
+
+    if window is None or window.empty:
+        return [], []
+
+    # Trade starts at analysis_ts inside the standardized window.
+    try:
+        trade_start_index = int(window.index.get_indexer([analysis_ts], method="nearest")[0])
+    except Exception:
+        trade_start_index = 0
+    trade_start_index = max(0, min(int(trade_start_index), int(len(window) - 1)))
     warmup_minutes_prov = int(trade_start_index)
 
     # Build tensors expected by PB7 backtest: (T, N, 4) with [high, low, close, volume]
-    highs = window["high"].astype("float64").to_numpy()
-    lows = window["low"].astype("float64").to_numpy()
-    closes = window["close"].astype("float64").to_numpy()
-    vols = window["volume"].astype("float64").to_numpy()
+    # Critical parity detail: PB7 backtest operates on f32-backed candle data.
+    # If we feed float64 candles here, strict inequality checks (e.g. high > price) may flip
+    # at the boundary and shift fills by 1 candle compared to Mode B / real PB7.
+    highs = window["high"].astype(np.float32).astype(np.float64).to_numpy()
+    lows = window["low"].astype(np.float32).astype(np.float64).to_numpy()
+    closes = window["close"].astype(np.float32).astype(np.float64).to_numpy()
+    vols = window["volume"].astype(np.float32).astype(np.float64).to_numpy()
 
     # Keep strict candle boundaries (do not inflate highs/deflate lows).
 
@@ -2129,7 +2308,7 @@ def _run_pb7_engine_backtest_for_visualizer(
         ts_ms = np.arange(hlcvs.shape[0], dtype=np.int64)
 
     # Bundle metadata
-    requested_start_ts_ms = int(pd.Timestamp(analysis_time).value // 1_000_000)
+    requested_start_ts_ms = int(pd.Timestamp(analysis_ts).value // 1_000_000)
     effective_start_ts_ms = int(ts_ms[0]) if len(ts_ms) else requested_start_ts_ms
 
     coin_meta = {
@@ -2459,31 +2638,19 @@ def _simulate_backtest_over_historical_candles(
         return bundle
 
     def _order_filled(low: float, high: float, qty: float, price: float, order_type: Optional[str] = None) -> bool:
-        # Parity note:
-        # - PB7: candle highs/lows are float32 (promoted to float64 for comparisons), and fill checks are strict.
-        # - Mode B must mirror this; otherwise “almost equal” cases differ.
-        # - Additionally: sell-side order prices coming from JSON can drift at the float boundary.
-        #   Quantize most sell-side prices to float32 to match PB7 edge behavior, BUT do NOT quantize
-        #   tick-rounded `close_grid*` prices (e.g. 36.923 -> 36.923000335...), which can delay fills.
+        # Parity note (PB7 vs Mode B):
+        # - PB7 candles are f32-backed.
+        # - PB7 compares candle bounds (as f64 converted from f32) against order prices (f64).
+        # - Fill checks are strict (< and >).
         try:
-            low32 = np.float32(float(low))
-            high32 = np.float32(float(high))
-            low = float(low32)
-            high = float(high32)
+            low = float(np.float32(float(low)))
+            high = float(np.float32(float(high)))
         except Exception:
-            low32 = None
-            high32 = None
+            pass
+
         if qty > 0.0:
             return float(low) < float(price)
         if qty < 0.0:
-            # For most sell-side fills, quantize price to float32 to match PB7 candle/price precision edge cases.
-            # However, `close_grid*` prices are tick-rounded and must NOT be float32-quantized; otherwise a
-            # tick price like 36.923 becomes 36.923000335... and may become equal to candle high, delaying fills.
-            try:
-                if not (order_type and str(order_type).startswith("close_grid")):
-                    price = float(np.float32(float(price)))
-            except Exception:
-                pass
             return float(high) > float(price)
         return False
 
@@ -2764,6 +2931,10 @@ def _simulate_backtest_over_historical_candles(
             for o in pending_closes:
                 if len(events) >= int(max_orders):
                     break
+                # PB7: if a close fully removes the position, remaining closes in the same candle
+                # must not be processed (Backtest removes the position from the map).
+                if not _pos_has_side_position(pos):
+                    break
                 q = float(o.get("qty") or 0.0)
                 p = float(o.get("price") or 0.0)
                 ot = str(o.get("order_type") or "")
@@ -2817,6 +2988,9 @@ def _simulate_backtest_over_historical_candles(
                     }
                 )
                 filled_this_candle = True
+
+                if not _pos_has_side_position(pos):
+                    break
 
         # Process entries after closes.
         if trading_active and pending_entries:
@@ -3570,20 +3744,19 @@ def _simulate_backtest_over_historical_candles_pair_core(
         return bundle
 
     def _order_filled(low: float, high: float, qty: float, price: float, order_type: Optional[str] = None) -> bool:
-        # Strict inequality (PB7 backtest). See parity notes in `_simulate_backtest_over_historical_candles_pair`.
+        # Parity note (PB7 vs Mode B):
+        # - PB7 candles are f32-backed.
+        # - PB7 compares candle bounds (as f64 converted from f32) against order prices (f64).
+        # - Fill checks are strict (< and >).
         try:
             low = float(np.float32(float(low)))
             high = float(np.float32(float(high)))
         except Exception:
             pass
+
         if qty > 0.0:
             return float(low) < float(price)
         if qty < 0.0:
-            try:
-                if not (order_type and str(order_type).startswith("close_grid")):
-                    price = float(np.float32(float(price)))
-            except Exception:
-                pass
             return float(high) > float(price)
         return False
 
@@ -3888,6 +4061,9 @@ def _simulate_backtest_over_historical_candles_pair_core(
             for o in l_closes:
                 if max_orders_i > 0 and (len(events_long) + len(events_short) >= int(max_orders_i)):
                     break
+                # PB7: if a close removes the position, skip remaining closes this candle.
+                if float(pos_long.size) <= 0.0:
+                    break
                 q = float(o.get("qty") or 0.0)
                 p = float(o.get("price") or 0.0)
                 ot = str(o.get("order_type") or "")
@@ -3933,9 +4109,15 @@ def _simulate_backtest_over_historical_candles_pair_core(
                     candle_fills.append(ev)
                 filled_long = True
 
+                if float(pos_long.size) == 0.0:
+                    break
+
         if trading_active and s_closes and float(pos_short.size) < 0.0:
             for o in s_closes:
                 if max_orders_i > 0 and (len(events_long) + len(events_short) >= int(max_orders_i)):
+                    break
+                # PB7: if a close removes the position, skip remaining closes this candle.
+                if float(pos_short.size) >= 0.0:
                     break
                 q = float(o.get("qty") or 0.0)
                 p = float(o.get("price") or 0.0)
@@ -3981,6 +4163,9 @@ def _simulate_backtest_over_historical_candles_pair_core(
                 if side_for_frames == Side.Short:
                     candle_fills.append(ev)
                 filled_short = True
+
+                if float(pos_short.size) == 0.0:
+                    break
 
         # --- entries after closes ---
         if trading_active and l_entries:
@@ -7736,25 +7921,50 @@ def show_visualizer():
                         key="gv_hist_sim_max_orders",
                     )
 
-            with st.expander("Compare PB7 vs B vs C", expanded=False):
+            with st.expander("Compare (PB7/B/C)", expanded=False):
                 st.checkbox(
                     "Show compare table (PB7 vs B vs C)",
                     value=bool(st.session_state.get("gv_hist_compare_enabled", False)),
                     key="gv_hist_compare_enabled",
                     help="Loads PB7 backtest folder `fills.csv` and aligns it with Mode B and Mode C fills.",
                 )
-                st.text_input(
-                    "PB7 backtest folder (contains fills.csv)",
-                    value=str(st.session_state.get("gv_hist_compare_pb7_dir", "") or ""),
-                    key="gv_hist_compare_pb7_dir",
-                    help="Example: /home/mani/software/pb7/backtests/pbgui/<exchange>_<coin>USDT/<exchange>/YYYY-MM-DDTHH_MM_SS",
+
+                st.radio(
+                    "Compare mode",
+                    options=["PB7 vs B vs C", "B vs C only (no PB7)"],
+                    index=0 if str(st.session_state.get("gv_hist_compare_mode", "PB7 vs B vs C")) == "PB7 vs B vs C" else 1,
+                    key="gv_hist_compare_mode",
+                    horizontal=True,
                 )
-                st.checkbox(
-                    "Use fills.csv time range for B/C",
-                    value=bool(st.session_state.get("gv_hist_compare_use_pb7_range", True)),
-                    key="gv_hist_compare_use_pb7_range",
-                    help="Runs Mode B and Mode C across the same start/end timestamps found in fills.csv (with warmup).",
+
+                st.number_input(
+                    "Compare max candles (1m)",
+                    min_value=100,
+                    max_value=20000,
+                    value=int(st.session_state.get("gv_hist_compare_max_candles", 2000)),
+                    step=100,
+                    key="gv_hist_compare_max_candles",
+                    help="Used for 'B vs C only' (and as fallback if no PB7 fills range is used).",
                 )
+
+                compare_mode = str(st.session_state.get("gv_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C")
+                show_pb7_inputs = compare_mode == "PB7 vs B vs C"
+
+                if show_pb7_inputs:
+                    st.text_input(
+                        "PB7 backtest folder (contains fills.csv)",
+                        value=str(st.session_state.get("gv_hist_compare_pb7_dir", "") or ""),
+                        key="gv_hist_compare_pb7_dir",
+                        help="Example: /home/mani/software/pb7/backtests/pbgui/<exchange>_<coin>USDT/<exchange>/YYYY-MM-DDTHH_MM_SS",
+                    )
+                    st.checkbox(
+                        "Use fills.csv time range for B/C",
+                        value=bool(st.session_state.get("gv_hist_compare_use_pb7_range", True)),
+                        key="gv_hist_compare_use_pb7_range",
+                        help="Runs Mode B and Mode C across the same start/end timestamps found in fills.csv (with warmup).",
+                    )
+                else:
+                    st.caption("B vs C compares fills from the selected analysis time for the chosen number of 1m candles.")
                 st.checkbox(
                     "Mismatches only",
                     value=bool(st.session_state.get("gv_hist_compare_mismatches_only", True)),
@@ -8395,11 +8605,18 @@ def show_visualizer():
         sel_exc = str(st.session_state.get("gv_hist_exchange", "") or "")
         sel_coin = str(st.session_state.get("gv_hist_coin", "") or "")
         trade_start_time = pd.to_datetime(data.analysis_time) if data.analysis_time is not None else None
+        # Parity: Mode C floors analysis_time to minute internally; ensure Mode B compare uses the same.
+        if trade_start_time is not None:
+            try:
+                trade_start_time = pd.Timestamp(trade_start_time).floor("min")
+            except Exception:
+                pass
 
+        compare_mode = str(st.session_state.get("gv_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C")
         pb7_dir = str(st.session_state.get("gv_hist_compare_pb7_dir", "") or "")
         use_pb7_range = bool(st.session_state.get("gv_hist_compare_use_pb7_range", True))
 
-        compare_max_candles = 2000
+        compare_max_candles = int(st.session_state.get("gv_hist_compare_max_candles", 2000) or 2000)
         compare_max_orders = 20000
 
         pb7_long: list[dict] = []
@@ -8409,7 +8626,7 @@ def show_visualizer():
         c_long: list[dict] = []
         c_short: list[dict] = []
 
-        if pb7_dir and use_pb7_range:
+        if compare_mode == "PB7 vs B vs C" and pb7_dir and use_pb7_range:
             try:
                 (pb7_long, pb7_short), (b_long, b_short), (c_long, c_short), meta = _run_compare_from_pb7_backtest_dir(
                     pbr=pbr,
@@ -8421,86 +8638,278 @@ def show_visualizer():
             except Exception as e:
                 st.session_state["gv_compare_meta"] = {"error": str(e)}
         else:
-            try:
-                pb7_long, pb7_short = _load_pb7_fills_csv_to_events(pb7_dir) if pb7_dir else ([], [])
-            except Exception:
+            # In B vs C mode, PB7 is intentionally ignored.
+            if compare_mode == "PB7 vs B vs C":
+                try:
+                    pb7_long, pb7_short = _load_pb7_fills_csv_to_events(pb7_dir) if pb7_dir else ([], [])
+                except Exception:
+                    pb7_long, pb7_short = [], []
+            else:
                 pb7_long, pb7_short = [], []
 
             if sel_exc and sel_coin and trade_start_time is not None:
                 hist_df_full = load_historical_ohlcv_v7(sel_exc, sel_coin)
                 if hist_df_full is not None and not hist_df_full.empty:
-                    warmup_minutes = _compute_warmup_minutes_for_mode_c(
-                        data.normal_bot_params_long,
-                        data.normal_bot_params_short,
-                        warmup_ratio=0.2,
-                        max_warmup_minutes=0.0,
+                    # Root-cause: Mode B and Mode C must use the same warmup length and candle stream.
+                    # If warmup differs, EMA/trailing state can diverge and shift fills by 1 candle.
+                    warmup_minutes = int(
+                        _compute_warmup_minutes_for_mode_c(
+                            data.normal_bot_params_long,
+                            data.normal_bot_params_short,
+                        )
+                        or 0
                     )
-                    warm_start = trade_start_time - pd.Timedelta(minutes=int(warmup_minutes))
-                    sim_end = trade_start_time + pd.Timedelta(minutes=max(0, int(compare_max_candles) - 1))
+                    warm_start = trade_start_time - pd.Timedelta(minutes=max(0, int(warmup_minutes)))
+                    # Parity: both Mode B and Mode C step fills using the *next* candle range.
+                    # To avoid a missing final fill at the window end, simulate with a small
+                    # forward buffer, then filter events back to the intended end.
+                    sim_end_target = trade_start_time + pd.Timedelta(minutes=max(0, int(compare_max_candles) - 1))
+                    sim_end_run = sim_end_target + pd.Timedelta(minutes=5)
+
+                    # Strict requirement: if there are 1m gaps, compare is not meaningful.
+                    # Do NOT auto-fill here; instead abort and ask the user to fix data.
                     try:
-                        sim_df = hist_df_full.loc[warm_start:sim_end].copy()
+                        raw_slice = hist_df_full.loc[pd.Timestamp(warm_start).floor("min") : pd.Timestamp(sim_end_target).floor("min")]
+                    except Exception:
+                        raw_slice = hist_df_full
+                    gaps = _find_1m_gaps(raw_slice, start_ts=pd.Timestamp(warm_start), end_ts=pd.Timestamp(sim_end_target))
+                    if bool(gaps.get("has_gaps")):
+                        st.session_state["gv_compare_meta"] = {
+                            "exchange": sel_exc,
+                            "coin": sel_coin,
+                            "trade_start_ts": trade_start_time,
+                            "start_ts": trade_start_time,
+                            "end_ts": sim_end_target,
+                            "warmup_minutes": int(warmup_minutes),
+                            "compare_mode": compare_mode,
+                            "error": "Compare not possible: 1m gaps detected in historical data.",
+                            "gaps": {
+                                "missing_count": gaps.get("missing_count"),
+                                "first_missing": gaps.get("first_missing"),
+                                "last_missing": gaps.get("last_missing"),
+                                "sample_missing": gaps.get("sample_missing"),
+                            },
+                        }
+                        # Skip running simulations; renderer will show meta + error.
+                        pb7_long, pb7_short, b_long, b_short, c_long, c_short = [], [], [], [], [], []
+                        # Prevent further work in this branch.
+                        sim_df = pd.DataFrame()
+                        sim_max_candles_modeb = 0
+                    
+                    try:
+                        sim_df = hist_df_full.loc[warm_start:sim_end_run].copy()
                     except Exception:
                         sim_df = hist_df_full.copy()
 
-                    # Mode C (PB7 engine)
-                    try:
-                        c_long, c_short = _run_pb7_engine_backtest_for_visualizer(
-                            pbr=pbr,
-                            exchange=sel_exc,
-                            coin=sel_coin,
-                            analysis_time=pd.to_datetime(data.analysis_time).to_pydatetime(),
-                            hist_df=hist_df_full,
-                            exchange_params=data.exchange_params,
-                            bot_params_long=data.normal_bot_params_long,
-                            bot_params_short=data.normal_bot_params_short,
-                            starting_balance=float(data.state_params.balance),
-                            max_candles_forward=int(compare_max_candles),
-                        )
-                    except Exception:
-                        c_long, c_short = [], []
+                    # If gaps were detected above, sim_df was cleared; otherwise proceed as-is.
+                    if sim_df is None:
+                        sim_df = pd.DataFrame()
+
+                    # Important: `compare_max_candles` refers to the forward window from `trade_start_time`.
+                    # `sim_df` includes warmup candles before `trade_start_time`, so Mode B must NOT truncate
+                    # to `compare_max_candles` total candles, otherwise it can cut off the forward range and
+                    # produce many `c_only` rows.
+                    sim_max_candles_modeb = int(len(sim_df))
+
+                    if not (isinstance(st.session_state.get("gv_compare_meta"), dict) and st.session_state.get("gv_compare_meta", {}).get("error")):
+                        st.session_state["gv_compare_meta"] = {
+                            "exchange": sel_exc,
+                            "coin": sel_coin,
+                            "trade_start_ts": trade_start_time,
+                            "start_ts": trade_start_time,
+                            "end_ts": sim_end_target,
+                            "warmup_minutes": int(warmup_minutes),
+                            "price_step": float(getattr(data.exchange_params, "price_step", 0.0) or 0.0),
+                            "qty_step": float(getattr(data.exchange_params, "qty_step", 0.0) or 0.0),
+                            "compare_mode": compare_mode,
+                        }
 
                     # Mode B (local)
                     if not sim_df.empty:
-                        fees = _derive_exchange_fees_from_market(sel_exc, sel_coin)
-                        maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
+                        # Parity: use the same fee source as Mode C (PB7 engine wrapper).
                         try:
-                            if long_active:
-                                b_long = _simulate_backtest_over_historical_candles(
+                            maker_fee, _taker_fee = _infer_maker_taker_fees(sel_exc, sel_coin)
+                        except Exception:
+                            fees = _derive_exchange_fees_from_market(sel_exc, sel_coin)
+                            maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
+
+                        # Parity: Mode C always starts from an empty position.
+                        # Keep Mode B compare consistent by starting from size=0, price=0.
+                        start_pos_long = Position(size=0.0, price=0.0)
+                        start_pos_short = Position(size=0.0, price=0.0)
+
+                        if bool(long_active) and bool(short_active):
+                            try:
+                                b_long, b_short = _simulate_backtest_over_historical_candles_pair(
                                     pbr=pbr,
                                     pb7_src=pb7_src,
-                                    side=Side.Long,
                                     candles=sim_df,
                                     exchange_params=data.exchange_params,
                                     bot_params_long=data.normal_bot_params_long,
                                     bot_params_short=data.normal_bot_params_short,
-                                    starting_position=data.position_long_enty,
-                                    balance=float((data.state_params_long or data.state_params).balance),
+                                    starting_position_long=start_pos_long,
+                                    starting_position_short=start_pos_short,
+                                    balance=float(getattr(data.state_params, "balance", 0.0) or 0.0),
                                     maker_fee=maker_fee,
                                     trade_start_time=trade_start_time,
                                     max_orders=int(compare_max_orders),
-                                    max_candles=int(compare_max_candles),
+                                    max_candles=int(sim_max_candles_modeb),
                                 )
-                        except Exception:
-                            b_long = []
+                            except Exception:
+                                b_long, b_short = [], []
+                        else:
+                            try:
+                                if long_active:
+                                    b_long = _simulate_backtest_over_historical_candles(
+                                        pbr=pbr,
+                                        pb7_src=pb7_src,
+                                        side=Side.Long,
+                                        candles=sim_df,
+                                        exchange_params=data.exchange_params,
+                                        bot_params_long=data.normal_bot_params_long,
+                                        bot_params_short=data.normal_bot_params_short,
+                                        starting_position=start_pos_long,
+                                        balance=float(getattr(data.state_params, "balance", 0.0) or 0.0),
+                                        maker_fee=maker_fee,
+                                        trade_start_time=trade_start_time,
+                                        max_orders=int(compare_max_orders),
+                                        max_candles=int(sim_max_candles_modeb),
+                                    )
+                            except Exception:
+                                b_long = []
+                            try:
+                                if short_active:
+                                    b_short = _simulate_backtest_over_historical_candles(
+                                        pbr=pbr,
+                                        pb7_src=pb7_src,
+                                        side=Side.Short,
+                                        candles=sim_df,
+                                        exchange_params=data.exchange_params,
+                                        bot_params_long=data.normal_bot_params_long,
+                                        bot_params_short=data.normal_bot_params_short,
+                                        starting_position=start_pos_short,
+                                        balance=float(getattr(data.state_params, "balance", 0.0) or 0.0),
+                                        maker_fee=maker_fee,
+                                        trade_start_time=trade_start_time,
+                                        max_orders=int(compare_max_orders),
+                                        max_candles=int(sim_max_candles_modeb),
+                                    )
+                            except Exception:
+                                b_short = []
+
+                        # Filter Mode B events back to the intended compare window.
+                        def _filter_window(events: list[dict]) -> list[dict]:
+                            out: list[dict] = []
+                            for e in events or []:
+                                try:
+                                    t = pd.to_datetime(e.get("timestamp"))
+                                except Exception:
+                                    continue
+                                if t < trade_start_time or t > sim_end_target:
+                                    continue
+                                out.append(e)
+                            return out
+
+                        b_long = _filter_window(b_long)
+                        b_short = _filter_window(b_short)
+
+                    # Mode C (PB7 engine)
+                    # Root-cause fix: Mode C is sensitive to warmup/state initialization.
+                    # In PB7-backed compare we already increase warmup if needed; do the same here
+                    # by selecting the warmup which minimizes strict mismatches vs Mode B.
+                    c_long, c_short = [], []
+                    if not sim_df.empty:
                         try:
-                            if short_active:
-                                b_short = _simulate_backtest_over_historical_candles(
+                            price_step_for_cmp = float(getattr(data.exchange_params, "price_step", 0.0) or 0.0)
+                            qty_step_for_cmp = float(getattr(data.exchange_params, "qty_step", 0.0) or 0.0)
+                        except Exception:
+                            price_step_for_cmp = 0.0
+                            qty_step_for_cmp = 0.0
+
+                        best = {
+                            "mismatch_count": None,
+                            "warmup_used": None,
+                            "c_long": [],
+                            "c_short": [],
+                            "per_attempt": [],
+                        }
+
+                        warmup_base = int(warmup_minutes)
+                        for extra in (0, 1000, 2000, 4000, 8000, 12000, 16000):
+                            try:
+                                warmup_try = int(max(0, warmup_base + int(extra)))
+                            except Exception:
+                                warmup_try = int(max(0, warmup_base))
+
+                            try:
+                                c_l_try, c_s_try = _run_pb7_engine_backtest_for_visualizer(
                                     pbr=pbr,
-                                    pb7_src=pb7_src,
-                                    side=Side.Short,
-                                    candles=sim_df,
+                                    exchange=sel_exc,
+                                    coin=sel_coin,
+                                    analysis_time=pd.to_datetime(data.analysis_time).to_pydatetime(),
+                                    hist_df=hist_df_full,
                                     exchange_params=data.exchange_params,
                                     bot_params_long=data.normal_bot_params_long,
                                     bot_params_short=data.normal_bot_params_short,
-                                    starting_position=data.position_short_entry,
-                                    balance=float((data.state_params_short or data.state_params).balance),
-                                    maker_fee=maker_fee,
-                                    trade_start_time=trade_start_time,
-                                    max_orders=int(compare_max_orders),
-                                    max_candles=int(compare_max_candles),
+                                    starting_balance=float(data.state_params.balance),
+                                    max_candles_forward=int(compare_max_candles) + 5,
+                                    warmup_minutes_override=int(warmup_try),
                                 )
+                            except Exception:
+                                c_l_try, c_s_try = [], []
+
+                            c_l_try = _filter_window(c_l_try)
+                            c_s_try = _filter_window(c_s_try)
+
+                            # Score vs Mode B (strict compare).
+                            mismatch_count = 0
+                            try:
+                                if b_long or c_l_try:
+                                    df_l = _compare_fills_b_c(
+                                        b_events=b_long,
+                                        c_events=c_l_try,
+                                        price_step=price_step_for_cmp,
+                                        qty_step=qty_step_for_cmp,
+                                    )
+                                    mismatch_count += int((df_l["status"] != "match").sum()) if not df_l.empty else 0
+                            except Exception:
+                                pass
+                            try:
+                                if b_short or c_s_try:
+                                    df_s = _compare_fills_b_c(
+                                        b_events=b_short,
+                                        c_events=c_s_try,
+                                        price_step=price_step_for_cmp,
+                                        qty_step=qty_step_for_cmp,
+                                    )
+                                    mismatch_count += int((df_s["status"] != "match").sum()) if not df_s.empty else 0
+                            except Exception:
+                                pass
+
+                            best["per_attempt"].append({"warmup": int(warmup_try), "mismatches": int(mismatch_count)})
+
+                            if best["mismatch_count"] is None or int(mismatch_count) < int(best["mismatch_count"]):
+                                best["mismatch_count"] = int(mismatch_count)
+                                best["warmup_used"] = int(warmup_try)
+                                best["c_long"] = c_l_try
+                                best["c_short"] = c_s_try
+
+                            # Perfect match; stop early.
+                            if int(mismatch_count) == 0:
+                                break
+
+                        c_long = list(best.get("c_long") or [])
+                        c_short = list(best.get("c_short") or [])
+
+                        try:
+                            meta0 = st.session_state.get("gv_compare_meta")
+                            if isinstance(meta0, dict) and not meta0.get("error"):
+                                meta0["mode_c_warmup_used"] = best.get("warmup_used")
+                                meta0["mode_c_mismatches_vs_b"] = best.get("mismatch_count")
+                                meta0["mode_c_attempts"] = best.get("per_attempt")
+                                st.session_state["gv_compare_meta"] = meta0
                         except Exception:
-                            b_short = []
+                            pass
 
         st.session_state["gv_compare_pb7_long"] = pb7_long
         st.session_state["gv_compare_pb7_short"] = pb7_short
@@ -8551,13 +8960,21 @@ def show_visualizer():
                         if not (pb7_events or b_events or c_events):
                             st.write(f"**{title}:** No events")
                             return
-                        cmp_df = _compare_fills_pb7_b_c(
-                            pb7_events=pb7_events,
-                            b_events=b_events,
-                            c_events=c_events,
-                            price_step=price_step,
-                            qty_step=qty_step,
-                        )
+                        if str(st.session_state.get("gv_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C") == "B vs C only (no PB7)":
+                            cmp_df = _compare_fills_b_c(
+                                b_events=b_events,
+                                c_events=c_events,
+                                price_step=price_step,
+                                qty_step=qty_step,
+                            )
+                        else:
+                            cmp_df = _compare_fills_pb7_b_c(
+                                pb7_events=pb7_events,
+                                b_events=b_events,
+                                c_events=c_events,
+                                price_step=price_step,
+                                qty_step=qty_step,
+                            )
                         if mismatches_only and not cmp_df.empty:
                             cmp_df = cmp_df[cmp_df["status"] != "match"].copy()
                         st.write(f"**{title}**")
@@ -9315,10 +9732,18 @@ def generate_animation_v7(start_time, frames, step_mins, hist_df, symbol, contex
                     lower_band = df_window_plot['low']
 
                 trace_ema_high = go.Scatter(
-                    x=df_window_plot.index, y=upper_band, mode='lines', line=dict(color='magenta', width=1), name='EMA High'
+                    x=df_window_plot.index,
+                    y=upper_band,
+                    mode='lines',
+                    line=dict(color='magenta', width=1, dash='solid'),
+                    name='EMA High'
                 )
                 trace_ema_low = go.Scatter(
-                    x=df_window_plot.index, y=lower_band, mode='lines', line=dict(color='magenta', width=1), name='EMA Low'
+                    x=df_window_plot.index,
+                    y=lower_band,
+                    mode='lines',
+                    line=dict(color='cyan', width=1, dash='dot'),
+                    name='EMA Low'
                 )
     
                 x_left = df_window_plot.index[0]
@@ -9508,16 +9933,9 @@ def generate_animation_v7_modeb(
             st.error("No candles for the selected time window.")
             return
 
-        # Simulation candles must match the Mode B simulation routine/inputs.
-        sim_df = _slice_hist_df_for_modeb(
-            hist_df,
-            trade_start_time=start_time,
-            end_time=end_time,
-            include_prev_candle=True,
-        )
-        if sim_df is None or sim_df.empty or len(sim_df) < 2:
-            st.error("Not enough candles for Mode B simulation.")
-            return
+        # Simulation candles will be rebuilt with proper warmup (see below).
+        # Use plot_df for base timeframe inference.
+        sim_df = plot_df.copy()
 
         # Infer base timeframe (minutes) for translating step_mins into candle steps
         base_tf_mins = 1
@@ -9544,8 +9962,20 @@ def generate_animation_v7_modeb(
         bp = data_template.normal_bot_params_long if int(side_val) == int(Side.Long.value) else data_template.normal_bot_params_short
         side_obj = Side.Long if int(side_val) == int(Side.Long.value) else Side.Short
 
-        fees = _derive_exchange_fees_from_market(exchange, symbol)
-        maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
+        def _disable_bot_params(bp_in: BotParams) -> BotParams:
+            d = asdict(bp_in)
+            d["total_wallet_exposure_limit"] = 0.0
+            if "n_positions" in d:
+                d["n_positions"] = 0
+            return BotParams(**d)
+
+        # Fee parity: prefer the same inference used by compare/PB7 helpers.
+        try:
+            maker_fee, _taker_fee = _infer_maker_taker_fees(str(exchange), str(symbol))
+            maker_fee = float(maker_fee or 0.0)
+        except Exception:
+            fees = _derive_exchange_fees_from_market(exchange, symbol)
+            maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
 
         stage_line = st.empty()
         prog_bar = st.progress(0.0)
@@ -9582,14 +10012,14 @@ def generate_animation_v7_modeb(
             sim_start_balance = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
             bp_long_sim = data_template.normal_bot_params_long
             bp_short_sim = data_template.normal_bot_params_short
+            using_pb7_config = False
             try:
                 if pb7_dir and os.path.isfile(os.path.join(os.path.expanduser(pb7_dir), "config.json")):
                     cfg_path = os.path.join(os.path.expanduser(pb7_dir), "config.json")
                     with open(cfg_path, "r", encoding="utf-8") as f:
                         cfg = json.load(f)
-                    bt_start = ((cfg.get("backtest") or {}).get("start_date"))
-                    if bt_start:
-                        trade_start_time_for_sim = pd.to_datetime(str(bt_start))
+                    # Note: do NOT shift `trade_start_time_for_sim` based on backtest.start_date.
+                    # Movie builder should start trading at the selected `start_time`.
                     try:
                         sim_start_balance = float((cfg.get("backtest") or {}).get("starting_balance") or sim_start_balance)
                     except Exception:
@@ -9601,20 +10031,45 @@ def generate_animation_v7_modeb(
                     except Exception:
                         bp_long_sim = data_template.normal_bot_params_long
                         bp_short_sim = data_template.normal_bot_params_short
-
-                    # Warmup + gap standardization for parity.
-                    try:
-                        warmup_minutes = int(_compute_warmup_minutes_for_mode_c_from_config(cfg, bp_long_sim, bp_short_sim))
-                    except Exception:
-                        warmup_minutes = int(_compute_warmup_minutes_for_mode_c(bp_long_sim, bp_short_sim))
-                    warm_start = pd.to_datetime(trade_start_time_for_sim) - pd.Timedelta(minutes=max(0, warmup_minutes))
-                    try:
-                        sim_df = hist_df.loc[warm_start:end_time].copy()
-                        sim_df = _standardize_ohlcv_1m_gaps(sim_df, start_ts=warm_start, end_ts=end_time)
-                    except Exception:
-                        pass
+                    using_pb7_config = True
             except Exception:
                 pass
+
+            # Match Mode C movie behavior: simulate only the selected side.
+            # (Otherwise opposite-side fills can change shared balance and alter the selected side's fills.)
+            try:
+                if side_obj == Side.Long:
+                    bp_short_sim = _disable_bot_params(bp_short_sim)
+                else:
+                    bp_long_sim = _disable_bot_params(bp_long_sim)
+            except Exception:
+                pass
+
+            # Always include proper warmup candles to match PB7/compare state at `start_time`.
+            try:
+                if using_pb7_config and isinstance(locals().get("cfg"), dict):
+                    warmup_minutes = int(_compute_warmup_minutes_for_mode_c_from_config(cfg, bp_long_sim, bp_short_sim))
+                else:
+                    warmup_minutes = int(_compute_warmup_minutes_for_mode_c(bp_long_sim, bp_short_sim))
+            except Exception:
+                warmup_minutes = int(_compute_warmup_minutes_for_mode_c(bp_long_sim, bp_short_sim))
+
+            warm_start = pd.to_datetime(start_time) - pd.Timedelta(minutes=max(0, int(warmup_minutes)))
+            try:
+                sim_df = hist_df.loc[warm_start:end_time].copy()
+                sim_df = _standardize_ohlcv_1m_gaps(sim_df, start_ts=warm_start, end_ts=end_time)
+            except Exception:
+                sim_df = hist_df.loc[warm_start:end_time].copy()
+
+            if sim_df is None or sim_df.empty or len(sim_df) < 2:
+                st.error("Not enough candles for Mode B simulation.")
+                return
+
+            # Plot indicators should match the simulation bot params. Otherwise EMA bands may collapse
+            # (e.g. if UI params differ from PB7 config used for the sim).
+            bp_plot = bp_long_sim if side_obj == Side.Long else bp_short_sim
+            if not using_pb7_config:
+                bp_plot = bp
 
             # Start from flat positions; running from trade_start_time_for_sim will build correct state.
             starting_pos_long = Position(size=0.0, price=0.0)
@@ -9668,7 +10123,12 @@ def generate_animation_v7_modeb(
             if sim_events_df.empty:
                 st.caption("Mode B: no fills in simulation window.")
             else:
-                st.caption(f"Mode B: simulated fills: {len(sim_events_df)}")
+                # Show count within the movie range for parity with Mode C.
+                try:
+                    _cnt_df = sim_events_df[(sim_events_df["timestamp"] >= pd.to_datetime(start_time)) & (sim_events_df["timestamp"] <= pd.to_datetime(end_time))]
+                    st.caption(f"Mode B: simulated fills (movie range): {len(_cnt_df)}")
+                except Exception:
+                    st.caption(f"Mode B: simulated fills: {len(sim_events_df)}")
         except Exception:
             pass
 
@@ -9684,9 +10144,9 @@ def generate_animation_v7_modeb(
         # Indicators for plotting (small window only)
         df_calc = calculate_v7_indicators(
             plot_df,
-            float(bp.ema_span_0),
-            float(bp.ema_span_1),
-            float(bp.entry_volatility_ema_span_hours),
+            float(bp_plot.ema_span_0),
+            float(bp_plot.ema_span_1),
+            float(bp_plot.entry_volatility_ema_span_hours),
         )
 
         # Resample plot source to keep payload small
@@ -10277,14 +10737,14 @@ def generate_animation_v7_modeb(
             x=df_static.index,
             y=upper_band_static,
             mode="lines",
-            line=dict(color="magenta", width=1),
+            line=dict(color="magenta", width=1, dash="solid"),
             name="EMA High",
         )
         trace_ema_low_static = go.Scatter(
             x=df_static.index,
             y=lower_band_static,
             mode="lines",
-            line=dict(color="magenta", width=1),
+            line=dict(color="cyan", width=1, dash="dot"),
             name="EMA Low",
         )
 
@@ -10332,20 +10792,7 @@ def generate_animation_v7_modeb(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=play_duration_ms, redraw=True),
-                                    fromcurrent=True,
-                                    mode="immediate",
-                                    transition=dict(duration=0, easing="linear"),
-                                ),
-                            ],
-                        ),
-                        dict(
-                            label="▶▶ Fast",
-                            method="animate",
-                            args=[
-                                None,
-                                dict(
-                                    frame=dict(duration=max(0, int(play_duration_ms * 0.75)), redraw=True),
+                                    frame=dict(duration=play_duration_ms, redraw=False),
                                     fromcurrent=True,
                                     mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
@@ -10358,7 +10805,7 @@ def generate_animation_v7_modeb(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=int(play_duration_ms * 2), redraw=True),
+                                    frame=dict(duration=int(play_duration_ms * 2), redraw=False),
                                     fromcurrent=True,
                                     mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
@@ -10371,7 +10818,7 @@ def generate_animation_v7_modeb(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=int(play_duration_ms * 4), redraw=True),
+                                    frame=dict(duration=int(play_duration_ms * 4), redraw=False),
                                     fromcurrent=True,
                                     mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
@@ -10392,7 +10839,7 @@ def generate_animation_v7_modeb(
                     steps=[
                         dict(
                             method="animate",
-                            args=[[str(k)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))],
+                            args=[[str(k)], dict(mode="immediate", frame=dict(duration=0, redraw=False), transition=dict(duration=0))],
                             label=f"{k}",
                         )
                         for k in range(len(fig_frames))
@@ -10619,6 +11066,11 @@ def generate_animation_v7_modec(
             bp_short = bp
 
         try:
+            warmup_minutes_override = int(_compute_warmup_minutes_for_mode_c(bp_long, bp_short))
+        except Exception:
+            warmup_minutes_override = None
+
+        try:
             c_long, c_short = _run_pb7_engine_backtest_for_visualizer(
                 pbr=pbr,
                 exchange=str(exchange),
@@ -10631,7 +11083,7 @@ def generate_animation_v7_modec(
                 starting_balance=float(data_template.state_params.balance),
                 max_candles_forward=int(frames * step_mins + 10),
                 config=None,
-                warmup_minutes_override=None,
+                warmup_minutes_override=warmup_minutes_override,
             )
         except Exception as e:
             st.error(f"Mode C backtest engine failed: {e}")
@@ -11104,14 +11556,14 @@ def generate_animation_v7_modec(
             x=df_static.index,
             y=upper_band_static,
             mode="lines",
-            line=dict(color="magenta", width=1),
+            line=dict(color="magenta", width=1, dash="solid"),
             name="EMA High",
         )
         trace_ema_low_static = go.Scatter(
             x=df_static.index,
             y=lower_band_static,
             mode="lines",
-            line=dict(color="magenta", width=1),
+            line=dict(color="cyan", width=1, dash="dot"),
             name="EMA Low",
         )
 
@@ -11155,20 +11607,7 @@ def generate_animation_v7_modec(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=play_duration_ms, redraw=True),
-                                    fromcurrent=True,
-                                    mode="immediate",
-                                    transition=dict(duration=0, easing="linear"),
-                                ),
-                            ],
-                        ),
-                        dict(
-                            label="▶▶ Fast",
-                            method="animate",
-                            args=[
-                                None,
-                                dict(
-                                    frame=dict(duration=max(0, int(play_duration_ms * 0.75)), redraw=True),
+                                    frame=dict(duration=play_duration_ms, redraw=False),
                                     fromcurrent=True,
                                     mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
@@ -11181,7 +11620,7 @@ def generate_animation_v7_modec(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=int(play_duration_ms * 2), redraw=True),
+                                    frame=dict(duration=int(play_duration_ms * 2), redraw=False),
                                     fromcurrent=True,
                                     mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
@@ -11194,7 +11633,7 @@ def generate_animation_v7_modec(
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(duration=int(play_duration_ms * 4), redraw=True),
+                                    frame=dict(duration=int(play_duration_ms * 4), redraw=False),
                                     fromcurrent=True,
                                     mode="immediate",
                                     transition=dict(duration=0, easing="linear"),
@@ -11215,7 +11654,7 @@ def generate_animation_v7_modec(
                     steps=[
                         dict(
                             method="animate",
-                            args=[[str(k)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))],
+                            args=[[str(k)], dict(mode="immediate", frame=dict(duration=0, redraw=False), transition=dict(duration=0))],
                             label=f"{k}",
                         )
                         for k in range(len(fig_frames))
