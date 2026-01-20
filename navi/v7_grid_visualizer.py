@@ -62,10 +62,16 @@ except ModuleNotFoundError:  # pragma: no cover
     go = None
 from dataclasses import dataclass, field, asdict, replace
 import json
-from typing import List, Any, Optional, Callable
+from typing import List, Any, Optional, Callable, Tuple
 import copy
 import os
 import sys
+import io
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+import importlib.metadata
 try:
     from Config import ConfigV7
 except ModuleNotFoundError:  # pragma: no cover
@@ -4584,6 +4590,450 @@ def _render_debug_json(value) -> None:
     st.write(value)
 
 
+def _plotly_figure_with_frame_applied(base_fig: Any, frame: Any) -> Any:
+    """Return a new Plotly figure representing `base_fig` with `frame` data applied.
+
+    Works for figures where frames specify `traces=[...]` indices (as used by the Movie Builder).
+    """
+    fig2 = go.Figure(base_fig)
+    try:
+        fr_data = list(getattr(frame, "data", None) or [])
+    except Exception:
+        fr_data = []
+    try:
+        fr_traces = list(getattr(frame, "traces", None) or [])
+    except Exception:
+        fr_traces = []
+
+    if fr_data:
+        if fr_traces:
+            for tr_obj, tr_idx in zip(fr_data, fr_traces):
+                try:
+                    ti = int(tr_idx)
+                except Exception:
+                    continue
+                if ti < 0:
+                    continue
+                try:
+                    if ti < len(fig2.data):
+                        fig2.data[ti] = tr_obj
+                    else:
+                        fig2.add_trace(tr_obj)
+                except Exception:
+                    pass
+        else:
+            # If traces indices are not provided, best-effort replacement.
+            try:
+                if len(fr_data) == len(fig2.data):
+                    fig2.data = tuple(fr_data)
+                else:
+                    for j, tr_obj in enumerate(fr_data):
+                        if j < len(fig2.data):
+                            fig2.data[j] = tr_obj
+                        else:
+                            fig2.add_trace(tr_obj)
+            except Exception:
+                pass
+
+    try:
+        fr_layout = getattr(frame, "layout", None)
+        if fr_layout:
+            fig2.update_layout(fr_layout)
+    except Exception:
+        pass
+
+    return fig2
+
+
+def _apply_plotly_frame_inplace(fig2: Any, frame: Any) -> None:
+    """Apply Plotly frame data/layout onto an existing figure in-place.
+
+    This avoids allocating a fresh figure per frame (useful for exporting many frames).
+    """
+    try:
+        fr_data = list(getattr(frame, "data", None) or [])
+    except Exception:
+        fr_data = []
+    try:
+        fr_traces = list(getattr(frame, "traces", None) or [])
+    except Exception:
+        fr_traces = []
+
+    if fr_data:
+        if fr_traces:
+            for tr_obj, tr_idx in zip(fr_data, fr_traces):
+                try:
+                    ti = int(tr_idx)
+                except Exception:
+                    continue
+                if ti < 0:
+                    continue
+                try:
+                    if ti < len(fig2.data):
+                        # Plotly frames often contain only partial trace updates.
+                        # Merge into the base trace to preserve styling (colors, markers, etc).
+                        payload = None
+                        try:
+                            payload = tr_obj.to_plotly_json()  # type: ignore
+                        except Exception:
+                            payload = tr_obj
+                        if isinstance(payload, dict):
+                            # Avoid trying to overwrite the trace type.
+                            payload.pop("type", None)
+                            fig2.data[ti].update(payload)
+                        else:
+                            # Fallback: replacement.
+                            fig2.data[ti] = tr_obj
+                    else:
+                        fig2.add_trace(tr_obj)
+                except Exception:
+                    pass
+        else:
+            try:
+                if len(fr_data) == len(fig2.data):
+                    # Merge element-wise where possible.
+                    for j, tr_obj in enumerate(fr_data):
+                        payload = None
+                        try:
+                            payload = tr_obj.to_plotly_json()  # type: ignore
+                        except Exception:
+                            payload = tr_obj
+                        if j < len(fig2.data) and isinstance(payload, dict):
+                            payload.pop("type", None)
+                            fig2.data[j].update(payload)
+                        elif j < len(fig2.data):
+                            fig2.data[j] = tr_obj
+                else:
+                    for j, tr_obj in enumerate(fr_data):
+                        if j < len(fig2.data):
+                            payload = None
+                            try:
+                                payload = tr_obj.to_plotly_json()  # type: ignore
+                            except Exception:
+                                payload = tr_obj
+                            if isinstance(payload, dict):
+                                payload.pop("type", None)
+                                fig2.data[j].update(payload)
+                            else:
+                                fig2.data[j] = tr_obj
+                        else:
+                            fig2.add_trace(tr_obj)
+            except Exception:
+                pass
+
+    try:
+        fr_layout = getattr(frame, "layout", None)
+        if fr_layout:
+            fig2.update_layout(fr_layout)
+    except Exception:
+        pass
+
+
+def _export_plotly_animation_to_mp4(
+    fig: Any,
+    *,
+    fps: int = 30,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    scale: int = 1,
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+) -> bytes:
+    """Render a Plotly animation to MP4.
+
+    Implementation:
+    - Render each frame to PNG using Plotly image export (requires `kaleido`).
+    - Stitch PNGs to MP4 using `ffmpeg`.
+
+    Raises RuntimeError with a user-friendly message if prerequisites are missing.
+    """
+    if go is None:
+        raise RuntimeError("Plotly is required for video export.")
+    if fig is None:
+        raise RuntimeError("No figure to export.")
+
+    # Preflight: pip-only export requirements.
+    # - Use kaleido==0.2.1 (bundles its own headless chromium) to avoid requiring system Chrome.
+    # - Use imageio-ffmpeg to avoid requiring system ffmpeg.
+    try:
+        plotly_v = importlib.metadata.version("plotly")
+    except Exception:
+        plotly_v = None
+    try:
+        kaleido_v = importlib.metadata.version("kaleido")
+    except Exception:
+        kaleido_v = None
+
+    try:
+        import imageio_ffmpeg  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "MP4 export requires the pip package 'imageio-ffmpeg' (bundled ffmpeg). "
+            "Install it via pip (no system ffmpeg needed)."
+        ) from e
+
+    def _parse_ver(v: str) -> Tuple[int, int, int]:
+        try:
+            parts = str(v).split("+")[0].split("-")[0].split(".")
+            a = int(parts[0]) if len(parts) > 0 else 0
+            b = int(parts[1]) if len(parts) > 1 else 0
+            c = int(parts[2]) if len(parts) > 2 else 0
+            return (a, b, c)
+        except Exception:
+            return (0, 0, 0)
+
+    if not kaleido_v:
+        raise RuntimeError("Plotly image export requires the pip package 'kaleido'. Install kaleido to export MP4.")
+
+    kv = _parse_ver(str(kaleido_v))
+    if kv >= (1, 0, 0):
+        raise RuntimeError(
+            "Movie export is configured to be pip-only (no system Chrome). "
+            f"Found kaleido=={kaleido_v}. Please install `kaleido==0.2.1` for export."
+        )
+
+    try:
+        ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception as e:
+        raise RuntimeError(
+            "Could not locate bundled ffmpeg from imageio-ffmpeg. "
+            "Reinstall `imageio-ffmpeg` and try again."
+        ) from e
+
+    frames = list(getattr(fig, "frames", None) or [])
+    if not frames:
+        raise RuntimeError("This figure has no animation frames to export.")
+
+    base_fig = go.Figure(fig)
+    base_fig.frames = []
+
+    def _strip_animation_controls_for_export(fig_obj: Any) -> None:
+        """Remove interactive animation UI elements for export.
+
+        The Play/Slow buttons and the frame slider are useful in the interactive UI,
+        but should not appear in a rendered MP4.
+        """
+        # 1) Clear animation controls (some Plotly versions may not fully clear via update_layout)
+        try:
+            fig_obj.update_layout(updatemenus=[], sliders=[])
+        except Exception:
+            pass
+        try:
+            fig_obj.layout.updatemenus = []  # type: ignore
+        except Exception:
+            pass
+        try:
+            fig_obj.layout.sliders = []  # type: ignore
+        except Exception:
+            pass
+
+        # 2) Ensure rangeslider is disabled on all x-axes (xaxis, xaxis2, ...)
+        try:
+            fig_obj.update_xaxes(rangeslider=dict(visible=False))
+        except Exception:
+            pass
+        try:
+            layout = getattr(fig_obj, "layout", None)
+            if layout is not None:
+                for k in list(getattr(layout, "to_plotly_json", lambda: {})().keys()):
+                    if not str(k).startswith("xaxis"):
+                        continue
+                    try:
+                        ax = getattr(layout, str(k), None)
+                        if ax is not None and getattr(ax, "rangeslider", None) is not None:
+                            ax.rangeslider.visible = False
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _maybe_apply_streamlit_theme_for_export(fig_obj: Any) -> None:
+        """Ensure exported images have a solid background.
+
+        Plotly figures in Streamlit often rely on transparent backgrounds which look fine in the app,
+        but MP4 has no alpha channel so exported frames can look wrong (e.g. white background).
+        """
+        try:
+            paper = getattr(fig_obj.layout, "paper_bgcolor", None)
+            plotbg = getattr(fig_obj.layout, "plot_bgcolor", None)
+        except Exception:
+            paper, plotbg = None, None
+
+        def _is_transparent(v: Any) -> bool:
+            if v is None:
+                return True
+            s = str(v).lower()
+            return s in ("transparent", "rgba(0,0,0,0)", "rgba(0, 0, 0, 0)")
+
+        # Only override when the figure didn't specify a solid background.
+        if not (_is_transparent(paper) or _is_transparent(plotbg)):
+            return
+
+        bg = None
+        text = None
+        theme_base = None
+        try:
+            theme_base = st.get_option("theme.base")
+            bg = st.get_option("theme.backgroundColor")
+            if not bg:
+                # Better-than-white fallback for some themes.
+                bg = st.get_option("theme.secondaryBackgroundColor")
+            text = st.get_option("theme.textColor")
+        except Exception:
+            bg = None
+            text = None
+            theme_base = None
+
+        # If we can't read Streamlit theme colors, ensure a dark export via Plotly template.
+        if not bg:
+            try:
+                fig_obj.update_layout(template="plotly_dark")
+            except Exception:
+                pass
+            return
+
+        if bg:
+            try:
+                fig_obj.update_layout(paper_bgcolor=bg, plot_bgcolor=bg)
+            except Exception:
+                pass
+        if text:
+            try:
+                fig_obj.update_layout(font=dict(color=text))
+            except Exception:
+                pass
+
+        # Ensure gridlines show up on dark backgrounds.
+        try:
+            if getattr(fig_obj.layout, "template", None) is None and str(theme_base).lower() == "dark":
+                fig_obj.update_layout(template="plotly_dark")
+        except Exception:
+            pass
+
+        try:
+            xa = getattr(fig_obj.layout, "xaxis", None)
+            ya = getattr(fig_obj.layout, "yaxis", None)
+            if xa is not None and getattr(xa, "showgrid", None) is None:
+                fig_obj.update_xaxes(showgrid=True)
+            if ya is not None and getattr(ya, "showgrid", None) is None:
+                fig_obj.update_yaxes(showgrid=True)
+        except Exception:
+            pass
+
+    w = int(width or (getattr(base_fig.layout, "width", None) or 1280))
+    h = int(height or (getattr(base_fig.layout, "height", None) or 720))
+    fps_i = int(fps) if fps and int(fps) > 0 else 30
+    scale_i = int(scale) if scale and int(scale) > 0 else 1
+
+    total = len(frames) + 1
+
+    def _progress(i: int, msg: str) -> None:
+        if progress_cb:
+            try:
+                progress_cb(min(1.0, max(0.0, float(i) / float(max(1, total)))), msg)
+            except Exception:
+                pass
+
+    with tempfile.TemporaryDirectory(prefix="pbgui_movie_export_") as tmpdir:
+        tmp = Path(tmpdir)
+
+        def _render_png(fig_obj: Any) -> bytes:
+            try:
+                return fig_obj.to_image(format="png", width=w, height=h, scale=scale_i)
+            except Exception as e:
+                msg = str(e)
+                if "kaleido" in msg.lower():
+                    raise RuntimeError("Plotly image export requires the 'kaleido' package. Install it to export video.") from e
+                raise RuntimeError(f"Failed to render frame image: {e}") from e
+
+        out_mp4 = tmp / "movie.mp4"
+
+        # Stream PNGs to ffmpeg (image2pipe) to avoid writing thousands of frame files.
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "png",
+            "-framerate",
+            str(fps_i),
+            "-i",
+            "pipe:0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            str(out_mp4),
+        ]
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to start ffmpeg: {e}") from e
+
+        if proc.stdin is None:
+            raise RuntimeError("Failed to open ffmpeg stdin for video export.")
+
+        try:
+            # Reuse a working figure to reduce per-frame allocations.
+            work_fig = go.Figure(base_fig)
+            _maybe_apply_streamlit_theme_for_export(work_fig)
+            _strip_animation_controls_for_export(work_fig)
+
+            _progress(0, "Rendering frame 0")
+            proc.stdin.write(_render_png(work_fig))
+
+            for i, fr in enumerate(frames, start=1):
+                _progress(i, f"Rendering frame {i}/{total-1}")
+                _apply_plotly_frame_inplace(work_fig, fr)
+                _maybe_apply_streamlit_theme_for_export(work_fig)
+                _strip_animation_controls_for_export(work_fig)
+                proc.stdin.write(_render_png(work_fig))
+
+            _progress(total - 1, "Encoding MP4")
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+
+            rc = proc.wait()
+            if rc != 0:
+                err_b = b""
+                try:
+                    if proc.stderr is not None:
+                        err_b = proc.stderr.read() or b""
+                except Exception:
+                    err_b = b""
+                err = ""
+                try:
+                    err = err_b.decode("utf-8", errors="replace")
+                except Exception:
+                    err = str(err_b)
+                raise RuntimeError(f"ffmpeg failed to encode MP4: {err}")
+
+        finally:
+            try:
+                if proc.stderr is not None:
+                    proc.stderr.close()
+            except Exception:
+                pass
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except Exception:
+                pass
+
+        _progress(total, "Done")
+        return out_mp4.read_bytes()
+
+
 def _calc_potential_trailing_entry_prices_from_fullgrid(
     *,
     side: Side,
@@ -7897,8 +8347,8 @@ def show_visualizer():
                     key="gv_hist_sim_mode",
                     horizontal=True,
                     help=(
-                        "Local (B): PBGui simuliert Candle-für-Candle (Orchestrator-Orders + lokale Fill-Regeln) und kann deshalb Grids/Trailing pro Candle anzeigen. "
-                        "PB7 (C): verwendet die echte PB7 Rust Backtest-Engine (Ground truth) für Vergleich – aber ohne per-Candle offene Grid-Ladder-Details."
+                        "Local (B): PBGui simulates candle-by-candle (orchestrator orders + local fill rules) and can therefore show grids/trailing per candle. "
+                        "PB7 (C): uses the real PB7 Rust backtest engine (ground truth) for comparison – but without per-candle open grid ladder details."
                     ),
                 )
                 sim_col1, sim_col2 = st.columns(2)
@@ -7987,73 +8437,310 @@ def show_visualizer():
             same_indicators = both_active and (_ind_key(data.normal_bot_params_long) == _ind_key(data.normal_bot_params_short))
 
             with st.expander("Movie Builder", expanded=False):
-                ani_col1, ani_col2, ani_col3 = st.columns(3)
-                with ani_col1:
-                    ani_frames = st.number_input("Frames", min_value=10, max_value=5000, value=200)
-                with ani_col2:
-                    ani_step_name = st.selectbox("Step Size", ["1m", "5m", "15m", "1h", "4h", "1d"], index=4)
+                def _render_movie_builder() -> None:
                     ani_steps_mins = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
-                    ani_step_min = ani_steps_mins[ani_step_name]
-                with ani_col3:
-                    gen_movie = st.button("Generate Movie")
 
-                st.radio(
-                    "Movie engine",
-                    options=["Local (B) – full grids", "PB7 backtest engine (C) – upcoming fills"],
-                    index=0 if str(st.session_state.get("gv_movie_engine", "Local (B) – full grids")) == "Local (B) – full grids" else 1,
-                    key="gv_movie_engine",
-                    horizontal=True,
-                    help=(
-                        "Local (B): rendert die sich entwickelnden Entry/Close-Grids + Trailing (volle Grid-Ladders). "
-                        "PB7 (C): zeigt Fills aus der PB7 Backtest-Engine (Ground truth) und previewt kommende Fills; offene Grids pro Candle werden von der Engine nicht geliefert."
-                    ),
-                )
+                    # Per-market keys so widget state doesn't leak between markets.
+                    frames_key = f"gv_movie_frames__{sel_exc}__{sel_sym}"
+                    step_key = f"gv_movie_step__{sel_exc}__{sel_sym}"
+                    duration_key = f"gv_movie_duration__{sel_exc}__{sel_sym}"
+                    sync_key = f"gv_movie_sync__{sel_exc}__{sel_sym}"
+                    gen_key = f"gv_movie_gen__{sel_exc}__{sel_sym}"
 
-                movie_out = st.container()
-                if gen_movie:
-                    side_val = 1 if long_active else (2 if short_active else 1)
-                    if str(st.session_state.get("gv_movie_engine")) == "PB7 backtest engine (C) – upcoming fills":
-                        generate_animation_v7_modec(
-                            start_time=pd.to_datetime(sel_time),
-                            frames=int(ani_frames),
-                            step_mins=int(ani_step_min),
-                            hist_df=hist_df,
-                            exchange=str(sel_exc),
-                            symbol=str(sel_sym),
-                            context_days=float(context_days),
-                            side_val=int(side_val),
-                            data_template=data,
-                            output_container=movie_out,
-                        )
-                    else:
-                        generate_animation_v7_modeb(
-                            start_time=pd.to_datetime(sel_time),
-                            frames=int(ani_frames),
-                            step_mins=int(ani_step_min),
-                            hist_df=hist_df,
-                            exchange=str(sel_exc),
-                            symbol=str(sel_sym),
-                            context_days=float(context_days),
-                            side_val=int(side_val),
-                            data_template=data,
-                            output_container=movie_out,
-                        )
-                else:
-                    # Keep rendering the last generated movie on reruns until a new one is generated.
-                    with movie_out:
-                        if str(st.session_state.get("gv_movie_engine")) == "PB7 backtest engine (C) – upcoming fills":
-                            fig = st.session_state.get("gv_movie_fig_modec")
-                            df_fills = st.session_state.get("gv_movie_fills_modec")
-                        else:
-                            fig = st.session_state.get("gv_movie_fig_modeb")
-                            df_fills = st.session_state.get("gv_movie_fills_modeb")
-                        if fig is not None:
-                            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+                    def _movie_duration_presets(step_name: str) -> list[tuple[str, int | None, int | None]]:
+                        # Returns: (label, duration_minutes, anchor_hour)
+                        # anchor_hour: None => use selected analysis time; 0 => 00:00; 12 => 12:00
+                        if step_name == "1m":
+                            return [
+                                ("Custom (Frames)", None, None),
+                                ("12h (00:00)", 12 * 60, 0),
+                                ("12h (12:00)", 12 * 60, 12),
+                                ("1 day (00:00)", 24 * 60, 0),
+                                ("3 days (00:00)", 3 * 24 * 60, 0),
+                                ("7 days (00:00)", 7 * 24 * 60, 0),
+                            ]
+                        if step_name == "5m":
+                            return [
+                                ("Custom (Frames)", None, None),
+                                ("6h", 6 * 60, None),
+                                ("12h", 12 * 60, None),
+                                ("1 day", 24 * 60, None),
+                                ("3 days", 3 * 24 * 60, None),
+                                ("7 days", 7 * 24 * 60, None),
+                                ("14 days", 14 * 24 * 60, None),
+                            ]
+                        if step_name == "15m":
+                            return [
+                                ("Custom (Frames)", None, None),
+                                ("12h", 12 * 60, None),
+                                ("1 day", 24 * 60, None),
+                                ("3 days", 3 * 24 * 60, None),
+                                ("7 days", 7 * 24 * 60, None),
+                                ("30 days", 30 * 24 * 60, None),
+                            ]
+                        if step_name == "1h":
+                            return [
+                                ("Custom (Frames)", None, None),
+                                ("3 days", 3 * 24 * 60, None),
+                                ("7 days", 7 * 24 * 60, None),
+                                ("30 days", 30 * 24 * 60, None),
+                                ("90 days", 90 * 24 * 60, None),
+                            ]
+                        if step_name == "4h":
+                            return [
+                                ("Custom (Frames)", None, None),
+                                ("7 days", 7 * 24 * 60, None),
+                                ("30 days", 30 * 24 * 60, None),
+                                ("90 days", 90 * 24 * 60, None),
+                                ("180 days", 180 * 24 * 60, None),
+                            ]
+                        # 1d
+                        return [
+                            ("Custom (Frames)", None, None),
+                            ("30 days", 30 * 24 * 60, None),
+                            ("90 days", 90 * 24 * 60, None),
+                            ("180 days", 180 * 24 * 60, None),
+                            ("365 days", 365 * 24 * 60, None),
+                        ]
+
+                    sync = st.session_state.get(sync_key) or {}
+                    prev_frames = sync.get("frames")
+                    prev_duration = sync.get("duration")
+                    prev_step = sync.get("step")
+
+                    if step_key not in st.session_state:
+                        st.session_state[step_key] = "4h"
+
+                    # Detect manual frame changes early and flip duration back to Custom.
+                    if frames_key not in st.session_state:
+                        st.session_state[frames_key] = 200
+
+                    step_val = str(st.session_state.get(step_key) or "4h")
+                    presets = _movie_duration_presets(step_val)
+                    preset_labels = [p[0] for p in presets]
+
+                    if duration_key not in st.session_state:
+                        st.session_state[duration_key] = "Custom (Frames)"
+                    if st.session_state.get(duration_key) not in preset_labels:
+                        st.session_state[duration_key] = "Custom (Frames)"
+
+                    cur_frames = int(st.session_state.get(frames_key) or 0)
+                    cur_duration = str(st.session_state.get(duration_key) or "Custom (Frames)")
+
+                    if prev_frames is not None and cur_frames != int(prev_frames) and cur_duration != "Custom (Frames)":
+                        st.session_state[duration_key] = "Custom (Frames)"
+                        cur_duration = "Custom (Frames)"
+
+                    # If duration preset is selected, compute frames (and keep in sync on step changes).
+                    step_min = int(ani_steps_mins.get(step_val, 1))
+                    if cur_duration != "Custom (Frames)":
                         try:
-                            if df_fills is not None and hasattr(df_fills, "empty") and not df_fills.empty:
-                                st.dataframe(df_fills, use_container_width=True, height=250)
+                            sel = next((p for p in presets if p[0] == cur_duration), ("Custom (Frames)", None, None))
+                            dur_min = sel[1]
+                            if dur_min is not None and (cur_duration != prev_duration or step_val != prev_step):
+                                new_frames = max(2, int(int(dur_min) // int(step_min)))
+                                st.session_state[frames_key] = new_frames
+                                cur_frames = new_frames
                         except Exception:
                             pass
+
+                    # Controls row (3 controls in one line)
+                    c1, c2, c3 = st.columns([1, 1, 2])
+                    with c1:
+                        st.number_input(
+                            "Frames",
+                            min_value=10,
+                            max_value=20000,
+                            value=int(cur_frames) if cur_frames else 200,
+                            key=frames_key,
+                        )
+                    with c2:
+                        st.selectbox(
+                            "Step Size",
+                            ["1m", "5m", "15m", "1h", "4h", "1d"],
+                            index=["1m", "5m", "15m", "1h", "4h", "1d"].index(step_val) if step_val in ["1m", "5m", "15m", "1h", "4h", "1d"] else 4,
+                            key=step_key,
+                        )
+                    with c3:
+                        st.selectbox(
+                            "Duration",
+                            options=preset_labels,
+                            index=preset_labels.index(cur_duration) if cur_duration in preset_labels else 0,
+                            key=duration_key,
+                            help="Choose a time range preset; frames are computed from Duration / Step Size.",
+                        )
+
+                    # Generate button below
+                    gen_movie = st.button("Generate Movie", key=gen_key)
+
+                    # Re-read current widget values after rendering
+                    step_val = str(st.session_state.get(step_key) or "4h")
+                    step_min = int(ani_steps_mins.get(step_val, 1))
+                    cur_frames = int(st.session_state.get(frames_key) or 0)
+                    cur_duration = str(st.session_state.get(duration_key) or "Custom (Frames)")
+                    presets = _movie_duration_presets(step_val)
+
+                    # Compute derived start time + frames (for generation)
+                    start_time_for_movie = pd.to_datetime(sel_time)
+                    frames_for_movie = int(cur_frames)
+                    if cur_duration != "Custom (Frames)":
+                        try:
+                            sel = next((p for p in presets if p[0] == cur_duration), ("Custom (Frames)", None, None))
+                            dur_min = sel[1]
+                            anchor_h = sel[2]
+                            if dur_min is not None:
+                                frames_for_movie = max(2, int(int(dur_min) // int(step_min)))
+                                if anchor_h is not None:
+                                    base = pd.to_datetime(sel_time).normalize()
+                                    anchored = base + pd.Timedelta(hours=int(anchor_h))
+                                    if anchored > pd.to_datetime(sel_time):
+                                        anchored = anchored - pd.Timedelta(days=1)
+                                    start_time_for_movie = anchored
+                        except Exception:
+                            pass
+
+                    st.radio(
+                        "Movie engine",
+                        options=["Local (B) – full grids", "PB7 backtest engine (C) – upcoming fills"],
+                        index=0
+                        if str(st.session_state.get("gv_movie_engine", "Local (B) – full grids")) == "Local (B) – full grids"
+                        else 1,
+                        key="gv_movie_engine",
+                        horizontal=True,
+                        help=(
+                            "Local (B): renders the evolving entry/close grids + trailing (full grid ladders). "
+                            "PB7 (C): shows fills from the PB7 backtest engine (ground truth) and previews upcoming fills; open grids per candle are not provided by the engine."
+                        ),
+                    )
+
+                    movie_out = st.container()
+                    movie_generated_this_run = False
+                    if gen_movie:
+                        movie_generated_this_run = True
+                        side_val = 1 if long_active else (2 if short_active else 1)
+                        if str(st.session_state.get("gv_movie_engine")) == "PB7 backtest engine (C) – upcoming fills":
+                            generate_animation_v7_modec(
+                                start_time=pd.to_datetime(start_time_for_movie),
+                                frames=int(frames_for_movie),
+                                step_mins=int(step_min),
+                                hist_df=hist_df,
+                                exchange=str(sel_exc),
+                                symbol=str(sel_sym),
+                                context_days=float(context_days),
+                                side_val=int(side_val),
+                                data_template=data,
+                                output_container=movie_out,
+                            )
+                        else:
+                            generate_animation_v7_modeb(
+                                start_time=pd.to_datetime(start_time_for_movie),
+                                frames=int(frames_for_movie),
+                                step_mins=int(step_min),
+                                hist_df=hist_df,
+                                exchange=str(sel_exc),
+                                symbol=str(sel_sym),
+                                context_days=float(context_days),
+                                side_val=int(side_val),
+                                data_template=data,
+                                output_container=movie_out,
+                            )
+
+                    # Persist sync state
+                    st.session_state[sync_key] = {"frames": int(st.session_state.get(frames_key) or 0), "duration": str(st.session_state.get(duration_key) or ""), "step": str(st.session_state.get(step_key) or "")}
+
+                    # Video export (MP4) – evaluate the button before rendering heavy UI.
+                    if str(st.session_state.get("gv_movie_engine")) == "PB7 backtest engine (C) – upcoming fills":
+                        fig = st.session_state.get("gv_movie_fig_modec")
+                        df_fills = st.session_state.get("gv_movie_fills_modec")
+                        meta = st.session_state.get("gv_movie_meta_modec")
+                        engine_key = "modec"
+                    else:
+                        fig = st.session_state.get("gv_movie_fig_modeb")
+                        df_fills = st.session_state.get("gv_movie_fills_modeb")
+                        meta = st.session_state.get("gv_movie_meta_modeb")
+                        engine_key = "modeb"
+
+                    do_export = False
+                    if fig is not None:
+                        export_btn_key = f"gv_movie_export_btn_{engine_key}"
+                        export_mp4_key = f"gv_movie_export_mp4_{engine_key}"
+                        export_name_key = f"gv_movie_export_name_{engine_key}"
+
+                        c1, c2 = st.columns([1, 3])
+                        with c1:
+                            do_export = st.button("Export video (mp4)", key=export_btn_key)
+                        with c2:
+                            try:
+                                nframes = len(getattr(fig, "frames", None) or [])
+                                st.caption(f"Frames: {nframes}")
+                            except Exception:
+                                pass
+
+                        if do_export:
+                            prog = st.progress(0.0)
+                            status = st.empty()
+
+                            def _cb(p: float, msg: str) -> None:
+                                try:
+                                    prog.progress(float(p))
+                                except Exception:
+                                    pass
+                                try:
+                                    status.caption(str(msg))
+                                except Exception:
+                                    pass
+
+                            try:
+                                mp4_bytes = _export_plotly_animation_to_mp4(fig, fps=30, progress_cb=_cb)
+                                try:
+                                    st.session_state[export_mp4_key] = mp4_bytes
+                                except Exception:
+                                    pass
+
+                                fn = "movie.mp4"
+                                try:
+                                    if isinstance(meta, dict):
+                                        ex = str(meta.get("exchange") or "")
+                                        sym = str(meta.get("symbol") or "")
+                                        stt = str(meta.get("start_time") or "")
+                                        stt = stt.replace(":", "-").replace(" ", "_")
+                                        fn = f"{ex}_{sym}_{engine_key}_{stt}.mp4".strip("_")
+                                except Exception:
+                                    fn = "movie.mp4"
+                                try:
+                                    st.session_state[export_name_key] = fn
+                                except Exception:
+                                    pass
+                                status.caption("Export ready")
+                            except Exception as e:
+                                st.error(str(e))
+
+                        mp4_data = st.session_state.get(export_mp4_key)
+                        if mp4_data:
+                            file_name = str(st.session_state.get(export_name_key) or "movie.mp4")
+                            st.download_button(
+                                "Download mp4",
+                                data=mp4_data,
+                                file_name=file_name,
+                                mime="video/mp4",
+                                key=f"gv_movie_export_dl_{engine_key}",
+                            )
+
+                    # Keep rendering the last generated movie on reruns.
+                    if (not movie_generated_this_run) and (not do_export):
+                        with movie_out:
+                            if fig is not None:
+                                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+                            try:
+                                if df_fills is not None and hasattr(df_fills, "empty") and not df_fills.empty:
+                                    st.dataframe(df_fills, use_container_width=True, height=250)
+                            except Exception:
+                                pass
+
+                _frag = getattr(st, "fragment", None)
+                if callable(_frag):
+                    _render_movie_builder = _frag(_render_movie_builder)
+                _render_movie_builder()
 
             # Automatically inject state based on slider
             idx = hist_df.index.get_indexer([sel_time], method='nearest')[0]
