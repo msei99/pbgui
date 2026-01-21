@@ -49,6 +49,7 @@ from pbgui_func import (
     pb7dir,
     set_page_config,
 )
+from pbgui_purefunc import load_ini, save_ini
 try:
     from Config import ConfigV7
 except ModuleNotFoundError:  # pragma: no cover
@@ -4748,6 +4749,9 @@ def _export_plotly_animation_to_mp4(
     width: Optional[int] = None,
     height: Optional[int] = None,
     scale: int = 1,
+    crf: int = 18,
+    ffmpeg_preset: str = "ultrafast",
+    pix_fmt: str = "yuv420p",
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> bytes:
     """Render a Plotly animation to MP4.
@@ -4835,6 +4839,26 @@ def _export_plotly_animation_to_mp4(
             pass
         try:
             fig_obj.layout.sliders = []  # type: ignore
+        except Exception:
+            pass
+
+        # 3) Tighten bottom margin: without sliders/buttons, many figures have a large
+        # empty bottom band (e.g. margin.b=170). Keep enough room for x-axis labels.
+        try:
+            cur_b = None
+            try:
+                cur_b = getattr(getattr(fig_obj.layout, "margin", None), "b", None)
+            except Exception:
+                cur_b = None
+            try:
+                cur_bi = int(cur_b) if cur_b is not None else None
+            except Exception:
+                cur_bi = None
+            target_b = 70
+            if cur_bi is None:
+                fig_obj.update_layout(margin=dict(b=target_b))
+            else:
+                fig_obj.update_layout(margin=dict(b=min(int(cur_bi), int(target_b))))
         except Exception:
             pass
 
@@ -4931,10 +4955,25 @@ def _export_plotly_animation_to_mp4(
         except Exception:
             pass
 
-    w = int(width or (getattr(base_fig.layout, "width", None) or 1280))
-    h = int(height or (getattr(base_fig.layout, "height", None) or 720))
+    # Export defaults: prioritize readable text/lines.
+    # Streamlit figures often have no explicit width; 1280x720 tends to look soft.
+    w = int(width or (getattr(base_fig.layout, "width", None) or 1920))
+    h = int(height or (getattr(base_fig.layout, "height", None) or 1080))
+    # H.264 requires even dimensions.
+    try:
+        w = max(2, int(w) // 2 * 2)
+        h = max(2, int(h) // 2 * 2)
+    except Exception:
+        pass
     fps_i = int(fps) if fps and int(fps) > 0 else 30
     scale_i = int(scale) if scale and int(scale) > 0 else 1
+    try:
+        crf_i = int(crf)
+    except Exception:
+        crf_i = 18
+    crf_i = max(0, min(51, crf_i))
+    preset_s = str(ffmpeg_preset or "ultrafast")
+    pix_fmt_s = str(pix_fmt or "yuv420p")
 
     total = len(frames) + 1
 
@@ -4960,6 +4999,8 @@ def _export_plotly_animation_to_mp4(
         out_mp4 = tmp / "movie.mp4"
 
         # Stream PNGs to ffmpeg (image2pipe) to avoid writing thousands of frame files.
+        # Note: encoding time is usually not the bottleneck vs Kaleido rendering,
+        # so we use a reasonable CRF to improve sharpness without a big slowdown.
         cmd = [
             ffmpeg,
             "-y",
@@ -4973,10 +5014,19 @@ def _export_plotly_animation_to_mp4(
             "pipe:0",
             "-c:v",
             "libx264",
+            # Encoding is usually not the bottleneck vs Kaleido rendering, but when it is,
+            # use a faster preset while keeping CRF (visual quality) stable.
+            # Tradeoff: larger file size.
             "-preset",
-            "veryfast",
+            preset_s,
+            "-crf",
+            str(crf_i),
+            "-threads",
+            "0",
             "-pix_fmt",
-            "yuv420p",
+            pix_fmt_s,
+            "-movflags",
+            "+faststart",
             str(out_mp4),
         ]
 
@@ -5005,8 +5055,6 @@ def _export_plotly_animation_to_mp4(
             for i, fr in enumerate(frames, start=1):
                 _progress(i, f"Rendering frame {i}/{total-1}")
                 _apply_plotly_frame_inplace(work_fig, fr)
-                _maybe_apply_streamlit_theme_for_export(work_fig)
-                _strip_animation_controls_for_export(work_fig)
                 proc.stdin.write(_render_png(work_fig))
 
             _progress(total - 1, "Encoding MP4")
@@ -6114,6 +6162,21 @@ def clear_v7_tuning_keys():
         ):
             del st.session_state[key]
 
+
+def clear_v7_bot_tuning_keys():
+    """Clear only bot-param widget keys.
+
+    Do NOT clear `state_*` keys here, since state widgets may already be instantiated
+    earlier in the same run; deleting them can raise Streamlit errors and break rendering.
+    """
+    for key in list(st.session_state.keys()):
+        if (
+            key.startswith("long_")
+            or key.startswith("short_")
+            or key in ("long_twe_override_entry", "short_twe_override_entry")
+        ):
+            del st.session_state[key]
+
 def prepare_config() -> GVData:
     def _apply_tuning_from_session_state(data: "GVData") -> None:
         def _apply_prefix(bp: BotParams, prefix: str) -> None:
@@ -6184,6 +6247,21 @@ def prepare_config() -> GVData:
             st.session_state.gv_hist_config_exchange = resolved_cfg_exchange
         if cfg_coins:
             st.session_state.gv_hist_config_coins = cfg_coins
+
+        # Re-entry safety: if the user navigates away and comes back from RunV7,
+        # other pages may clear `gv_hist_exchange/gv_hist_coin`. Always repopulate
+        # them from the config defaults when they are empty.
+        try:
+            if resolved_cfg_exchange and not str(st.session_state.get("gv_hist_exchange", "") or "").strip():
+                st.session_state.gv_hist_exchange = resolved_cfg_exchange
+                st.session_state.gv_hist_exchange_last = resolved_cfg_exchange
+        except Exception:
+            pass
+        try:
+            if cfg_coins and not str(st.session_state.get("gv_hist_coin", "") or "").strip():
+                st.session_state.gv_hist_coin = cfg_coins[0]
+        except Exception:
+            pass
 
         # Apply the prefill only once per imported config to avoid overwriting user changes.
         last_applied = str(st.session_state.get("gv_hist_config_applied", "") or "")
@@ -7997,6 +8075,17 @@ def _param_help(name: str) -> str | None:
         return "Start time for the displayed chart window and historical simulation. Grid/state is computed at the chart end (right edge)."
 
     # Bot param families (PB7 semantics)
+    if n == "entry_initial_qty_pct":
+        return (
+            "Initial entry order size as a fraction of the wallet-exposure budget. "
+            "In PB7 sizing this is applied to (balance * total_wallet_exposure_limit)."
+        )
+    if n == "entry_initial_ema_dist":
+        return (
+            "Initial entry reference distance from the EMA band (percent). "
+            "This shifts where the first entry grid starts relative to the EMA band."
+        )
+
     if n.startswith("entry_grid_"):
         if n == "entry_grid_spacing_pct":
             return (
@@ -8095,7 +8184,7 @@ def show_visualizer():
         min_day = None
         max_day = None
 
-        with st.expander("Data (Exchange/Coin)", expanded=True):
+        with st.expander("Data + Time & View", expanded=True):
             exchanges = get_available_exchanges_v7()
             cfg_exc = str(st.session_state.get("gv_hist_config_exchange", "") or "")
             if cfg_exc and cfg_exc not in exchanges:
@@ -8156,6 +8245,212 @@ def show_visualizer():
             else:
                 if sel_exc and sel_sym:
                     st.warning(f"No candles found for {sel_exc} / {sel_sym}.")
+
+            # --- Time & View (moved into this expander) ---
+            sel_time = None
+            context_days = 5.0
+            if hist_df is not None and not hist_df.empty and min_day is not None and max_day is not None:
+                # --- Playback Logic ---
+                # When exchange/coin changes, reset viz time so the chart updates immediately.
+                # Important: Streamlit widgets with a fixed `key` can keep their prior value and ignore
+                # programmatic session_state changes. Use a per-market slider key.
+                sel_key = f"{sel_exc}:{sel_sym}"
+                viz_slider_key = f"gv_viz_time__{sel_exc}__{sel_sym}"
+                viz_date_key = f"gv_start_date__{sel_exc}__{sel_sym}"
+                viz_clock_key = f"gv_start_clock__{sel_exc}__{sel_sym}"
+                viz_sync_key = f"gv_time_sync__{sel_exc}__{sel_sym}"
+
+                # Apply a pending time jump BEFORE any widgets are instantiated.
+                # This avoids Streamlit errors like:
+                # "cannot be modified after the widget with key ... is instantiated".
+                pending_jump = st.session_state.get("gv_pending_time_jump")
+                try:
+                    if (
+                        isinstance(pending_jump, dict)
+                        and pending_jump.get("exc") == sel_exc
+                        and pending_jump.get("sym") == sel_sym
+                        and pending_jump.get("new_ts") is not None
+                    ):
+                        new_ts = pd.to_datetime(pending_jump.get("new_ts")).floor("min")
+                        new_day_dt = datetime.datetime.combine(pd.Timestamp(new_ts).date(), datetime.time(0, 0))
+                        st.session_state["gv_viz_time_for"] = sel_key
+                        st.session_state["gv_viz_time"] = pd.Timestamp(new_ts)
+                        # Slider expects `datetime.datetime`, not `pd.Timestamp`.
+                        st.session_state[viz_slider_key] = new_day_dt
+                        st.session_state[viz_date_key] = pd.Timestamp(new_ts).date()
+                        st.session_state[viz_clock_key] = (
+                            pd.Timestamp(new_ts).time().replace(second=0, microsecond=0)
+                        )
+                        st.session_state[viz_sync_key] = {
+                            "slider_date": pd.Timestamp(new_ts).date(),
+                            "date_input": pd.Timestamp(new_ts).date(),
+                        }
+
+                        if bool(pending_jump.get("run_compare")):
+                            st.session_state["gv_hist_compare_run_requested"] = True
+
+                        st.session_state.pop("gv_pending_time_jump", None)
+                except Exception:
+                    # If anything goes wrong, just drop the pending jump.
+                    st.session_state.pop("gv_pending_time_jump", None)
+
+                if st.session_state.get("gv_viz_time_for") != sel_key:
+                    st.session_state.gv_viz_time = min_day
+                    st.session_state.gv_viz_time_for = sel_key
+
+                # Clamp + initialize the per-market slider state
+                try:
+                    cur_viz_time = st.session_state.get("gv_viz_time")
+                    if cur_viz_time is None or cur_viz_time < min_day or cur_viz_time > max_day:
+                        st.session_state.gv_viz_time = min_day
+                except Exception:
+                    st.session_state.gv_viz_time = min_day
+
+                try:
+                    cur_slider_time = st.session_state.get(viz_slider_key)
+                    if cur_slider_time is None or cur_slider_time < min_day or cur_slider_time > max_day:
+                        # Keep slider state as `datetime.datetime`.
+                        st.session_state[viz_slider_key] = pd.to_datetime(st.session_state.gv_viz_time).to_pydatetime()
+                except Exception:
+                    st.session_state[viz_slider_key] = pd.to_datetime(st.session_state.gv_viz_time).to_pydatetime()
+
+                # --- Bidirectional sync between Start Date and day-slider ---
+                # We only push changes from the control that changed since last run,
+                # otherwise Streamlit reruns would constantly overwrite the user's input.
+                try:
+                    if viz_date_key not in st.session_state or st.session_state.get(viz_date_key) is None:
+                        st.session_state[viz_date_key] = pd.to_datetime(st.session_state[viz_slider_key]).date()
+                except Exception:
+                    st.session_state[viz_date_key] = pd.to_datetime(min_day).date()
+
+                # Clamp date into available range
+                try:
+                    _min_d = pd.to_datetime(min_day).date()
+                    _max_d = pd.to_datetime(max_day).date()
+                    cur_date = st.session_state.get(viz_date_key)
+                    if cur_date < _min_d:
+                        cur_date = _min_d
+                    if cur_date > _max_d:
+                        cur_date = _max_d
+                    st.session_state[viz_date_key] = cur_date
+                except Exception:
+                    pass
+
+                try:
+                    cur_slider_date = pd.to_datetime(st.session_state.get(viz_slider_key)).date()
+                except Exception:
+                    cur_slider_date = pd.to_datetime(min_day).date()
+                    st.session_state[viz_slider_key] = min_day
+
+                sync = st.session_state.get(viz_sync_key) or {}
+                last_slider_date = sync.get("slider_date")
+                last_date_input = sync.get("date_input")
+
+                slider_changed = (last_slider_date is not None) and (cur_slider_date != last_slider_date)
+                date_changed = (last_date_input is not None) and (st.session_state.get(viz_date_key) != last_date_input)
+
+                if slider_changed and not date_changed:
+                    # User moved slider -> update date input
+                    st.session_state[viz_date_key] = cur_slider_date
+                elif date_changed and not slider_changed:
+                    # User changed date input -> update slider
+                    try:
+                        st.session_state[viz_slider_key] = datetime.datetime.combine(
+                            st.session_state[viz_date_key], datetime.time(0, 0)
+                        )
+                    except Exception:
+                        st.session_state[viz_slider_key] = min_day
+                else:
+                    # First run or ambiguous: just reconcile mismatch by snapping slider to date input
+                    try:
+                        if cur_slider_date != st.session_state[viz_date_key]:
+                            st.session_state[viz_slider_key] = datetime.datetime.combine(
+                                st.session_state[viz_date_key], datetime.time(0, 0)
+                            )
+                    except Exception:
+                        pass
+
+                # Init/start clock (time-of-day) separately from day selection.
+                # Keep it stable across slider/date changes.
+                try:
+                    if viz_clock_key not in st.session_state or st.session_state.get(viz_clock_key) is None:
+                        st.session_state[viz_clock_key] = datetime.time(0, 0)
+                except Exception:
+                    st.session_state[viz_clock_key] = datetime.time(0, 0)
+
+                c_sd, c_sc = st.columns([2, 1])
+                with c_sd:
+                    start_date = st.date_input(
+                        "Start Date",
+                        value=st.session_state[viz_date_key],
+                        min_value=pd.to_datetime(min_day).date(),
+                        max_value=pd.to_datetime(max_day).date(),
+                        key=viz_date_key,
+                        help="Select the analysis/simulation start date.",
+                    )
+                with c_sc:
+                    start_clock = st.time_input(
+                        "Start Time (HH:MM)",
+                        value=st.session_state.get(viz_clock_key, datetime.time(0, 0)),
+                        step=60,
+                        key=viz_clock_key,
+                        help="Exact start time within the selected day (minute resolution).",
+                    )
+
+                sel_time = gv_slider(
+                    "Select Day",
+                    min_value=min_day,
+                    max_value=max_day,
+                    value=st.session_state[viz_slider_key],
+                    step=datetime.timedelta(days=1),
+                    format="YYYY-MM-DD",
+                    key=viz_slider_key,
+                )
+
+                # Record last values for next rerun
+                try:
+                    st.session_state[viz_sync_key] = {
+                        "slider_date": pd.to_datetime(sel_time).date(),
+                        "date_input": start_date,
+                    }
+                except Exception:
+                    pass
+
+                # Keep canonical state in sync
+                try:
+                    min_ts = pd.to_datetime(hist_df.index.min())
+                except Exception:
+                    min_ts = pd.to_datetime(min_day)
+                try:
+                    max_ts = pd.to_datetime(hist_df.index.max())
+                except Exception:
+                    max_ts = pd.to_datetime(max_day)
+
+                # Combine selected day + exact clock time.
+                try:
+                    combined = pd.Timestamp(datetime.datetime.combine(pd.to_datetime(start_date).date(), start_clock))
+                except Exception:
+                    combined = pd.to_datetime(sel_time)
+
+                # Clamp into available candle range.
+                try:
+                    if combined < min_ts:
+                        combined = min_ts
+                    if combined > max_ts:
+                        combined = max_ts
+                except Exception:
+                    pass
+
+                st.session_state.gv_viz_time = combined
+
+                # Make the selected analysis time available to plotting/simulation.
+                data.analysis_time = combined
+
+                context_days = gv_slider(
+                    "Chart Context (Days)", min_value=0.5, max_value=60.0, value=5.0, step=0.5
+                )
+            else:
+                st.info("Select an Exchange/Coin with available local history.", icon="ℹ️")
 
         with st.expander("Exchange / State", expanded=False):
             st.caption("Exchange Parameters")
@@ -8385,220 +8680,96 @@ def show_visualizer():
                     )
                 )
 
-        sel_time = None
-        context_days = 5.0
-        if hist_df is not None and not hist_df.empty and min_day is not None and max_day is not None:
-            with st.expander("Time & View", expanded=True):
-                # --- Playback Logic ---
-                # When exchange/coin changes, reset viz time so the chart updates immediately.
-                # Important: Streamlit widgets with a fixed `key` can keep their prior value and ignore
-                # programmatic session_state changes. Use a per-market slider key.
-                sel_key = f"{sel_exc}:{sel_sym}"
-                viz_slider_key = f"gv_viz_time__{sel_exc}__{sel_sym}"
-                viz_date_key = f"gv_start_date__{sel_exc}__{sel_sym}"
-                viz_clock_key = f"gv_start_clock__{sel_exc}__{sel_sym}"
-                viz_sync_key = f"gv_time_sync__{sel_exc}__{sel_sym}"
-
-                # Apply a pending time jump BEFORE any widgets are instantiated.
-                # This avoids Streamlit errors like:
-                # "cannot be modified after the widget with key ... is instantiated".
-                pending_jump = st.session_state.get("gv_pending_time_jump")
-                try:
-                    if (
-                        isinstance(pending_jump, dict)
-                        and pending_jump.get("exc") == sel_exc
-                        and pending_jump.get("sym") == sel_sym
-                        and pending_jump.get("new_ts") is not None
-                    ):
-                        new_ts = pd.to_datetime(pending_jump.get("new_ts")).floor("min")
-                        new_day_dt = datetime.datetime.combine(pd.Timestamp(new_ts).date(), datetime.time(0, 0))
-                        st.session_state["gv_viz_time_for"] = sel_key
-                        st.session_state["gv_viz_time"] = pd.Timestamp(new_ts)
-                        # Slider expects `datetime.datetime`, not `pd.Timestamp`.
-                        st.session_state[viz_slider_key] = new_day_dt
-                        st.session_state[viz_date_key] = pd.Timestamp(new_ts).date()
-                        st.session_state[viz_clock_key] = (
-                            pd.Timestamp(new_ts).time().replace(second=0, microsecond=0)
-                        )
-                        st.session_state[viz_sync_key] = {
-                            "slider_date": pd.Timestamp(new_ts).date(),
-                            "date_input": pd.Timestamp(new_ts).date(),
-                        }
-
-                        if bool(pending_jump.get("run_compare")):
-                            st.session_state["gv_hist_compare_run_requested"] = True
-
-                        st.session_state.pop("gv_pending_time_jump", None)
-                except Exception:
-                    # If anything goes wrong, just drop the pending jump.
-                    st.session_state.pop("gv_pending_time_jump", None)
-
-                if st.session_state.get("gv_viz_time_for") != sel_key:
-                    st.session_state.gv_viz_time = min_day
-                    st.session_state.gv_viz_time_for = sel_key
-
-                # Clamp + initialize the per-market slider state
-                try:
-                    cur_viz_time = st.session_state.get("gv_viz_time")
-                    if cur_viz_time is None or cur_viz_time < min_day or cur_viz_time > max_day:
-                        st.session_state.gv_viz_time = min_day
-                except Exception:
-                    st.session_state.gv_viz_time = min_day
-
-                try:
-                    cur_slider_time = st.session_state.get(viz_slider_key)
-                    if cur_slider_time is None or cur_slider_time < min_day or cur_slider_time > max_day:
-                        # Keep slider state as `datetime.datetime`.
-                        st.session_state[viz_slider_key] = pd.to_datetime(st.session_state.gv_viz_time).to_pydatetime()
-                except Exception:
-                    st.session_state[viz_slider_key] = pd.to_datetime(st.session_state.gv_viz_time).to_pydatetime()
-
-                # --- Bidirectional sync between Start Date and day-slider ---
-                # We only push changes from the control that changed since last run,
-                # otherwise Streamlit reruns would constantly overwrite the user's input.
-                try:
-                    if viz_date_key not in st.session_state or st.session_state.get(viz_date_key) is None:
-                        st.session_state[viz_date_key] = pd.to_datetime(st.session_state[viz_slider_key]).date()
-                except Exception:
-                    st.session_state[viz_date_key] = pd.to_datetime(min_day).date()
-
-                # Clamp date into available range
-                try:
-                    _min_d = pd.to_datetime(min_day).date()
-                    _max_d = pd.to_datetime(max_day).date()
-                    cur_date = st.session_state.get(viz_date_key)
-                    if cur_date < _min_d:
-                        cur_date = _min_d
-                    if cur_date > _max_d:
-                        cur_date = _max_d
-                    st.session_state[viz_date_key] = cur_date
-                except Exception:
-                    pass
-
-                try:
-                    cur_slider_date = pd.to_datetime(st.session_state.get(viz_slider_key)).date()
-                except Exception:
-                    cur_slider_date = pd.to_datetime(min_day).date()
-                    st.session_state[viz_slider_key] = min_day
-
-                sync = st.session_state.get(viz_sync_key) or {}
-                last_slider_date = sync.get("slider_date")
-                last_date_input = sync.get("date_input")
-
-                slider_changed = (last_slider_date is not None) and (cur_slider_date != last_slider_date)
-                date_changed = (last_date_input is not None) and (st.session_state.get(viz_date_key) != last_date_input)
-
-                if slider_changed and not date_changed:
-                    # User moved slider -> update date input
-                    st.session_state[viz_date_key] = cur_slider_date
-                elif date_changed and not slider_changed:
-                    # User changed date input -> update slider
-                    try:
-                        st.session_state[viz_slider_key] = datetime.datetime.combine(
-                            st.session_state[viz_date_key], datetime.time(0, 0)
-                        )
-                    except Exception:
-                        st.session_state[viz_slider_key] = min_day
-                else:
-                    # First run or ambiguous: just reconcile mismatch by snapping slider to date input
-                    try:
-                        if cur_slider_date != st.session_state[viz_date_key]:
-                            st.session_state[viz_slider_key] = datetime.datetime.combine(
-                                st.session_state[viz_date_key], datetime.time(0, 0)
-                            )
-                    except Exception:
-                        pass
-
-                # Init/start clock (time-of-day) separately from day selection.
-                # Keep it stable across slider/date changes.
-                try:
-                    if viz_clock_key not in st.session_state or st.session_state.get(viz_clock_key) is None:
-                        st.session_state[viz_clock_key] = datetime.time(0, 0)
-                except Exception:
-                    st.session_state[viz_clock_key] = datetime.time(0, 0)
-
-                c_sd, c_sc = st.columns([2, 1])
-                with c_sd:
-                    start_date = st.date_input(
-                        "Start Date",
-                        value=st.session_state[viz_date_key],
-                        min_value=pd.to_datetime(min_day).date(),
-                        max_value=pd.to_datetime(max_day).date(),
-                        key=viz_date_key,
-                        help="Select the analysis/simulation start date.",
-                    )
-                with c_sc:
-                    start_clock = st.time_input(
-                        "Start Time (HH:MM)",
-                        value=st.session_state.get(viz_clock_key, datetime.time(0, 0)),
-                        step=60,
-                        key=viz_clock_key,
-                        help="Exact start time within the selected day (minute resolution).",
-                    )
-
-                sel_time = gv_slider(
-                    "Select Day",
-                    min_value=min_day,
-                    max_value=max_day,
-                    value=st.session_state[viz_slider_key],
-                    step=datetime.timedelta(days=1),
-                    format="YYYY-MM-DD",
-                    key=viz_slider_key,
-                )
-
-                # Record last values for next rerun
-                try:
-                    st.session_state[viz_sync_key] = {
-                        "slider_date": pd.to_datetime(sel_time).date(),
-                        "date_input": start_date,
-                    }
-                except Exception:
-                    pass
-
-                # Keep canonical state in sync
-                try:
-                    min_ts = pd.to_datetime(hist_df.index.min())
-                except Exception:
-                    min_ts = pd.to_datetime(min_day)
-                try:
-                    max_ts = pd.to_datetime(hist_df.index.max())
-                except Exception:
-                    max_ts = pd.to_datetime(max_day)
-
-                # Combine selected day + exact clock time.
-                try:
-                    combined = pd.Timestamp(datetime.datetime.combine(pd.to_datetime(start_date).date(), start_clock))
-                except Exception:
-                    combined = pd.to_datetime(sel_time)
-
-                # Clamp into available candle range.
-                try:
-                    if combined < min_ts:
-                        combined = min_ts
-                    if combined > max_ts:
-                        combined = max_ts
-                except Exception:
-                    pass
-
-                st.session_state.gv_viz_time = combined
-
-                # Make the selected analysis time available to plotting/simulation.
-                data.analysis_time = combined
-
-                context_days = gv_slider(
-                    "Chart Context (Days)", min_value=0.5, max_value=60.0, value=5.0, step=0.5
-                )
-        else:
-            with st.expander("Time & View", expanded=True):
-                st.info("Select an Exchange/Coin with available local history.", icon="ℹ️")
+        # (sel_time/context_days are now controlled in the combined expander above)
 
         with st.expander("Config (Raw JSON)", expanded=False):
-            json_str = st.text_area("hidden", data.to_json(), height=1000, label_visibility="collapsed")
-            if st.button("Apply"):
-                data = GVData.from_json(json_str)
-                st.session_state.v7_grid_visualizer_data = data
-                clear_v7_tuning_keys()
-                st.rerun()
+            RAW_KEY = "gv_raw_config_json"
+            RAW_LAST_SER_KEY = "gv_raw_config_last_serialized"
+            RAW_GOOD_KEY = "gv_raw_config_last_good"
+            RAW_ERR_KEY = "gv_raw_config_error"
+            RAW_PENDING_RESTORE_KEY = "gv_raw_config_pending_restore"
+
+            def _gv_set_botparam_widget_state(prefix: str, bp: Any) -> None:
+                try:
+                    dct = asdict(bp)
+                except Exception:
+                    try:
+                        dct = dict(getattr(bp, "__dict__", {}) or {})
+                    except Exception:
+                        dct = {}
+                for k, v in (dct or {}).items():
+                    # Only sync scalar values; sliders/toggles are scalar.
+                    if v is None:
+                        continue
+                    if isinstance(v, (bool, int, float)):
+                        st.session_state[f"{prefix}{k}"] = v
+
+            # Keep raw editor in-sync with the current sliders/config unless the user has edited it.
+            cur_ser = data.to_json()
+
+            # Apply a pending restore BEFORE the textarea widget is instantiated.
+            pending_restore = st.session_state.pop(RAW_PENDING_RESTORE_KEY, None)
+            if isinstance(pending_restore, str) and pending_restore:
+                st.session_state[RAW_KEY] = pending_restore
+                st.session_state[RAW_LAST_SER_KEY] = pending_restore
+                st.session_state[RAW_GOOD_KEY] = pending_restore
+                st.session_state[RAW_ERR_KEY] = ""
+
+            if RAW_KEY not in st.session_state:
+                st.session_state[RAW_KEY] = cur_ser
+                st.session_state[RAW_LAST_SER_KEY] = cur_ser
+                st.session_state[RAW_GOOD_KEY] = cur_ser
+                st.session_state[RAW_ERR_KEY] = ""
+            else:
+                last_ser = st.session_state.get(RAW_LAST_SER_KEY)
+                if last_ser is None:
+                    st.session_state[RAW_LAST_SER_KEY] = cur_ser
+                    last_ser = cur_ser
+                if st.session_state.get(RAW_GOOD_KEY) is None:
+                    st.session_state[RAW_GOOD_KEY] = str(last_ser or cur_ser)
+                # Only auto-update the textarea if it was previously in-sync.
+                if str(st.session_state.get(RAW_KEY, "") or "") == str(last_ser or ""):
+                    st.session_state[RAW_KEY] = cur_ser
+                    st.session_state[RAW_LAST_SER_KEY] = cur_ser
+                    st.session_state[RAW_GOOD_KEY] = cur_ser
+
+            json_str = st.text_area(
+                "hidden",
+                key=RAW_KEY,
+                height=1000,
+                label_visibility="collapsed",
+            )
+
+            # Apply raw JSON immediately (no Apply button): if the content changed and parses,
+            # update the in-memory config used by sliders/plot in this same run.
+            try:
+                last_ser = str(st.session_state.get(RAW_LAST_SER_KEY, "") or "")
+                cur_txt = str(json_str or "")
+                if cur_txt and cur_txt != last_ser:
+                    parsed = GVData.from_json(cur_txt)
+                    data.normal_bot_params_long = parsed.normal_bot_params_long
+                    data.normal_bot_params_short = parsed.normal_bot_params_short
+                    st.session_state.v7_grid_visualizer_data = data
+                    # Reset + prefill widget states so sliders reflect raw JSON immediately.
+                    # Use bot-only clearer; state widgets may already be instantiated in this run.
+                    clear_v7_bot_tuning_keys()
+                    _gv_set_botparam_widget_state("long_", data.normal_bot_params_long)
+                    _gv_set_botparam_widget_state("short_", data.normal_bot_params_short)
+                    st.session_state[RAW_ERR_KEY] = ""
+                    # Mark the editor as "in sync" with what the user just typed.
+                    # This enables slider->raw sync again on subsequent reruns.
+                    st.session_state[RAW_LAST_SER_KEY] = cur_txt
+                    st.session_state[RAW_GOOD_KEY] = cur_txt
+            except Exception as e:
+                # Reject invalid edits: restore the last known good raw config.
+                st.session_state[RAW_ERR_KEY] = f"Invalid JSON/config: {e}"
+                restore_txt = str(st.session_state.get(RAW_GOOD_KEY, "") or "")
+                if restore_txt:
+                    st.session_state[RAW_PENDING_RESTORE_KEY] = restore_txt
+                    st.rerun()
+
+            if st.session_state.get(RAW_ERR_KEY):
+                st.error(st.session_state.get(RAW_ERR_KEY))
 
         if hist_df is not None and not hist_df.empty and sel_time is not None:
             with st.expander("Simulation (Mode B/C)", expanded=False):
@@ -9089,15 +9260,168 @@ def show_visualizer():
                         export_mp4_key = f"gv_movie_export_mp4_{engine_key}"
                         export_name_key = f"gv_movie_export_name_{engine_key}"
 
-                        c1, c2 = st.columns([1, 3])
-                        with c1:
-                            do_export = st.button("Export video (mp4)", key=export_btn_key)
-                        with c2:
+                        # Global export settings (preset + advanced), persisted in pbgui.ini
+                        export_ini_section = "v7_grid_visualizer"
+                        preset_key = "gv_movie_export_preset"
+                        width_key = "gv_movie_export_width"
+                        height_key = "gv_movie_export_height"
+                        scale_key = "gv_movie_export_scale"
+                        crf_key = "gv_movie_export_crf"
+                        ffmpeg_preset_key = "gv_movie_export_ffmpeg_preset"
+
+                        def _gv_movie_export_defaults() -> dict:
+                            return {
+                                "preset": "Balanced",
+                                "width": 1600,
+                                "height": 800,
+                                "scale": 1,
+                                "crf": 18,
+                                "ffmpeg_preset": "veryfast",
+                            }
+
+                        def _gv_movie_export_preset_values(name: str) -> dict:
+                            n = str(name or "").strip()
+                            if n == "Fast":
+                                return {"preset": "Fast", "width": 1280, "height": 720, "scale": 1, "crf": 23, "ffmpeg_preset": "ultrafast"}
+                            if n == "Quality":
+                                return {"preset": "Quality", "width": 1920, "height": 1080, "scale": 1, "crf": 16, "ffmpeg_preset": "fast"}
+                            if n == "Balanced":
+                                return {"preset": "Balanced", "width": 1600, "height": 800, "scale": 1, "crf": 18, "ffmpeg_preset": "veryfast"}
+                            return {"preset": "Custom"}
+
+                        def _gv_movie_export_load_once() -> None:
+                            if preset_key in st.session_state:
+                                return
+                            d = _gv_movie_export_defaults()
                             try:
-                                nframes = len(getattr(fig, "frames", None) or [])
-                                st.caption(f"Frames: {nframes}")
+                                p = load_ini(export_ini_section, "movie_export_preset")
+                                if p:
+                                    d["preset"] = str(p)
                             except Exception:
                                 pass
+                            for k_ini, k_ss, cast, fallback in [
+                                ("movie_export_width", width_key, int, d["width"]),
+                                ("movie_export_height", height_key, int, d["height"]),
+                                ("movie_export_scale", scale_key, int, d["scale"]),
+                                ("movie_export_crf", crf_key, int, d["crf"]),
+                            ]:
+                                v = ""
+                                try:
+                                    v = load_ini(export_ini_section, k_ini)
+                                except Exception:
+                                    v = ""
+                                try:
+                                    st.session_state[k_ss] = cast(v) if str(v).strip() != "" else cast(fallback)
+                                except Exception:
+                                    st.session_state[k_ss] = cast(fallback)
+                            try:
+                                fp = load_ini(export_ini_section, "movie_export_ffmpeg_preset")
+                                st.session_state[ffmpeg_preset_key] = str(fp).strip() or str(d["ffmpeg_preset"])
+                            except Exception:
+                                st.session_state[ffmpeg_preset_key] = str(d["ffmpeg_preset"])
+                            try:
+                                pv = str(st.session_state.get(preset_key) or "").strip()
+                                if pv:
+                                    st.session_state[preset_key] = pv
+                                else:
+                                    st.session_state[preset_key] = str(d["preset"])
+                            except Exception:
+                                st.session_state[preset_key] = str(d["preset"])
+
+                        def _gv_movie_export_save_from_state() -> None:
+                            try:
+                                save_ini(export_ini_section, "movie_export_preset", str(st.session_state.get(preset_key) or ""))
+                            except Exception:
+                                pass
+                            for k_ini, k_ss in [
+                                ("movie_export_width", width_key),
+                                ("movie_export_height", height_key),
+                                ("movie_export_scale", scale_key),
+                                ("movie_export_crf", crf_key),
+                                ("movie_export_ffmpeg_preset", ffmpeg_preset_key),
+                            ]:
+                                try:
+                                    save_ini(export_ini_section, k_ini, str(st.session_state.get(k_ss)))
+                                except Exception:
+                                    pass
+
+                        def _gv_movie_export_apply_preset() -> None:
+                            p = str(st.session_state.get(preset_key) or "").strip()
+                            if p in ("Fast", "Balanced", "Quality"):
+                                vals = _gv_movie_export_preset_values(p)
+                                try:
+                                    st.session_state[width_key] = int(vals.get("width"))
+                                    st.session_state[height_key] = int(vals.get("height"))
+                                    st.session_state[scale_key] = int(vals.get("scale"))
+                                    st.session_state[crf_key] = int(vals.get("crf"))
+                                    st.session_state[ffmpeg_preset_key] = str(vals.get("ffmpeg_preset"))
+                                except Exception:
+                                    pass
+                            _gv_movie_export_save_from_state()
+
+                        def _gv_movie_export_mark_custom() -> None:
+                            try:
+                                st.session_state[preset_key] = "Custom"
+                            except Exception:
+                                pass
+                            _gv_movie_export_save_from_state()
+
+                        _gv_movie_export_load_once()
+
+                        r1, r2 = st.columns([2, 1])
+                        with r1:
+                            st.selectbox(
+                                "Export preset",
+                                options=["Fast", "Balanced", "Quality", "Custom"],
+                                key=preset_key,
+                                on_change=_gv_movie_export_apply_preset,
+                                help="Choose a preset. Use Advanced to override. Settings are saved globally to pbgui.ini.",
+                                label_visibility="collapsed",
+                            )
+                        with r2:
+                            do_export = st.button("Export video (mp4)", key=export_btn_key)
+
+                        with st.expander("Advanced export settings", expanded=False):
+                            st.number_input(
+                                "Width",
+                                min_value=640,
+                                max_value=3840,
+                                step=20,
+                                key=width_key,
+                                on_change=_gv_movie_export_mark_custom,
+                            )
+                            st.number_input(
+                                "Height",
+                                min_value=360,
+                                max_value=2160,
+                                step=20,
+                                key=height_key,
+                                on_change=_gv_movie_export_mark_custom,
+                            )
+                            st.number_input(
+                                "Scale",
+                                min_value=1,
+                                max_value=4,
+                                step=1,
+                                key=scale_key,
+                                on_change=_gv_movie_export_mark_custom,
+                                help="Kaleido render scale multiplier (higher = sharper, slower).",
+                            )
+                            st.number_input(
+                                "CRF (x264)",
+                                min_value=0,
+                                max_value=51,
+                                step=1,
+                                key=crf_key,
+                                on_change=_gv_movie_export_mark_custom,
+                                help="Lower = higher quality, larger file. Typical: 16–23.",
+                            )
+                            st.selectbox(
+                                "FFmpeg preset (x264)",
+                                options=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"],
+                                key=ffmpeg_preset_key,
+                                on_change=_gv_movie_export_mark_custom,
+                            )
 
                         if do_export:
                             prog = st.progress(0.0)
@@ -9114,7 +9438,63 @@ def show_visualizer():
                                     pass
 
                             try:
-                                mp4_bytes = _export_plotly_animation_to_mp4(fig, fps=30, progress_cb=_cb)
+                                # Export: derive playback FPS from the Plotly Play button duration.
+                                export_fps = 15
+                                try:
+                                    dur_ms = None
+                                    ums = getattr(getattr(fig, "layout", None), "updatemenus", None)
+                                    if ums and len(ums) > 0:
+                                        btns = getattr(ums[0], "buttons", None)
+                                        if btns and len(btns) > 0:
+                                            args = getattr(btns[0], "args", None)
+                                            if isinstance(args, (list, tuple)) and len(args) >= 2 and isinstance(args[1], dict):
+                                                fr = (args[1].get("frame") or {}) if isinstance(args[1].get("frame"), dict) else {}
+                                                if isinstance(fr, dict):
+                                                    dur_ms = fr.get("duration")
+                                    if dur_ms is None:
+                                        # default used by the movie builders
+                                        dur_ms = 120
+                                    dur_ms = float(dur_ms)
+                                    if dur_ms > 0:
+                                        base_fps = 1000.0 / dur_ms
+                                        export_fps = max(1, int(round(base_fps)))
+                                except Exception:
+                                    export_fps = 15
+
+                                # Export dimensions: avoid overly wide output when layout.width is unset.
+                                try:
+                                    export_h = int(st.session_state.get(height_key) or 800)
+                                except Exception:
+                                    export_h = 800
+                                try:
+                                    export_w = int(st.session_state.get(width_key) or 1600)
+                                except Exception:
+                                    export_w = 1600
+
+                                try:
+                                    export_scale = int(st.session_state.get(scale_key) or 1)
+                                except Exception:
+                                    export_scale = 1
+                                try:
+                                    export_crf = int(st.session_state.get(crf_key) or 18)
+                                except Exception:
+                                    export_crf = 18
+                                try:
+                                    export_ffmpeg_preset = str(st.session_state.get(ffmpeg_preset_key) or "veryfast")
+                                except Exception:
+                                    export_ffmpeg_preset = "veryfast"
+
+                                mp4_bytes = _export_plotly_animation_to_mp4(
+                                    fig,
+                                    fps=int(export_fps),
+                                    width=int(export_w),
+                                    height=int(export_h),
+                                    scale=int(export_scale),
+                                    crf=int(export_crf),
+                                    ffmpeg_preset=str(export_ffmpeg_preset),
+                                    pix_fmt="yuv420p",
+                                    progress_cb=_cb,
+                                )
                                 try:
                                     st.session_state[export_mp4_key] = mp4_bytes
                                 except Exception:
@@ -12319,24 +12699,44 @@ def generate_animation_v7_modeb(
             except Exception:
                 bal_now = None
             bal_text = ""
+            pos_now = None
+            try:
+                pa = fr.get("pos_after") or {}
+                pos_now = float((pa or {}).get("size"))
+            except Exception:
+                pos_now = None
+
+            we_now = None
+            try:
+                if bal_now is not None and math.isfinite(float(bal_now)) and float(bal_now) > 0.0:
+                    if pos_now is not None and math.isfinite(float(pos_now)):
+                        we_now = abs(float(pos_now) * float(current_price_plot)) / float(bal_now)
+            except Exception:
+                we_now = None
+
             if bal_now is not None and math.isfinite(float(bal_now)):
-                bal_text = f"Wallet: {float(bal_now):.2f}"
+                parts = [f"Wallet Balance: {float(bal_now):.2f}"]
+                if we_now is not None and math.isfinite(float(we_now)):
+                    parts.append(f"WE: {float(we_now):.6g}")
+                if pos_now is not None and math.isfinite(float(pos_now)):
+                    parts.append(f"posSize: {float(pos_now):.8g}")
+                bal_text = "<br>".join(parts)
 
             ann = []
             if bal_text:
                 ann = [
                     dict(
                         x=1.02,
-                        y=0.0,
+                        y=1.0,
                         xref="paper",
                         yref="paper",
                         xanchor="left",
-                        yanchor="bottom",
+                        yanchor="top",
                         text=bal_text,
                         showarrow=False,
                         align="left",
                         bgcolor="rgba(0,0,0,0.5)",
-                        font=dict(size=12),
+                        font=dict(size=16),
                     )
                 ]
 
@@ -12436,7 +12836,7 @@ def generate_animation_v7_modeb(
             yaxis=dict(autorange=False, fixedrange=False),
             height=800,
             margin=dict(l=50, r=260, t=70, b=170),
-            legend=dict(x=1.02, y=1, xanchor="left", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
+            legend=dict(x=1.02, y=0.85, xanchor="left", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
             updatemenus=[
                 dict(
                     type="buttons",
@@ -13086,6 +13486,78 @@ def generate_animation_v7_modec(
                 ),
                 yaxis=dict(range=[y_min_frame, y_max_frame]),
             )
+
+            # Overlay: wallet + WE + current posSize
+            try:
+                px_now = float(df_window_plot["close"].iloc[-1])
+            except Exception:
+                px_now = None
+
+            wb_now = None
+            ps_now = None
+            try:
+                if len(fills_df) > 0 and len(ts_arr) == len(fills_df):
+                    ct64 = np.datetime64(pd.to_datetime(current_time).to_datetime64())
+                    kk = int(np.searchsorted(ts_arr, ct64, side="right") - 1)
+                else:
+                    kk = -1
+            except Exception:
+                kk = -1
+
+            try:
+                if kk >= 0 and kk < len(fills_df):
+                    if "wallet_balance" in fills_df.columns:
+                        wb_now = float(pd.to_numeric(fills_df.iloc[int(kk)].get("wallet_balance"), errors="coerce"))
+                    if "pos_size" in fills_df.columns:
+                        ps_now = float(pd.to_numeric(fills_df.iloc[int(kk)].get("pos_size"), errors="coerce"))
+            except Exception:
+                wb_now = None
+                ps_now = None
+
+            if wb_now is None or (not math.isfinite(float(wb_now))) or float(wb_now) <= 0.0:
+                try:
+                    wb_now = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
+                except Exception:
+                    wb_now = None
+            if ps_now is None or (not math.isfinite(float(ps_now))):
+                ps_now = 0.0
+
+            we_now = None
+            try:
+                if wb_now is not None and math.isfinite(float(wb_now)) and float(wb_now) > 0.0 and px_now is not None:
+                    we_now = abs(float(ps_now) * float(px_now)) / float(wb_now)
+            except Exception:
+                we_now = None
+
+            ann = []
+            try:
+                if wb_now is not None and math.isfinite(float(wb_now)):
+                    parts = [f"Balance: {float(wb_now):.2f}"]
+                    if we_now is not None and math.isfinite(float(we_now)):
+                        parts.append(f"WE: {float(we_now):.6g}")
+                    if ps_now is not None and math.isfinite(float(ps_now)):
+                        parts.append(f"posSize: {float(ps_now):.8g}")
+                    txt = "<br>".join(parts)
+                    ann = [
+                        dict(
+                            x=1.02,
+                            y=1.0,
+                            xref="paper",
+                            yref="paper",
+                            xanchor="left",
+                            yanchor="top",
+                            text=txt,
+                            showarrow=False,
+                            align="left",
+                            bgcolor="rgba(0,0,0,0.5)",
+                            font=dict(size=16),
+                        )
+                    ]
+            except Exception:
+                ann = []
+
+            if ann:
+                frame_layout["annotations"] = ann
             # Executed fills up to current_time (B/S markers)
             # Snap to plotted candle bins to avoid X-misalignment when candle series is resampled.
             # Hover should still show the *real* fill timestamp/price, not the snapped/clamped plot coords.
@@ -13314,7 +13786,7 @@ def generate_animation_v7_modec(
             yaxis=dict(autorange=False, fixedrange=False),
             height=800,
             margin=dict(l=50, r=260, t=70, b=170),
-            legend=dict(x=1.02, y=1, xanchor="left", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
+            legend=dict(x=1.02, y=0.78, xanchor="left", yanchor="top", bgcolor="rgba(0,0,0,0.5)"),
             updatemenus=[
                 dict(
                     type="buttons",
@@ -13399,6 +13871,11 @@ def generate_animation_v7_modec(
                 layout_args["xaxis"]["range"] = init_frame.layout["xaxis"]["range"]
             if "yaxis" in init_frame.layout and "range" in init_frame.layout["yaxis"]:
                 layout_args["yaxis"]["range"] = init_frame.layout["yaxis"]["range"]
+            try:
+                if "annotations" in init_frame.layout:
+                    layout_args["annotations"] = init_frame.layout["annotations"]
+            except Exception:
+                pass
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
         try:
