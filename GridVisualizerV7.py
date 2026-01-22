@@ -52,7 +52,7 @@ class Order:
     qty: float = 0.0
     price: float = 0.0
     order_type: OrderType = OrderType.Default
-    # Optional: preserve PB7/Rust order type (snake) for display in GridVis tables.
+    # Optional: preserve PB7/Rust order type (snake) for display in Strategy Explorer tables.
     order_type_str: str = ""
 
     @staticmethod
@@ -80,7 +80,7 @@ class StateParams:
     order_book: OrderBook = field(default_factory=OrderBook)
     ema_bands: EmaBands = field(default_factory=EmaBands)
     # PB7 rust calc expects a precomputed volatility scalar.
-    # In GridVis we allow manually setting it for live preview.
+    # In Strategy Explorer we allow manually setting it for live preview.
     entry_volatility_logrange_ema_1h: float = 0.0
 
     def clone(self):

@@ -189,8 +189,8 @@ def bt_v7_results():
             st.rerun()
         if st.button("BT selected"):
             bt_v7_results.backtest_selected_results()
-        if st.button("Grid Visualizer"):
-            bt_v7_results.grid_visualizer()
+        if st.button("Strategy Explorer"):
+            bt_v7_results.strategy_explorer()
         if st.button("Caclulate Balance"):
             bt_v7_results.calculate_balance()
         if st.button("Add to Compare"):
