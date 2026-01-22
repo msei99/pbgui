@@ -2014,13 +2014,13 @@ class BacktestV7Results:
                     # When opening Strategy Explorer from a backtest result, auto-wire the PB7 backtest folder
                     # so Compare/Movie Builder can load `fills.csv` without manual copy/paste.
                     try:
-                        st.session_state["gv_hist_compare_pb7_dir"] = str(sel_result.result_path)
-                        st.session_state["gv_hist_compare_mode"] = "PB7 vs B vs C"
-                        st.session_state["gv_hist_compare_use_pb7_range"] = True
+                        st.session_state["se_hist_compare_pb7_dir"] = str(sel_result.result_path)
+                        st.session_state["se_hist_compare_mode"] = "PB7 vs B vs C"
+                        st.session_state["se_hist_compare_use_pb7_range"] = True
                         # Auto-initialize Strategy Explorer time range + Movie Builder from this backtest.
-                        st.session_state["gv_open_from_backtest_result"] = True
-                        st.session_state["gv_open_from_backtest_dir"] = str(sel_result.result_path)
-                        st.session_state["gv_movie_engine"] = "PB7 fills.csv (from backtest)"
+                        st.session_state["se_open_from_backtest_result"] = True
+                        st.session_state["se_open_from_backtest_dir"] = str(sel_result.result_path)
+                        st.session_state["se_movie_engine"] = "PB7 fills.csv (from backtest)"
                     except Exception:
                         pass
                     st.switch_page(get_navi_paths()["V7_STRATEGY_EXPLORER"])
