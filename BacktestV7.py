@@ -1993,7 +1993,7 @@ class BacktestV7Results:
                 if ed["edited_rows"][row]["Select"]:
                     self.add_compare(self.results_d[row]["index"])
 
-    def grid_visualizer(self):
+    def strategy_explorer(self):
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'select_btv7_result_{ed_key}']
         # Get number of selected results
@@ -2007,9 +2007,23 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    st.session_state.v7_grid_visualizer_config = self.results_d[row]["index"].config
-                    st.session_state.v7_grid_visualizer_config.pbgui.note = f'{self.results_d[row]["index"].config.backtest.base_dir.split("/")[-1]}'
-                    st.switch_page(get_navi_paths()["V7_GRID_VISUALIZER"])
+                    sel_result = self.results_d[row]["index"]
+                    st.session_state.v7_strategy_explorer_config = sel_result.config
+                    st.session_state.v7_strategy_explorer_config.pbgui.note = f'{sel_result.config.backtest.base_dir.split("/")[-1]}'
+
+                    # When opening Strategy Explorer from a backtest result, auto-wire the PB7 backtest folder
+                    # so Compare/Movie Builder can load `fills.csv` without manual copy/paste.
+                    try:
+                        st.session_state["gv_hist_compare_pb7_dir"] = str(sel_result.result_path)
+                        st.session_state["gv_hist_compare_mode"] = "PB7 vs B vs C"
+                        st.session_state["gv_hist_compare_use_pb7_range"] = True
+                        # Auto-initialize Strategy Explorer time range + Movie Builder from this backtest.
+                        st.session_state["gv_open_from_backtest_result"] = True
+                        st.session_state["gv_open_from_backtest_dir"] = str(sel_result.result_path)
+                        st.session_state["gv_movie_engine"] = "PB7 fills.csv (from backtest)"
+                    except Exception:
+                        pass
+                    st.switch_page(get_navi_paths()["V7_STRATEGY_EXPLORER"])
 
     def optimize_from_result(self):
         ed_key = st.session_state.ed_key

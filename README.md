@@ -499,7 +499,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 ## v1.33 (30-12-2024)
 - Filter for coins with warnings on CoinMarketCap
 - Multi: Added only_cpt and apply_filter function
-- Improved GridVis by Sephral
+- Improved Strategy Explorer by Sephral
 - Fetch notice from CoinMarketCap metadata for display warning messages
 - Added preset manager for optimizer v7 by Sephral
 - Small bugfixes
@@ -511,7 +511,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.31 (16-12-2024)
 - Added coin_flags to pb7 run
-- Reworked GridVisualizer
+- Reworked Strategy Explorer
 - Updated SYMBOLMAP for CoinData
 - Change balance on bybit to totalWalletBalance
 - Add install.sh for easy install PBGui, pb6 and pb7 on ubuntu
@@ -564,7 +564,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - VPS-Manager: Don't allow add VPS with same names
 - New P+L Dashboard (Sephral)
 - New Navigation (Sephral)
-- Added V7 Grid Visualizer (Sephral)
+- Added V7 Strategy Explorer (formerly Grid Visualizer) (Sephral)
 - Added optional notes to instances (Sephral)
 - Imporved Titel & Page Headers (Sephral)
 - VPS-Manager: Added update function for localhost (Master) for pbgui, pb6 and pb7

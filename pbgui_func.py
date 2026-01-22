@@ -154,7 +154,7 @@ def get_navi_paths():
         "V7_RUN":              os.path.join(NAVI_BASE_DIR, "v7_run.py"),
         "V7_BACKTEST":         os.path.join(NAVI_BASE_DIR, "v7_backtest.py"),
         "V7_OPTIMIZE":         os.path.join(NAVI_BASE_DIR, "v7_optimize.py"),
-        "V7_GRID_VISUALIZER":  os.path.join(NAVI_BASE_DIR, "v7_grid_visualizer.py"),
+        "V7_STRATEGY_EXPLORER":  os.path.join(NAVI_BASE_DIR, "v7_strategy_explorer.py"),
         "V7_BALANCE_CALC":     os.path.join(NAVI_BASE_DIR, "v7_balance_calc.py"),
         "V7_PARETO_EXPLORER":  os.path.join(NAVI_BASE_DIR, "v7_pareto_explorer.py"),
     }
@@ -185,7 +185,7 @@ def build_navigation():
     p71 = st.Page(paths["V7_RUN"], title="Run", icon=":material/play_arrow:")
     p72 = st.Page(paths["V7_BACKTEST"], title="Backtest", icon=":material/history:")
     p73 = st.Page(paths["V7_OPTIMIZE"], title="Optimize", icon=":material/tune:")
-    p74 = st.Page(paths["V7_GRID_VISUALIZER"], title="Grid Visualizer", icon=":material/remove_red_eye:")
+    p74 = st.Page(paths["V7_STRATEGY_EXPLORER"], title="Strategy Explorer", icon=":material/remove_red_eye:")
     p75 = st.Page(paths["V7_BALANCE_CALC"], title="Balance Calculator", icon=":material/attach_money:")
     p76 = st.Page(paths["V7_PARETO_EXPLORER"], title="🎯 Pareto Explorer", icon=":material/analytics:")
 
