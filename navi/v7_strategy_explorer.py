@@ -9671,7 +9671,7 @@ def show_visualizer():
                         def _se_movie_export_load_once() -> None:
                             if preset_key in st.session_state:
                                 return
-                            d = _gv_movie_export_defaults()
+                            d = _se_movie_export_defaults()
                             try:
                                 p = load_ini(export_ini_section, "movie_export_preset")
                                 if p:
@@ -9727,7 +9727,7 @@ def show_visualizer():
                         def _se_movie_export_apply_preset() -> None:
                             p = str(st.session_state.get(preset_key) or "").strip()
                             if p in ("Fast", "Balanced", "Quality"):
-                                vals = _gv_movie_export_preset_values(p)
+                                vals = _se_movie_export_preset_values(p)
                                 try:
                                     st.session_state[width_key] = int(vals.get("width"))
                                     st.session_state[height_key] = int(vals.get("height"))
@@ -9736,14 +9736,14 @@ def show_visualizer():
                                     st.session_state[ffmpeg_preset_key] = str(vals.get("ffmpeg_preset"))
                                 except Exception:
                                     pass
-                            _gv_movie_export_save_from_state()
+                            _se_movie_export_save_from_state()
 
                         def _se_movie_export_mark_custom() -> None:
                             try:
                                 st.session_state[preset_key] = "Custom"
                             except Exception:
                                 pass
-                            _gv_movie_export_save_from_state()
+                            _se_movie_export_save_from_state()
 
                         _se_movie_export_load_once()
 
@@ -9767,7 +9767,7 @@ def show_visualizer():
                                 max_value=3840,
                                 step=20,
                                 key=width_key,
-                                on_change=_gv_movie_export_mark_custom,
+                                on_change=_se_movie_export_mark_custom,
                             )
                             st.number_input(
                                 "Height",
@@ -9775,7 +9775,7 @@ def show_visualizer():
                                 max_value=2160,
                                 step=20,
                                 key=height_key,
-                                on_change=_gv_movie_export_mark_custom,
+                                on_change=_se_movie_export_mark_custom,
                             )
                             st.number_input(
                                 "Scale",
@@ -9783,7 +9783,7 @@ def show_visualizer():
                                 max_value=4,
                                 step=1,
                                 key=scale_key,
-                                on_change=_gv_movie_export_mark_custom,
+                                on_change=_se_movie_export_mark_custom,
                                 help="Kaleido render scale multiplier (higher = sharper, slower).",
                             )
                             st.number_input(
@@ -9792,14 +9792,14 @@ def show_visualizer():
                                 max_value=51,
                                 step=1,
                                 key=crf_key,
-                                on_change=_gv_movie_export_mark_custom,
+                                on_change=_se_movie_export_mark_custom,
                                 help="Lower = higher quality, larger file. Typical: 16–23.",
                             )
                             st.selectbox(
                                 "FFmpeg preset (x264)",
                                 options=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"],
                                 key=ffmpeg_preset_key,
-                                on_change=_gv_movie_export_mark_custom,
+                                on_change=_se_movie_export_mark_custom,
                             )
 
                         if do_export:
