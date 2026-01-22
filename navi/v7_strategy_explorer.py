@@ -6311,12 +6311,12 @@ def prepare_config() -> GVData:
             pass
 
         # Apply the prefill only once per imported config to avoid overwriting user changes.
-        last_applied = str(st.session_state.get("gv_hist_config_applied", "") or "")
+        last_applied = str(st.session_state.get("se_hist_config_applied", "") or "")
         if cfg_id and cfg_id != last_applied:
             if resolved_cfg_exchange:
-                st.session_state.gv_hist_exchange = resolved_cfg_exchange
+                st.session_state.se_hist_exchange = resolved_cfg_exchange
             if cfg_coins:
-                st.session_state.gv_hist_coin = cfg_coins[0]
+                st.session_state.se_hist_coin = cfg_coins[0]
             st.session_state.se_hist_config_applied = cfg_id
         
         data = GVData()
@@ -7707,7 +7707,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
 
     # Historical simulation fill markers (B/S) on the chart
     try:
-        sim_enabled = bool(st.session_state.get("gv_hist_sim_enabled", False))
+        sim_enabled = bool(st.session_state.get("se_hist_sim_enabled", False))
         is_datetime_axis = isinstance(plot_x[0], (pd.Timestamp, datetime.datetime, np.datetime64))
         if sim_enabled and is_datetime_axis:
             fills = list(
@@ -7809,7 +7809,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
         pass
 
     # --- Chart help (toggleable) ---
-    help_state_key = f"gv_show_chart_help_{title_side.lower()}"
+    help_state_key = f"se_show_chart_help_{title_side.lower()}"
     try:
         c_help_l, c_help_r = st.columns([0.95, 0.05])
         with c_help_l:
@@ -7817,7 +7817,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
         with c_help_r:
             if st.button(
                 "?",
-                key=f"gv_chart_help_btn_{title_side.lower()}",
+                key=f"se_chart_help_btn_{title_side.lower()}",
                 help="Show/hide chart help",
                 use_container_width=True,
             ):
@@ -7869,7 +7869,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
 
     # Fills table under the chart
     try:
-        sim_enabled = bool(st.session_state.get("gv_hist_sim_enabled", False))
+        sim_enabled = bool(st.session_state.get("se_hist_sim_enabled", False))
         if sim_enabled:
             fills = list(getattr(data, "historical_sim_fills_long" if side == Side.Long else "historical_sim_fills_short", []) or [])
             if fills:
@@ -8057,7 +8057,7 @@ def create_statistics(side: OrderType, data: GVData):
         st.write(f"**{title_side} Entry Orders:** None")
 
     # Historical candle-walk simulation (chronological fills)
-    if bool(st.session_state.get("gv_hist_sim_enabled", False)):
+    if bool(st.session_state.get("se_hist_sim_enabled", False)):
         sim_fills = list(
             getattr(data, "historical_sim_fills_long" if side == Side.Long else "historical_sim_fills_short", []) or []
         )
@@ -8242,7 +8242,7 @@ def _se_read_markdown(abs_path: str) -> str:
 def se_slider(label, *args, **kwargs):
     """Streamlit slider with automatic tooltip (`?`) based on parameter name.
 
-    This mirrors the old `gv_slider` helper so we can safely rename calls to `se_slider`.
+    This mirrors the old `se_slider` helper so we can safely rename calls to `se_slider`.
     """
     if "help" not in kwargs or kwargs.get("help") is None:
         kwargs["help"] = _param_help(str(label))
@@ -8253,34 +8253,34 @@ def show_visualizer():
     # Load the config
     data = prepare_config()
 
-    # Session-state migration: old key `gv_hist_symbol` -> new key `gv_hist_coin`
-    if "gv_hist_symbol" in st.session_state and "se_hist_coin" not in st.session_state:
-        st.session_state.se_hist_coin = st.session_state.gv_hist_symbol
+    # Session-state migration: old key `se_hist_symbol` -> new key `se_hist_coin`
+    if "se_hist_symbol" in st.session_state and "se_hist_coin" not in st.session_state:
+        st.session_state.se_hist_coin = st.session_state.se_hist_symbol
 
-    # Session-state migration: migrate legacy `gv_` keys to new `se_` keys (backcompat)
+    # Session-state migration: migrate legacy `se_` keys to new `se_` keys (backcompat)
     _gv_to_se_map = [
-        ("gv_hist_exchange", "se_hist_exchange"),
-        ("gv_hist_exchange_last", "se_hist_exchange_last"),
-        ("gv_hist_coin", "se_hist_coin"),
-        ("gv_viz_time", "se_viz_time"),
-        ("gv_pending_time_jump", "se_pending_time_jump"),
-        ("gv_movie_engine", "se_movie_engine"),
-        ("gv_docs_lang", "se_docs_lang"),
-        ("gv_docs_sel", "se_docs_sel"),
-        ("gv_raw_config_json", "se_raw_config_json"),
-        ("gv_raw_config_last_serialized", "se_raw_config_last_serialized"),
-        ("gv_raw_config_last_good", "se_raw_config_last_good"),
-        ("gv_raw_config_error", "se_raw_config_error"),
-        ("gv_raw_config_pending_restore", "se_raw_config_pending_restore"),
+        ("se_hist_exchange", "se_hist_exchange"),
+        ("se_hist_exchange_last", "se_hist_exchange_last"),
+        ("se_hist_coin", "se_hist_coin"),
+        ("se_viz_time", "se_viz_time"),
+        ("se_pending_time_jump", "se_pending_time_jump"),
+        ("se_movie_engine", "se_movie_engine"),
+        ("se_docs_lang", "se_docs_lang"),
+        ("se_docs_sel", "se_docs_sel"),
+        ("se_raw_config_json", "se_raw_config_json"),
+        ("se_raw_config_last_serialized", "se_raw_config_last_serialized"),
+        ("se_raw_config_last_good", "se_raw_config_last_good"),
+        ("se_raw_config_error", "se_raw_config_error"),
+        ("se_raw_config_pending_restore", "se_raw_config_pending_restore"),
     ]
     for old_k, new_k in _gv_to_se_map:
         if old_k in st.session_state and new_k not in st.session_state:
             st.session_state[new_k] = st.session_state[old_k]
 
-    # Generic migration: mirror any remaining `gv_` prefixed keys to `se_` equivalents so we don't break sessions.
+    # Generic migration: mirror any remaining `se_` prefixed keys to `se_` equivalents so we don't break sessions.
     for k in list(st.session_state.keys()):
         try:
-            if isinstance(k, str) and k.startswith("gv_"):
+            if isinstance(k, str) and k.startswith("se_"):
                 nk = "se_" + k[3:]
                 if nk not in st.session_state:
                     st.session_state[nk] = st.session_state[k]
@@ -8331,31 +8331,31 @@ def show_visualizer():
                     st.markdown(md)
 
             exchanges = get_available_exchanges_v7()
-            cfg_exc = str(st.session_state.get("gv_hist_config_exchange", "") or "")
+            cfg_exc = str(st.session_state.get("se_hist_config_exchange", "") or "")
             if cfg_exc and cfg_exc not in exchanges:
                 exchanges = [cfg_exc] + exchanges
 
             sel_exc = st.selectbox("Exchange", [""] + exchanges, key="se_hist_exchange")
 
             # When exchange changes, reset coin selection (or set to first config coin for that exchange).
-            last_exc = str(st.session_state.get("gv_hist_exchange_last", "") or "")
+            last_exc = str(st.session_state.get("se_hist_exchange_last", "") or "")
             if str(sel_exc or "") != last_exc:
                 st.session_state.se_hist_exchange_last = str(sel_exc or "")
-                cfg_coins = list(st.session_state.get("gv_hist_config_coins", []) or [])
+                cfg_coins = list(st.session_state.get("se_hist_config_coins", []) or [])
                 if cfg_exc and str(sel_exc or "") == cfg_exc and cfg_coins:
-                    st.session_state.gv_hist_coin = str(cfg_coins[0])
+                    st.session_state.se_hist_coin = str(cfg_coins[0])
                 else:
-                    st.session_state.gv_hist_coin = ""
+                    st.session_state.se_hist_coin = ""
 
             if sel_exc:
-                cfg_coins = list(st.session_state.get("gv_hist_config_coins", []) or [])
+                cfg_coins = list(st.session_state.get("se_hist_config_coins", []) or [])
                 if cfg_exc and str(sel_exc or "") == cfg_exc and cfg_coins:
                     coins = cfg_coins
                 else:
                     coins = get_available_coins_v7(sel_exc)
 
                 # Ensure the current selection is always in the option list to avoid Streamlit widget errors.
-                cur_coin = str(st.session_state.get("gv_hist_coin", "") or "")
+                cur_coin = str(st.session_state.get("se_hist_coin", "") or "")
                 if cur_coin and cur_coin not in coins:
                     coins = [cur_coin] + coins
 
@@ -8576,7 +8576,7 @@ def show_visualizer():
                         st.session_state.pop("se_pending_time_jump", None)
                 except Exception:
                     # If anything goes wrong, just drop the pending jump.
-                    st.session_state.pop("gv_pending_time_jump", None)
+                    st.session_state.pop("se_pending_time_jump", None)
 
                 if st.session_state.get("se_viz_time_for") != sel_key:
                     st.session_state.se_viz_time = min_day
@@ -8730,7 +8730,7 @@ def show_visualizer():
                 # Make the selected analysis time available to plotting/simulation.
                 data.analysis_time = combined
 
-                context_days = gv_slider(
+                context_days = se_slider(
                     "Chart Context (Days)", min_value=0.5, max_value=60.0, value=5.0, step=0.5
                 )
             else:
@@ -8770,15 +8770,15 @@ def show_visualizer():
             st.session_state.setdefault("se_ep_market_values", {})[_ep_suffix] = market_ep
 
             def _ep_set_override(field: str, widget_key: str, suffix: str) -> None:
-                overrides = st.session_state.setdefault("gv_ep_overrides", {})
+                overrides = st.session_state.setdefault("se_ep_overrides", {})
                 d = overrides.setdefault(suffix, {})
                 try:
                     d[field] = float(st.session_state.get(widget_key))
                 except Exception:
                     d[field] = st.session_state.get(widget_key)
-                st.session_state["gv_ep_overrides"] = overrides
+                st.session_state["se_ep_overrides"] = overrides
 
-            overrides_for_market = (st.session_state.get("gv_ep_overrides") or {}).get(_ep_suffix, {})
+            overrides_for_market = (st.session_state.get("se_ep_overrides") or {}).get(_ep_suffix, {})
 
             # Keep widget state aligned with the effective value.
             def _effective_ep(field: str, current: float) -> tuple[float, str]:
@@ -8816,9 +8816,9 @@ def show_visualizer():
                 disabled=not bool(overrides_for_market),
                 help="Clears manual overrides for this market and re-applies market-derived values (if available).",
             ):
-                overrides = st.session_state.setdefault("gv_ep_overrides", {})
+                overrides = st.session_state.setdefault("se_ep_overrides", {})
                 overrides.pop(_ep_suffix, None)
-                st.session_state["gv_ep_overrides"] = overrides
+                st.session_state["se_ep_overrides"] = overrides
                 for field, wkey in _ep_widget_keys.items():
                     mv = market_ep.get(field)
                     if mv is not None:
@@ -8837,8 +8837,8 @@ def show_visualizer():
                     _render_debug_json(
                         {
                             "suffix": _ep_suffix,
-                            "market_ep": (st.session_state.get("gv_ep_market_values") or {}).get(_ep_suffix, {}),
-                            "manual_overrides": (st.session_state.get("gv_ep_overrides") or {}).get(_ep_suffix, {}),
+                            "market_ep": (st.session_state.get("se_ep_market_values") or {}).get(_ep_suffix, {}),
+                            "manual_overrides": (st.session_state.get("se_ep_overrides") or {}).get(_ep_suffix, {}),
                         }
                     )
                     st.caption("Active ExchangeParams widget keys (to detect stale state)")
@@ -9062,7 +9062,7 @@ def show_visualizer():
                 st.radio(
                     "Simulation mode",
                     options=["Local (B)", "PB7 backtest engine (C)"],
-                    index=0 if str(st.session_state.get("gv_hist_sim_mode", "Local (B)")) == "Local (B)" else 1,
+                    index=0 if str(st.session_state.get("se_hist_sim_mode", "Local (B)")) == "Local (B)" else 1,
                     key="se_hist_sim_mode",
                     horizontal=True,
                     help=(
@@ -9076,7 +9076,7 @@ def show_visualizer():
                         "Sim max candles",
                         min_value=10,
                         max_value=20000,
-                        value=int(st.session_state.get("gv_hist_sim_max_candles", 2000)),
+                        value=int(st.session_state.get("se_hist_sim_max_candles", 2000)),
                         step=10,
                         key="se_hist_sim_max_candles",
                     )
@@ -9085,18 +9085,18 @@ def show_visualizer():
                         "Sim max entry fills",
                         min_value=1,
                         max_value=2000,
-                        value=int(st.session_state.get("gv_hist_sim_max_orders", 200)),
+                        value=int(st.session_state.get("se_hist_sim_max_orders", 200)),
                         step=1,
                         key="se_hist_sim_max_orders",
                     )
 
                 # Optional: manual starting state (only affects Local/B simulation).
-                if str(st.session_state.get("gv_hist_sim_mode", "Local (B)") or "Local (B)") == "Local (B)":
+                if str(st.session_state.get("se_hist_sim_mode", "Local (B)") or "Local (B)") == "Local (B)":
                     st.radio(
                         "Simulation start state",
                         options=["Flat (Compare)", "Manual (custom)"],
                         index=0
-                        if str(st.session_state.get("gv_hist_sim_start_state", "Flat (Compare)") or "Flat (Compare)")
+                        if str(st.session_state.get("se_hist_sim_start_state", "Flat (Compare)") or "Flat (Compare)")
                         == "Flat (Compare)"
                         else 1,
                         key="se_hist_sim_start_state",
@@ -9107,7 +9107,7 @@ def show_visualizer():
                         ),
                     )
 
-                    if str(st.session_state.get("gv_hist_sim_start_state", "Flat (Compare)") or "Flat (Compare)") == "Manual (custom)":
+                    if str(st.session_state.get("se_hist_sim_start_state", "Flat (Compare)") or "Flat (Compare)") == "Manual (custom)":
                         def _infer_px0_from_start_time() -> float:
                             # Prefer candle close at selected start time (minute), fallback to injected order_book mid.
                             px = 0.0
@@ -9150,16 +9150,16 @@ def show_visualizer():
                         # Auto-sync default prices when the user changes the start time.
                         # Only update if the user hasn't overridden (value equals previous default).
                         try:
-                            at_key = "gv_hist_sim_manual_ref"
+                            at_key = "se_hist_sim_manual_ref"
                             cur_at = pd.Timestamp(pd.to_datetime(getattr(data, "analysis_time", None))).floor("min")
                             ref = st.session_state.get(at_key) or {}
                             prev_at = ref.get("analysis_time")
                             prev_px0 = float(ref.get("px0") or 0.0)
 
-                            lp_key = "gv_hist_sim_start_long_price"
-                            sp_key = "gv_hist_sim_start_short_price"
-                            lp_over = bool(st.session_state.get("gv_hist_sim_start_long_price__overridden", False))
-                            sp_over = bool(st.session_state.get("gv_hist_sim_start_short_price__overridden", False))
+                            lp_key = "se_hist_sim_start_long_price"
+                            sp_key = "se_hist_sim_start_short_price"
+                            lp_over = bool(st.session_state.get("se_hist_sim_start_long_price__overridden", False))
+                            sp_over = bool(st.session_state.get("se_hist_sim_start_short_price__overridden", False))
 
                             if prev_at is None or pd.Timestamp(prev_at) != cur_at:
                                 lp_cur = float(st.session_state.get(lp_key, px0) or 0.0)
@@ -9185,7 +9185,7 @@ def show_visualizer():
                         st.number_input(
                             "Start balance (simulation)",
                             min_value=0.0,
-                            value=float(st.session_state.get("gv_hist_sim_start_balance", getattr(data.state_params, "balance", 0.0) or 0.0)),
+                            value=float(st.session_state.get("se_hist_sim_start_balance", getattr(data.state_params, "balance", 0.0) or 0.0)),
                             step=10.0,
                             key="se_hist_sim_start_balance",
                         )
@@ -9195,7 +9195,7 @@ def show_visualizer():
                             st.caption("LONG start position")
                             st.number_input(
                                 "size (>=0)",
-                                value=float(st.session_state.get("gv_hist_sim_start_long_size", 0.0) or 0.0),
+                                value=float(st.session_state.get("se_hist_sim_start_long_size", 0.0) or 0.0),
                                 step=0.001,
                                 format="%.6f",
                                 key="se_hist_sim_start_long_size",
@@ -9203,18 +9203,18 @@ def show_visualizer():
                             st.number_input(
                                 "price",
                                 min_value=0.0,
-                                value=float(st.session_state.get("gv_hist_sim_start_long_price", px0) or 0.0),
+                                value=float(st.session_state.get("se_hist_sim_start_long_price", px0) or 0.0),
                                 step=0.01,
                                 format="%.6f",
                                 key="se_hist_sim_start_long_price",
                                 on_change=_mark_manual_override,
-                                args=("gv_hist_sim_start_long_price__overridden",),
+                                args=("se_hist_sim_start_long_price__overridden",),
                             )
                         with c2:
                             st.caption("SHORT start position")
                             st.number_input(
                                 "size (<=0)",
-                                value=float(st.session_state.get("gv_hist_sim_start_short_size", 0.0) or 0.0),
+                                value=float(st.session_state.get("se_hist_sim_start_short_size", 0.0) or 0.0),
                                 step=0.001,
                                 format="%.6f",
                                 key="se_hist_sim_start_short_size",
@@ -9222,17 +9222,17 @@ def show_visualizer():
                             st.number_input(
                                 "price",
                                 min_value=0.0,
-                                value=float(st.session_state.get("gv_hist_sim_start_short_price", px0) or 0.0),
+                                value=float(st.session_state.get("se_hist_sim_start_short_price", px0) or 0.0),
                                 step=0.01,
                                 format="%.6f",
                                 key="se_hist_sim_start_short_price",
                                 on_change=_mark_manual_override,
-                                args=("gv_hist_sim_start_short_price__overridden",),
+                                args=("se_hist_sim_start_short_price__overridden",),
                             )
 
                 def _request_hist_sim_run() -> None:
-                    st.session_state["gv_hist_sim_run_requested"] = True
-                    st.session_state["gv_hist_sim_enabled"] = True
+                    st.session_state["se_hist_sim_run_requested"] = True
+                    st.session_state["se_hist_sim_enabled"] = True
 
                 st.button(
                     "Start Simulation (entry fills)",
@@ -9256,13 +9256,13 @@ def show_visualizer():
                     "Compare max candles (1m)",
                     min_value=100,
                     max_value=20000,
-                    value=int(st.session_state.get("gv_hist_compare_max_candles", 2000)),
+                    value=int(st.session_state.get("se_hist_compare_max_candles", 2000)),
                     step=100,
-                    key="gv_hist_compare_max_candles",
+                    key="se_hist_compare_max_candles",
                     help="Used for 'B vs C only' (and as fallback if no PB7 fills range is used).",
                 )
 
-                compare_mode = str(st.session_state.get("gv_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C")
+                compare_mode = str(st.session_state.get("se_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C")
                 show_pb7_inputs = compare_mode == "PB7 vs B vs C"
 
                 if show_pb7_inputs:
@@ -9274,7 +9274,7 @@ def show_visualizer():
                     )
                     st.checkbox(
                         "Use fills.csv time range for B/C",
-                        value=bool(st.session_state.get("gv_hist_compare_use_pb7_range", True)),
+                        value=bool(st.session_state.get("se_hist_compare_use_pb7_range", True)),
                         key="se_hist_compare_use_pb7_range",
                         help="Runs Mode B and Mode C across the same start/end timestamps found in fills.csv (with warmup).",
                     )
@@ -9282,13 +9282,13 @@ def show_visualizer():
                     st.caption("B vs C compares fills from the selected analysis time for the chosen number of 1m candles.")
                 st.checkbox(
                     "Mismatches only",
-                    value=bool(st.session_state.get("gv_hist_compare_mismatches_only", True)),
+                    value=bool(st.session_state.get("se_hist_compare_mismatches_only", True)),
                     key="se_hist_compare_mismatches_only",
                 )
 
                 def _request_hist_compare_run() -> None:
-                    st.session_state["gv_hist_compare_run_requested"] = True
-                    st.session_state["gv_hist_compare_enabled"] = True
+                    st.session_state["se_hist_compare_run_requested"] = True
+                    st.session_state["se_hist_compare_enabled"] = True
 
                 st.button(
                     "Start Compare (PB7/B/C)",
@@ -9488,10 +9488,10 @@ def show_visualizer():
                             0
                             if str(st.session_state.get("se_movie_engine", "Local (B) – full grids")) == "Local (B) – full grids"
                             else 1
-                            if str(st.session_state.get("gv_movie_engine", "Local (B) – full grids"))
+                            if str(st.session_state.get("se_movie_engine", "Local (B) – full grids"))
                             == "PB7 backtest engine (C) – upcoming fills"
                             else 2
-                            if str(st.session_state.get("gv_movie_engine", "Local (B) – full grids"))
+                            if str(st.session_state.get("se_movie_engine", "Local (B) – full grids"))
                             == "PB7 fills.csv (from backtest)"
                             else 0
                         ),
@@ -9621,7 +9621,7 @@ def show_visualizer():
                     st.session_state[sync_key] = {"frames": int(st.session_state.get(frames_key) or 0), "duration": str(st.session_state.get(duration_key) or ""), "step": str(st.session_state.get(step_key) or "")}
 
                     # Video export (MP4) – evaluate the button before rendering heavy UI.
-                    engine = str(st.session_state.get("gv_movie_engine"))
+                    engine = str(st.session_state.get("se_movie_engine"))
                     if engine in ("PB7 backtest engine (C) – upcoming fills", "PB7 fills.csv (from backtest)"):
                         fig = st.session_state.get("se_movie_fig_modec")
                         df_fills = st.session_state.get("se_movie_fills_modec")
@@ -10140,7 +10140,7 @@ def show_visualizer():
             l = data.normal_bot_params_long
             if panel_long == "Entry grid":
                 l.entry_initial_qty_pct = float(se_slider("entry_initial_qty_pct", 0.0, 1.0, float(l.entry_initial_qty_pct), 0.001, key="long_entry_initial_qty_pct"))
-                l.entry_initial_ema_dist = float(gv_slider("entry_initial_ema_dist", -1.0, 1.0, float(l.entry_initial_ema_dist), 0.001, key="long_entry_initial_ema_dist"))
+                l.entry_initial_ema_dist = float(se_slider("entry_initial_ema_dist", -1.0, 1.0, float(l.entry_initial_ema_dist), 0.001, key="long_entry_initial_ema_dist"))
                 
                 if l.entry_trailing_grid_ratio > 0 and l.entry_trailing_threshold_pct > 0 and l.entry_initial_ema_dist < l.entry_trailing_threshold_pct:
                     st.warning(
@@ -10158,7 +10158,7 @@ def show_visualizer():
                         "changing `entry_grid_spacing_volatility_weight` will not create grid spacing. Set `entry_grid_spacing_pct` > 0."
                     )
 
-                l.entry_grid_spacing_we_weight = float(gv_slider("entry_grid_spacing_we_weight", 0.0, 10.0, float(l.entry_grid_spacing_we_weight), 0.01, key="long_entry_grid_spacing_we_weight"))
+                l.entry_grid_spacing_we_weight = float(se_slider("entry_grid_spacing_we_weight", 0.0, 10.0, float(l.entry_grid_spacing_we_weight), 0.01, key="long_entry_grid_spacing_we_weight"))
                 
                 # --- CALC TEOR GRID COUNT ---
                 try:
@@ -10201,7 +10201,7 @@ def show_visualizer():
                 except Exception as e:
                     st.error(f"Error approximating grid count: {e}")
                 # -----------------------------
-                l.entry_grid_double_down_factor = float(gv_slider("entry_grid_double_down_factor", 0.01, 10.0, float(l.entry_grid_double_down_factor), 0.01, key="long_entry_grid_double_down_factor"))
+                l.entry_grid_double_down_factor = float(se_slider("entry_grid_double_down_factor", 0.01, 10.0, float(l.entry_grid_double_down_factor), 0.01, key="long_entry_grid_double_down_factor"))
                 try:
                     sp_dbg = data.state_params_long or data.state_params
                     vol_dbg = float(getattr(sp_dbg, "entry_volatility_logrange_ema_1h", 0.0) or 0.0)
@@ -10215,7 +10215,7 @@ def show_visualizer():
                 except Exception:
                     pass
                 l.entry_grid_spacing_volatility_weight = float(
-                    gv_slider(
+                    se_slider(
                         "entry_grid_spacing_volatility_weight",
                         0.0,
                         400.0,
@@ -10225,14 +10225,14 @@ def show_visualizer():
                     )
                 )
                 l.entry_volatility_ema_span_hours = float(se_slider("entry_volatility_ema_span_hours", 1.0, 4000.0, float(l.entry_volatility_ema_span_hours), 1.0, key="long_entry_volatility_ema_span_hours"))
-                l.ema_span_0 = float(gv_slider("ema_span_0", 1.0, 10000.0, float(l.ema_span_0), 1.0, key="long_ema_span_0"))
-                l.ema_span_1 = float(gv_slider("ema_span_1", 1.0, 10000.0, float(l.ema_span_1), 1.0, key="long_ema_span_1"))
+                l.ema_span_0 = float(se_slider("ema_span_0", 1.0, 10000.0, float(l.ema_span_0), 1.0, key="long_ema_span_0"))
+                l.ema_span_1 = float(se_slider("ema_span_1", 1.0, 10000.0, float(l.ema_span_1), 1.0, key="long_ema_span_1"))
             elif panel_long == "Entry trailing":
-                l.entry_trailing_threshold_pct = float(gv_slider("entry_trailing_threshold_pct", 0.0, 1.0, float(l.entry_trailing_threshold_pct), 0.001, key="long_entry_trailing_threshold_pct"))
-                l.entry_trailing_retracement_pct = float(gv_slider("entry_trailing_retracement_pct", 0.0, 1.0, float(l.entry_trailing_retracement_pct), 0.001, key="long_entry_trailing_retracement_pct"))
-                l.entry_trailing_grid_ratio = float(gv_slider("entry_trailing_grid_ratio", -1.0, 1.0, float(l.entry_trailing_grid_ratio), 0.01, key="long_entry_trailing_grid_ratio"))
+                l.entry_trailing_threshold_pct = float(se_slider("entry_trailing_threshold_pct", 0.0, 1.0, float(l.entry_trailing_threshold_pct), 0.001, key="long_entry_trailing_threshold_pct"))
+                l.entry_trailing_retracement_pct = float(se_slider("entry_trailing_retracement_pct", 0.0, 1.0, float(l.entry_trailing_retracement_pct), 0.001, key="long_entry_trailing_retracement_pct"))
+                l.entry_trailing_grid_ratio = float(se_slider("entry_trailing_grid_ratio", -1.0, 1.0, float(l.entry_trailing_grid_ratio), 0.01, key="long_entry_trailing_grid_ratio"))
                 l.entry_trailing_double_down_factor = float(
-                    gv_slider(
+                    se_slider(
                         "entry_trailing_double_down_factor",
                         0.0,
                         10.0,
@@ -10241,9 +10241,9 @@ def show_visualizer():
                         key="long_entry_trailing_double_down_factor"
                     )
                 )
-                l.entry_trailing_threshold_we_weight = float(gv_slider("entry_trailing_threshold_we_weight", 0.0, 20.0, float(l.entry_trailing_threshold_we_weight), 0.1, key="long_entry_trailing_threshold_we_weight"))
+                l.entry_trailing_threshold_we_weight = float(se_slider("entry_trailing_threshold_we_weight", 0.0, 20.0, float(l.entry_trailing_threshold_we_weight), 0.1, key="long_entry_trailing_threshold_we_weight"))
                 l.entry_trailing_threshold_volatility_weight = float(
-                    gv_slider(
+                    se_slider(
                         "entry_trailing_threshold_volatility_weight",
                         0.0,
                         400.0,
@@ -10252,9 +10252,9 @@ def show_visualizer():
                         key="long_entry_trailing_threshold_volatility_weight"
                     )
                 )
-                l.entry_trailing_retracement_we_weight = float(gv_slider("entry_trailing_retracement_we_weight", 0.0, 20.0, float(l.entry_trailing_retracement_we_weight), 0.1, key="long_entry_trailing_retracement_we_weight"))
+                l.entry_trailing_retracement_we_weight = float(se_slider("entry_trailing_retracement_we_weight", 0.0, 20.0, float(l.entry_trailing_retracement_we_weight), 0.1, key="long_entry_trailing_retracement_we_weight"))
                 l.entry_trailing_retracement_volatility_weight = float(
-                    gv_slider(
+                    se_slider(
                         "entry_trailing_retracement_volatility_weight",
                         0.0,
                         400.0,
@@ -10264,31 +10264,31 @@ def show_visualizer():
                     )
                 )
             elif panel_long == "Close grid":
-                l.close_grid_markup_end = float(gv_slider("close_grid_markup_end", 0.0, 1.0, float(l.close_grid_markup_end), 0.001, key="long_close_grid_markup_end"))
-                l.close_grid_markup_start = float(gv_slider("close_grid_markup_start", 0.0, 1.0, float(l.close_grid_markup_start), 0.001, key="long_close_grid_markup_start"))
-                l.close_grid_qty_pct = float(gv_slider("close_grid_qty_pct", 0.0, 1.0, float(l.close_grid_qty_pct), 0.01, key="long_close_grid_qty_pct"))
-                l.close_trailing_grid_ratio = float(gv_slider("close_trailing_grid_ratio", -1.0, 1.0, float(l.close_trailing_grid_ratio), 0.01, key="long_close_trailing_grid_ratio"))
+                l.close_grid_markup_end = float(se_slider("close_grid_markup_end", 0.0, 1.0, float(l.close_grid_markup_end), 0.001, key="long_close_grid_markup_end"))
+                l.close_grid_markup_start = float(se_slider("close_grid_markup_start", 0.0, 1.0, float(l.close_grid_markup_start), 0.001, key="long_close_grid_markup_start"))
+                l.close_grid_qty_pct = float(se_slider("close_grid_qty_pct", 0.0, 1.0, float(l.close_grid_qty_pct), 0.01, key="long_close_grid_qty_pct"))
+                l.close_trailing_grid_ratio = float(se_slider("close_trailing_grid_ratio", -1.0, 1.0, float(l.close_trailing_grid_ratio), 0.01, key="long_close_trailing_grid_ratio"))
             elif panel_long == "Close trailing":
-                l.close_trailing_threshold_pct = float(gv_slider("close_trailing_threshold_pct", 0.0, 1.0, float(l.close_trailing_threshold_pct), 0.001, key="long_close_trailing_threshold_pct"))
-                l.close_trailing_retracement_pct = float(gv_slider("close_trailing_retracement_pct", 0.0, 1.0, float(l.close_trailing_retracement_pct), 0.001, key="long_close_trailing_retracement_pct"))
-                l.close_trailing_qty_pct = float(gv_slider("close_trailing_qty_pct", 0.0, 1.0, float(l.close_trailing_qty_pct), 0.01, key="long_close_trailing_qty_pct"))
-                l.close_trailing_grid_ratio = float(gv_slider("close_trailing_grid_ratio", -1.0, 1.0, float(l.close_trailing_grid_ratio), 0.01, key="long_close_trailing_grid_ratio"))
+                l.close_trailing_threshold_pct = float(se_slider("close_trailing_threshold_pct", 0.0, 1.0, float(l.close_trailing_threshold_pct), 0.001, key="long_close_trailing_threshold_pct"))
+                l.close_trailing_retracement_pct = float(se_slider("close_trailing_retracement_pct", 0.0, 1.0, float(l.close_trailing_retracement_pct), 0.001, key="long_close_trailing_retracement_pct"))
+                l.close_trailing_qty_pct = float(se_slider("close_trailing_qty_pct", 0.0, 1.0, float(l.close_trailing_qty_pct), 0.01, key="long_close_trailing_qty_pct"))
+                l.close_trailing_grid_ratio = float(se_slider("close_trailing_grid_ratio", -1.0, 1.0, float(l.close_trailing_grid_ratio), 0.01, key="long_close_trailing_grid_ratio"))
             elif panel_long == "Filters/Unstuck":
-                l.filter_volatility_ema_span = float(gv_slider("filter_volatility_ema_span", 1.0, 4000.0, float(l.filter_volatility_ema_span), 1.0, key="long_filter_volatility_ema_span"))
-                l.filter_volatility_drop_pct = float(gv_slider("filter_volatility_drop_pct", 0.0, 1.0, float(l.filter_volatility_drop_pct), 0.001, key="long_filter_volatility_drop_pct"))
-                l.filter_volume_ema_span = float(gv_slider("filter_volume_ema_span", 1.0, 10000.0, float(l.filter_volume_ema_span), 1.0, key="long_filter_volume_ema_span"))
-                l.filter_volume_drop_pct = float(gv_slider("filter_volume_drop_pct", 0.0, 1.0, float(l.filter_volume_drop_pct), 0.001, key="long_filter_volume_drop_pct"))
+                l.filter_volatility_ema_span = float(se_slider("filter_volatility_ema_span", 1.0, 4000.0, float(l.filter_volatility_ema_span), 1.0, key="long_filter_volatility_ema_span"))
+                l.filter_volatility_drop_pct = float(se_slider("filter_volatility_drop_pct", 0.0, 1.0, float(l.filter_volatility_drop_pct), 0.001, key="long_filter_volatility_drop_pct"))
+                l.filter_volume_ema_span = float(se_slider("filter_volume_ema_span", 1.0, 10000.0, float(l.filter_volume_ema_span), 1.0, key="long_filter_volume_ema_span"))
+                l.filter_volume_drop_pct = float(se_slider("filter_volume_drop_pct", 0.0, 1.0, float(l.filter_volume_drop_pct), 0.001, key="long_filter_volume_drop_pct"))
                 st.divider()
-                l.unstuck_close_pct = float(gv_slider("unstuck_close_pct", -0.1, 0.5, float(l.unstuck_close_pct), 0.001, key="long_unstuck_close_pct"))
-                l.unstuck_ema_dist = float(gv_slider("unstuck_ema_dist", -0.5, 0.5, float(l.unstuck_ema_dist), 0.001, key="long_unstuck_ema_dist"))
-                l.unstuck_loss_allowance_pct = float(gv_slider("unstuck_loss_allowance_pct", 0.0, 0.5, float(l.unstuck_loss_allowance_pct), 0.001, key="long_unstuck_loss_allowance_pct"))
-                l.unstuck_threshold = float(gv_slider("unstuck_threshold", 0.0, 1.0, float(l.unstuck_threshold), 0.01, key="long_unstuck_threshold"))
+                l.unstuck_close_pct = float(se_slider("unstuck_close_pct", -0.1, 0.5, float(l.unstuck_close_pct), 0.001, key="long_unstuck_close_pct"))
+                l.unstuck_ema_dist = float(se_slider("unstuck_ema_dist", -0.5, 0.5, float(l.unstuck_ema_dist), 0.001, key="long_unstuck_ema_dist"))
+                l.unstuck_loss_allowance_pct = float(se_slider("unstuck_loss_allowance_pct", 0.0, 0.5, float(l.unstuck_loss_allowance_pct), 0.001, key="long_unstuck_loss_allowance_pct"))
+                l.unstuck_threshold = float(se_slider("unstuck_threshold", 0.0, 1.0, float(l.unstuck_threshold), 0.01, key="long_unstuck_threshold"))
             else:
-                l.total_wallet_exposure_limit = float(gv_slider("total_wallet_exposure_limit", 0.0, 10.0, float(l.total_wallet_exposure_limit), 0.05, key="long_total_wallet_exposure_limit"))
-                l.n_positions = float(gv_slider("n_positions", 1.0, 50.0, float(l.n_positions), 1.0, key="long_n_positions"))
-                l.risk_we_excess_allowance_pct = float(gv_slider("risk_we_excess_allowance_pct", 0.0, 1.0, float(l.risk_we_excess_allowance_pct), 0.001, key="long_risk_we_excess_allowance_pct"))
-                l.risk_wel_enforcer_threshold = float(gv_slider("risk_wel_enforcer_threshold", 0.0, 10.0, float(l.risk_wel_enforcer_threshold), 0.01, key="long_risk_wel_enforcer_threshold"))
-                l.risk_twel_enforcer_threshold = float(gv_slider("risk_twel_enforcer_threshold", 0.0, 10.0, float(l.risk_twel_enforcer_threshold), 0.01, key="long_risk_twel_enforcer_threshold"))
+                l.total_wallet_exposure_limit = float(se_slider("total_wallet_exposure_limit", 0.0, 10.0, float(l.total_wallet_exposure_limit), 0.05, key="long_total_wallet_exposure_limit"))
+                l.n_positions = float(se_slider("n_positions", 1.0, 50.0, float(l.n_positions), 1.0, key="long_n_positions"))
+                l.risk_we_excess_allowance_pct = float(se_slider("risk_we_excess_allowance_pct", 0.0, 1.0, float(l.risk_we_excess_allowance_pct), 0.001, key="long_risk_we_excess_allowance_pct"))
+                l.risk_wel_enforcer_threshold = float(se_slider("risk_wel_enforcer_threshold", 0.0, 10.0, float(l.risk_wel_enforcer_threshold), 0.01, key="long_risk_wel_enforcer_threshold"))
+                l.risk_twel_enforcer_threshold = float(se_slider("risk_twel_enforcer_threshold", 0.0, 10.0, float(l.risk_twel_enforcer_threshold), 0.01, key="long_risk_twel_enforcer_threshold"))
 
     
     with col3:
@@ -10297,13 +10297,13 @@ def show_visualizer():
             panel_short = st.segmented_control(
                 "Segment",
                 options=["Entry grid", "Entry trailing", "Close grid", "Close trailing", "Risk/State", "Filters/Unstuck"],
-                default=str(st.session_state.get("gv_tuning_segment_short", "Entry grid")),
+                default=str(st.session_state.get("se_tuning_segment_short", "Entry grid")),
                 key="se_tuning_segment_short",
             )
             s = data.normal_bot_params_short
             if panel_short == "Entry grid":
                 s.entry_initial_qty_pct = float(se_slider("entry_initial_qty_pct", 0.0, 1.0, float(s.entry_initial_qty_pct), 0.001, key="short_entry_initial_qty_pct"))
-                s.entry_initial_ema_dist = float(gv_slider("entry_initial_ema_dist", -1.0, 1.0, float(s.entry_initial_ema_dist), 0.001, key="short_entry_initial_ema_dist"))
+                s.entry_initial_ema_dist = float(se_slider("entry_initial_ema_dist", -1.0, 1.0, float(s.entry_initial_ema_dist), 0.001, key="short_entry_initial_ema_dist"))
                 
                 if s.entry_trailing_grid_ratio > 0 and s.entry_trailing_threshold_pct > 0 and s.entry_initial_ema_dist < s.entry_trailing_threshold_pct:
                     st.warning(
@@ -10321,7 +10321,7 @@ def show_visualizer():
                         "changing `entry_grid_spacing_volatility_weight` will not create grid spacing. Set `entry_grid_spacing_pct` > 0."
                     )
 
-                s.entry_grid_spacing_we_weight = float(gv_slider("entry_grid_spacing_we_weight", 0.0, 10.0, float(s.entry_grid_spacing_we_weight), 0.01, key="short_entry_grid_spacing_we_weight"))
+                s.entry_grid_spacing_we_weight = float(se_slider("entry_grid_spacing_we_weight", 0.0, 10.0, float(s.entry_grid_spacing_we_weight), 0.01, key="short_entry_grid_spacing_we_weight"))
 
                 # --- CALC TEOR GRID COUNT ---
                 try:
@@ -10359,7 +10359,7 @@ def show_visualizer():
                 except Exception as e:
                     pass
                 # -----------------------------
-                s.entry_grid_double_down_factor = float(gv_slider("entry_grid_double_down_factor", 0.01, 10.0, float(s.entry_grid_double_down_factor), 0.01, key="short_entry_grid_double_down_factor"))
+                s.entry_grid_double_down_factor = float(se_slider("entry_grid_double_down_factor", 0.01, 10.0, float(s.entry_grid_double_down_factor), 0.01, key="short_entry_grid_double_down_factor"))
                 try:
                     sp_dbg = data.state_params_short or data.state_params
                     vol_dbg = float(getattr(sp_dbg, "entry_volatility_logrange_ema_1h", 0.0) or 0.0)
@@ -10373,7 +10373,7 @@ def show_visualizer():
                 except Exception:
                     pass
                 s.entry_grid_spacing_volatility_weight = float(
-                    gv_slider(
+                    se_slider(
                         "entry_grid_spacing_volatility_weight",
                         0.0,
                         400.0,
@@ -10382,15 +10382,15 @@ def show_visualizer():
                         key="short_entry_grid_spacing_volatility_weight"
                     )
                 )
-                s.entry_volatility_ema_span_hours = float(gv_slider("entry_volatility_ema_span_hours", 1.0, 4000.0, float(s.entry_volatility_ema_span_hours), 1.0, key="short_entry_volatility_ema_span_hours"))
-                s.ema_span_0 = float(gv_slider("ema_span_0", 1.0, 10000.0, float(s.ema_span_0), 1.0, key="short_ema_span_0"))
-                s.ema_span_1 = float(gv_slider("ema_span_1", 1.0, 10000.0, float(s.ema_span_1), 1.0, key="short_ema_span_1"))
+                s.entry_volatility_ema_span_hours = float(se_slider("entry_volatility_ema_span_hours", 1.0, 4000.0, float(s.entry_volatility_ema_span_hours), 1.0, key="short_entry_volatility_ema_span_hours"))
+                s.ema_span_0 = float(se_slider("ema_span_0", 1.0, 10000.0, float(s.ema_span_0), 1.0, key="short_ema_span_0"))
+                s.ema_span_1 = float(se_slider("ema_span_1", 1.0, 10000.0, float(s.ema_span_1), 1.0, key="short_ema_span_1"))
             elif panel_short == "Entry trailing":
-                s.entry_trailing_threshold_pct = float(gv_slider("entry_trailing_threshold_pct", 0.0, 1.0, float(s.entry_trailing_threshold_pct), 0.001, key="short_entry_trailing_threshold_pct"))
-                s.entry_trailing_retracement_pct = float(gv_slider("entry_trailing_retracement_pct", 0.0, 1.0, float(s.entry_trailing_retracement_pct), 0.001, key="short_entry_trailing_retracement_pct"))
-                s.entry_trailing_grid_ratio = float(gv_slider("entry_trailing_grid_ratio", -1.0, 1.0, float(s.entry_trailing_grid_ratio), 0.01, key="short_entry_trailing_grid_ratio"))
+                s.entry_trailing_threshold_pct = float(se_slider("entry_trailing_threshold_pct", 0.0, 1.0, float(s.entry_trailing_threshold_pct), 0.001, key="short_entry_trailing_threshold_pct"))
+                s.entry_trailing_retracement_pct = float(se_slider("entry_trailing_retracement_pct", 0.0, 1.0, float(s.entry_trailing_retracement_pct), 0.001, key="short_entry_trailing_retracement_pct"))
+                s.entry_trailing_grid_ratio = float(se_slider("entry_trailing_grid_ratio", -1.0, 1.0, float(s.entry_trailing_grid_ratio), 0.01, key="short_entry_trailing_grid_ratio"))
                 s.entry_trailing_double_down_factor = float(
-                    gv_slider(
+                    se_slider(
                         "entry_trailing_double_down_factor",
                         0.0,
                         10.0,
@@ -10399,9 +10399,9 @@ def show_visualizer():
                         key="short_entry_trailing_double_down_factor"
                     )
                 )
-                s.entry_trailing_threshold_we_weight = float(gv_slider("entry_trailing_threshold_we_weight", 0.0, 20.0, float(s.entry_trailing_threshold_we_weight), 0.1, key="short_entry_trailing_threshold_we_weight"))
+                s.entry_trailing_threshold_we_weight = float(se_slider("entry_trailing_threshold_we_weight", 0.0, 20.0, float(s.entry_trailing_threshold_we_weight), 0.1, key="short_entry_trailing_threshold_we_weight"))
                 s.entry_trailing_threshold_volatility_weight = float(
-                    gv_slider(
+                    se_slider(
                         "entry_trailing_threshold_volatility_weight",
                         0.0,
                         400.0,
@@ -10410,9 +10410,9 @@ def show_visualizer():
                         key="short_entry_trailing_threshold_volatility_weight"
                     )
                 )
-                s.entry_trailing_retracement_we_weight = float(gv_slider("entry_trailing_retracement_we_weight", 0.0, 20.0, float(s.entry_trailing_retracement_we_weight), 0.1, key="short_entry_trailing_retracement_we_weight"))
+                s.entry_trailing_retracement_we_weight = float(se_slider("entry_trailing_retracement_we_weight", 0.0, 20.0, float(s.entry_trailing_retracement_we_weight), 0.1, key="short_entry_trailing_retracement_we_weight"))
                 s.entry_trailing_retracement_volatility_weight = float(
-                    gv_slider(
+                    se_slider(
                         "entry_trailing_retracement_volatility_weight",
                         0.0,
                         400.0,
@@ -10422,31 +10422,31 @@ def show_visualizer():
                     )
                 )
             elif panel_short == "Close grid":
-                s.close_grid_markup_end = float(gv_slider("close_grid_markup_end", 0.0, 1.0, float(s.close_grid_markup_end), 0.001, key="short_close_grid_markup_end"))
-                s.close_grid_markup_start = float(gv_slider("close_grid_markup_start", 0.0, 1.0, float(s.close_grid_markup_start), 0.001, key="short_close_grid_markup_start"))
-                s.close_grid_qty_pct = float(gv_slider("close_grid_qty_pct", 0.0, 1.0, float(s.close_grid_qty_pct), 0.01, key="short_close_grid_qty_pct"))
-                s.close_trailing_grid_ratio = float(gv_slider("close_trailing_grid_ratio", -1.0, 1.0, float(s.close_trailing_grid_ratio), 0.01, key="short_close_trailing_grid_ratio"))
+                s.close_grid_markup_end = float(se_slider("close_grid_markup_end", 0.0, 1.0, float(s.close_grid_markup_end), 0.001, key="short_close_grid_markup_end"))
+                s.close_grid_markup_start = float(se_slider("close_grid_markup_start", 0.0, 1.0, float(s.close_grid_markup_start), 0.001, key="short_close_grid_markup_start"))
+                s.close_grid_qty_pct = float(se_slider("close_grid_qty_pct", 0.0, 1.0, float(s.close_grid_qty_pct), 0.01, key="short_close_grid_qty_pct"))
+                s.close_trailing_grid_ratio = float(se_slider("close_trailing_grid_ratio", -1.0, 1.0, float(s.close_trailing_grid_ratio), 0.01, key="short_close_trailing_grid_ratio"))
             elif panel_short == "Close trailing":
-                s.close_trailing_threshold_pct = float(gv_slider("close_trailing_threshold_pct", 0.0, 1.0, float(s.close_trailing_threshold_pct), 0.001, key="short_close_trailing_threshold_pct"))
-                s.close_trailing_retracement_pct = float(gv_slider("close_trailing_retracement_pct", 0.0, 1.0, float(s.close_trailing_retracement_pct), 0.001, key="short_close_trailing_retracement_pct"))
-                s.close_trailing_qty_pct = float(gv_slider("close_trailing_qty_pct", 0.0, 1.0, float(s.close_trailing_qty_pct), 0.01, key="short_close_trailing_qty_pct"))
-                s.close_trailing_grid_ratio = float(gv_slider("close_trailing_grid_ratio", -1.0, 1.0, float(s.close_trailing_grid_ratio), 0.01, key="short_close_trailing_grid_ratio"))
+                s.close_trailing_threshold_pct = float(se_slider("close_trailing_threshold_pct", 0.0, 1.0, float(s.close_trailing_threshold_pct), 0.001, key="short_close_trailing_threshold_pct"))
+                s.close_trailing_retracement_pct = float(se_slider("close_trailing_retracement_pct", 0.0, 1.0, float(s.close_trailing_retracement_pct), 0.001, key="short_close_trailing_retracement_pct"))
+                s.close_trailing_qty_pct = float(se_slider("close_trailing_qty_pct", 0.0, 1.0, float(s.close_trailing_qty_pct), 0.01, key="short_close_trailing_qty_pct"))
+                s.close_trailing_grid_ratio = float(se_slider("close_trailing_grid_ratio", -1.0, 1.0, float(s.close_trailing_grid_ratio), 0.01, key="short_close_trailing_grid_ratio"))
             elif panel_short == "Filters/Unstuck":
-                s.filter_volatility_ema_span = float(gv_slider("filter_volatility_ema_span", 1.0, 4000.0, float(s.filter_volatility_ema_span), 1.0, key="short_filter_volatility_ema_span"))
-                s.filter_volatility_drop_pct = float(gv_slider("filter_volatility_drop_pct", 0.0, 1.0, float(s.filter_volatility_drop_pct), 0.001, key="short_filter_volatility_drop_pct"))
-                s.filter_volume_ema_span = float(gv_slider("filter_volume_ema_span", 1.0, 10000.0, float(s.filter_volume_ema_span), 1.0, key="short_filter_volume_ema_span"))
-                s.filter_volume_drop_pct = float(gv_slider("filter_volume_drop_pct", 0.0, 1.0, float(s.filter_volume_drop_pct), 0.001, key="short_filter_volume_drop_pct"))
+                s.filter_volatility_ema_span = float(se_slider("filter_volatility_ema_span", 1.0, 4000.0, float(s.filter_volatility_ema_span), 1.0, key="short_filter_volatility_ema_span"))
+                s.filter_volatility_drop_pct = float(se_slider("filter_volatility_drop_pct", 0.0, 1.0, float(s.filter_volatility_drop_pct), 0.001, key="short_filter_volatility_drop_pct"))
+                s.filter_volume_ema_span = float(se_slider("filter_volume_ema_span", 1.0, 10000.0, float(s.filter_volume_ema_span), 1.0, key="short_filter_volume_ema_span"))
+                s.filter_volume_drop_pct = float(se_slider("filter_volume_drop_pct", 0.0, 1.0, float(s.filter_volume_drop_pct), 0.001, key="short_filter_volume_drop_pct"))
                 st.divider()
-                s.unstuck_close_pct = float(gv_slider("unstuck_close_pct", -0.1, 0.5, float(s.unstuck_close_pct), 0.001, key="short_unstuck_close_pct"))
-                s.unstuck_ema_dist = float(gv_slider("unstuck_ema_dist", -0.5, 0.5, float(s.unstuck_ema_dist), 0.001, key="short_unstuck_ema_dist"))
-                s.unstuck_loss_allowance_pct = float(gv_slider("unstuck_loss_allowance_pct", 0.0, 0.5, float(s.unstuck_loss_allowance_pct), 0.001, key="short_unstuck_loss_allowance_pct"))
-                s.unstuck_threshold = float(gv_slider("unstuck_threshold", 0.0, 1.0, float(s.unstuck_threshold), 0.01, key="short_unstuck_threshold"))
+                s.unstuck_close_pct = float(se_slider("unstuck_close_pct", -0.1, 0.5, float(s.unstuck_close_pct), 0.001, key="short_unstuck_close_pct"))
+                s.unstuck_ema_dist = float(se_slider("unstuck_ema_dist", -0.5, 0.5, float(s.unstuck_ema_dist), 0.001, key="short_unstuck_ema_dist"))
+                s.unstuck_loss_allowance_pct = float(se_slider("unstuck_loss_allowance_pct", 0.0, 0.5, float(s.unstuck_loss_allowance_pct), 0.001, key="short_unstuck_loss_allowance_pct"))
+                s.unstuck_threshold = float(se_slider("unstuck_threshold", 0.0, 1.0, float(s.unstuck_threshold), 0.01, key="short_unstuck_threshold"))
             else:
-                s.total_wallet_exposure_limit = float(gv_slider("total_wallet_exposure_limit", 0.0, 10.0, float(s.total_wallet_exposure_limit), 0.05, key="short_total_wallet_exposure_limit"))
-                s.n_positions = float(gv_slider("n_positions", 1.0, 50.0, float(s.n_positions), 1.0, key="short_n_positions"))
-                s.risk_we_excess_allowance_pct = float(gv_slider("risk_we_excess_allowance_pct", 0.0, 1.0, float(s.risk_we_excess_allowance_pct), 0.001, key="short_risk_we_excess_allowance_pct"))
-                s.risk_wel_enforcer_threshold = float(gv_slider("risk_wel_enforcer_threshold", 0.0, 10.0, float(s.risk_wel_enforcer_threshold), 0.01, key="short_risk_wel_enforcer_threshold"))
-                s.risk_twel_enforcer_threshold = float(gv_slider("risk_twel_enforcer_threshold", 0.0, 10.0, float(s.risk_twel_enforcer_threshold), 0.01, key="short_risk_twel_enforcer_threshold"))
+                s.total_wallet_exposure_limit = float(se_slider("total_wallet_exposure_limit", 0.0, 10.0, float(s.total_wallet_exposure_limit), 0.05, key="short_total_wallet_exposure_limit"))
+                s.n_positions = float(se_slider("n_positions", 1.0, 50.0, float(s.n_positions), 1.0, key="short_n_positions"))
+                s.risk_we_excess_allowance_pct = float(se_slider("risk_we_excess_allowance_pct", 0.0, 1.0, float(s.risk_we_excess_allowance_pct), 0.001, key="short_risk_we_excess_allowance_pct"))
+                s.risk_wel_enforcer_threshold = float(se_slider("risk_wel_enforcer_threshold", 0.0, 10.0, float(s.risk_wel_enforcer_threshold), 0.01, key="short_risk_wel_enforcer_threshold"))
+                s.risk_twel_enforcer_threshold = float(se_slider("risk_twel_enforcer_threshold", 0.0, 10.0, float(s.risk_twel_enforcer_threshold), 0.01, key="short_risk_twel_enforcer_threshold"))
 
     # Sync derived params (gridonly clones, modes, and positions that depend on TWE)
     # NOTE: This must run after all Streamlit sliders have been applied.
@@ -10469,18 +10469,18 @@ def show_visualizer():
 
     # Optional: historical candle-walk simulation of entry fills.
     # Uses `data.historical_candles` (slice from selected time) and Rust next-entry per candle.
-    sim_enabled = bool(st.session_state.get("gv_hist_sim_enabled", False))
-    sim_mode = str(st.session_state.get("gv_hist_sim_mode", "Local (B)") or "Local (B)")
-    sim_run_requested = bool(st.session_state.get("gv_hist_sim_run_requested", False))
+    sim_enabled = bool(st.session_state.get("se_hist_sim_enabled", False))
+    sim_mode = str(st.session_state.get("se_hist_sim_mode", "Local (B)") or "Local (B)")
+    sim_run_requested = bool(st.session_state.get("se_hist_sim_run_requested", False))
 
     if sim_run_requested:
-        st.session_state["gv_hist_sim_run_requested"] = False
-        sim_max_candles = int(st.session_state.get("gv_hist_sim_max_candles", 2000) or 2000)
-        sim_max_orders = int(st.session_state.get("gv_hist_sim_max_orders", 200) or 200)
+        st.session_state["se_hist_sim_run_requested"] = False
+        sim_max_candles = int(st.session_state.get("se_hist_sim_max_candles", 2000) or 2000)
+        sim_max_orders = int(st.session_state.get("se_hist_sim_max_orders", 200) or 200)
 
         if sim_mode == "PB7 backtest engine (C)":
-            sel_exc = str(st.session_state.get("gv_hist_exchange", "") or "")
-            sel_coin = str(st.session_state.get("gv_hist_coin", "") or "")
+            sel_exc = str(st.session_state.get("se_hist_exchange", "") or "")
+            sel_coin = str(st.session_state.get("se_hist_coin", "") or "")
             if sel_exc and sel_coin and data.analysis_time is not None:
                 hist_df_full = load_historical_ohlcv_v7(sel_exc, sel_coin)
                 if not hist_df_full.empty:
@@ -10509,8 +10509,8 @@ def show_visualizer():
             data.historical_sim_fills_short = events_short if short_active else []
         else:
             # Local (B): visualizer candle-walk simulation.
-            sel_exc = str(st.session_state.get("gv_hist_exchange", "") or "")
-            sel_coin = str(st.session_state.get("gv_hist_coin", "") or "")
+            sel_exc = str(st.session_state.get("se_hist_exchange", "") or "")
+            sel_coin = str(st.session_state.get("se_hist_coin", "") or "")
             trade_start_time = pd.to_datetime(data.analysis_time) if data.analysis_time is not None else None
 
             sim_df = pd.DataFrame()
@@ -10548,7 +10548,7 @@ def show_visualizer():
                     maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
 
                 # Start state selection (UI lives in Simulation expander).
-                start_state_mode = str(st.session_state.get("gv_hist_sim_start_state", "Flat (Compare)") or "Flat (Compare)")
+                start_state_mode = str(st.session_state.get("se_hist_sim_start_state", "Flat (Compare)") or "Flat (Compare)")
                 start_balance = float(getattr(data.state_params, "balance", 0.0) or 0.0)
 
                 try:
@@ -10561,18 +10561,18 @@ def show_visualizer():
                 start_pos_long = Position(size=0.0, price=0.0)
                 start_pos_short = Position(size=0.0, price=0.0)
                 if start_state_mode == "Manual (custom)":
-                    start_balance = float(st.session_state.get("gv_hist_sim_start_balance", start_balance) or 0.0)
+                    start_balance = float(st.session_state.get("se_hist_sim_start_balance", start_balance) or 0.0)
 
-                    l_size = float(st.session_state.get("gv_hist_sim_start_long_size", 0.0) or 0.0)
+                    l_size = float(st.session_state.get("se_hist_sim_start_long_size", 0.0) or 0.0)
                     l_size = max(0.0, l_size)
-                    l_price = float(st.session_state.get("gv_hist_sim_start_long_price", px0) or 0.0)
+                    l_price = float(st.session_state.get("se_hist_sim_start_long_price", px0) or 0.0)
                     if l_size != 0.0 and l_price <= 0.0 and px0 > 0.0:
                         l_price = px0
                     start_pos_long = Position(size=float(l_size), price=float(l_price))
 
-                    s_size = float(st.session_state.get("gv_hist_sim_start_short_size", 0.0) or 0.0)
+                    s_size = float(st.session_state.get("se_hist_sim_start_short_size", 0.0) or 0.0)
                     s_size = -abs(s_size) if s_size != 0.0 else 0.0
-                    s_price = float(st.session_state.get("gv_hist_sim_start_short_price", px0) or 0.0)
+                    s_price = float(st.session_state.get("se_hist_sim_start_short_price", px0) or 0.0)
                     if s_size != 0.0 and s_price <= 0.0 and px0 > 0.0:
                         s_price = px0
                     start_pos_short = Position(size=float(s_size), price=float(s_price))
@@ -10677,11 +10677,11 @@ def show_visualizer():
         data.historical_sim_fills_short = []
 
     # PB7 vs B vs C compare: independent of simulation/movie; runs when Start Compare is pressed.
-    if bool(st.session_state.get("gv_hist_compare_run_requested", False)):
-        st.session_state["gv_hist_compare_run_requested"] = False
-        st.session_state["gv_hist_compare_enabled"] = True
-        sel_exc = str(st.session_state.get("gv_hist_exchange", "") or "")
-        sel_coin = str(st.session_state.get("gv_hist_coin", "") or "")
+    if bool(st.session_state.get("se_hist_compare_run_requested", False)):
+        st.session_state["se_hist_compare_run_requested"] = False
+        st.session_state["se_hist_compare_enabled"] = True
+        sel_exc = str(st.session_state.get("se_hist_exchange", "") or "")
+        sel_coin = str(st.session_state.get("se_hist_coin", "") or "")
         trade_start_time = pd.to_datetime(data.analysis_time) if data.analysis_time is not None else None
         # Parity: Mode C floors analysis_time to minute internally; ensure Mode B compare uses the same.
         if trade_start_time is not None:
@@ -10690,11 +10690,11 @@ def show_visualizer():
             except Exception:
                 pass
 
-        compare_mode = str(st.session_state.get("gv_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C")
-        pb7_dir = str(st.session_state.get("gv_hist_compare_pb7_dir", "") or "")
-        use_pb7_range = bool(st.session_state.get("gv_hist_compare_use_pb7_range", True))
+        compare_mode = str(st.session_state.get("se_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C")
+        pb7_dir = str(st.session_state.get("se_hist_compare_pb7_dir", "") or "")
+        use_pb7_range = bool(st.session_state.get("se_hist_compare_use_pb7_range", True))
 
-        compare_max_candles = int(st.session_state.get("gv_hist_compare_max_candles", 2000) or 2000)
+        compare_max_candles = int(st.session_state.get("se_hist_compare_max_candles", 2000) or 2000)
         compare_max_orders = 20000
 
         pb7_long: list[dict] = []
@@ -10712,9 +10712,9 @@ def show_visualizer():
                     backtest_dir=pb7_dir,
                     max_orders=int(compare_max_orders),
                 )
-                st.session_state["gv_compare_meta"] = meta
+                st.session_state["se_compare_meta"] = meta
             except Exception as e:
-                st.session_state["gv_compare_meta"] = {"error": str(e)}
+                st.session_state["se_compare_meta"] = {"error": str(e)}
         else:
             # In B vs C mode, PB7 is intentionally ignored.
             if compare_mode == "PB7 vs B vs C":
@@ -10759,7 +10759,7 @@ def show_visualizer():
                     try:
                         if bool(gaps.get("insufficient_coverage")) and not bool(gaps.get("has_gaps")):
                             auto_ctx = f"{sel_exc}:{sel_coin}:{str(trade_start_time)}:{int(warmup_minutes)}:{int(compare_max_candles)}"
-                            last_ctx = st.session_state.get("gv_compare_auto_shift_coverage_ctx")
+                            last_ctx = st.session_state.get("se_compare_auto_shift_coverage_ctx")
 
                             new_ts = gaps.get("recommended_trade_start")
                             if new_ts is None:
@@ -10791,8 +10791,8 @@ def show_visualizer():
 
                                     # If clamping made it a no-op, fall through to error handling.
                                     if new_ts > cur_ts:
-                                        st.session_state["gv_compare_auto_shift_coverage_ctx"] = auto_ctx
-                                        st.session_state["gv_pending_time_jump"] = {
+                                        st.session_state["se_compare_auto_shift_coverage_ctx"] = auto_ctx
+                                        st.session_state["se_pending_time_jump"] = {
                                             "exc": sel_exc,
                                             "sym": sel_coin,
                                             "new_ts": new_ts,
@@ -10813,7 +10813,7 @@ def show_visualizer():
                         else:
                             err_msg = "Compare not possible: insufficient historical coverage for warmup/window."
 
-                        st.session_state["gv_compare_meta"] = {
+                        st.session_state["se_compare_meta"] = {
                             "exchange": sel_exc,
                             "coin": sel_coin,
                             "trade_start_ts": trade_start_time,
@@ -10858,7 +10858,7 @@ def show_visualizer():
                         sim_max_candles_modeb = int(len(sim_df))
 
                         # Always refresh meta on a successful (non-gap) run to avoid stale error state.
-                        st.session_state["gv_compare_meta"] = {
+                        st.session_state["se_compare_meta"] = {
                             "exchange": sel_exc,
                             "coin": sel_coin,
                             "trade_start_ts": trade_start_time,
@@ -11049,40 +11049,40 @@ def show_visualizer():
                         c_short = list(best.get("c_short") or [])
 
                         try:
-                            meta0 = st.session_state.get("gv_compare_meta")
+                            meta0 = st.session_state.get("se_compare_meta")
                             if isinstance(meta0, dict) and not meta0.get("error"):
                                 meta0["mode_c_warmup_used"] = best.get("warmup_used")
                                 meta0["mode_c_mismatches_vs_b"] = best.get("mismatch_count")
                                 meta0["mode_c_attempts"] = best.get("per_attempt")
-                                st.session_state["gv_compare_meta"] = meta0
+                                st.session_state["se_compare_meta"] = meta0
                         except Exception:
                             pass
 
-        st.session_state["gv_compare_pb7_long"] = pb7_long
-        st.session_state["gv_compare_pb7_short"] = pb7_short
-        st.session_state["gv_compare_b_long"] = b_long
-        st.session_state["gv_compare_b_short"] = b_short
-        st.session_state["gv_compare_c_long"] = c_long
-        st.session_state["gv_compare_c_short"] = c_short
+        st.session_state["se_compare_pb7_long"] = pb7_long
+        st.session_state["se_compare_pb7_short"] = pb7_short
+        st.session_state["se_compare_b_long"] = b_long
+        st.session_state["se_compare_b_short"] = b_short
+        st.session_state["se_compare_c_long"] = c_long
+        st.session_state["se_compare_c_short"] = c_short
 
     # Render inside the Compare expander (uses stored session_state results).
-    if bool(st.session_state.get("gv_hist_compare_enabled", False)):
+    if bool(st.session_state.get("se_hist_compare_enabled", False)):
         try:
             if compare_out is not None:
                 with compare_out:
-                    meta = st.session_state.get("gv_compare_meta")
+                    meta = st.session_state.get("se_compare_meta")
                     if isinstance(meta, dict) and meta.get("error"):
                         # Human-friendly gaps/error output (no raw dict spam).
                         err = str(meta.get("error") or "Compare failed")
                         st.error(err)
 
                         # Safety: clear any stale results so we don't show mismatches after an error.
-                        st.session_state["gv_compare_pb7_long"] = []
-                        st.session_state["gv_compare_pb7_short"] = []
-                        st.session_state["gv_compare_b_long"] = []
-                        st.session_state["gv_compare_b_short"] = []
-                        st.session_state["gv_compare_c_long"] = []
-                        st.session_state["gv_compare_c_short"] = []
+                        st.session_state["se_compare_pb7_long"] = []
+                        st.session_state["se_compare_pb7_short"] = []
+                        st.session_state["se_compare_b_long"] = []
+                        st.session_state["se_compare_b_short"] = []
+                        st.session_state["se_compare_c_long"] = []
+                        st.session_state["se_compare_c_short"] = []
 
                         try:
                             st.write(f"Exchange: `{meta.get('exchange')}`")
@@ -11141,8 +11141,8 @@ def show_visualizer():
                                 else:
                                     raise ValueError("No suggested start time available")
 
-                                sel_exc = str(st.session_state.get("gv_hist_exchange", "") or meta.get("exchange") or "")
-                                sel_sym = str(st.session_state.get("gv_hist_coin", "") or meta.get("coin") or "")
+                                sel_exc = str(st.session_state.get("se_hist_exchange", "") or meta.get("exchange") or "")
+                                sel_sym = str(st.session_state.get("se_hist_coin", "") or meta.get("coin") or "")
                                 if not sel_exc or not sel_sym:
                                     raise ValueError("Exchange/coin not available")
 
@@ -11161,7 +11161,7 @@ def show_visualizer():
 
                                 # Don't touch widget keys here; they already exist in this run.
                                 # Instead, store a pending jump and rerun so Time & View can apply it.
-                                st.session_state["gv_pending_time_jump"] = {
+                                st.session_state["se_pending_time_jump"] = {
                                     "exc": sel_exc,
                                     "sym": sel_sym,
                                     "new_ts": pd.Timestamp(new_ts).floor("min"),
@@ -11183,7 +11183,7 @@ def show_visualizer():
                         except Exception:
                             pass
 
-                    mismatches_only = bool(st.session_state.get("gv_hist_compare_mismatches_only", True))
+                    mismatches_only = bool(st.session_state.get("se_hist_compare_mismatches_only", True))
                     # Important: use the same tick sizes used to produce B/C events.
                     # Using the current visualizer config's exchange_params can make everything look `pb7_only`.
                     price_step = 0.0
@@ -11197,8 +11197,8 @@ def show_visualizer():
                         qty_step = 0.0
                     if not price_step or not qty_step:
                         try:
-                            sel_exc = str((meta or {}).get("exchange") or st.session_state.get("gv_hist_exchange") or "")
-                            sel_coin = str((meta or {}).get("coin") or st.session_state.get("gv_hist_coin") or "")
+                            sel_exc = str((meta or {}).get("exchange") or st.session_state.get("se_hist_exchange") or "")
+                            sel_coin = str((meta or {}).get("coin") or st.session_state.get("se_hist_coin") or "")
                             if sel_exc and sel_coin:
                                 market_ep = _derive_exchange_params_from_market(sel_exc, sel_coin)
                                 price_step = float(market_ep.get("price_step") or price_step or 0.0)
@@ -11211,13 +11211,13 @@ def show_visualizer():
                         qty_step = float(getattr(data.exchange_params, "qty_step", 0.0) or 0.0)
 
                     def _render_one(side_key: str, title: str):
-                        pb7_events = list(st.session_state.get(f"gv_compare_pb7_{side_key}", []) or [])
-                        b_events = list(st.session_state.get(f"gv_compare_b_{side_key}", []) or [])
-                        c_events = list(st.session_state.get(f"gv_compare_c_{side_key}", []) or [])
+                        pb7_events = list(st.session_state.get(f"se_compare_pb7_{side_key}", []) or [])
+                        b_events = list(st.session_state.get(f"se_compare_b_{side_key}", []) or [])
+                        c_events = list(st.session_state.get(f"se_compare_c_{side_key}", []) or [])
                         if not (pb7_events or b_events or c_events):
                             st.write(f"**{title}:** No events")
                             return
-                        if str(st.session_state.get("gv_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C") == "B vs C only (no PB7)":
+                        if str(st.session_state.get("se_hist_compare_mode", "PB7 vs B vs C") or "PB7 vs B vs C") == "B vs C only (no PB7)":
                             cmp_df = _compare_fills_b_c(
                                 b_events=b_events,
                                 c_events=c_events,
@@ -11242,18 +11242,18 @@ def show_visualizer():
                         # (a) different order generation vs (b) different fill checking.
                         try:
                             if (
-                                str(st.session_state.get("gv_hist_compare_mode", "") or "")
+                                str(st.session_state.get("se_hist_compare_mode", "") or "")
                                 == "B vs C only (no PB7)"
                                 and cmp_df is not None
                                 and not cmp_df.empty
                                 and (cmp_df["status"] != "match").any()
                             ):
                                 first_ts = pd.to_datetime(cmp_df.loc[cmp_df["status"] != "match", "timestamp"].iloc[0]).floor("min")
-                                dbg_key = f"gv_compare_debug_orders_{side_key}"
+                                dbg_key = f"se_compare_debug_orders_{side_key}"
                                 dbg = st.session_state.get(dbg_key)
                                 if not (isinstance(dbg, dict) and dbg.get("ts") == str(first_ts)):
-                                    sel_exc = str((meta or {}).get("exchange") or st.session_state.get("gv_hist_exchange") or "")
-                                    sel_coin = str((meta or {}).get("coin") or st.session_state.get("gv_hist_coin") or "")
+                                    sel_exc = str((meta or {}).get("exchange") or st.session_state.get("se_hist_exchange") or "")
+                                    sel_coin = str((meta or {}).get("coin") or st.session_state.get("se_hist_coin") or "")
                                     hist_df_full = load_historical_ohlcv_v7(sel_exc, sel_coin)
                                     warmup_used = None
                                     try:
@@ -11305,7 +11305,7 @@ def show_visualizer():
 
                                 # Mode B debug: recompute a tiny window with capture_frames so we can
                                 # see the exact pending orders Mode B generated around the mismatch.
-                                dbg_key_b = f"gv_compare_debug_modeb_{side_key}"
+                                dbg_key_b = f"se_compare_debug_modeb_{side_key}"
                                 dbg_b = st.session_state.get(dbg_key_b)
                                 if not (isinstance(dbg_b, dict) and dbg_b.get("ts") == str(first_ts)):
                                     try:
@@ -12428,7 +12428,7 @@ def generate_animation_v7_modeb(
 
             # If a PB7 backtest dir is provided (compare panel), run Mode B from backtest.start_date
             # (with warmup) so the state at `start_time` matches PB7. Otherwise, simulate from start_time.
-            pb7_dir = str(st.session_state.get("gv_hist_compare_pb7_dir", "") or "")
+            pb7_dir = str(st.session_state.get("se_hist_compare_pb7_dir", "") or "")
             trade_start_time_for_sim = start_time
             sim_start_balance = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
             bp_long_sim = data_template.normal_bot_params_long
@@ -13308,8 +13308,8 @@ def generate_animation_v7_modeb(
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
         try:
-            st.session_state["gv_movie_fig_modeb"] = fig
-            st.session_state["gv_movie_meta_modeb"] = {
+            st.session_state["se_movie_fig_modeb"] = fig
+            st.session_state["se_movie_meta_modeb"] = {
                 "start_time": str(start_time),
                 "frames": int(frames),
                 "step_mins": int(step_mins),
@@ -13348,7 +13348,7 @@ def generate_animation_v7_modeb(
                 if cols:
                     df_fills = df_fills[cols]
                 try:
-                    st.session_state["gv_movie_fills_modeb"] = df_fills
+                    st.session_state["se_movie_fills_modeb"] = df_fills
                 except Exception:
                     pass
                 st.dataframe(df_fills, use_container_width=True, height=250)
@@ -14274,8 +14274,8 @@ def generate_animation_v7_modec(
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
         try:
-            st.session_state["gv_movie_fig_modec"] = fig
-            st.session_state["gv_movie_meta_modec"] = {
+            st.session_state["se_movie_fig_modec"] = fig
+            st.session_state["se_movie_meta_modec"] = {
                 "start_time": str(start_time),
                 "frames": int(frames),
                 "step_mins": int(step_mins),
@@ -14310,7 +14310,7 @@ def generate_animation_v7_modec(
                 if cols:
                     df_fills = df_fills[cols]
                 try:
-                    st.session_state["gv_movie_fills_modec"] = df_fills
+                    st.session_state["se_movie_fills_modec"] = df_fills
                 except Exception:
                     pass
                 st.dataframe(df_fills, use_container_width=True, height=250)
