@@ -55,7 +55,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     class ConfigV7:  # type: ignore
         pass
-from GridVisualizerV7 import (
+from strategy_explorer_types import (
     ExchangeParams,
     StateParams,
     BotParams,
