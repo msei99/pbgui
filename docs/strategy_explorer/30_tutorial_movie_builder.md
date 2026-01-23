@@ -10,9 +10,9 @@ Movie Builder is driven by:
 - **Step Size** (e.g. 1m, 5m, 1h, 4h)
 - **Duration** (preset) or **Frames** (custom)
 
-Total covered time is roughly:
+Total covered time:
 
-- If Duration preset: Duration is fixed, Frames are derived from Duration / Step Size
+- If Duration preset: Frames are calculated from Duration / Step Size
 - If Custom (Frames): covered time ≈ Frames × Step Size
 
 Tip: When launching Strategy Explorer from a backtest result, Step Size and Duration are auto-picked to cover the full backtest fills window.

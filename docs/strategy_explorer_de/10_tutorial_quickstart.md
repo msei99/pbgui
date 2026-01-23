@@ -20,7 +20,7 @@ Wenn „No candles found“ erscheint, fehlen lokale OHLCV-Daten im PB7 Cache.
 2. Setze **Context days** am Anfang eher klein (z. B. 3–10), damit es übersichtlich bleibt.
 
 Merksatz:
-- Analysis Time = Candle am rechten Rand, aus der Grids berechnet werden.
+- Analysis Time = Kerze am rechten Rand, aus der Grids berechnet werden.
 
 ---
 
@@ -34,7 +34,7 @@ Achte auf:
 Fragen:
 
 - Sind Entry-Level dort, wo ich sie erwarte?
-- Ist die Close-Ladder zu aggressiv/zu konservativ?
+- Sind die Close-Schritte zu aggressiv/zu konservativ?
 - Aktiviert Trailing wie gedacht (Threshold erreicht, dann Retrace)?
 
 ---
