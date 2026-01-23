@@ -40,6 +40,27 @@ def is_pb7_installed():
         return True
     return False
 
+
+def pb7srcdir() -> str:
+    d = pb7dir()
+    return f"{d}/src" if d else ""
+
+
+def import_passivbot_rust():
+    """Import PB7's compiled Rust extension (passivbot_rust).
+
+    This uses `pb7dir` from `pbgui.ini` and prepends `<pb7dir>/src` to `sys.path`.
+    """
+    import sys
+
+    src_dir = pb7srcdir()
+    if src_dir and src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+
+    import passivbot_rust as pbr  # type: ignore
+
+    return pbr
+
 PBGDIR = Path.cwd()
 
 def validateJSON(jsonData):

@@ -38,9 +38,9 @@ def edit_v7_instance():
         if st.button("Caclulate Balance"):
             st.session_state.balance_calc = BalanceCalculator(v7_instance.config.config_file)
             st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
-        if st.button("GridVis"):
-            st.session_state.v7_grid_visualizer_config = v7_instance.config
-            st.switch_page(get_navi_paths()["V7_GRID_VISUALIZER"])
+        if st.button("Strategy Explorer"):
+            st.session_state.v7_strategy_explorer_config = v7_instance.config
+            st.switch_page(get_navi_paths()["V7_STRATEGY_EXPLORER"])
             st.stop()
     v7_instance.edit()
 
