@@ -41,6 +41,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 import importlib.metadata
+import threading
+import queue
+from concurrent.futures import ThreadPoolExecutor
 from pbgui_func import (
     get_navi_paths,
     is_authenticted,
@@ -2070,6 +2073,150 @@ def _compare_fills_pb7_b_c(
     return out
 
 
+def _auto_shift_trade_start_for_warmup_coverage(
+    hist_df_full: pd.DataFrame,
+    trade_start_time: pd.Timestamp,
+    *,
+    warmup_minutes: int,
+    forward_minutes: int,
+) -> tuple[pd.Timestamp, dict]:
+    """Match Compare's auto-shift behavior when warmup extends beyond available history.
+
+    If the requested warmup window extends before the first available candle (insufficient coverage)
+    and there are no internal 1m gaps, suggest shifting trade_start_time forward to:
+      available_start + warmup_minutes
+
+    Returns (effective_trade_start_time, gaps_dict).
+    """
+    try:
+        ts = pd.Timestamp(pd.to_datetime(trade_start_time)).floor("min")
+    except Exception:
+        ts = pd.Timestamp(trade_start_time)
+
+    try:
+        warmup_minutes_i = int(max(0, int(warmup_minutes)))
+    except Exception:
+        warmup_minutes_i = 0
+    try:
+        forward_minutes_i = int(max(0, int(forward_minutes)))
+    except Exception:
+        forward_minutes_i = 0
+
+    warm_start = ts - pd.Timedelta(minutes=warmup_minutes_i)
+    end_ts = ts + pd.Timedelta(minutes=max(0, forward_minutes_i))
+
+    gaps = _find_1m_gaps(
+        hist_df_full,
+        start_ts=pd.Timestamp(warm_start),
+        end_ts=pd.Timestamp(end_ts),
+        warmup_minutes=int(warmup_minutes_i),
+    )
+    if not isinstance(gaps, dict):
+        return ts, {}
+
+    # Internal gaps cannot be auto-fixed.
+    if bool(gaps.get("has_gaps")):
+        return ts, gaps
+
+    if bool(gaps.get("insufficient_coverage")):
+        new_ts = gaps.get("recommended_trade_start")
+        if new_ts is None:
+            try:
+                astart = gaps.get("available_start")
+                if astart is not None:
+                    new_ts = pd.Timestamp(pd.to_datetime(astart)).floor("min") + pd.Timedelta(
+                        minutes=int(warmup_minutes_i)
+                    )
+            except Exception:
+                new_ts = None
+
+        if new_ts is not None:
+            try:
+                new_ts = pd.Timestamp(pd.to_datetime(new_ts)).floor("min")
+            except Exception:
+                new_ts = None
+
+        if new_ts is not None and new_ts > ts:
+            # Clamp into available candle range (best-effort).
+            try:
+                min_ts = pd.Timestamp(pd.to_datetime(hist_df_full.index.min())).floor("min")
+                max_ts = pd.Timestamp(pd.to_datetime(hist_df_full.index.max())).floor("min")
+                if new_ts < min_ts:
+                    new_ts = min_ts
+                if new_ts > max_ts:
+                    new_ts = max_ts
+            except Exception:
+                pass
+
+            if new_ts > ts:
+                return new_ts, gaps
+
+    return ts, gaps
+
+
+def _run_with_indeterminate_progress(
+    *,
+    work_fn: Callable[[], Any],
+    progress_fn: Callable[[float, str], None],
+    base: float,
+    span: float,
+    label: str,
+    update_every_s: float = 0.2,
+) -> Any:
+    """Run a blocking function while keeping Streamlit progress UI responsive.
+
+    Streamlit cannot update UI during a single long-running blocking call.
+    This helper runs `work_fn` in a worker thread and updates `progress_fn`
+    with an indeterminate progress + elapsed time until it finishes.
+    """
+    try:
+        base_f = float(base)
+    except Exception:
+        base_f = 0.0
+    try:
+        span_f = float(span)
+    except Exception:
+        span_f = 0.0
+    base_f = max(0.0, min(1.0, base_f))
+    span_f = max(0.0, min(1.0 - base_f, span_f))
+
+    try:
+        update_s = float(update_every_s)
+    except Exception:
+        update_s = 0.2
+    if not math.isfinite(update_s) or update_s <= 0.0:
+        update_s = 0.2
+
+    t0 = time.time()
+    period = 3.0
+
+    # Important: use a single worker to avoid parallel PB7 calls.
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(work_fn)
+        i = 0
+        while True:
+            if fut.done():
+                break
+            elapsed = max(0.0, time.time() - t0)
+            # Indeterminate sawtooth: base + span * phase
+            phase = (elapsed % period) / period
+            # Gentle easing so it doesn't look like it's stuck at the same spot.
+            frac = base_f + span_f * float(phase)
+            try:
+                progress_fn(frac, f"{label} (elapsed {elapsed:,.0f}s)")
+            except Exception:
+                pass
+            # Avoid tight loop
+            try:
+                time.sleep(update_s)
+            except Exception:
+                pass
+            i += 1
+        # Surface exceptions from worker
+        out = fut.result()
+    return out
+
+
 def _compare_fills_b_c(
     *,
     b_events: list[dict],
@@ -2637,6 +2784,291 @@ def _run_pb7_engine_backtest_for_visualizer(
     )
 
     return _pb7_fills_to_events(fills)
+
+
+# ============================================================================
+# Shared Mode B and Mode C backtest helpers (used by Compare and Movie Builder)
+# ============================================================================
+
+def _run_mode_b_backtest(
+    pbr,
+    pb7_src: str,
+    hist_df: pd.DataFrame,
+    trade_start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    exchange_params,
+    bot_params_long,
+    bot_params_short,
+    balance: float,
+    side_obj: Side,
+    max_orders: int,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Run Mode B (local orchestrator) backtest simulation.
+    
+    Args:
+        pbr: Passivbot Rust module
+        pb7_src: Path to PB7 source directory
+        hist_df: Full historical candle data
+        trade_start_time: When trading should start (after warmup)
+        end_time: When trading should end
+        exchange_params: Exchange parameters
+        bot_params_long: Long bot parameters
+        bot_params_short: Short bot parameters
+        balance: Starting balance
+        side_obj: Side (Both/Long/Short)
+        max_orders: Max orders per side
+        
+    Returns:
+        (events_long, events_short): Tuple of event lists for long and short sides
+    """
+    # Compute warmup
+    warmup_minutes = _compute_warmup_minutes_for_mode_c(bot_params_long, bot_params_short)
+    
+    # Prepare simulation dataframe: start from (trade_start - warmup), end at end_time
+    try:
+        warm_start = pd.Timestamp(trade_start_time) - pd.Timedelta(minutes=int(warmup_minutes))
+    except Exception:
+        warm_start = pd.Timestamp(trade_start_time)
+    
+    try:
+        sim_end_run = pd.Timestamp(end_time)
+    except Exception:
+        sim_end_run = hist_df.index[-1] if not hist_df.empty else pd.Timestamp(trade_start_time)
+    
+    sim_df = hist_df.loc[warm_start:sim_end_run].copy() if not hist_df.empty else pd.DataFrame()
+    
+    if sim_df.empty:
+        return [], []
+    
+    # Infer maker fee
+    try:
+        maker_fee = float(getattr(exchange_params, "maker", 0.0) or 0.0)
+    except Exception:
+        maker_fee = 0.0
+    
+    # Helper to filter events back to intended trading window
+    def _filter_window(events: list[dict]) -> list[dict]:
+        """Filter events to [trade_start_time, end_time] window."""
+        if not events:
+            return []
+        filtered = []
+        trade_start_ts = int(pd.Timestamp(trade_start_time).value)
+        end_ts = int(pd.Timestamp(end_time).value)
+        for ev in events:
+            try:
+                ev_ts = int(ev.get("timestamp", 0))
+                if trade_start_ts <= ev_ts <= end_ts:
+                    filtered.append(ev)
+            except Exception:
+                pass
+        return filtered
+    
+    # Run simulation
+    try:
+        if side_obj == Side.Both:
+            b_long, b_short = _simulate_backtest_over_historical_candles_pair(
+                pbr=pbr,
+                pb7_src=pb7_src,
+                candles=sim_df,
+                exchange_params=exchange_params,
+                bot_params_long=bot_params_long,
+                bot_params_short=bot_params_short,
+                starting_position_long=Position(size=0.0, price=0.0),
+                starting_position_short=Position(size=0.0, price=0.0),
+                balance=float(balance),
+                maker_fee=float(maker_fee),
+                trade_start_time=trade_start_time,
+                max_orders=int(max_orders),
+                max_candles=int(len(sim_df)),
+            )
+        else:
+            # Single side
+            events = _simulate_backtest_over_historical_candles(
+                pbr=pbr,
+                pb7_src=pb7_src,
+                side=side_obj,
+                candles=sim_df,
+                exchange_params=exchange_params,
+                bot_params_long=bot_params_long,
+                bot_params_short=bot_params_short,
+                starting_position=Position(size=0.0, price=0.0),
+                balance=float(balance),
+                maker_fee=float(maker_fee),
+                trade_start_time=trade_start_time,
+                max_orders=int(max_orders),
+                max_candles=int(len(sim_df)),
+            )
+            if side_obj == Side.Long:
+                b_long, b_short = events, []
+            else:
+                b_long, b_short = [], events
+    except Exception:
+        b_long, b_short = [], []
+    
+    # Filter to intended window
+    b_long = _filter_window(b_long)
+    b_short = _filter_window(b_short)
+    
+    return b_long, b_short
+
+
+def _run_mode_c_backtest_with_warmup_optimization(
+    pbr,
+    exchange: str,
+    coin: str,
+    hist_df: pd.DataFrame,
+    analysis_time: datetime.datetime,
+    end_time: datetime.datetime,
+    max_candles_forward: int,
+    exchange_params,
+    bot_params_long,
+    bot_params_short,
+    balance: float,
+    warmup_base_minutes: int,
+    mode_b_long: list[dict] = None,
+    mode_b_short: list[dict] = None,
+) -> tuple[list[dict], list[dict], int, int, list[dict]]:
+    """
+    Run Mode C (PB7 Rust engine) backtest with warmup optimization loop.
+    
+    Tries multiple warmup values (base, +1000, +2000, +4000, +8000, +12000, +16000 minutes)
+    and selects the attempt with minimum mismatches vs Mode B (if provided).
+    
+    Args:
+        pbr: Passivbot Rust module
+        exchange: Exchange name
+        coin: Coin symbol
+        hist_df: Full historical candle data
+        analysis_time: When trading should start (after warmup)
+        end_time: When trading should end
+        max_candles_forward: Max candles to simulate forward from analysis_time
+        exchange_params: Exchange parameters
+        bot_params_long: Long bot parameters
+        bot_params_short: Short bot parameters
+        balance: Starting balance
+        warmup_base_minutes: Base warmup minutes
+        mode_b_long: Optional Mode B long events for mismatch scoring
+        mode_b_short: Optional Mode B short events for mismatch scoring
+        
+    Returns:
+        (events_long, events_short, warmup_used, mismatch_count, attempts):
+            - events_long: Long side events
+            - events_short: Short side events
+            - warmup_used: Warmup minutes that produced best result
+            - mismatch_count: Number of mismatches vs Mode B (None if no Mode B provided)
+            - attempts: List of {warmup, mismatches} for each attempt
+    """
+    # Helper to filter events back to intended trading window
+    def _filter_window(events: list[dict]) -> list[dict]:
+        """Filter events to [analysis_time, end_time] window."""
+        if not events:
+            return []
+        filtered = []
+        analysis_ts = int(pd.Timestamp(analysis_time).value)
+        end_ts = int(pd.Timestamp(end_time).value)
+        for ev in events:
+            try:
+                ev_ts = int(ev.get("timestamp", 0))
+                if analysis_ts <= ev_ts <= end_ts:
+                    filtered.append(ev)
+            except Exception:
+                pass
+        return filtered
+    
+    # Get price/qty steps for mismatch scoring
+    try:
+        price_step = float(getattr(exchange_params, "price_step", 0.0) or 0.0)
+        qty_step = float(getattr(exchange_params, "qty_step", 0.0) or 0.0)
+    except Exception:
+        price_step = 0.0
+        qty_step = 0.0
+    
+    best = {
+        "mismatch_count": None,
+        "warmup_used": None,
+        "c_long": [],
+        "c_short": [],
+        "per_attempt": [],
+    }
+    
+    warmup_base = int(warmup_base_minutes)
+    for extra in (0, 1000, 2000, 4000, 8000, 12000, 16000):
+        try:
+            warmup_try = int(max(0, warmup_base + int(extra)))
+        except Exception:
+            warmup_try = int(max(0, warmup_base))
+        
+        # Run PB7 engine backtest
+        try:
+            c_l_try, c_s_try = _run_pb7_engine_backtest_for_visualizer(
+                pbr=pbr,
+                exchange=exchange,
+                coin=coin,
+                analysis_time=analysis_time,
+                hist_df=hist_df,
+                exchange_params=exchange_params,
+                bot_params_long=bot_params_long,
+                bot_params_short=bot_params_short,
+                starting_balance=float(balance),
+                max_candles_forward=int(max_candles_forward),
+                warmup_minutes_override=int(warmup_try),
+            )
+        except Exception:
+            c_l_try, c_s_try = [], []
+        
+        # Filter to intended window
+        c_l_try = _filter_window(c_l_try)
+        c_s_try = _filter_window(c_s_try)
+        
+        # Score vs Mode B (if provided)
+        mismatch_count = None
+        if mode_b_long is not None or mode_b_short is not None:
+            mismatch_count = 0
+            try:
+                if mode_b_long or c_l_try:
+                    df_l = _compare_fills_b_c(
+                        b_events=mode_b_long or [],
+                        c_events=c_l_try,
+                        price_step=price_step,
+                        qty_step=qty_step,
+                    )
+                    mismatch_count += int((df_l["status"] != "match").sum()) if not df_l.empty else 0
+            except Exception:
+                pass
+            
+            try:
+                if mode_b_short or c_s_try:
+                    df_s = _compare_fills_b_c(
+                        b_events=mode_b_short or [],
+                        c_events=c_s_try,
+                        price_step=price_step,
+                        qty_step=qty_step,
+                    )
+                    mismatch_count += int((df_s["status"] != "match").sum()) if not df_s.empty else 0
+            except Exception:
+                pass
+        
+        best["per_attempt"].append({"warmup": int(warmup_try), "mismatches": mismatch_count})
+        
+        # Update best if this is better
+        if best["mismatch_count"] is None or (mismatch_count is not None and int(mismatch_count) < int(best["mismatch_count"])):
+            best["mismatch_count"] = mismatch_count
+            best["warmup_used"] = int(warmup_try)
+            best["c_long"] = c_l_try
+            best["c_short"] = c_s_try
+        
+        # Perfect match; stop early
+        if mismatch_count is not None and int(mismatch_count) == 0:
+            break
+    
+    return (
+        list(best.get("c_long") or []),
+        list(best.get("c_short") or []),
+        best.get("warmup_used"),
+        best.get("mismatch_count"),
+        list(best.get("per_attempt") or []),
+    )
 
 
 def _pb7_debug_dump_orders_around_ts_for_visualizer(
@@ -4789,6 +5221,328 @@ def _apply_plotly_frame_inplace(fig2: Any, frame: Any) -> None:
         pass
 
 
+def _detect_hw_encoder_standalone(ffmpeg_exe: str, fallback_preset: str = "ultrafast") -> Tuple[str, str]:
+    """Detect available hardware encoder.
+    
+    Returns (codec, preset) tuple.
+    Priority: h264_nvenc (NVIDIA) > h264_qsv (Intel QuickSync) > h264_v4l2m2m (Linux V4L2) > h264_videotoolbox (Apple) > libx264 (CPU)
+    """
+    # Check available encoders
+    try:
+        result = subprocess.run(
+            [ffmpeg_exe, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        encoders = result.stdout.lower()
+
+        def _qsv_works() -> bool:
+            try:
+                # QSV fails fast on this machine with "Error during set display handle : device failed (-17)"
+                r = subprocess.run(
+                    [
+                        ffmpeg_exe,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "nullsrc=s=128x72:d=0.1",
+                        "-c:v",
+                        "h264_qsv",
+                        "-frames:v",
+                        "1",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                return r.returncode == 0
+            except Exception:
+                return False
+
+        def _vaapi_works() -> bool:
+            try:
+                if not os.path.exists("/dev/dri/renderD128"):
+                    return False
+                r = subprocess.run(
+                    [
+                        ffmpeg_exe,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-vaapi_device",
+                        "/dev/dri/renderD128",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "nullsrc=s=128x72:d=0.1",
+                        "-vf",
+                        "format=nv12,hwupload",
+                        "-c:v",
+                        "h264_vaapi",
+                        "-frames:v",
+                        "1",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                return r.returncode == 0
+            except Exception:
+                return False
+        
+        # NVIDIA NVENC - ffmpeg may list it even without NVIDIA drivers/device.
+        if "h264_nvenc" in encoders:
+            try:
+                has_nvidia = os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version")
+            except Exception:
+                has_nvidia = False
+            if has_nvidia:
+                return ("h264_nvenc", "p4")
+        
+        # Intel QuickSync - only if it actually initializes on this machine.
+        if "h264_qsv" in encoders and _qsv_works():
+            return ("h264_qsv", "medium")
+
+        # Intel/AMD via VAAPI - good Linux hardware path.
+        if "h264_vaapi" in encoders and _vaapi_works():
+            return ("h264_vaapi", "medium")
+        
+        # V4L2 M2M (Linux hardware encoding via Video4Linux2, Intel/AMD GPUs)
+        if "h264_v4l2m2m" in encoders:
+            return ("h264_v4l2m2m", "medium")
+        
+        # Apple VideoToolbox (macOS hardware encoding)
+        if "h264_videotoolbox" in encoders:
+            return ("h264_videotoolbox", "medium")
+        
+    except Exception:
+        pass
+    
+    # Fallback: CPU encoding
+    return ("libx264", str(fallback_preset))
+
+
+def _get_available_video_codecs() -> list[tuple[str, str]]:
+    """Get list of available video codecs with display names.
+    
+    Returns list of (codec_id, display_name) tuples.
+    """
+    available = []
+    
+    try:
+        # Check system ffmpeg first
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            import imageio_ffmpeg  # type: ignore
+            ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
+        
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        encoders = result.stdout.lower()
+        
+        def _qsv_works() -> bool:
+            try:
+                r = subprocess.run(
+                    [
+                        ffmpeg,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "nullsrc=s=128x72:d=0.1",
+                        "-c:v",
+                        "h264_qsv",
+                        "-frames:v",
+                        "1",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                return r.returncode == 0
+            except Exception:
+                return False
+
+        def _vaapi_works() -> bool:
+            try:
+                if not os.path.exists("/dev/dri/renderD128"):
+                    return False
+                r = subprocess.run(
+                    [
+                        ffmpeg,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-vaapi_device",
+                        "/dev/dri/renderD128",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "nullsrc=s=128x72:d=0.1",
+                        "-vf",
+                        "format=nv12,hwupload",
+                        "-c:v",
+                        "h264_vaapi",
+                        "-frames:v",
+                        "1",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                return r.returncode == 0
+            except Exception:
+                return False
+
+        try:
+            has_nvidia = os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version")
+        except Exception:
+            has_nvidia = False
+
+        qsv_ok = _qsv_works() if "h264_qsv" in encoders else False
+        vaapi_ok = _vaapi_works() if "h264_vaapi" in encoders else False
+
+        # VAAPI (Linux) – working hardware path on this machine
+        if vaapi_ok:
+            if "av1_vaapi" in encoders:
+                available.append(("av1_vaapi", "AV1 (VAAPI) - Best compression (Linux GPU)"))
+            if "hevc_vaapi" in encoders:
+                available.append(("hevc_vaapi", "H.265/HEVC (VAAPI) - High quality (Linux GPU)"))
+            if "h264_vaapi" in encoders:
+                available.append(("h264_vaapi", "H.264 (VAAPI) - Fast & compatible (Linux GPU)"))
+
+        # QSV (Intel) – show only if it initializes; otherwise show as unavailable
+        if "h264_qsv" in encoders:
+            if qsv_ok:
+                if "av1_qsv" in encoders:
+                    available.append(("av1_qsv", "AV1 (Intel QuickSync) - Best compression"))
+                if "hevc_qsv" in encoders:
+                    available.append(("hevc_qsv", "H.265/HEVC (Intel QuickSync) - High quality"))
+                available.append(("h264_qsv", "H.264 (Intel QuickSync) - Fast & compatible"))
+            else:
+                available.append(("h264_qsv", "H.264 (Intel QuickSync) - NOT working (device failed -17)"))
+
+        # NVENC only if NVIDIA device exists
+        if has_nvidia:
+            if "h264_nvenc" in encoders:
+                available.append(("h264_nvenc", "H.264 (NVIDIA NVENC) - Fast & compatible"))
+            if "hevc_nvenc" in encoders:
+                available.append(("hevc_nvenc", "H.265/HEVC (NVIDIA NVENC) - High quality"))
+            if "av1_nvenc" in encoders:
+                available.append(("av1_nvenc", "AV1 (NVIDIA NVENC) - Best compression"))
+
+        if "h264_v4l2m2m" in encoders:
+            available.append(("h264_v4l2m2m", "H.264 (V4L2 Hardware) - Linux"))
+        if "h264_videotoolbox" in encoders:
+            available.append(("h264_videotoolbox", "H.264 (VideoToolbox) - macOS"))
+        if "hevc_videotoolbox" in encoders:
+            available.append(("hevc_videotoolbox", "H.265/HEVC (VideoToolbox) - macOS"))
+        
+        # Always include software fallbacks
+        available.append(("libx264", "H.264 (libx264) - CPU Software"))
+        available.append(("libx265", "H.265/HEVC (libx265) - CPU Software"))
+        
+    except Exception:
+        # Fallback to basic software encoder
+        available.append(("libx264", "H.264 (libx264) - CPU Software"))
+    
+    return available
+
+
+def _get_video_encoder_info() -> str:
+    """Get information about available video encoder for display in UI.
+    
+    Returns a formatted string describing the detected encoder.
+    """
+    try:
+        # Check system ffmpeg first (better hardware support)
+        ffmpeg = None
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            try:
+                result = subprocess.run([system_ffmpeg, "-version"], capture_output=True, timeout=2)
+                if result.returncode == 0:
+                    ffmpeg = system_ffmpeg
+            except Exception:
+                pass
+        
+        # Fall back to bundled ffmpeg
+        if not ffmpeg:
+            try:
+                import imageio_ffmpeg  # type: ignore
+                ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
+            except Exception:
+                return "⚠️ No ffmpeg found. Install system ffmpeg or imageio-ffmpeg package."
+        
+        ffmpeg_source = "system" if ffmpeg == system_ffmpeg else "bundled"
+        
+        # Check available encoders
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        encoders_output = result.stdout
+        encoders = encoders_output.lower()
+        
+        # Extract h264 encoders for debugging
+        h264_encoders = []
+        for line in encoders_output.split('\n'):
+            if 'h264' in line.lower() and line.strip().startswith('V'):
+                # Extract encoder name (usually first word after flags)
+                parts = line.split()
+                if len(parts) >= 2:
+                    h264_encoders.append(parts[1])
+        
+        if "h264_nvenc" in encoders:
+            # Avoid reporting NVENC when the system has no NVIDIA device (ffmpeg may still list the encoder).
+            try:
+                has_nvidia = os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version")
+            except Exception:
+                has_nvidia = False
+            if has_nvidia:
+                return f"🚀 Hardware encoder: **NVIDIA NVENC** (GPU) | ffmpeg: {ffmpeg_source}"
+        elif "h264_qsv" in encoders:
+            return f"🚀 Hardware encoder: **Intel QuickSync** (GPU) | ffmpeg: {ffmpeg_source}"
+        elif "h264_v4l2m2m" in encoders:
+            return f"🚀 Hardware encoder: **V4L2 M2M** (GPU, Linux) | ffmpeg: {ffmpeg_source}"
+        elif "h264_videotoolbox" in encoders:
+            return f"🚀 Hardware encoder: **Apple VideoToolbox** (GPU) | ffmpeg: {ffmpeg_source}"
+        else:
+            # Show available h264 encoders for debugging
+            if h264_encoders:
+                encoders_list = ", ".join(h264_encoders)
+                return f"⚙️ Software encoder: **libx264** (CPU) | ffmpeg: {ffmpeg_source} | Available: {encoders_list}"
+            else:
+                return f"⚙️ Software encoder: **libx264** (CPU) | ffmpeg: {ffmpeg_source}"
+            
+    except Exception as e:
+        return f"⚙️ Software encoder: **libx264** (CPU) | Error: {e}"
+
+
 def _export_plotly_animation_to_mp4(
     fig: Any,
     *,
@@ -4799,7 +5553,9 @@ def _export_plotly_animation_to_mp4(
     crf: int = 18,
     ffmpeg_preset: str = "ultrafast",
     pix_fmt: str = "yuv420p",
+    codec_override: Optional[str] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
+    log_display: Optional[Any] = None,
 ) -> bytes:
     """Render a Plotly animation to MP4.
 
@@ -4808,6 +5564,9 @@ def _export_plotly_animation_to_mp4(
     - Stitch PNGs to MP4 using `ffmpeg`.
 
     Raises RuntimeError with a user-friendly message if prerequisites are missing.
+    
+    Args:
+        log_display: Optional Streamlit element to display ffmpeg log output during encoding
     """
     if go is None:
         raise RuntimeError("Plotly is required for video export.")
@@ -4855,12 +5614,45 @@ def _export_plotly_animation_to_mp4(
         )
 
     try:
-        ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
+        # First try: system ffmpeg (better hardware encoder support, especially for Intel QSV)
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            # Verify it works and has better encoder support than bundled version
+            try:
+                result = subprocess.run(
+                    [system_ffmpeg, "-version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                if result.returncode == 0:
+                    # Check if it has QSV support (preferred for Intel GPUs)
+                    enc_result = subprocess.run(
+                        [system_ffmpeg, "-hide_banner", "-encoders"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    if "h264_qsv" in enc_result.stdout.lower():
+                        ffmpeg = system_ffmpeg
+                    else:
+                        # Fall back to bundled if system doesn't have better encoders
+                        ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
+                else:
+                    ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
+            except Exception:
+                ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
+        else:
+            ffmpeg = str(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception as e:
         raise RuntimeError(
-            "Could not locate bundled ffmpeg from imageio-ffmpeg. "
-            "Reinstall `imageio-ffmpeg` and try again."
+            "Could not locate ffmpeg (neither system nor bundled from imageio-ffmpeg). "
+            "Install either system ffmpeg or imageio-ffmpeg package."
         ) from e
+
+    def _detect_hw_encoder(ffmpeg_exe: str) -> Tuple[str, str]:
+        """Wrapper that uses the preset from the outer scope."""
+        return _detect_hw_encoder_standalone(ffmpeg_exe, str(ffmpeg_preset or "ultrafast"))
 
     frames = list(getattr(fig, "frames", None) or [])
     if not frames:
@@ -5045,12 +5837,136 @@ def _export_plotly_animation_to_mp4(
 
         out_mp4 = tmp / "movie.mp4"
 
+        # Detect and use hardware encoder if available (or use override)
+        if codec_override and codec_override != "auto":
+            # User selected specific codec
+            hw_codec = codec_override
+            # Use preset from parameter for software codecs, or default for hardware
+            if hw_codec.startswith("lib"):
+                hw_preset = str(ffmpeg_preset or "ultrafast")
+            else:
+                hw_preset = "medium"  # Generic preset for hardware encoders
+        else:
+            # Auto-detect best available encoder
+            hw_codec, hw_preset = _detect_hw_encoder(ffmpeg)
+
+        # Validate selected codec actually works on this machine.
+        # Otherwise ffmpeg may die immediately and the write() side only errors later (often around ~42 frames).
+        def _has_nvidia_runtime() -> bool:
+            try:
+                return os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version")
+            except Exception:
+                return False
+
+        def _qsv_works() -> bool:
+            try:
+                r = subprocess.run(
+                    [
+                        ffmpeg,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "nullsrc=s=128x72:d=0.1",
+                        "-c:v",
+                        "h264_qsv",
+                        "-frames:v",
+                        "1",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                return r.returncode == 0
+            except Exception:
+                return False
+
+        def _vaapi_works() -> bool:
+            try:
+                if not os.path.exists("/dev/dri/renderD128"):
+                    return False
+                r = subprocess.run(
+                    [
+                        ffmpeg,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-vaapi_device",
+                        "/dev/dri/renderD128",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "nullsrc=s=128x72:d=0.1",
+                        "-vf",
+                        "format=nv12,hwupload",
+                        "-c:v",
+                        "h264_vaapi",
+                        "-frames:v",
+                        "1",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                return r.returncode == 0
+            except Exception:
+                return False
+
+        try:
+            if hw_codec.endswith("_nvenc") and not _has_nvidia_runtime():
+                _progress(0, f"⚠️ {hw_codec} selected but NVIDIA runtime not present → falling back")
+                if _vaapi_works():
+                    hw_codec, hw_preset = ("h264_vaapi", "medium")
+                else:
+                    hw_codec, hw_preset = ("libx264", preset_s)
+
+            if hw_codec in ("h264_qsv", "hevc_qsv", "av1_qsv") and not _qsv_works():
+                _progress(0, f"⚠️ {hw_codec} selected but QSV init fails (device failed -17) → falling back")
+                if _vaapi_works():
+                    hw_codec, hw_preset = ("h264_vaapi", "medium")
+                else:
+                    hw_codec, hw_preset = ("libx264", preset_s)
+
+            if hw_codec in ("h264_vaapi", "hevc_vaapi", "av1_vaapi") and not _vaapi_works():
+                _progress(0, f"⚠️ {hw_codec} selected but VAAPI init fails → falling back to libx264")
+                hw_codec, hw_preset = ("libx264", preset_s)
+        except Exception:
+            pass
+
+        # If QSV was selected but the user cannot access the render node, fall back.
+        try:
+            if hw_codec in ("h264_qsv", "hevc_qsv", "av1_qsv"):
+                if os.path.exists("/dev/dri/renderD128") and not os.access("/dev/dri/renderD128", os.R_OK | os.W_OK):
+                    _progress(0, "⚠️ QSV selected but no permission for /dev/dri/renderD128 → falling back to libx264 (add user to 'render' group and re-login)")
+                    hw_codec = "libx264"
+                    hw_preset = str(ffmpeg_preset or "ultrafast")
+        except Exception:
+            pass
+        
+        # Build ffmpeg command with hardware encoder support
         # Stream PNGs to ffmpeg (image2pipe) to avoid writing thousands of frame files.
-        # Note: encoding time is usually not the bottleneck vs Kaleido rendering,
-        # so we use a reasonable CRF to improve sharpness without a big slowdown.
         cmd = [
             ffmpeg,
             "-y",
+            "-hide_banner",
+            "-nostats",
+            "-loglevel",
+            "info",
+            # Emit machine-readable progress with newlines (avoids \r-only stats that can block readline()).
+            "-progress",
+            "pipe:2",
+        ]
+        if hw_codec in ("h264_vaapi", "hevc_vaapi", "av1_vaapi") and os.path.exists("/dev/dri/renderD128"):
+            cmd.extend(["-vaapi_device", "/dev/dri/renderD128"])
+        cmd.extend([
             "-f",
             "image2pipe",
             "-vcodec",
@@ -5060,23 +5976,86 @@ def _export_plotly_animation_to_mp4(
             "-i",
             "pipe:0",
             "-c:v",
-            "libx264",
-            # Encoding is usually not the bottleneck vs Kaleido rendering, but when it is,
-            # use a faster preset while keeping CRF (visual quality) stable.
-            # Tradeoff: larger file size.
-            "-preset",
-            preset_s,
-            "-crf",
-            str(crf_i),
-            "-threads",
-            "0",
+            hw_codec,
+        ])
+        
+        # Add codec-specific options
+        if hw_codec in ("h264_nvenc", "hevc_nvenc"):
+            # NVIDIA NVENC options
+            cmd.extend([
+                "-preset", hw_preset if hw_preset != "medium" else "p4",  # p4 = medium quality/speed
+                "-cq", str(crf_i),      # Constant Quality mode (like CRF for NVENC)
+                "-b:v", "0",            # Use CQ mode, not target bitrate
+            ])
+        elif hw_codec == "av1_nvenc":
+            # NVIDIA AV1 encoding
+            cmd.extend([
+                "-preset", hw_preset if hw_preset != "medium" else "p4",
+                "-cq", str(crf_i),
+                "-b:v", "0",
+            ])
+        elif hw_codec in ("h264_qsv", "hevc_qsv"):
+            # Intel QuickSync options (H.264 / HEVC)
+            cmd.extend([
+                "-preset", hw_preset,
+                "-global_quality", str(crf_i + 5),  # QSV uses different scale
+            ])
+        elif hw_codec == "av1_qsv":
+            # Intel QuickSync AV1
+            cmd.extend([
+                "-preset", hw_preset,
+                "-global_quality", str(crf_i + 5),
+            ])
+        elif hw_codec == "h264_v4l2m2m":
+            # V4L2 M2M (Linux Video4Linux2) options
+            # v4l2m2m uses bitrate control, estimate from CRF (lower CRF = higher bitrate)
+            target_bitrate = max(500, int(5000 - (crf_i * 80)))  # rough mapping
+            cmd.extend([
+                "-b:v", f"{target_bitrate}k",
+            ])
+        elif hw_codec in ("h264_videotoolbox", "hevc_videotoolbox"):
+            # Apple VideoToolbox options
+            cmd.extend([
+                "-q:v", str(int(crf_i * 100 / 51)),  # VideoToolbox quality scale 0-100
+            ])
+        elif hw_codec in ("h264_vaapi", "hevc_vaapi", "av1_vaapi"):
+            # VAAPI (Linux) requires upload to GPU.
+            cmd.extend([
+                "-vf",
+                "format=nv12,hwupload",
+                "-qp",
+                str(crf_i),
+            ])
+        elif hw_codec in ("libx264", "libx265"):
+            # CPU encoding (libx264 / libx265)
+            cmd.extend([
+                "-preset", hw_preset,
+                "-crf", str(crf_i),
+                "-threads", "0",
+            ])
+        else:
+            # Generic fallback (bitrate-based)
+            target_bitrate = max(500, int(5000 - (crf_i * 80)))
+            cmd.extend([
+                "-b:v", f"{target_bitrate}k",
+            ])
+        
+        # Common options for all encoders
+        pix_fmt_effective = pix_fmt_s
+        if hw_codec in ("h264_qsv", "hevc_qsv", "av1_qsv", "h264_vaapi", "hevc_vaapi", "av1_vaapi"):
+            pix_fmt_effective = "nv12"
+        cmd.extend([
             "-pix_fmt",
-            pix_fmt_s,
+            pix_fmt_effective,
             "-movflags",
             "+faststart",
             str(out_mp4),
-        ]
+        ])
 
+        # Log ffmpeg command for debugging
+        cmd_str = " ".join(str(c) for c in cmd)
+        _progress(0, f"FFmpeg command: {cmd_str[:100]}...")  # Show first 100 chars
+        
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -5090,40 +6069,129 @@ def _export_plotly_animation_to_mp4(
         if proc.stdin is None:
             raise RuntimeError("Failed to open ffmpeg stdin for video export.")
 
+        # Read stderr asynchronously to prevent buffer overflow.
+        # NOTE: Do NOT call Streamlit APIs from background threads.
+        stderr_queue: queue.Queue[bytes] = queue.Queue()
+
+        def read_stderr() -> None:
+            # Read raw chunks to guarantee draining even if ffmpeg writes without newlines.
+            try:
+                if proc.stderr:
+                    for chunk in iter(lambda: proc.stderr.read(4096), b""):
+                        if chunk:
+                            stderr_queue.put(chunk)
+            except Exception:
+                pass
+
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+
+        stderr_text_lines: list[str] = []
+        stderr_text_buf: str = ""
+
+        def _stderr_has_fatal() -> bool:
+            tail = "".join(stderr_text_lines[-80:]).lower()
+            return any(
+                m in tail
+                for m in (
+                    "error while opening encoder",
+                    "error during set display handle",
+                    "device failed",
+                    "cannot load libcuda.so.1",
+                    "nothing was written into output file",
+                    "conversion failed",
+                )
+            )
+
+        def _drain_stderr(update_ui: bool = False) -> str:
+            collected = []
+            while True:
+                try:
+                    b = stderr_queue.get_nowait()
+                except Exception:
+                    break
+                try:
+                    s = b.decode("utf-8", errors="replace")
+                except Exception:
+                    s = str(b)
+                # Split into lines where possible but tolerate partial chunks.
+                nonlocal stderr_text_buf
+                stderr_text_buf += s
+                while "\n" in stderr_text_buf:
+                    line, stderr_text_buf = stderr_text_buf.split("\n", 1)
+                    stderr_text_lines.append(line + "\n")
+                collected.append(s)
+            if update_ui and log_display and collected:
+                try:
+                    tail = "".join(stderr_text_lines[-25:])
+                    log_display.code(tail, language="")
+                except Exception:
+                    pass
+            return "".join(collected)
+
         try:
             # Reuse a working figure to reduce per-frame allocations.
             work_fig = go.Figure(base_fig)
             _maybe_apply_streamlit_theme_for_export(work_fig)
             _strip_animation_controls_for_export(work_fig)
 
-            _progress(0, "Rendering frame 0")
-            proc.stdin.write(_render_png(work_fig))
+            encoder_info = "HW" if hw_codec != "libx264" else "CPU"
+            _progress(0, f"Rendering frame 0 ({encoder_info}: {hw_codec})")
+            
+            try:
+                # If ffmpeg already exited, fail fast with stderr.
+                if proc.poll() is not None:
+                    _drain_stderr(update_ui=True)
+                    raise BrokenPipeError("ffmpeg exited before receiving frames")
+                proc.stdin.write(_render_png(work_fig))
+                try:
+                    proc.stdin.flush()
+                except Exception:
+                    pass
+                _drain_stderr(update_ui=True)
+                if _stderr_has_fatal():
+                    raise BrokenPipeError("ffmpeg reported fatal error")
+            except (BrokenPipeError, IOError) as e:
+                # ffmpeg died early, collect stderr
+                stderr_output = "".join(stderr_text_lines) + _drain_stderr(update_ui=True)
+                raise RuntimeError(f"ffmpeg closed pipe early (frame 0): {stderr_output}") from e
 
             for i, fr in enumerate(frames, start=1):
                 _progress(i, f"Rendering frame {i}/{total-1}")
                 _apply_plotly_frame_inplace(work_fig, fr)
-                proc.stdin.write(_render_png(work_fig))
+                
+                try:
+                    if proc.poll() is not None:
+                        _drain_stderr(update_ui=True)
+                        raise BrokenPipeError("ffmpeg exited early")
+                    proc.stdin.write(_render_png(work_fig))
+                    if i % 3 == 0:
+                        _drain_stderr(update_ui=True)
+                        if _stderr_has_fatal():
+                            raise BrokenPipeError("ffmpeg reported fatal error")
+                except (BrokenPipeError, IOError) as e:
+                    # ffmpeg died during encoding, collect stderr
+                    stderr_output = "".join(stderr_text_lines) + _drain_stderr(update_ui=True)
+                    raise RuntimeError(f"ffmpeg closed pipe at frame {i}/{total-1}: {stderr_output}") from e
 
-            _progress(total - 1, "Encoding MP4")
+            _progress(total - 1, f"Encoding MP4 ({encoder_info}: {hw_codec})")
             try:
                 proc.stdin.close()
             except Exception:
                 pass
 
             rc = proc.wait()
+            
+            # Collect all stderr output from queue
+            stderr_output = "".join(stderr_text_lines) + _drain_stderr(update_ui=True)
+            
+            # Show ffmpeg log (last 500 chars)
+            if stderr_output:
+                log_preview = stderr_output[-500:] if len(stderr_output) > 500 else stderr_output
+                _progress(total, f"FFmpeg log:\n{log_preview}")
+            
             if rc != 0:
-                err_b = b""
-                try:
-                    if proc.stderr is not None:
-                        err_b = proc.stderr.read() or b""
-                except Exception:
-                    err_b = b""
-                err = ""
-                try:
-                    err = err_b.decode("utf-8", errors="replace")
-                except Exception:
-                    err = str(err_b)
-                raise RuntimeError(f"ffmpeg failed to encode MP4: {err}")
+                raise RuntimeError(f"ffmpeg failed to encode MP4 (exit code {rc}):\n{stderr_output}")
 
         finally:
             try:
@@ -8239,6 +9307,41 @@ def _se_read_markdown(abs_path: str) -> str:
         return f"Failed to read docs: {e}"
     
 
+# --- Help prototypes (developer only, disabled by default) ---
+
+def _se_open_help_tab():
+    """Open the internal Help page in a new browser tab using a small JS snippet.
+
+    This is a lightweight prototype for testing header→tab behavior without changing
+    existing navigation.
+    """
+    try:
+        help_page = get_navi_paths().get("HELP") or "navi/help.py"
+        url = f"?page={help_page}"
+        st.markdown(f"<script>window.open('{url}', '_blank');</script>", unsafe_allow_html=True)
+    except Exception:
+        st.markdown("[Open Help Page](?page=navi/help.py)", unsafe_allow_html=True)
+
+
+@st.dialog("Help & Tutorials", width="large")
+def _se_help_modal():
+    """Show centralized Help docs in a dialog popup."""
+    lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="se_help_modal_lang")
+    docs = _se_docs_index(str(lang))
+    if not docs:
+        st.info("No help docs found.")
+        return
+    labels = [d[0] for d in docs]
+    sel = st.selectbox("Select Topic", options=list(range(len(labels))), format_func=lambda i: labels[int(i)], index=0, key="se_help_modal_sel")
+    path = docs[int(sel)][1]
+    md = _se_read_markdown(path)
+    st.markdown(md, unsafe_allow_html=True)
+    try:
+        st.markdown(f"<a href='?page=navi/help.py' target='_blank'>Open full Help page in new tab</a>", unsafe_allow_html=True)
+    except Exception:
+        pass
+
+
 def se_slider(label, *args, **kwargs):
     """Streamlit slider with automatic tooltip (`?`) based on parameter name.
 
@@ -8257,9 +9360,15 @@ def show_visualizer():
     if "se_hist_symbol" in st.session_state and "se_hist_coin" not in st.session_state:
         st.session_state.se_hist_coin = st.session_state.se_hist_symbol
 
-    # Title
-    if not data.title == "":
-        st.subheader(data.title)
+    # Header row: Title (if exists) + persistent Help button
+    c_title, c_help = st.columns([0.95, 0.05])
+    with c_title:
+        if not data.title == "":
+            st.subheader(data.title)
+    with c_help:
+        # Persistent Help button (opens central Help in dialog)
+        if st.button("📖 Guide", key="se_header_help_btn"):
+            _se_help_modal()
 
     # Create columns for organizing parameters
     col1, col2, col3 = st.columns(3)
@@ -8275,31 +9384,6 @@ def show_visualizer():
         max_day = None
 
         with st.expander("Data + Time & View", expanded=True):
-            # Built-in help + tutorials (stored in pbgui/docs/strategy_explorer and pbgui/docs/strategy_explorer_de)
-            with st.expander("Help & Tutorials", expanded=False):
-                lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="se_docs_lang")
-                docs = _se_docs_index(str(lang))
-                if not docs:
-                    if str(lang).strip().upper() == "DE":
-                        st.caption("Keine Docs gefunden in pbgui/docs/strategy_explorer_de.")
-                    else:
-                        st.caption("No docs found in pbgui/docs/strategy_explorer.")
-                else:
-                    labels = [d[0] for d in docs]
-                    paths = [d[1] for d in docs]
-                    try:
-                        default_idx = 0
-                        # Prefer the main help page if present
-                        for i, p in enumerate(paths):
-                            if p.endswith("00_strategy_explorer_help.md"):
-                                default_idx = i
-                                break
-                    except Exception:
-                        default_idx = 0
-                    sel_doc = st.selectbox("Docs", options=list(range(len(labels))), format_func=lambda i: labels[int(i)], index=int(default_idx), key="se_docs_sel")
-                    md = _se_read_markdown(paths[int(sel_doc)])
-                    st.markdown(md)
-
             exchanges = get_available_exchanges_v7()
             cfg_exc = str(st.session_state.get("se_hist_config_exchange", "") or "")
             if cfg_exc and cfg_exc not in exchanges:
@@ -9294,6 +10378,7 @@ def show_visualizer():
                     duration_key = f"se_movie_duration__{sel_exc}__{sel_sym}"
                     sync_key = f"se_movie_sync__{sel_exc}__{sel_sym}"
                     gen_key = f"se_movie_gen__{sel_exc}__{sel_sym}"
+                    vis_key = f"se_movie_visible_candles__{sel_exc}__{sel_sym}"
 
                     def _movie_duration_presets(step_name: str) -> list[tuple[str, int | None, int | None]]:
                         # Returns: (label, duration_minutes, anchor_hour)
@@ -9418,6 +10503,20 @@ def show_visualizer():
                             help="Choose a time range preset; frames are computed from Duration / Step Size.",
                         )
 
+                    if vis_key not in st.session_state:
+                        st.session_state[vis_key] = 60
+                    vcol1, _vcol2 = st.columns([1, 2])
+                    with vcol1:
+                        st.number_input(
+                            "Visible candles",
+                            min_value=10,
+                            max_value=500,
+                            value=int(st.session_state.get(vis_key) or 60),
+                            step=5,
+                            key=vis_key,
+                            help="How many candles are shown in the moving viewport (default 60).",
+                        )
+
                     # Generate button below
                     gen_movie = st.button("Generate Movie", key=gen_key)
 
@@ -9506,6 +10605,7 @@ def show_visualizer():
                                 start_time=pd.to_datetime(start_time_for_movie),
                                 frames=int(frames_for_movie),
                                 step_mins=int(step_min),
+                                visible_candles=int(st.session_state.get(vis_key) or 60),
                                 hist_df=hist_df,
                                 exchange=str(sel_exc),
                                 symbol=str(sel_sym),
@@ -9564,6 +10664,7 @@ def show_visualizer():
                                     start_time=pd.to_datetime(start_time_for_movie),
                                     frames=int(frames_for_movie),
                                     step_mins=int(step_min),
+                                    visible_candles=int(st.session_state.get(vis_key) or 60),
                                     hist_df=hist_df,
                                     exchange=str(sel_exc),
                                     symbol=str(sel_sym),
@@ -9578,6 +10679,7 @@ def show_visualizer():
                                 start_time=pd.to_datetime(start_time_for_movie),
                                 frames=int(frames_for_movie),
                                 step_mins=int(step_min),
+                                visible_candles=int(st.session_state.get(vis_key) or 60),
                                 hist_df=hist_df,
                                 exchange=str(sel_exc),
                                 symbol=str(sel_sym),
@@ -9588,7 +10690,12 @@ def show_visualizer():
                             )
 
                     # Persist sync state
-                    st.session_state[sync_key] = {"frames": int(st.session_state.get(frames_key) or 0), "duration": str(st.session_state.get(duration_key) or ""), "step": str(st.session_state.get(step_key) or "")}
+                    st.session_state[sync_key] = {
+                        "frames": int(st.session_state.get(frames_key) or 0),
+                        "duration": str(st.session_state.get(duration_key) or ""),
+                        "step": str(st.session_state.get(step_key) or ""),
+                        "visible_candles": int(st.session_state.get(vis_key) or 60),
+                    }
 
                     # Video export (MP4) – evaluate the button before rendering heavy UI.
                     engine = str(st.session_state.get("se_movie_engine"))
@@ -9617,6 +10724,7 @@ def show_visualizer():
                         scale_key = "se_movie_export_scale"
                         crf_key = "se_movie_export_crf"
                         ffmpeg_preset_key = "se_movie_export_ffmpeg_preset"
+                        codec_key = "se_movie_export_codec"
 
                         def _se_movie_export_defaults() -> dict:
                             return {
@@ -9626,16 +10734,17 @@ def show_visualizer():
                                 "scale": 1,
                                 "crf": 18,
                                 "ffmpeg_preset": "veryfast",
+                                "codec": "auto",
                             }
 
                         def _se_movie_export_preset_values(name: str) -> dict:
                             n = str(name or "").strip()
                             if n == "Fast":
-                                return {"preset": "Fast", "width": 1280, "height": 720, "scale": 1, "crf": 23, "ffmpeg_preset": "ultrafast"}
+                                return {"preset": "Fast", "width": 1280, "height": 720, "scale": 1, "crf": 23, "ffmpeg_preset": "ultrafast", "codec": "auto"}
                             if n == "Quality":
-                                return {"preset": "Quality", "width": 1920, "height": 1080, "scale": 1, "crf": 16, "ffmpeg_preset": "fast"}
+                                return {"preset": "Quality", "width": 1920, "height": 1080, "scale": 1, "crf": 16, "ffmpeg_preset": "fast", "codec": "auto"}
                             if n == "Balanced":
-                                return {"preset": "Balanced", "width": 1600, "height": 800, "scale": 1, "crf": 18, "ffmpeg_preset": "veryfast"}
+                                return {"preset": "Balanced", "width": 1600, "height": 800, "scale": 1, "crf": 18, "ffmpeg_preset": "veryfast", "codec": "auto"}
                             return {"preset": "Custom"}
 
                         def _se_movie_export_load_once() -> None:
@@ -9669,6 +10778,11 @@ def show_visualizer():
                             except Exception:
                                 st.session_state[ffmpeg_preset_key] = str(d["ffmpeg_preset"])
                             try:
+                                codec = load_ini(export_ini_section, "movie_export_codec")
+                                st.session_state[codec_key] = str(codec).strip() or str(d["codec"])
+                            except Exception:
+                                st.session_state[codec_key] = str(d["codec"])
+                            try:
                                 pv = str(st.session_state.get(preset_key) or "").strip()
                                 if pv:
                                     st.session_state[preset_key] = pv
@@ -9688,6 +10802,7 @@ def show_visualizer():
                                 ("movie_export_scale", scale_key),
                                 ("movie_export_crf", crf_key),
                                 ("movie_export_ffmpeg_preset", ffmpeg_preset_key),
+                                ("movie_export_codec", codec_key),
                             ]:
                                 try:
                                     save_ini(export_ini_section, k_ini, str(st.session_state.get(k_ss)))
@@ -9704,6 +10819,7 @@ def show_visualizer():
                                     st.session_state[scale_key] = int(vals.get("scale"))
                                     st.session_state[crf_key] = int(vals.get("crf"))
                                     st.session_state[ffmpeg_preset_key] = str(vals.get("ffmpeg_preset"))
+                                    st.session_state[codec_key] = str(vals.get("codec", "auto"))
                                 except Exception:
                                     pass
                             _se_movie_export_save_from_state()
@@ -9716,6 +10832,39 @@ def show_visualizer():
                             _se_movie_export_save_from_state()
 
                         _se_movie_export_load_once()
+
+                        # Show detected encoder info with selected codec
+                        encoder_info = _get_video_encoder_info()
+                        selected_codec = st.session_state.get(codec_key, "auto")
+                        
+                        if selected_codec == "auto":
+                            # Show auto-detected codec (using same logic as export)
+                            try:
+                                import imageio_ffmpeg  # type: ignore
+                                
+                                # Same logic as in _export_plotly_animation_to_mp4
+                                ffmpeg_exe = None
+                                system_ffmpeg = shutil.which("ffmpeg")
+                                if system_ffmpeg:
+                                    try:
+                                        result = subprocess.run([system_ffmpeg, "-version"], capture_output=True, text=True, timeout=2)
+                                        if result.returncode == 0:
+                                            enc_result = subprocess.run([system_ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=2)
+                                            if "h264_qsv" in enc_result.stdout.lower():
+                                                ffmpeg_exe = system_ffmpeg
+                                    except Exception:
+                                        pass
+                                
+                                if not ffmpeg_exe:
+                                    ffmpeg_exe = str(imageio_ffmpeg.get_ffmpeg_exe())
+                                
+                                hw_codec, _ = _detect_hw_encoder_standalone(ffmpeg_exe)
+                                st.caption(f"{encoder_info} → Selected: **{hw_codec}** (auto-detected)")
+                            except Exception:
+                                st.caption(encoder_info)
+                        else:
+                            # Show manually selected codec
+                            st.caption(f"{encoder_info} → Selected: **{selected_codec}**")
 
                         r1, r2 = st.columns([2, 1])
                         with r1:
@@ -9731,6 +10880,74 @@ def show_visualizer():
                             do_export = st.button("Export video (mp4)", key=export_btn_key)
 
                         with st.expander("Advanced export settings", expanded=False):
+                            # Codec selection - detect auto codec for display
+                            available_codecs = _get_available_video_codecs()
+                            
+                            # Determine auto-detected codec for label (use same logic as export)
+                            auto_label = "Auto (detect best available)"
+                            try:
+                                import imageio_ffmpeg  # type: ignore
+                                
+                                # Same logic as in _export_plotly_animation_to_mp4
+                                ffmpeg_exe = None
+                                system_ffmpeg = shutil.which("ffmpeg")
+                                if system_ffmpeg:
+                                    try:
+                                        result = subprocess.run([system_ffmpeg, "-version"], capture_output=True, text=True, timeout=2)
+                                        if result.returncode == 0:
+                                            # Check if it has QSV support (preferred)
+                                            enc_result = subprocess.run([system_ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=2)
+                                            if "h264_qsv" in enc_result.stdout.lower():
+                                                ffmpeg_exe = system_ffmpeg
+                                    except Exception:
+                                        pass
+                                
+                                if not ffmpeg_exe:
+                                    ffmpeg_exe = str(imageio_ffmpeg.get_ffmpeg_exe())
+                                
+                                hw_codec, _ = _detect_hw_encoder_standalone(ffmpeg_exe)
+                                auto_label = f"Auto (detect best available) - {hw_codec}"
+                            except Exception:
+                                pass
+                            
+                            codec_options = [("auto", auto_label)] + available_codecs
+                            codec_ids = [c[0] for c in codec_options]
+                            codec_labels = [c[1] for c in codec_options]
+                            
+                            try:
+                                current_codec = st.session_state.get(codec_key, "auto")
+                                if current_codec not in codec_ids:
+                                    current_codec = "auto"
+                                    try:
+                                        st.session_state[codec_key] = "auto"
+                                    except Exception:
+                                        pass
+                                codec_index = codec_ids.index(current_codec)
+                            except Exception:
+                                codec_index = 0
+
+                            # If the selector key already exists, Streamlit will ignore `index=`.
+                            # Force-sync it so the UI reflects the effective codec.
+                            try:
+                                sel_key = codec_key + "_selector"
+                                if st.session_state.get(sel_key) != codec_index:
+                                    st.session_state[sel_key] = codec_index
+                            except Exception:
+                                pass
+                            
+                            st.selectbox(
+                                "Video Codec",
+                                options=list(range(len(codec_options))),
+                                format_func=lambda i: codec_labels[i],
+                                index=codec_index,
+                                key=codec_key + "_selector",
+                                on_change=lambda: (
+                                    st.session_state.update({codec_key: codec_ids[st.session_state[codec_key + "_selector"]]}),
+                                    _se_movie_export_mark_custom()
+                                ),
+                                help="Choose video codec/format. 'Auto' selects the best available hardware encoder.",
+                            )
+                            
                             st.number_input(
                                 "Width",
                                 min_value=640,
@@ -9757,24 +10974,63 @@ def show_visualizer():
                                 help="Kaleido render scale multiplier (higher = sharper, slower).",
                             )
                             st.number_input(
-                                "CRF (x264)",
+                                "CRF / Quality",
                                 min_value=0,
                                 max_value=51,
                                 step=1,
                                 key=crf_key,
                                 on_change=_se_movie_export_mark_custom,
-                                help="Lower = higher quality, larger file. Typical: 16–23.",
+                                help="Lower = higher quality, larger file. Typical: 16–23. (Note: Different codecs may use different scales)",
                             )
                             st.selectbox(
-                                "FFmpeg preset (x264)",
+                                "FFmpeg preset (CPU codecs)",
                                 options=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"],
                                 key=ffmpeg_preset_key,
                                 on_change=_se_movie_export_mark_custom,
+                                help="Only used for CPU software encoders (libx264/libx265)",
                             )
 
                         if do_export:
+                            # Show which encoder will be used (same logic as actual export)
+                            selected_codec = st.session_state.get(codec_key, "auto")
+                            try:
+                                import imageio_ffmpeg  # type: ignore
+                                
+                                # Same logic as in _export_plotly_animation_to_mp4
+                                ffmpeg_exe = None
+                                system_ffmpeg = shutil.which("ffmpeg")
+                                if system_ffmpeg:
+                                    try:
+                                        result = subprocess.run([system_ffmpeg, "-version"], capture_output=True, text=True, timeout=2)
+                                        if result.returncode == 0:
+                                            enc_result = subprocess.run([system_ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=2)
+                                            if "h264_qsv" in enc_result.stdout.lower():
+                                                ffmpeg_exe = system_ffmpeg
+                                    except Exception:
+                                        pass
+                                
+                                if not ffmpeg_exe:
+                                    ffmpeg_exe = str(imageio_ffmpeg.get_ffmpeg_exe())
+                                
+                                if selected_codec == "auto":
+                                    hw_codec, hw_preset = _detect_hw_encoder_standalone(ffmpeg_exe)
+                                    actual_codec = hw_codec
+                                    auto_suffix = " [Auto-detected]"
+                                else:
+                                    actual_codec = selected_codec
+                                    auto_suffix = ""
+                                
+                                encoder_type = "Hardware (GPU)" if actual_codec not in ("libx264", "libx265") else "Software (CPU)"
+                                st.info(f"🎬 Starting video export with **{actual_codec}** encoder ({encoder_type}){auto_suffix}")
+                            except Exception:
+                                pass
+                            
                             prog = st.progress(0.0)
                             status = st.empty()
+                            log_output = st.empty()
+                            ffmpeg_log_output = st.empty()
+                            log_lines: list[str] = []
+                            last_msg: str = ""
 
                             def _cb(p: float, msg: str) -> None:
                                 try:
@@ -9783,6 +11039,17 @@ def show_visualizer():
                                     pass
                                 try:
                                     status.caption(str(msg))
+                                except Exception:
+                                    pass
+                                nonlocal last_msg
+                                try:
+                                    msg_s = str(msg)
+                                    if msg_s and msg_s != last_msg:
+                                        last_msg = msg_s
+                                        log_lines.append(msg_s)
+                                        if len(log_lines) > 200:
+                                            del log_lines[:-150]
+                                        log_output.code("\n".join(log_lines[-40:]), language="")
                                 except Exception:
                                     pass
 
@@ -9833,6 +11100,14 @@ def show_visualizer():
                                 except Exception:
                                     export_ffmpeg_preset = "veryfast"
 
+                                # Get selected codec
+                                try:
+                                    codec_override = str(st.session_state.get(codec_key) or "auto")
+                                    if codec_override == "auto":
+                                        codec_override = None
+                                except Exception:
+                                    codec_override = None
+
                                 mp4_bytes = _export_plotly_animation_to_mp4(
                                     fig,
                                     fps=int(export_fps),
@@ -9843,6 +11118,8 @@ def show_visualizer():
                                     ffmpeg_preset=str(export_ffmpeg_preset),
                                     pix_fmt="yuv420p",
                                     progress_cb=_cb,
+                                    codec_override=codec_override,
+                                    log_display=ffmpeg_log_output,
                                 )
                                 try:
                                     st.session_state[export_mp4_key] = mp4_bytes
@@ -10078,16 +11355,6 @@ def show_visualizer():
             if "timestamp" not in slice_df.columns and "index" in slice_df.columns:
                 slice_df.rename(columns={"index": "timestamp"}, inplace=True)
             data.historical_candles = slice_df.to_dict(orient='list')
-
-            with st.expander("Debug", expanded=False):
-                st.write(f"Start Time (Select Time): {row_time}")
-                st.write(f"Grid Ref Time (Chart End): {grid_time}")
-                st.write(f"Grid Ref Close: {close_px}")
-                st.write(f"Active: long={long_active} short={short_active} | same_indicators={same_indicators}")
-                st.write(f"Ref Vol (primary): {float(row_primary['volatility'])}")
-                st.write(f"Slice Rows: {len(slice_df)}")
-                st.write("Head:", slice_df.head(3))
-                st.write("Tail:", slice_df.tail(3))
         else:
             with st.expander("Simulation (Mode B/C)", expanded=False):
                 st.info("Requires loaded OHLCV candles.", icon="ℹ️")
@@ -12267,6 +13534,7 @@ def generate_animation_v7_modeb(
     start_time: pd.Timestamp,
     frames: int,
     step_mins: int,
+    visible_candles: int = 60,
     hist_df: pd.DataFrame,
     exchange: str,
     symbol: str,
@@ -12301,11 +13569,76 @@ def generate_animation_v7_modeb(
 
         frames = int(frames or 0)
         step_mins = int(step_mins or 0)
+        try:
+            visible_candles = int(visible_candles or 0)
+        except Exception:
+            visible_candles = 0
+        if visible_candles <= 0:
+            visible_candles = 60
+        visible_candles = max(10, min(500, int(visible_candles)))
         if frames <= 0 or step_mins <= 0:
             st.error("Invalid animation parameters.")
             return
 
         start_time = pd.to_datetime(start_time)
+        requested_start_time = pd.to_datetime(start_time)
+
+        # Load PB7 config if available (same as Compare), so warmup & params are consistent.
+        pb7_dir = str(st.session_state.get("se_hist_compare_pb7_dir", "") or "")
+        sim_start_balance = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
+        bp_long_full = data_template.normal_bot_params_long
+        bp_short_full = data_template.normal_bot_params_short
+        using_pb7_config = False
+        cfg: dict | None = None
+        try:
+            if pb7_dir and os.path.isfile(os.path.join(os.path.expanduser(pb7_dir), "config.json")):
+                cfg_path = os.path.join(os.path.expanduser(pb7_dir), "config.json")
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                try:
+                    sim_start_balance = float((cfg.get("backtest") or {}).get("starting_balance") or sim_start_balance)
+                except Exception:
+                    pass
+                try:
+                    bot_cfg = cfg.get("bot") or {}
+                    bp_long_full = BotParams(**(bot_cfg.get("long") or {}))
+                    bp_short_full = BotParams(**(bot_cfg.get("short") or {}))
+                except Exception:
+                    bp_long_full = data_template.normal_bot_params_long
+                    bp_short_full = data_template.normal_bot_params_short
+                using_pb7_config = True
+        except Exception:
+            cfg = None
+
+        # Always compute warmup based on *both* sides (matches Compare).
+        try:
+            if using_pb7_config and isinstance(cfg, dict):
+                warmup_minutes_req = int(_compute_warmup_minutes_for_mode_c_from_config(cfg, bp_long_full, bp_short_full) or 0)
+            else:
+                warmup_minutes_req = int(_compute_warmup_minutes_for_mode_c(bp_long_full, bp_short_full) or 0)
+        except Exception:
+            warmup_minutes_req = int(_compute_warmup_minutes_for_mode_c(bp_long_full, bp_short_full) or 0)
+
+        # Compare behavior: if warmup would require data before the first available candle,
+        # shift the movie start forward so both Mode B and Mode C can initialize identically.
+        eff_start_time, gaps = _auto_shift_trade_start_for_warmup_coverage(
+            hist_df,
+            requested_start_time,
+            warmup_minutes=int(warmup_minutes_req),
+            forward_minutes=int(frames * step_mins),
+        )
+        if isinstance(gaps, dict) and bool(gaps.get("has_gaps")):
+            st.error("Movie not possible: 1m gaps detected in historical data.")
+            return
+        if eff_start_time > requested_start_time:
+            try:
+                st.warning(
+                    f"Start shifted forward due to insufficient warmup coverage: {str(requested_start_time)} → {str(eff_start_time)}"
+                )
+            except Exception:
+                pass
+            start_time = eff_start_time
+
         end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
         ctx_days = float(context_days or 0.0)
         if ctx_days <= 0:
@@ -12396,35 +13729,9 @@ def generate_animation_v7_modeb(
             def _sim_cb(frac: float, msg: str) -> None:
                 _progress(0.0 + 0.6 * float(frac), f"Mode B: {msg}")
 
-            # If a PB7 backtest dir is provided (compare panel), run Mode B from backtest.start_date
-            # (with warmup) so the state at `start_time` matches PB7. Otherwise, simulate from start_time.
-            pb7_dir = str(st.session_state.get("se_hist_compare_pb7_dir", "") or "")
             trade_start_time_for_sim = start_time
-            sim_start_balance = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
-            bp_long_sim = data_template.normal_bot_params_long
-            bp_short_sim = data_template.normal_bot_params_short
-            using_pb7_config = False
-            try:
-                if pb7_dir and os.path.isfile(os.path.join(os.path.expanduser(pb7_dir), "config.json")):
-                    cfg_path = os.path.join(os.path.expanduser(pb7_dir), "config.json")
-                    with open(cfg_path, "r", encoding="utf-8") as f:
-                        cfg = json.load(f)
-                    # Note: do NOT shift `trade_start_time_for_sim` based on backtest.start_date.
-                    # Movie builder should start trading at the selected `start_time`.
-                    try:
-                        sim_start_balance = float((cfg.get("backtest") or {}).get("starting_balance") or sim_start_balance)
-                    except Exception:
-                        pass
-                    try:
-                        bot_cfg = cfg.get("bot") or {}
-                        bp_long_sim = BotParams(**(bot_cfg.get("long") or {}))
-                        bp_short_sim = BotParams(**(bot_cfg.get("short") or {}))
-                    except Exception:
-                        bp_long_sim = data_template.normal_bot_params_long
-                        bp_short_sim = data_template.normal_bot_params_short
-                    using_pb7_config = True
-            except Exception:
-                pass
+            bp_long_sim = bp_long_full
+            bp_short_sim = bp_short_full
 
             # Match Mode C movie behavior: simulate only the selected side.
             # (Otherwise opposite-side fills can change shared balance and alter the selected side's fills.)
@@ -12436,14 +13743,8 @@ def generate_animation_v7_modeb(
             except Exception:
                 pass
 
-            # Always include proper warmup candles to match PB7/compare state at `start_time`.
-            try:
-                if using_pb7_config and isinstance(locals().get("cfg"), dict):
-                    warmup_minutes = int(_compute_warmup_minutes_for_mode_c_from_config(cfg, bp_long_sim, bp_short_sim))
-                else:
-                    warmup_minutes = int(_compute_warmup_minutes_for_mode_c(bp_long_sim, bp_short_sim))
-            except Exception:
-                warmup_minutes = int(_compute_warmup_minutes_for_mode_c(bp_long_sim, bp_short_sim))
+            # Always include proper warmup candles to match Compare/Mode C initialization.
+            warmup_minutes = int(max(0, int(warmup_minutes_req)))
 
             warm_start = pd.to_datetime(start_time) - pd.Timedelta(minutes=max(0, int(warmup_minutes)))
             try:
@@ -12465,13 +13766,65 @@ def generate_animation_v7_modeb(
             # Start from flat positions; running from trade_start_time_for_sim will build correct state.
             starting_pos_long = Position(size=0.0, price=0.0)
             starting_pos_short = Position(size=0.0, price=0.0)
+
             # Movie Builder must not be capped by the "Simulation" panel's max fills.
             # If user requests 200 frames @ 4h, we must simulate all fills needed for that full horizon.
             max_orders = 0
 
+            # IMPORTANT: for B vs C parity, compute fill events using the same non-replay
+            # simulator used by Compare. Replay orchestrator is used only to capture frames.
+            def _filter_window_events(events: list[dict]) -> list[dict]:
+                out: list[dict] = []
+                for e in events or []:
+                    try:
+                        t = pd.to_datetime(e.get("timestamp"))
+                    except Exception:
+                        continue
+                    if t < pd.to_datetime(start_time) or t > pd.to_datetime(end_time):
+                        continue
+                    out.append(e)
+                return out
+
+            try:
+                if side_obj == Side.Long:
+                    sim_events = _simulate_backtest_over_historical_candles(
+                        pbr=pbr,
+                        pb7_src=_pb7_src_dir(),
+                        side=Side.Long,
+                        candles=sim_df,
+                        exchange_params=data_template.exchange_params,
+                        bot_params_long=bp_long_sim,
+                        bot_params_short=bp_short_sim,
+                        starting_position=starting_pos_long,
+                        balance=float(sim_start_balance),
+                        maker_fee=maker_fee,
+                        trade_start_time=trade_start_time_for_sim,
+                        max_orders=max_orders,
+                        max_candles=int(len(sim_df)),
+                    )
+                else:
+                    sim_events = _simulate_backtest_over_historical_candles(
+                        pbr=pbr,
+                        pb7_src=_pb7_src_dir(),
+                        side=Side.Short,
+                        candles=sim_df,
+                        exchange_params=data_template.exchange_params,
+                        bot_params_long=bp_long_sim,
+                        bot_params_short=bp_short_sim,
+                        starting_position=starting_pos_short,
+                        balance=float(sim_start_balance),
+                        maker_fee=maker_fee,
+                        trade_start_time=trade_start_time_for_sim,
+                        max_orders=max_orders,
+                        max_candles=int(len(sim_df)),
+                    )
+                sim_events = _filter_window_events(list(sim_events or []))
+            except Exception:
+                sim_events = []
+
             # Capture frames only from (start_time - one step) to keep memory bounded.
             capture_from = start_time - pd.Timedelta(minutes=int(step_mins) * 2)
-            ev_l, ev_s, replay_frames = _simulate_backtest_over_historical_candles_replay_orchestrator_pair(
+            _ev_l, _ev_s, replay_frames = _simulate_backtest_over_historical_candles_replay_orchestrator_pair(
                 pbr=pbr,
                 pb7_src=_pb7_src_dir(),
                 side_for_frames=side_obj,
@@ -12490,8 +13843,6 @@ def generate_animation_v7_modeb(
                 capture_frames_from_time=capture_from,
                 progress_cb=_sim_cb,
             )
-
-            sim_events = (ev_l or []) if side_obj == Side.Long else (ev_s or [])
         except Exception as e:
             st.error(f"Mode B simulation failed: {e}")
             return
@@ -12528,9 +13879,27 @@ def generate_animation_v7_modeb(
             replay_ts = pd.to_datetime([fr.get("timestamp") for fr in replay_frames])
         except Exception:
             replay_ts = pd.to_datetime([])
-        if len(replay_ts) != len(replay_frames):
+        try:
+            if len(replay_ts) != len(replay_frames) or bool(pd.isna(replay_ts).any()):
+                st.error("Replay frame timestamps malformed.")
+                return
+        except Exception:
             st.error("Replay frame timestamps malformed.")
             return
+
+        # Ensure monotonic timestamps so get_indexer(..., method='pad') behaves as expected.
+        try:
+            sort_idx = np.argsort(replay_ts.values)
+            replay_ts = replay_ts[sort_idx]
+            replay_frames = [replay_frames[int(i)] for i in sort_idx]
+        except Exception:
+            pass
+
+        # Use int64 ns for robust indexing (avoids tz-naive/tz-aware comparison pitfalls).
+        try:
+            replay_ts_ns = pd.DatetimeIndex(replay_ts).asi8
+        except Exception:
+            replay_ts_ns = np.asarray([], dtype=np.int64)
 
         # Indicators for plotting (small window only)
         df_calc = calculate_v7_indicators(
@@ -12548,9 +13917,8 @@ def generate_animation_v7_modeb(
         except Exception:
             opt_res_mins = 1
 
-        # Visible window: default 60 candles (rolling window).
-        # For 1m playback, show 120 candles for more context.
-        target_visible_candles = 120 if int(opt_res_mins) == 1 else 60
+        # Visible window: user-configurable candle count (rolling window).
+        target_visible_candles = int(visible_candles)
         try:
             window_mins = int(target_visible_candles * int(opt_res_mins))
         except Exception:
@@ -12595,22 +13963,42 @@ def generate_animation_v7_modeb(
             current_time = start_time + datetime.timedelta(minutes=int(i) * int(step_mins))
 
             # Pick the closest captured replay frame to this time.
+            # Prefer last-known state at or before current_time (pad), else fall back to nearest.
+            fr_idx = -1
             try:
-                # Use last-known state at or before current_time.
-                fr_idx = int(replay_ts.get_indexer([current_time], method="pad")[0])
-                if fr_idx < 0:
-                    fr_idx = int(replay_ts.get_indexer([current_time], method="nearest")[0])
+                cur_ns = pd.to_datetime(current_time).value
+                if replay_ts_ns is not None and len(replay_ts_ns) > 0:
+                    pad_idx = int(np.searchsorted(replay_ts_ns, cur_ns, side="right") - 1)
+                    if pad_idx < 0:
+                        pad_idx = 0
+                    if pad_idx >= len(replay_ts_ns):
+                        pad_idx = len(replay_ts_ns) - 1
+
+                    # Nearest: compare pad vs next
+                    next_idx = min(pad_idx + 1, len(replay_ts_ns) - 1)
+                    if next_idx != pad_idx:
+                        d0 = abs(int(replay_ts_ns[pad_idx]) - int(cur_ns))
+                        d1 = abs(int(replay_ts_ns[next_idx]) - int(cur_ns))
+                        fr_idx = next_idx if d1 < d0 else pad_idx
+                    else:
+                        fr_idx = pad_idx
             except Exception:
                 fr_idx = -1
+
             if fr_idx < 0 or fr_idx >= len(replay_frames):
                 break
             fr = replay_frames[fr_idx]
-
-            ts = pd.to_datetime(fr.get("timestamp"))
+            try:
+                ts = pd.to_datetime(replay_ts[fr_idx])
+            except Exception:
+                ts = pd.to_datetime(fr.get("timestamp"))
             # Stop if we drift too far away from the requested stepping (out of coverage).
             try:
                 if abs((ts - current_time).total_seconds()) > float(step_mins) * 60.0 * 10.0:
-                    break
+                    if fig_frames:
+                        break
+                    else:
+                        continue
             except Exception:
                 pass
 
@@ -12618,18 +14006,33 @@ def generate_animation_v7_modeb(
             # With coarse stepping, the nearest captured replay frame can lag behind `current_time`.
             # If we plot candles beyond the state timestamp, pending close grids (especially trailing closes)
             # appear "too early" relative to the visible candles.
+            # However, `upper_time` must not go earlier than `start_time`, otherwise the viewport can become empty
+            # for all frames and we end up with "No frames generated".
             upper_time = ts
             try:
                 if pd.notna(current_time) and pd.notna(ts):
                     upper_time = min(pd.to_datetime(current_time), pd.to_datetime(ts))
             except Exception:
                 upper_time = ts
+            try:
+                if pd.notna(upper_time) and pd.notna(start_time):
+                    upper_time = max(pd.to_datetime(upper_time), pd.to_datetime(start_time))
+            except Exception:
+                pass
 
             ctx_start = pd.to_datetime(upper_time) - datetime.timedelta(minutes=int(window_mins))
             # Grow the viewport from start_time until we reach the target visible candles,
             # then roll (oldest candles disappear to the left).
             if ctx_start < start_time:
                 ctx_start = start_time
+
+            # If the viewport starts exactly at start_time, include the first candle.
+            # (We keep a strict lower bound below to avoid off-by-one candles for coarse timeframes.)
+            try:
+                if pd.notna(ctx_start) and pd.notna(start_time) and pd.to_datetime(ctx_start) <= pd.to_datetime(start_time):
+                    ctx_start = pd.to_datetime(start_time) - pd.Timedelta(minutes=int(opt_res_mins))
+            except Exception:
+                pass
 
             try:
                 if not df_plot_source.empty and upper_time > df_plot_source.index.max():
@@ -12875,8 +14278,13 @@ def generate_animation_v7_modeb(
                     if len(exec_df) > 3000:
                         exec_df = exec_df.iloc[-3000:]
 
-                    # Resampled candles are right-labeled (bin end). Snap fills into the corresponding bin.
-                    align_method = "backfill" if int(opt_res_mins) > 1 else "pad"
+                    # Snap fills onto the plotted candle timestamps.
+                    # For resampled series, using the raw fill timestamp makes markers appear between candles.
+                    is_resampled = int(opt_res_mins) > 1
+                    try:
+                        idx_ns = df_window_plot.index.asi8
+                    except Exception:
+                        idx_ns = np.array([], dtype=np.int64)
                     # If multiple fills snap to the same plotted candle bin, stack markers slightly so earlier
                     # ones don't get hidden under later ones (common with 4h candles).
                     stack_counts: dict[tuple, int] = {}
@@ -12888,13 +14296,15 @@ def generate_animation_v7_modeb(
                         k = (n + 1) // 2
                         return k if (n % 2) == 1 else -k
 
-                    # Jitter within candle bin to show markers horizontally side-by-side.
-                    # Use a small fraction of the plotted candle width.
+                    # Jitter slightly to make overlapping markers visible, but keep them close to the candle.
+                    # Cap the horizontal spread so 1d (or larger) doesn't scatter fills across the whole day.
                     try:
                         _bin_secs = max(1.0, float(opt_res_mins) * 60.0)
                     except Exception:
                         _bin_secs = 60.0
-                    _jitter_secs = max(1.0, _bin_secs * 0.06)
+                    # 0.2% candle-width jitter, capped by clamping total offset.
+                    _jitter_secs = max(1.0, _bin_secs * 0.002)
+                    _max_off = 8.0
                     for _, r in exec_df.iterrows():
                         try:
                             ts_fill = pd.to_datetime(r.get("timestamp"))
@@ -12911,10 +14321,18 @@ def generate_animation_v7_modeb(
                         lo = None
                         hi = None
                         try:
-                            ii = int(df_window_plot.index.get_indexer([ts_fill], method=align_method)[0])
-                            if ii < 0:
-                                ii = int(df_window_plot.index.get_indexer([ts_fill], method="nearest")[0])
-                            if 0 <= ii < len(df_window_plot):
+                            if len(idx_ns) > 0:
+                                ts_ns = int(pd.to_datetime(ts_fill).value)
+                                if is_resampled:
+                                    # Right-labeled bins: pick first candle timestamp >= fill timestamp.
+                                    ii = int(np.searchsorted(idx_ns, ts_ns, side="left"))
+                                else:
+                                    # 1m candles: pick last candle timestamp <= fill timestamp.
+                                    ii = int(np.searchsorted(idx_ns, ts_ns, side="right") - 1)
+                                if ii < 0:
+                                    ii = 0
+                                if ii >= len(df_window_plot):
+                                    ii = len(df_window_plot) - 1
                                 x_plot = df_window_plot.index[ii]
                                 lo = float(df_window_plot.iloc[ii].get("low", y_plot) or y_plot)
                                 hi = float(df_window_plot.iloc[ii].get("high", y_plot) or y_plot)
@@ -12927,7 +14345,7 @@ def generate_animation_v7_modeb(
 
                         is_buy = float(qty) > 0.0
 
-                        # Jitter markers horizontally within the candle bin.
+                        # Jitter markers horizontally near the candle timestamp.
                         # Always separate buys vs sells (buy left, sell right), then stack within each side.
                         try:
                             x_bin = pd.to_datetime(x_plot)
@@ -12935,22 +14353,14 @@ def generate_animation_v7_modeb(
                             n = int(stack_counts.get(key, 0))
                             stack_counts[key] = n + 1
                             off = int(_stack_step(n))
-                            base = (-0.5 if is_buy else 0.5)
+                            base = (-1.0 if is_buy else 1.0)
                             total_off = float(base) + float(off)
+                            if total_off < -_max_off:
+                                total_off = -_max_off
+                            if total_off > _max_off:
+                                total_off = _max_off
                             if total_off != 0.0:
                                 xj = x_bin + pd.Timedelta(seconds=int(total_off * _jitter_secs))
-                                # Keep within the candle bin so it still visually belongs to this candle.
-                                if align_method == "backfill":
-                                    bin_start = x_bin - pd.Timedelta(minutes=int(opt_res_mins))
-                                    bin_end = x_bin
-                                else:
-                                    bin_start = x_bin
-                                    bin_end = x_bin + pd.Timedelta(minutes=int(opt_res_mins))
-                                eps = pd.Timedelta(seconds=1)
-                                if xj < (bin_start + eps):
-                                    xj = bin_start + eps
-                                if xj > (bin_end - eps):
-                                    xj = bin_end - eps
                                 x_plot = xj
                         except Exception:
                             pass
@@ -13283,6 +14693,7 @@ def generate_animation_v7_modeb(
                 "start_time": str(start_time),
                 "frames": int(frames),
                 "step_mins": int(step_mins),
+                "visible_candles": int(visible_candles),
                 "exchange": str(exchange),
                 "symbol": str(symbol),
                 "context_days": float(context_days),
@@ -13394,6 +14805,7 @@ def generate_animation_v7_modec(
     start_time: pd.Timestamp,
     frames: int,
     step_mins: int,
+    visible_candles: int = 60,
     hist_df: pd.DataFrame,
     exchange: str,
     symbol: str,
@@ -13441,17 +14853,93 @@ def generate_animation_v7_modec(
 
         frames = int(frames or 0)
         step_mins = int(step_mins or 0)
+        try:
+            visible_candles = int(visible_candles or 0)
+        except Exception:
+            visible_candles = 0
+        if visible_candles <= 0:
+            visible_candles = 60
+        visible_candles = max(10, min(500, int(visible_candles)))
         if frames <= 0 or step_mins <= 0:
             st.error("Invalid animation parameters.")
             return
 
         start_time = pd.to_datetime(start_time)
+        requested_start_time = pd.to_datetime(start_time)
+
+        # Load PB7 config if available (same as Compare), so warmup & params are consistent.
+        pb7_dir = str(st.session_state.get("se_hist_compare_pb7_dir", "") or "")
+        sim_start_balance = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
+        bp_long_full = data_template.normal_bot_params_long
+        bp_short_full = data_template.normal_bot_params_short
+        using_pb7_config = False
+        cfg: dict | None = None
+        try:
+            if pb7_dir and os.path.isfile(os.path.join(os.path.expanduser(pb7_dir), "config.json")):
+                cfg_path = os.path.join(os.path.expanduser(pb7_dir), "config.json")
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                try:
+                    sim_start_balance = float((cfg.get("backtest") or {}).get("starting_balance") or sim_start_balance)
+                except Exception:
+                    pass
+                try:
+                    bot_cfg = cfg.get("bot") or {}
+                    bp_long_full = BotParams(**(bot_cfg.get("long") or {}))
+                    bp_short_full = BotParams(**(bot_cfg.get("short") or {}))
+                except Exception:
+                    bp_long_full = data_template.normal_bot_params_long
+                    bp_short_full = data_template.normal_bot_params_short
+                using_pb7_config = True
+        except Exception:
+            cfg = None
+
+        # Always compute warmup based on *both* sides (matches Compare).
+        try:
+            if using_pb7_config and isinstance(cfg, dict):
+                warmup_minutes_req = int(_compute_warmup_minutes_for_mode_c_from_config(cfg, bp_long_full, bp_short_full) or 0)
+            else:
+                warmup_minutes_req = int(_compute_warmup_minutes_for_mode_c(bp_long_full, bp_short_full) or 0)
+        except Exception:
+            warmup_minutes_req = int(_compute_warmup_minutes_for_mode_c(bp_long_full, bp_short_full) or 0)
+
+        # Compare behavior: shift the movie start if warmup extends before available history.
+        if events_override is None:
+            eff_start_time, gaps = _auto_shift_trade_start_for_warmup_coverage(
+                hist_df,
+                requested_start_time,
+                warmup_minutes=int(warmup_minutes_req),
+                forward_minutes=int(frames * step_mins),
+            )
+            if isinstance(gaps, dict) and bool(gaps.get("has_gaps")):
+                st.error("Movie not possible: 1m gaps detected in historical data.")
+                return
+            if eff_start_time > requested_start_time:
+                try:
+                    st.warning(
+                        f"Start shifted forward due to insufficient warmup coverage: {str(requested_start_time)} → {str(eff_start_time)}"
+                    )
+                except Exception:
+                    pass
+                start_time = eff_start_time
+
         end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
         ctx_days = float(context_days or 0.0)
         if ctx_days <= 0:
             ctx_days = 5.0
-        if int(step_mins) == 240:
-            ctx_days = max(ctx_days, 10.0)
+
+        # Match Mode B movie behavior: resample/display candles exactly at the chosen step size.
+        try:
+            opt_res_mins = int(max(1, int(step_mins)))
+        except Exception:
+            opt_res_mins = 1
+        window_mins = int(int(visible_candles) * int(opt_res_mins))
+
+        # Ensure we load enough context candles for the viewport.
+        try:
+            ctx_days = max(ctx_days, float(window_mins) / 1440.0 + 1.0)
+        except Exception:
+            pass
         warm_start = start_time - datetime.timedelta(days=ctx_days)
 
         # Plot candles from (warm_start..end_time)
@@ -13464,41 +14952,28 @@ def generate_animation_v7_modec(
         bp = data_template.normal_bot_params_long if int(side_val) == int(Side.Long.value) else data_template.normal_bot_params_short
         side_obj = Side.Long if int(side_val) == int(Side.Long.value) else Side.Short
 
+        # Keep indicators aligned with the sim params if we are using PB7 config.
+        bp_plot = bp
+        try:
+            if using_pb7_config:
+                bp_plot = bp_long_full if side_obj == Side.Long else bp_short_full
+        except Exception:
+            bp_plot = bp
+
         df_calc = calculate_v7_indicators(
             sim_df,
-            float(bp.ema_span_0),
-            float(bp.ema_span_1),
-            float(bp.entry_volatility_ema_span_hours),
+            float(bp_plot.ema_span_0),
+            float(bp_plot.ema_span_1),
+            float(bp_plot.entry_volatility_ema_span_hours),
         )
-
-        total_ctx_mins = float(ctx_days) * 1440.0
-        opt_res_mins = int(total_ctx_mins / 300.0)
-        if opt_res_mins < 1:
-            opt_res_mins = 1
-        # Special case: for 4h stepping we want true 4h candles (240x1m -> 1 candle) aligned to start_time.
-        if int(step_mins) == 240:
-            opt_res_mins = 240
-        else:
-            try:
-                opt_res_mins = min(int(opt_res_mins), int(max(1, step_mins)))
-            except Exception:
-                pass
-
-        # Visible window: for 4h playback show 60 candles (10 days). Otherwise keep 4h cap.
-        if int(step_mins) == 240:
-            window_mins = int(60 * int(opt_res_mins))
-        else:
-            max_visible_window_mins = 240
-            window_mins = int(min(float(total_ctx_mins), float(max_visible_window_mins), float(max(int(step_mins) * 5, max_visible_window_mins))))
 
         if opt_res_mins > 1:
             agg_dict = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
             for c in df_calc.columns:
                 if c not in agg_dict:
                     agg_dict[c] = "last"
-            rs_kwargs = {}
-            if int(opt_res_mins) == 240 and int(step_mins) == 240:
-                rs_kwargs = {"origin": pd.to_datetime(start_time), "label": "right", "closed": "right"}
+            # Completed step candles: bins end on (start_time + k*step)
+            rs_kwargs = {"origin": pd.to_datetime(start_time), "label": "right", "closed": "right"}
             df_plot_source = df_calc.resample(f"{opt_res_mins}min", **rs_kwargs).agg(agg_dict).dropna()
         else:
             df_plot_source = df_calc
@@ -13535,7 +15010,7 @@ def generate_animation_v7_modec(
             events = list(events_override or [])
         else:
             # Run PB7 engine for fills
-            _progress(0.05, "Mode C: running PB7 engine...")
+            _progress(0.05, "Mode C: preparing...")
 
         def _disable_bot_params(bp_in: BotParams) -> BotParams:
             d = asdict(bp_in)
@@ -13545,40 +15020,152 @@ def generate_animation_v7_modec(
             return BotParams(**d)
 
         if events_override is None:
+            # Use PB7 config params if available.
+            bp_long_sim = bp_long_full
+            bp_short_sim = bp_short_full
+
             if side_obj == Side.Long:
-                bp_long = bp
-                bp_short = _disable_bot_params(data_template.normal_bot_params_short)
+                bp_long = bp_long_sim
+                bp_short = _disable_bot_params(bp_short_sim)
             else:
-                bp_long = _disable_bot_params(data_template.normal_bot_params_long)
-                bp_short = bp
+                bp_long = _disable_bot_params(bp_long_sim)
+                bp_short = bp_short_sim
 
+            # Warmup selection for Mode C movie:
+            # Prefer PB7-native reference if available (fills.csv from compare panel's PB7 dir).
+            # If no reference is available, run a single backtest with computed warmup.
+            # Warmup base must match Compare (computed from both sides, before disabling).
+            warmup_minutes_base = int(max(0, int(warmup_minutes_req)))
+
+            def _filter_window_events(events: list[dict]) -> list[dict]:
+                out: list[dict] = []
+                for e in events or []:
+                    try:
+                        t = pd.to_datetime(e.get("timestamp"))
+                    except Exception:
+                        continue
+                    if t < pd.to_datetime(start_time) or t > pd.to_datetime(end_time):
+                        continue
+                    out.append(e)
+                return out
+
+            # PB7 reference fills from fills.csv (if provided).
+            pb7_ref_events: list[dict] = []
             try:
-                warmup_minutes_override = int(_compute_warmup_minutes_for_mode_c(bp_long, bp_short))
+                if pb7_dir:
+                    pb7_long, pb7_short = _load_pb7_fills_csv_to_events(pb7_dir)
+                    pb7_ref_events = pb7_long if side_obj == Side.Long else pb7_short
             except Exception:
-                warmup_minutes_override = None
+                pb7_ref_events = []
+            pb7_ref_events = _filter_window_events(list(pb7_ref_events or []))
 
             try:
-                _c_long, _c_short = _run_pb7_engine_backtest_for_visualizer(
-                    pbr=pbr,
-                    exchange=str(exchange),
-                    coin=str(symbol),
-                    analysis_time=pd.to_datetime(start_time).to_pydatetime(),
-                    hist_df=hist_df,
-                    exchange_params=data_template.exchange_params,
-                    bot_params_long=bp_long,
-                    bot_params_short=bp_short,
-                    starting_balance=float(data_template.state_params.balance),
-                    max_candles_forward=int(frames * step_mins + 10),
-                    config=None,
-                    warmup_minutes_override=warmup_minutes_override,
-                )
-                c_long = list(_c_long or [])
-                c_short = list(_c_short or [])
-            except Exception as e:
-                st.error(f"Mode C backtest engine failed: {e}")
-                return
+                price_step_for_cmp = float(getattr(data_template.exchange_params, "price_step", 0.0) or 0.0)
+                qty_step_for_cmp = float(getattr(data_template.exchange_params, "qty_step", 0.0) or 0.0)
+            except Exception:
+                price_step_for_cmp = 0.0
+                qty_step_for_cmp = 0.0
 
-        _progress(0.25, "Mode C: processing fills...")
+            best = {
+                "mismatch_count": None,
+                "warmup_used": None,
+                "c_long": [],
+                "c_short": [],
+                "per_attempt": [],
+            }
+
+            warmup_extras = (0, 1000, 2000, 4000, 8000, 12000, 16000) if pb7_ref_events else (0,)
+
+            total_attempts = int(len(warmup_extras) or 1)
+
+            for attempt_idx, extra in enumerate(warmup_extras):
+                try:
+                    warmup_try = int(max(0, int(warmup_minutes_base) + int(extra)))
+                except Exception:
+                    warmup_try = int(max(0, int(warmup_minutes_base)))
+
+                # Keep progress responsive while the PB7 engine runs.
+                # Reserve 0.05..0.80 for PB7 running.
+                base_frac = 0.05 + 0.75 * (float(attempt_idx) / float(max(1, total_attempts)))
+                span_frac = 0.75 / float(max(1, total_attempts))
+
+                def _work() -> tuple[list[dict], list[dict]]:
+                    return _run_pb7_engine_backtest_for_visualizer(
+                        pbr=pbr,
+                        exchange=str(exchange),
+                        coin=str(symbol),
+                        analysis_time=pd.to_datetime(start_time).to_pydatetime(),
+                        hist_df=hist_df,
+                        exchange_params=data_template.exchange_params,
+                        bot_params_long=bp_long,
+                        bot_params_short=bp_short,
+                        starting_balance=float(sim_start_balance),
+                        max_candles_forward=int(frames * step_mins + 10),
+                        config=None,
+                        warmup_minutes_override=int(warmup_try),
+                    )
+
+                try:
+                    c_l_try, c_s_try = _run_with_indeterminate_progress(
+                        work_fn=_work,
+                        progress_fn=_progress,
+                        base=float(base_frac),
+                        span=float(span_frac),
+                        label=f"Mode C: running PB7 engine (warmup {int(warmup_try)})",
+                        update_every_s=0.2,
+                    )
+                except Exception:
+                    c_l_try, c_s_try = [], []
+
+                c_l_try = _filter_window_events(list(c_l_try or []))
+                c_s_try = _filter_window_events(list(c_s_try or []))
+
+                # Strict scoring vs PB7 fills.csv reference (if available)
+                mismatch_count = 0
+                try:
+                    if pb7_ref_events:
+                        c_side = c_l_try if side_obj == Side.Long else c_s_try
+                        df_cmp = _compare_fills_b_c(
+                            b_events=pb7_ref_events,
+                            c_events=c_side,
+                            price_step=price_step_for_cmp,
+                            qty_step=qty_step_for_cmp,
+                        )
+                        mismatch_count = int((df_cmp["status"] != "match").sum()) if not df_cmp.empty else 0
+                    else:
+                        mismatch_count = 0
+                except Exception:
+                    mismatch_count = 0
+
+                best["per_attempt"].append({"warmup": int(warmup_try), "mismatches": int(mismatch_count)})
+                if best["mismatch_count"] is None or int(mismatch_count) < int(best["mismatch_count"]):
+                    best["mismatch_count"] = int(mismatch_count)
+                    best["warmup_used"] = int(warmup_try)
+                    best["c_long"] = c_l_try
+                    best["c_short"] = c_s_try
+                if int(mismatch_count) == 0:
+                    break
+
+            c_long = list(best.get("c_long") or [])
+            c_short = list(best.get("c_short") or [])
+
+            try:
+                meta_key = f"se_movie_meta_modec__{exchange}__{symbol}"
+                st.session_state[meta_key] = {
+                    "warmup_base": int(warmup_minutes_base),
+                    "warmup_used": best.get("warmup_used"),
+                    "mismatches_vs_ref": best.get("mismatch_count"),
+                    "attempts": best.get("per_attempt"),
+                    "ref_fills_in_window": int(len(pb7_ref_events or [])),
+                    "c_fills_in_window": int(len((c_long if side_obj == Side.Long else c_short) or [])),
+                }
+            except Exception:
+                pass
+
+        if events_override is None:
+            _progress(0.82, "Mode C: processing fills...")
+        else:
+            _progress(0.25, "Mode C: processing fills...")
 
         if events_override is None:
             events = c_long if side_obj == Side.Long else c_short
@@ -13728,10 +15315,6 @@ def generate_animation_v7_modec(
                 _progress(0.3 + 0.7 * float(i + 1) / float(max(1, int(frames))), f"Mode C: building frames {i + 1}/{int(frames)}")
             current_time = start_time + datetime.timedelta(minutes=int(i) * int(step_mins))
 
-            ctx_start = current_time - datetime.timedelta(minutes=int(window_mins))
-            if ctx_start < start_time:
-                ctx_start = start_time
-
             upper_time = current_time
             try:
                 if not df_plot_source.empty and upper_time > df_plot_source.index.max():
@@ -13739,10 +15322,28 @@ def generate_animation_v7_modec(
             except Exception:
                 pass
 
+            ctx_start = pd.to_datetime(upper_time) - datetime.timedelta(minutes=int(window_mins))
+            if ctx_start < start_time:
+                ctx_start = start_time
+            # Include the first candle at start_time.
+            try:
+                if pd.notna(ctx_start) and pd.notna(start_time) and pd.to_datetime(ctx_start) <= pd.to_datetime(start_time):
+                    ctx_start = pd.to_datetime(start_time) - pd.Timedelta(minutes=int(opt_res_mins))
+            except Exception:
+                pass
+
             mask_plot = (df_plot_source.index > ctx_start) & (df_plot_source.index <= upper_time)
             df_window_plot = df_plot_source.loc[mask_plot]
             if df_window_plot is None or df_window_plot.empty:
                 continue
+
+            x_left = df_window_plot.index[0]
+            try:
+                if int(opt_res_mins) > 1:
+                    x_left = x_left - pd.Timedelta(minutes=int(opt_res_mins))
+            except Exception:
+                pass
+            x_right = df_window_plot.index[-1]
 
             # Determine which upcoming fills to preview at this time.
             upcoming_entry_idxs: list[int] = []
@@ -13811,8 +15412,8 @@ def generate_animation_v7_modec(
                     upcoming_entry_idxs = upcoming_entry_idxs[:cap]
                     upcoming_close_idxs = upcoming_close_idxs[:cap]
 
-            trace_up_entries = _make_fill_lines(upcoming_entry_idxs, kind="entry", x0=df_window_plot.index[0], x1=df_window_plot.index[-1])
-            trace_up_closes = _make_fill_lines(upcoming_close_idxs, kind="close", x0=df_window_plot.index[0], x1=df_window_plot.index[-1])
+            trace_up_entries = _make_fill_lines(upcoming_entry_idxs, kind="entry", x0=x_left, x1=x_right)
+            trace_up_closes = _make_fill_lines(upcoming_close_idxs, kind="close", x0=x_left, x1=x_right)
 
             cols = [c for c in ["ema_0", "ema_1", "ema_2"] if c in df_window_plot.columns]
             if cols:
@@ -13841,14 +15442,7 @@ def generate_animation_v7_modec(
                 y_max_frame = max(y_vals) * 1.005
 
             frame_layout = dict(
-                xaxis=dict(
-                    range=[
-                        (df_window_plot.index[0] - pd.Timedelta(minutes=int(opt_res_mins)))
-                        if (int(step_mins) == 240 and int(opt_res_mins) == 240)
-                        else df_window_plot.index[0],
-                        df_window_plot.index[-1],
-                    ]
-                ),
+                xaxis=dict(range=[x_left, x_right]),
                 yaxis=dict(range=[y_min_frame, y_max_frame]),
             )
 
@@ -13945,7 +15539,11 @@ def generate_animation_v7_modec(
                     if len(exec_df) > 5000:
                         exec_df = exec_df.iloc[-5000:]
 
-                    align_method = "backfill" if (int(step_mins) == 240 and int(opt_res_mins) == 240) else "pad"
+                    is_resampled = int(opt_res_mins) > 1
+                    try:
+                        idx_ns = df_window_plot.index.asi8
+                    except Exception:
+                        idx_ns = np.array([], dtype=np.int64)
                     stack_counts: dict[tuple, int] = {}
 
                     def _stack_step(n: int) -> int:
@@ -13958,7 +15556,8 @@ def generate_animation_v7_modec(
                         _bin_secs = max(1.0, float(opt_res_mins) * 60.0)
                     except Exception:
                         _bin_secs = 60.0
-                    _jitter_secs = max(1.0, _bin_secs * 0.06)
+                    _jitter_secs = max(1.0, _bin_secs * 0.002)
+                    _max_off = 8.0
                     for _, rr in exec_df.iterrows():
                         try:
                             ts_fill = pd.to_datetime(rr.get("timestamp"))
@@ -13974,10 +15573,16 @@ def generate_animation_v7_modec(
                         lo = None
                         hi = None
                         try:
-                            ii = int(df_window_plot.index.get_indexer([ts_fill], method=align_method)[0])
-                            if ii < 0:
-                                ii = int(df_window_plot.index.get_indexer([ts_fill], method="nearest")[0])
-                            if 0 <= ii < len(df_window_plot):
+                            if len(idx_ns) > 0:
+                                ts_ns = int(pd.to_datetime(ts_fill).value)
+                                if is_resampled:
+                                    ii = int(np.searchsorted(idx_ns, ts_ns, side="left"))
+                                else:
+                                    ii = int(np.searchsorted(idx_ns, ts_ns, side="right") - 1)
+                                if ii < 0:
+                                    ii = 0
+                                if ii >= len(df_window_plot):
+                                    ii = len(df_window_plot) - 1
                                 x_plot = df_window_plot.index[ii]
                                 lo = float(df_window_plot.iloc[ii].get("low", y_plot) or y_plot)
                                 hi = float(df_window_plot.iloc[ii].get("high", y_plot) or y_plot)
@@ -13998,21 +15603,14 @@ def generate_animation_v7_modec(
                             n = int(stack_counts.get(key, 0))
                             stack_counts[key] = n + 1
                             off = int(_stack_step(n))
-                            base = (-0.5 if is_buy else 0.5)
+                            base = (-1.0 if is_buy else 1.0)
                             total_off = float(base) + float(off)
+                            if total_off < -_max_off:
+                                total_off = -_max_off
+                            if total_off > _max_off:
+                                total_off = _max_off
                             if total_off != 0.0:
                                 xj = x_bin + pd.Timedelta(seconds=int(total_off * _jitter_secs))
-                                if align_method == "backfill":
-                                    bin_start = x_bin - pd.Timedelta(minutes=int(opt_res_mins))
-                                    bin_end = x_bin
-                                else:
-                                    bin_start = x_bin
-                                    bin_end = x_bin + pd.Timedelta(minutes=int(opt_res_mins))
-                                eps = pd.Timedelta(seconds=1)
-                                if xj < (bin_start + eps):
-                                    xj = bin_start + eps
-                                if xj > (bin_end - eps):
-                                    xj = bin_end - eps
                                 x_plot = xj
                         except Exception:
                             pass
@@ -14249,6 +15847,7 @@ def generate_animation_v7_modec(
                 "start_time": str(start_time),
                 "frames": int(frames),
                 "step_mins": int(step_mins),
+                "visible_candles": int(visible_candles),
                 "exchange": str(exchange),
                 "symbol": str(symbol),
                 "context_days": float(context_days),
@@ -14468,7 +16067,9 @@ if _has_streamlit_session_context():
     set_page_config("PBv7 Strategy Explorer")
     st.header("PBv7 Strategy Explorer", divider="red")
     st.info(
-        "Strategy Explorer uses PB7/Rust calc_* when PB7 is installed. Trailing threshold/retracement weights are now tunable via sliders."
+        "📊 **Visual analysis of PB7 grid strategies** – Uses PB7/Rust for authentic grid calculations. "
+        "Explore entry/close grids, trailing behavior, and compare with backtest results. "
+        "🎛️ Trailing thresholds and retracement weights are now adjustable via sliders."
     )
 
     build_sidebar()
