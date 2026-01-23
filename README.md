@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.49
+# v1.50
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -323,6 +323,12 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.50 (23-01-2026)
+- PBv7 Strategy Explorer (successor to Grid Visualizer): compare Mode B/Mode C, inspect fills on candles, and build Movie replays.
+- Strategy Explorer help/tutorial docs (EN/DE).
+- Movie Builder: consistent frames, correct fill-marker placement (incl. 1d), responsive progress during long PB7 computations.
+- MP4 export: codec/encoder selection.
+
 ## v1.49 (11-01-2026)
 - Add: PB7 switch supports custom remotes and remote branch browsing.
 - Improve: VPS Manager allows overriding PB7 remote URL (effective).
@@ -499,7 +505,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 ## v1.33 (30-12-2024)
 - Filter for coins with warnings on CoinMarketCap
 - Multi: Added only_cpt and apply_filter function
-- Improved Strategy Explorer by Sephral
+- Improved GridVis by Sephral
 - Fetch notice from CoinMarketCap metadata for display warning messages
 - Added preset manager for optimizer v7 by Sephral
 - Small bugfixes
@@ -511,7 +517,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.31 (16-12-2024)
 - Added coin_flags to pb7 run
-- Reworked Strategy Explorer
+- Reworked GridVisualizer
 - Updated SYMBOLMAP for CoinData
 - Change balance on bybit to totalWalletBalance
 - Add install.sh for easy install PBGui, pb6 and pb7 on ubuntu
@@ -564,7 +570,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - VPS-Manager: Don't allow add VPS with same names
 - New P+L Dashboard (Sephral)
 - New Navigation (Sephral)
-- Added V7 Strategy Explorer (formerly Grid Visualizer) (Sephral)
+- Added V7 Grid Visualizer (Sephral)
 - Added optional notes to instances (Sephral)
 - Imporved Titel & Page Headers (Sephral)
 - VPS-Manager: Added update function for localhost (Master) for pbgui, pb6 and pb7
