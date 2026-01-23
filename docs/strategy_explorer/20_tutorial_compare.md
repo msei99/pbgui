@@ -13,22 +13,12 @@ Compare is used to debug differences between:
 2. In Backtest Results, click **Strategy Explorer**.
 
 When launched this way:
-- Strategy Explorer automatically points Compare to the correct PB7 backtest folder.
-- Strategy Explorer jumps its time selection to the backtest fills window.
+- Compare is automatically set to the correct backtest folder.
+- Strategy Explorer automatically jumps to the fills time range.
 
 ---
 
-## 2) Manual setup (if needed)
-If you didn’t come from Backtest Results:
-
-1. In the Compare panel, set **PB7 backtest folder (contains fills.csv)**.
-2. Ensure the folder contains:
-   - `fills.csv`
-   - (usually) `config.json`
-
----
-
-## 3) Run Compare
+## 2) Start Compare
 1. Choose the Compare mode (e.g. PB7 vs B vs C).
 2. Click **Start Compare**.
 
@@ -39,7 +29,7 @@ Interpretation tips:
 
 ---
 
-## 4) Typical workflow to debug mismatches
+## 3) Typical debug workflow
 1. Verify you are looking at the same market (exchange/coin).
 2. Verify time overlap (fills timestamps vs selected window).
 3. Use Strategy Explorer Movie Builder with **PB7 fills.csv** to confirm the backtest fills are being read correctly.

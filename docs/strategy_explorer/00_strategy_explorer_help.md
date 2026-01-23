@@ -60,18 +60,18 @@ If you enable historical simulation, Strategy Explorer walks candles forward and
 The fills appear as markers and in a fills table.
 
 ### 3) Compare (PB7 vs B vs C)
-Compare is for reconciliation and debugging differences.
+Compare is used to check / debug discrepancies between an actual PB7 backtest and the local PBGui calculations.
 
 Typical meaning of series:
 
 - **PB7**: fills read from the PB7 backtest result (usually `fills.csv`).
 - **B**: Strategy Explorer local simulation variant (Mode B).
-- **C**: PB7 engine “upcoming fills” style variant used by Strategy Explorer (Mode C).
+- **C**: PB7 engine-based path used by PBGui (Mode C, "upcoming fills" style).
 
 Use Compare when:
 
-- You want to verify that a visualization window aligns with a backtest window.
-- You want to see if a discrepancy comes from start-time/state injection vs engine differences.
+- You want to ensure your time window matches the backtest time window.
+- You want to see if discrepancies arise between an actual backtest and the PBGui calculation.
 
 ### 4) Movie Builder
 Movie Builder generates an animation over time.
@@ -124,8 +124,6 @@ Almost always this is a time-window issue:
 - Your selected Analysis Time / Movie window does not overlap the period where fills happened.
 - If you launch Strategy Explorer from Backtest Results, the tool should auto-jump to the fills range.
 
-### “Movie Builder table is missing early orders”
-The tool previously truncated very large tables; this has been removed. If you still want pagination for performance, ask for it.
 
 ---
 

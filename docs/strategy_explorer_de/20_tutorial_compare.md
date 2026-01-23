@@ -18,17 +18,7 @@ Wenn du so startest:
 
 ---
 
-## 2) Manuelles Setup (falls nötig)
-Wenn du nicht aus Backtest Results kommst:
-
-1. Im Compare Panel setze **PB7 backtest folder (contains fills.csv)**.
-2. Der Ordner sollte enthalten:
-   - `fills.csv`
-   - (meist) `config.json`
-
----
-
-## 3) Compare starten
+## 2) Compare starten
 1. Wähle den Compare Mode (z. B. PB7 vs B vs C).
 2. Klick **Start Compare**.
 
@@ -39,7 +29,7 @@ Interpretation:
 
 ---
 
-## 4) Typischer Debug-Workflow
+## 3) Typischer Debug-Workflow
 1. Markt prüfen (Exchange/Coin).
 2. Zeitüberlappung prüfen (Fills-Timestamps vs ausgewähltes Fenster).
 3. Movie Builder mit **PB7 fills.csv** nutzen, um sicherzustellen, dass Fills korrekt geladen werden.

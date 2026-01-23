@@ -28,7 +28,7 @@ Pro:
 - Maximal visuelle Details.
 
 Contra:
-- Lokale Simulation; kann vom PB7 Backtest abweichen.
+- Lokale Simulation; kann vom PB7 Backtest leicht abweichen.
 
 ### PB7 backtest engine (C) – upcoming fills
 Nutzen wenn:
@@ -38,7 +38,7 @@ Pro:
 - Näher an PB7 Logik.
 
 Contra:
-- Keine vollständigen „open grids“ pro Candle.
+- Keine vollständigen „open grids“ pro Kerze.
 
 ### PB7 fills.csv (from backtest)
 Nutzen wenn:

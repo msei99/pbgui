@@ -1,6 +1,6 @@
 # Strategy Explorer – Hilfe
 
-Strategy Explorer ist ein Debug-/Analyse-Tool für PB7 Grid-Strategien. Es kombiniert:
+Strategy Explorer ist ein Analyse-Tool für PB7 Strategien. Es kombiniert:
 
 - Eine **Snapshot-Ansicht** (Entry-/Close-Grids, Trailing-Linien) zu einer gewählten **Analysis Time**.
 - Optional eine **Historical Simulation** (lokaler Candle-Walk), um Fills/Orders als Marker zu sehen.
@@ -19,12 +19,12 @@ Strategy Explorer arbeitet immer auf einem konkreten Markt:
 - **Exchange**: z. B. `bybit`
 - **Coin**: Coin/Market-Code aus deinem lokalen PB7 OHLCV-Cache
 
-Wenn keine Candles gefunden werden, kann Strategy Explorer nichts rendern.
+Wenn keine Candles gefunden werden, kann Strategy Explorer Keine Kerzen rendern.
 
 ### Analysis Time (wichtigster Regler)
 Strategy Explorer berechnet Grids/Trailing-State für einen Zeitpunkt: **Analysis Time**.
 
-- Das ist praktisch die Candle am **rechten Rand** des Charts.
+- Die Grids/Trailings entsprechen der Kerze am **rechten Rand** des Charts.
 - Alle Grid-/Level-Linien sind „was der Bot als nächstes platzieren würde“, *unter der Annahme des injizierten States zu diesem Zeitpunkt*.
 
 ### Context window
@@ -42,12 +42,12 @@ Standardverhalten von Strategy Explorer.
 Du wählst die Analysis Time und Strategy Explorer rendert u. a.:
 
 - **Entry grid** Levels (potenzielle Entries)
-- **Close grid** Levels (TP/Close-Ladder)
+- **Close grid** Levels (TP/Close-Schritte)
 - Trailing Thresholds/Triggers + Referenzlinien
 
 Damit beantwortest du z. B.:
 
-- „Welche Grid-Ladder würde PB7 jetzt stellen?“
+- „Welche Grid-Schritte würde PB7 jetzt stellen?“
 - „Warum triggert Trailing hier?“
 - „Warum sind meine Close-Orders so eng/weit?“
 
@@ -60,7 +60,7 @@ Wenn aktiviert, läuft Strategy Explorer candle-by-candle vorwärts und zeichnet
 Fills erscheinen als Marker und in einer Tabelle.
 
 ### 3) Compare (PB7 vs B vs C)
-Compare dient zum Reconciliaten / Debuggen von Abweichungen.
+Compare dient zum Prüfen / Debuggen von Abweichungen eines echten PB7 Backtests zu den lokalen PBGui Berechnungen
 
 Typische Bedeutung:
 
@@ -71,7 +71,7 @@ Typische Bedeutung:
 Nutze Compare wenn:
 
 - Du sicherstellen willst, dass dein Zeitfenster dem Backtest-Zeitfenster entspricht.
-- Du sehen willst, ob Abweichungen von Startzeit/State-Injection vs Engine-Unterschieden kommen.
+- Du sehen willst, ob Abweichungen zwischen einem echten Backtest und der PBGui Berechnung entstehen.
 
 ### 4) Movie Builder
 Movie Builder erzeugt eine Animation über die Zeit.
@@ -83,12 +83,12 @@ Es gibt drei Engines:
   - Fills kommen aus lokaler Simulation.
 
 - **PB7 backtest engine (C) – upcoming fills**
-  - Nutzt den PB7 Engine-Pfad, den das Tool verwendet.
-  - Fokus: Fills und Vorschau „upcoming fills“; keine vollständigen Grid-Ladders pro Candle.
+  - Nutzt den PB7 Engine-Pfad, welchen PBGui aus Passivbot verwendet.
+  - Fokus: Fills und Vorschau „upcoming fills“; keine vollständigen Grid-Schritte.
 
 - **PB7 fills.csv (from backtest)**
-  - Visualisiert ein existierendes PB7 Backtest Result (`fills.csv`) als Ground Truth.
-  - Keine Neuberechnung der Engine.
+  - Visualisiert ein existierendes PB7 Backtest Result (`fills.csv`).
+  - Keine Neuberechnung durch PBGui.
 
 ---
 
@@ -97,7 +97,7 @@ Strategy Explorer kann Long und/oder Short anzeigen – abhängig von deiner Con
 
 ### Long
 - **Long entry grid**: typischerweise Buy-Level unterhalb des Preises.
-- **Long close grid**: typischerweise Sell/Close-Level oberhalb (TP-Ladder).
+- **Long close grid**: typischerweise Sell/Close-Level oberhalb (TP-Schritten).
 
 ### Short
 - **Short entry grid**: typischerweise Sell-Level oberhalb des Preises.
