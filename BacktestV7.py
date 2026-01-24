@@ -12,7 +12,7 @@ import time
 import multiprocessing
 import pandas as pd
 from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
-from pbgui_purefunc import config_pretty_str
+from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 from pbgui_purefunc import load_ini, save_ini
 from PBCoinData import CoinData, normalize_symbol
 import uuid
@@ -955,6 +955,11 @@ class BacktestV7Item(ConfigV7Editor):
 
     def save(self):
         # Create the backtest directory if it does not exist
+        preflight_errors = pb7_suite_preflight_errors(self.config.config)
+        if preflight_errors:
+            error_popup("\n\n".join(preflight_errors))
+            return
+        
         self.path = Path(f'{PBGDIR}/data/bt_v7/{self.name}')
         if not self.path.exists():
             self.path.mkdir(parents=True)
@@ -981,6 +986,11 @@ class BacktestV7Item(ConfigV7Editor):
         self.config.save_config()
 
     def save_queue(self, parameters : str = None):
+        preflight_errors = pb7_suite_preflight_errors(self.config.config)
+        if preflight_errors:
+            error_popup("\n\n".join(preflight_errors))
+            return
+
         dest = Path(f'{PBGDIR}/data/bt_v7_queue')
         unique_filename = str(uuid.uuid4())
         file = Path(f'{dest}/{unique_filename}.json') 
