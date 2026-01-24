@@ -1021,6 +1021,7 @@ class BacktestV7Item(ConfigV7Editor):
             if (
                 k.startswith("suite_")
                 or k.startswith("bt_suite_")
+                or k.startswith("bt_edit_suite_agg_")
                 or k.startswith("select_scenarios_")
                 or k.startswith("bt_select_scenarios_")
                 or k.startswith("select_aggregates_")
