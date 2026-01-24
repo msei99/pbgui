@@ -5503,8 +5503,19 @@ class OptimizeV7Item(ConfigV7Editor):
         """UI for editing metric-specific aggregation rules."""
         aggregate_options = ["mean", "min", "max", "std", "median"]
         
-        # For aggregation, use base metric names without currency suffix
-        metrics = sorted(list(CURRENCY_METRICS) + list(SHARED_METRICS))
+        # Aggregation supports both base metric keys and explicit currency suffixes.
+        # Also include any existing keys from the config to avoid blank values in SelectboxColumn.
+        base_metrics = set(CURRENCY_METRICS) | set(SHARED_METRICS)
+        currency_suffix_metrics: set[str] = set()
+        for m in CURRENCY_METRICS:
+            currency_suffix_metrics.add(f"{m}_usd")
+            currency_suffix_metrics.add(f"{m}_btc")
+        existing_metrics = {
+            k
+            for k in getattr(suite, "aggregate", {}).keys()
+            if isinstance(k, str) and k != "default"
+        }
+        metrics = sorted(base_metrics | currency_suffix_metrics | existing_metrics)
         
         # Get current metric-specific aggregations (exclude "default")
         current_aggregates = {k: v for k, v in suite.aggregate.items() if k != "default"}
