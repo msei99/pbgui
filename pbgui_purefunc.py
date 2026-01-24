@@ -173,3 +173,70 @@ def get_git_remote_url(repo_dir: str, remote_name: str, timeout_sec: int = 10) -
     if res.returncode != 0:
         return ""
     return (res.stdout or "").strip()
+
+
+def pb7_suite_preflight_errors(config: dict) -> list[str]:
+    """Return preflight errors for PB7 suite configs.
+
+    PB7 behavior note:
+    - If `backtest.suite.enabled` is true and `include_base_scenario` is false,
+      PB7 builds the master coin universe ONLY from scenario `coins` and
+      `coin_sources`. In that mode, `live.approved_coins` is effectively ignored
+      for coin selection.
+
+    This helper is intentionally pure (no Streamlit, no IO) and conservative.
+    """
+
+    errors: list[str] = []
+    if not isinstance(config, dict):
+        return ["Invalid config: expected a JSON object."]
+
+    backtest = config.get("backtest")
+    if not isinstance(backtest, dict):
+        return ["Invalid config: missing or invalid 'backtest' section."]
+
+    suite = backtest.get("suite") or {}
+    if not isinstance(suite, dict) or not suite.get("enabled"):
+        return []
+
+    scenarios = suite.get("scenarios") or []
+    if not isinstance(scenarios, list) or not scenarios:
+        errors.append("Suite is enabled but has no scenarios.")
+        return errors
+
+    include_base = bool(suite.get("include_base_scenario", False))
+    if include_base:
+        return []
+
+    base_coin_sources = backtest.get("coin_sources") or {}
+    has_base_coin_sources = isinstance(base_coin_sources, dict) and any(
+        v is not None and str(v).strip() for v in base_coin_sources.values()
+    )
+
+    has_any_scenario_coins = False
+    has_any_scenario_coin_sources = False
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            continue
+        coins = scenario.get("coins")
+        if isinstance(coins, (list, tuple, set)):
+            if any(str(x).strip() for x in coins if x is not None):
+                has_any_scenario_coins = True
+        elif isinstance(coins, str) and coins.strip():
+            has_any_scenario_coins = True
+
+        coin_sources = scenario.get("coin_sources")
+        if isinstance(coin_sources, dict) and any(
+            v is not None and str(v).strip() for v in coin_sources.values()
+        ):
+            has_any_scenario_coin_sources = True
+
+    if not (has_base_coin_sources or has_any_scenario_coins or has_any_scenario_coin_sources):
+        errors.append(
+            "Suite is enabled with include_base_scenario=false, but no coins are defined in any scenario "
+            "(and no coin_sources are set). PB7 will build an empty master coin list and fail with "
+            "'No coin data found on any exchange for the requested date range.'\n"
+            "Fix: enable include_base_scenario, OR set scenario coins, OR set coin_sources."
+        )
+
+    return errors

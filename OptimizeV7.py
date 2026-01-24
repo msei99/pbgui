@@ -12,6 +12,7 @@ import multiprocessing
 from Exchange import Exchange, V7
 from PBCoinData import CoinData
 from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
+from pbgui_purefunc import pb7_suite_preflight_errors
 import uuid
 from pathlib import Path, PurePath
 from User import Users
@@ -175,6 +176,38 @@ class OptimizeV7QueueItem:
 
     def run(self):
         if not self.is_finish() and not self.is_running():
+            def _emit_error(message: str) -> None:
+                try:
+                    st.error(message)
+                except Exception:
+                    print(message)
+
+            try:
+                with open(self.json, "r", encoding="utf-8") as f:
+                    opt_config = json.load(f)
+            except Exception as exc:
+                msg = f"Failed to read optimize config JSON: {self.json} ({exc})"
+                _emit_error(msg)
+                try:
+                    self.log.parent.mkdir(parents=True, exist_ok=True)
+                    with open(self.log, "w", encoding="utf-8") as log_f:
+                        log_f.write(msg + "\n")
+                except Exception:
+                    pass
+                return
+
+            preflight_errors = pb7_suite_preflight_errors(opt_config)
+            if preflight_errors:
+                msg = "\n\n".join(preflight_errors)
+                _emit_error(msg)
+                try:
+                    self.log.parent.mkdir(parents=True, exist_ok=True)
+                    with open(self.log, "w", encoding="utf-8") as log_f:
+                        log_f.write(msg + "\n")
+                except Exception:
+                    pass
+                return
+
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(pb7venv()) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
@@ -1036,6 +1069,11 @@ class OptimizeV7Item(ConfigV7Editor):
     def preset_save(self) -> bool:
         if self.name == "":
             error_popup("Name is empty")
+            return False
+
+        preflight_errors = pb7_suite_preflight_errors(self.config.config)
+        if preflight_errors:
+            error_popup("\n\n".join(preflight_errors))
             return False
         
         dest = Path(f'{PBGDIR}/data/opt_v7_presets')
@@ -5313,6 +5351,11 @@ class OptimizeV7Item(ConfigV7Editor):
             # Add new scenario UI
             self._add_scenario_ui(suite)
 
+            # Prevent creating invalid suite configs: PB7 ignores approved_coins when include_base_scenario=false.
+            preflight_errors = pb7_suite_preflight_errors(self.config.config)
+            if preflight_errors:
+                st.error("\n\n".join(preflight_errors))
+
     def _get_available_symbols(self, exchanges=None):
         """Get available symbols from coindata for specified exchanges.
         Returns normalized coin names (without USDT/USDC suffixes).
@@ -6267,6 +6310,11 @@ class OptimizeV7Item(ConfigV7Editor):
             del st.session_state[key]
 
     def save(self):
+        preflight_errors = pb7_suite_preflight_errors(self.config.config)
+        if preflight_errors:
+            error_popup("\n\n".join(preflight_errors))
+            return
+
         self.path = Path(f'{PBGDIR}/data/opt_v7')
         if not self.path.exists():
             self.path.mkdir(parents=True)
@@ -6278,6 +6326,11 @@ class OptimizeV7Item(ConfigV7Editor):
         self.config.save_config()
 
     def save_queue(self):
+        preflight_errors = pb7_suite_preflight_errors(self.config.config)
+        if preflight_errors:
+            error_popup("\n\n".join(preflight_errors))
+            return
+
         dest = Path(f'{PBGDIR}/data/opt_v7_queue')
         unique_filename = str(uuid.uuid4())
         file = Path(f'{dest}/{unique_filename}.json') 

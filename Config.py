@@ -2,7 +2,7 @@ import streamlit as st
 from pathlib import Path
 import json
 from pbgui_func import validateJSON, error_popup
-from pbgui_purefunc import config_pretty_str
+from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 import pbgui_help
 import traceback
 import multiprocessing
@@ -7179,9 +7179,14 @@ class ConfigV7Editor:
                 st.data_editor(d_scenarios, column_config=column_config, hide_index=True, key=f"{key_prefix}select_scenarios_{suite_key_ver}_{ed_key}", width="stretch")
             else:
                 st.info("No scenarios configured. Add a scenario below to test your config across different coin sets, date ranges, or parameter variations.")
-            
+
             # Add new scenario UI
             self._add_scenario_ui(suite)
+
+            # Prevent creating invalid suite configs: PB7 ignores approved_coins when include_base_scenario=false.
+            preflight_errors = pb7_suite_preflight_errors(self.config.config)
+            if preflight_errors:
+                st.error("\n\n".join(preflight_errors))
 
 # ============================================================================
 # ConfigV7 - Main configuration class
