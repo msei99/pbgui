@@ -6454,17 +6454,31 @@ class ConfigV7Editor:
     
     def _edit_aggregate_ui(self, suite):
         """UI for editing metric-specific aggregation rules."""
+        key_prefix = self._get_key_prefix()
+        suite_key_ver = int(st.session_state.get(f"{key_prefix}suite_key_ver", 0) or 0)
         aggregate_options = ["mean", "min", "max", "std", "median"]
         
-        # For aggregation, use base metric names without currency suffix
-        metrics = sorted(list(CURRENCY_METRICS) + list(SHARED_METRICS))
+        # Aggregation supports both base metric keys and explicit currency suffixes.
+        # Also include any existing keys from the config to avoid blank values in SelectboxColumn.
+        base_metrics = set(CURRENCY_METRICS) | set(SHARED_METRICS)
+        currency_suffix_metrics: set[str] = set()
+        for m in CURRENCY_METRICS:
+            currency_suffix_metrics.add(f"{m}_usd")
+            currency_suffix_metrics.add(f"{m}_btc")
+        existing_metrics = {
+            k
+            for k in getattr(suite, "aggregate", {}).keys()
+            if isinstance(k, str) and k != "default"
+        }
+        metrics = sorted(base_metrics | currency_suffix_metrics | existing_metrics)
         
         # Get current metric-specific aggregations (exclude "default")
         current_aggregates = {k: v for k, v in suite.aggregate.items() if k != "default"}
         
         # Init editor key
-        if "suite_agg_ed_key" not in st.session_state:
-            st.session_state.suite_agg_ed_key = 0
+        agg_ed_key_name = f"{key_prefix}suite_agg_ed_key_{suite_key_ver}"
+        if agg_ed_key_name not in st.session_state:
+            st.session_state[agg_ed_key_name] = 0
         
         if current_aggregates:
             st.caption("Metric-specific aggregation rules:")
@@ -6477,11 +6491,12 @@ class ConfigV7Editor:
                     "delete": False
                 })
             
-            ed_key = st.session_state.suite_agg_ed_key
+            ed_key = st.session_state[agg_ed_key_name]
             
             # Handle data_editor events
-            if f'select_aggregates_{ed_key}' in st.session_state:
-                ed = st.session_state[f'select_aggregates_{ed_key}']
+            table_key = f"{key_prefix}select_aggregates_{suite_key_ver}_{ed_key}"
+            if table_key in st.session_state:
+                ed = st.session_state[table_key]
                 changes_made = False
                 new_agg = dict(suite.aggregate)
                 
@@ -6506,7 +6521,7 @@ class ConfigV7Editor:
                 if changes_made:
                     suite.aggregate = new_agg
                     self.config.backtest.suite = suite
-                    st.session_state.suite_agg_ed_key += 1
+                    st.session_state[agg_ed_key_name] += 1
                     st.rerun()
             
             # Display aggregates table
@@ -6515,22 +6530,22 @@ class ConfigV7Editor:
                 "aggregation": st.column_config.SelectboxColumn("Aggregation", options=aggregate_options, required=True),
                 "delete": st.column_config.CheckboxColumn("Del", width="small"),
             }
-            st.data_editor(d_aggregates, column_config=column_config, hide_index=True, key=f'select_aggregates_{ed_key}', width="stretch")
+            st.data_editor(d_aggregates, column_config=column_config, hide_index=True, key=f"{key_prefix}select_aggregates_{suite_key_ver}_{ed_key}", width="stretch")
         
         # Add new metric-specific aggregation
         st.subheader("Add Metric")
         col1, col2, col3 = st.columns([1, 1, 2], vertical_alignment="bottom")
         with col1:
-            new_metric = st.selectbox("Metric", metrics, key="suite_agg_new_metric", label_visibility="visible", help=pbgui_help.suite_add_metric)
+            new_metric = st.selectbox("Metric", metrics, key=f"{key_prefix}suite_agg_new_metric_{suite_key_ver}", label_visibility="visible", help=pbgui_help.suite_add_metric)
         with col2:
-            new_agg = st.selectbox("Aggregation", aggregate_options, key="suite_agg_new_method", label_visibility="visible", help=pbgui_help.suite_add_aggregation)
+            new_agg = st.selectbox("Aggregation", aggregate_options, key=f"{key_prefix}suite_agg_new_method_{suite_key_ver}", label_visibility="visible", help=pbgui_help.suite_add_aggregation)
         with col3:
-            if st.button("➕", key="suite_agg_add", help=pbgui_help.suite_add_button):
+            if st.button("➕", key=f"{key_prefix}suite_agg_add_{suite_key_ver}", help=pbgui_help.suite_add_button):
                 updated_agg = dict(suite.aggregate)
                 updated_agg[new_metric] = new_agg
                 suite.aggregate = updated_agg
                 self.config.backtest.suite = suite
-                st.session_state.suite_agg_ed_key += 1
+                st.session_state[agg_ed_key_name] += 1
                 st.rerun()
     
     @st.fragment
@@ -6619,10 +6634,16 @@ class ConfigV7Editor:
 
     def _edit_scenario_ui(self, suite):
         """UI for editing an existing scenario."""
-        idx = st.session_state.edit_scenario_idx
+        key_prefix = self._get_key_prefix()
+        suite_key_ver = int(st.session_state.get(f"{key_prefix}suite_key_ver", 0) or 0)
+        idx_key = f"{key_prefix}edit_scenario_idx_{suite_key_ver}"
+        suite_ed_key_name = f"{key_prefix}suite_ed_key_{suite_key_ver}"
+        idx = st.session_state.get(idx_key)
+        if idx is None:
+            return
         scenario = suite.get_scenario(idx)
         if not scenario:
-            st.session_state.edit_scenario_idx = None
+            st.session_state[idx_key] = None
             st.rerun()
             return
         
@@ -6789,20 +6810,22 @@ class ConfigV7Editor:
                 # Trigger setter to update _backtest dict (like limits pattern)
                 self.config.backtest.suite = suite
                 # Clean up session state
-                st.session_state.edit_scenario_idx = None
-                st.session_state.suite_ed_key += 1
+                st.session_state[idx_key] = None
+                if suite_ed_key_name in st.session_state:
+                    st.session_state[suite_ed_key_name] += 1
                 st.rerun()
         with col2:
             if st.button("Cancel", key="edit_scenario_cancel"):
-                st.session_state.edit_scenario_idx = None
+                st.session_state[idx_key] = None
                 st.rerun()
         with col3:
             if st.button("Delete", key="edit_scenario_delete"):
                 suite.remove_scenario(idx)
                 # Trigger setter to update _backtest dict (like limits pattern)
                 self.config.backtest.suite = suite
-                st.session_state.edit_scenario_idx = None
-                st.session_state.suite_ed_key += 1
+                st.session_state[idx_key] = None
+                if suite_ed_key_name in st.session_state:
+                    st.session_state[suite_ed_key_name] += 1
                 st.rerun()
 
     def _add_scenario_ui(self, suite):
@@ -6841,33 +6864,40 @@ class ConfigV7Editor:
         """UI for configuring multi-scenario suite for backtesting/optimization."""
         suite = self.config.backtest.suite
         has_scenarios = bool(suite.scenarios)
+        key_prefix = self._get_key_prefix()
+        suite_key_ver_name = f"{key_prefix}suite_key_ver"
+        if suite_key_ver_name not in st.session_state:
+            st.session_state[suite_key_ver_name] = 0
+        suite_key_ver = int(st.session_state.get(suite_key_ver_name, 0) or 0)
         
         with st.expander("Suite Configuration", expanded=suite.enabled or has_scenarios):
             # Init session state
-            if "suite_ed_key" not in st.session_state:
-                st.session_state.suite_ed_key = 0
+            suite_ed_key_name = f"{key_prefix}suite_ed_key_{suite_key_ver}"
+            edit_scenario_idx_name = f"{key_prefix}edit_scenario_idx_{suite_key_ver}"
+            if suite_ed_key_name not in st.session_state:
+                st.session_state[suite_ed_key_name] = 0
             
             # Main suite controls
             col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
             with col1:
-                new_enabled = st.checkbox("Enable Suite", value=suite.enabled, key="suite_enabled", help=pbgui_help.suite_enabled)
+                new_enabled = st.checkbox("Enable Suite", value=suite.enabled, key=f"{key_prefix}suite_enabled_{suite_key_ver}", help=pbgui_help.suite_enabled)
                 if new_enabled != suite.enabled:
                     suite.enabled = new_enabled
                     self.config.backtest.suite = suite
             with col2:
-                new_include_base = st.checkbox("Include Base Scenario", value=suite.include_base_scenario, key="suite_include_base", help=pbgui_help.suite_include_base_scenario)
+                new_include_base = st.checkbox("Include Base Scenario", value=suite.include_base_scenario, key=f"{key_prefix}suite_include_base_{suite_key_ver}", help=pbgui_help.suite_include_base_scenario)
                 if new_include_base != suite.include_base_scenario:
                     suite.include_base_scenario = new_include_base
                     self.config.backtest.suite = suite
             with col3:
-                new_base_label = st.text_input("Base Label", value=suite.base_label, key="suite_base_label", help=pbgui_help.suite_base_label)
+                new_base_label = st.text_input("Base Label", value=suite.base_label, key=f"{key_prefix}suite_base_label_{suite_key_ver}", help=pbgui_help.suite_base_label)
                 if new_base_label != suite.base_label:
                     suite.base_label = new_base_label
                     self.config.backtest.suite = suite
             with col4:
                 aggregate_options = ["mean", "min", "max", "std", "median"]
                 current_default = suite.aggregate.get("default", "mean")
-                new_default = st.selectbox("Default Aggregate", aggregate_options, index=aggregate_options.index(current_default) if current_default in aggregate_options else 0, key="suite_aggregate_default", help=pbgui_help.suite_aggregate)
+                new_default = st.selectbox("Default Aggregate", aggregate_options, index=aggregate_options.index(current_default) if current_default in aggregate_options else 0, key=f"{key_prefix}suite_aggregate_default_{suite_key_ver}", help=pbgui_help.suite_aggregate)
                 if new_default != current_default:
                     new_agg = dict(suite.aggregate)
                     new_agg["default"] = new_default
@@ -6878,7 +6908,7 @@ class ConfigV7Editor:
             self._edit_aggregate_ui(suite)
             
             # Scenario editing mode check
-            if st.session_state.get("edit_scenario_idx") is not None:
+            if st.session_state.get(edit_scenario_idx_name) is not None:
                 self._edit_scenario_ui(suite)
                 return
             
@@ -6906,20 +6936,21 @@ class ConfigV7Editor:
                         "delete": False
                     })
                 
-                ed_key = st.session_state.suite_ed_key
+                ed_key = st.session_state[suite_ed_key_name]
                 
                 # Handle data_editor events
-                if f'select_scenarios_{ed_key}' in st.session_state:
-                    ed = st.session_state[f'select_scenarios_{ed_key}']
+                scenarios_table_key = f"{key_prefix}select_scenarios_{suite_key_ver}_{ed_key}"
+                if scenarios_table_key in st.session_state:
+                    ed = st.session_state[scenarios_table_key]
                     for row in ed.get("edited_rows", {}):
                         if ed["edited_rows"][row].get("delete"):
                             suite.remove_scenario(row)
                             # Trigger setter to update _backtest dict (like limits pattern)
                             self.config.backtest.suite = suite
-                            st.session_state.suite_ed_key += 1
+                            st.session_state[suite_ed_key_name] += 1
                             st.rerun()
                         if ed["edited_rows"][row].get("edit"):
-                            st.session_state.edit_scenario_idx = row
+                            st.session_state[edit_scenario_idx_name] = row
                             st.rerun()
                 
                 # Display scenarios table
@@ -6933,7 +6964,7 @@ class ConfigV7Editor:
                     "edit": st.column_config.CheckboxColumn("Edit", width="small"),
                     "delete": st.column_config.CheckboxColumn("Del", width="small"),
                 }
-                st.data_editor(d_scenarios, column_config=column_config, hide_index=True, key=f'select_scenarios_{ed_key}', width="stretch")
+                st.data_editor(d_scenarios, column_config=column_config, hide_index=True, key=f"{key_prefix}select_scenarios_{suite_key_ver}_{ed_key}", width="stretch")
             else:
                 st.info("No scenarios configured. Add a scenario below to test your config across different coin sets, date ranges, or parameter variations.")
             

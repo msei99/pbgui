@@ -999,47 +999,100 @@ class BacktestV7Item(ConfigV7Editor):
         path = Path(self.path).parent
         rmtree(path, ignore_errors=True)
 
+    def _clear_config_widget_session_state_after_import(self) -> None:
+        """Clear Streamlit widget state so imported configs are reflected in UI.
+
+        Copy/paste import happens without rebuilding the ConfigV7 object from disk, so any
+        existing widget keys (especially suite_* keys) will override the new defaults.
+        """
+
+        # Clear all backtest editor keys
+        for k in list(st.session_state.keys()):
+            if k.startswith("edit_bt_v7_"):
+                st.session_state.pop(k, None)
+
+        # Clear bot editor keys
+        for k in list(st.session_state.keys()):
+            if k.startswith("edit_configv7_"):
+                st.session_state.pop(k, None)
+
+        # Clear suite/scenario editor keys (these otherwise force old values)
+        for k in list(st.session_state.keys()):
+            if (
+                k.startswith("suite_")
+                or k.startswith("bt_suite_")
+                or k.startswith("select_scenarios_")
+                or k.startswith("bt_select_scenarios_")
+                or k.startswith("select_aggregates_")
+                or k.startswith("bt_select_aggregates_")
+                or k.startswith("edit_scenario_")
+                or k.startswith("bt_edit_scenario_")
+                or k.startswith("add_scenario_")
+                or k.startswith("scenario_")
+            ):
+                if k == "bt_suite_key_ver":
+                    continue
+                st.session_state.pop(k, None)
+
+        # Clear coin_sources editor keys (ConfigV7Editor uses bt_ prefix)
+        for k in list(st.session_state.keys()):
+            if (
+                k.startswith("bt_coin_sources_")
+                or k.startswith("bt_new_coin_source_")
+                or k.startswith("bt_add_new_coin_source")
+                or k == "bt_coin_sources_table"
+            ):
+                st.session_state.pop(k, None)
+
     @st.dialog("Paste config", width="large")
     def import_instance(self):
-        invalid_json = False
-        # Init session_state for keys
-        if "import_backtest_v7_config" in st.session_state:
-            if st.session_state.import_backtest_v7_config != json.dumps(self.config.config, indent=4):
-                try:
-                    self.config.config = json.loads(st.session_state.import_backtest_v7_config)
-                except Exception:
-                    invalid_json = True
+        # Keep the raw text stable while the user is editing/pasting.
+        if "import_backtest_v7_config" not in st.session_state:
             st.session_state.import_backtest_v7_config = json.dumps(self.config.config, indent=4)
 
-        if invalid_json:
-            st.error('Invalid JSON (use true/false/null, not True/False/None)', icon="⚠️")
-        # Display import
-        st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_backtest_v7_config", height=500)
+        st.text_area(
+            "config",
+            key="import_backtest_v7_config",
+            height=500,
+            help="Paste full JSON config here",
+        )
+
         col1, col2 = st.columns([1,1])
         with col1:
             if st.button("OK"):
-                del st.session_state.edit_bt_v7_exchanges
-                del st.session_state.edit_bt_v7_name
-                del st.session_state.edit_bt_v7_start_date
-                del st.session_state.edit_bt_v7_end_date
-                del st.session_state.edit_bt_v7_starting_balance
-                del st.session_state.edit_bt_v7_minimum_coin_age_days
-                del st.session_state.edit_bt_v7_compress_cache
-                del st.session_state.edit_bt_v7_market_cap
-                del st.session_state.edit_bt_v7_vol_mcap
-                del st.session_state.edit_bt_v7_approved_coins_long
-                del st.session_state.edit_bt_v7_approved_coins_short
-                del st.session_state.edit_bt_v7_ignored_coins_long
-                del st.session_state.edit_bt_v7_ignored_coins_short
-                del st.session_state.edit_configv7_long_twe
-                del st.session_state.edit_configv7_short_twe
-                del st.session_state.edit_configv7_long_positions
-                del st.session_state.edit_configv7_short_positions
-                del st.session_state.edit_configv7_long
-                del st.session_state.edit_configv7_short
+                try:
+                    raw_txt = str(st.session_state.get("import_backtest_v7_config") or "")
+                    parsed = json.loads(raw_txt)
+                except Exception:
+                    st.error('Invalid JSON (use true/false/null, not True/False/None)', icon="⚠️")
+                    return
+
+                # Apply config via setter (ensures backtest/suite/pbgui are parsed into objects)
+                self.config.config = parsed
+
+                # Reset widget state so UI reflects the imported config values.
+                # IMPORTANT: don't wipe bt_suite_key_ver.
+                self._clear_config_widget_session_state_after_import()
+
+                # Force fresh suite widget keys after import so stale frontend widget state
+                # cannot override the imported config (Enable Suite etc.).
+                st.session_state["bt_suite_key_ver"] = int(st.session_state.get("bt_suite_key_ver", 0) or 0) + 1
+                ver = int(st.session_state.get("bt_suite_key_ver", 0) or 0)
+
+                # Seed suite widgets for this new version from the imported config.
+                try:
+                    suite_obj = self.config.backtest.suite
+                    st.session_state[f"bt_suite_enabled_{ver}"] = bool(getattr(suite_obj, "enabled", False))
+                    st.session_state[f"bt_suite_include_base_{ver}"] = bool(getattr(suite_obj, "include_base_scenario", True))
+                    st.session_state[f"bt_suite_base_label_{ver}"] = str(getattr(suite_obj, "base_label", "base") or "base")
+                    st.session_state[f"bt_suite_aggregate_default_{ver}"] = str(getattr(getattr(suite_obj, "aggregate", {}) or {}, "get", lambda *_: "mean")("default", "mean"))
+                except Exception:
+                    pass
                 st.rerun()
         with col2:
             if st.button("Cancel"):
+                # Restore the textarea to current config for next open
+                st.session_state.import_backtest_v7_config = json.dumps(self.config.config, indent=4)
                 st.rerun()
 
 class BacktestV7Result:
