@@ -6453,97 +6453,309 @@ class ConfigV7Editor:
         return get_aggregate_metrics()
     
     def _edit_aggregate_ui(self, suite):
-        """UI for editing metric-specific aggregation rules."""
+        """UI for editing metric-specific aggregation rules (limits-style)."""
         key_prefix = self._get_key_prefix()
         suite_key_ver = int(st.session_state.get(f"{key_prefix}suite_key_ver", 0) or 0)
+
         aggregate_options = ["mean", "min", "max", "std", "median"]
-        
-        # Aggregation supports both base metric keys and explicit currency suffixes.
-        # Also include any existing keys from the config to avoid blank values in SelectboxColumn.
-        base_metrics = set(CURRENCY_METRICS) | set(SHARED_METRICS)
-        currency_suffix_metrics: set[str] = set()
-        for m in CURRENCY_METRICS:
-            currency_suffix_metrics.add(f"{m}_usd")
-            currency_suffix_metrics.add(f"{m}_btc")
-        existing_metrics = {
-            k
-            for k in getattr(suite, "aggregate", {}).keys()
-            if isinstance(k, str) and k != "default"
-        }
-        metrics = sorted(base_metrics | currency_suffix_metrics | existing_metrics)
-        
-        # Get current metric-specific aggregations (exclude "default")
-        current_aggregates = {k: v for k, v in suite.aggregate.items() if k != "default"}
-        
-        # Init editor key
+        agg_currency_options = ["both", "usd", "btc"]
+        type_options = ["all"] + list(get_metric_groups())
+
+        def split_agg_metric_key(metric_key: str) -> tuple[str, str]:
+            """Return (base_metric, currency_sel) where currency_sel in {both, usd, btc}.
+
+            For currency metrics:
+            - base key (no suffix) => currency_sel == both
+            - suffix key (e.g. *_usd) => currency_sel == usd/btc
+            """
+            if not isinstance(metric_key, str):
+                return str(metric_key), "both"
+
+            for prefix, currency in (("usd_", "usd"), ("btc_", "btc")):
+                if metric_key.startswith(prefix):
+                    core = metric_key[len(prefix):]
+                    if core in SHARED_METRICS:
+                        return core, "both"
+                    return core, currency
+
+            for suffix, currency in (("_usd", "usd"), ("_btc", "btc")):
+                if metric_key.endswith(suffix):
+                    core = metric_key[:-len(suffix)]
+                    return core, currency
+
+            base = metric_key
+            if is_currency_metric(base):
+                return base, "both"
+            return base, "both"
+
+        def build_agg_metric_key(base_metric: str, currency_sel: str) -> str:
+            if currency_sel in ("usd", "btc") and is_currency_metric(base_metric):
+                return f"{base_metric}_{currency_sel}"
+            return base_metric
+
+        # Keys for this suite editor version
         agg_ed_key_name = f"{key_prefix}suite_agg_ed_key_{suite_key_ver}"
+        edit_key_name = f"{key_prefix}edit_suite_agg_metric_{suite_key_ver}"
         if agg_ed_key_name not in st.session_state:
             st.session_state[agg_ed_key_name] = 0
-        
-        if current_aggregates:
-            st.caption("Metric-specific aggregation rules:")
-            # Build display data
-            d_aggregates = []
-            for metric, agg_method in current_aggregates.items():
-                d_aggregates.append({
-                    "metric": metric,
-                    "aggregation": agg_method,
-                    "delete": False
-                })
-            
+
+        current_aggregates = {
+            k: v
+            for k, v in getattr(suite, "aggregate", {}).items()
+            if isinstance(k, str) and k != "default"
+        }
+
+        st.caption("Metric-specific aggregation rules:")
+
+        edit_mode = st.session_state.get(edit_key_name) is not None
+
+        if not edit_mode:
+            # Display table (edit/delete)
+            d_aggregates: list[dict[str, object]] = []
+            for metric_key in sorted(current_aggregates.keys()):
+                d_aggregates.append(
+                    {
+                        "metric": metric_key,
+                        "aggregation": str(current_aggregates.get(metric_key, "")),
+                        "edit": False,
+                        "delete": False,
+                    }
+                )
+
             ed_key = st.session_state[agg_ed_key_name]
-            
-            # Handle data_editor events
-            table_key = f"{key_prefix}select_aggregates_{suite_key_ver}_{ed_key}"
+            table_key = f"{key_prefix}suite_agg_table_{suite_key_ver}_{ed_key}"
             if table_key in st.session_state:
                 ed = st.session_state[table_key]
-                changes_made = False
-                new_agg = dict(suite.aggregate)
-                
-                # Handle deletions
                 for row in ed.get("edited_rows", {}):
-                    if ed["edited_rows"][row].get("delete"):
-                        metric_to_delete = d_aggregates[row]["metric"]
-                        if metric_to_delete in new_agg:
-                            del new_agg[metric_to_delete]
-                            changes_made = True
-                    # Handle edits
-                    elif "metric" in ed["edited_rows"][row] or "aggregation" in ed["edited_rows"][row]:
-                        old_metric = d_aggregates[row]["metric"]
-                        new_metric = ed["edited_rows"][row].get("metric", old_metric)
-                        new_method = ed["edited_rows"][row].get("aggregation", d_aggregates[row]["aggregation"])
-                        # Remove old key if metric changed
-                        if old_metric != new_metric and old_metric in new_agg:
-                            del new_agg[old_metric]
-                        new_agg[new_metric] = new_method
-                        changes_made = True
-                
-                if changes_made:
-                    suite.aggregate = new_agg
+                    if d_aggregates and 0 <= row < len(d_aggregates):
+                        if ed["edited_rows"][row].get("delete"):
+                            metric_to_delete = str(d_aggregates[row]["metric"])
+                            updated = dict(suite.aggregate)
+                            if metric_to_delete in updated:
+                                del updated[metric_to_delete]
+                                suite.aggregate = updated
+                                self.config.backtest.suite = suite
+                                st.session_state[agg_ed_key_name] += 1
+                                st.rerun()
+                        if ed["edited_rows"][row].get("edit"):
+                            st.session_state[edit_key_name] = str(d_aggregates[row]["metric"])
+                            # Refresh the table key so data_editor state can't keep retriggering.
+                            st.session_state[agg_ed_key_name] += 1
+                            st.rerun()
+
+            if d_aggregates:
+                column_config = {
+                    "metric": st.column_config.TextColumn("Metric", width="medium"),
+                    "aggregation": st.column_config.TextColumn("Aggregation", width="small"),
+                    "edit": st.column_config.CheckboxColumn("Edit", width="small"),
+                    "delete": st.column_config.CheckboxColumn("Del", width="small"),
+                }
+                st.data_editor(
+                    data=d_aggregates,
+                    height=36 + (len(d_aggregates)) * 35,
+                    key=table_key,
+                    disabled=["metric", "aggregation"],
+                    column_config=column_config,
+                    hide_index=True,
+                    width="stretch",
+                )
+            else:
+                st.info("No metric-specific aggregation rules. Add one below if needed.")
+
+        # Edit existing rule
+        if st.session_state.get(edit_key_name):
+            old_metric_key = str(st.session_state.get(edit_key_name))
+            if old_metric_key not in suite.aggregate:
+                st.session_state[edit_key_name] = None
+                st.rerun()
+
+            st.subheader("Edit Aggregate")
+
+            old_base, old_currency_sel = split_agg_metric_key(old_metric_key)
+            old_method = str(suite.aggregate.get(old_metric_key, "mean") or "mean").lower()
+            if old_method not in aggregate_options:
+                old_method = "mean"
+
+            default_type = get_metric_group(old_base) or "all"
+            edit_type_key = f"{key_prefix}suite_agg_edit_type_{suite_key_ver}"
+            if edit_type_key not in st.session_state:
+                st.session_state[edit_type_key] = default_type
+
+            selected_type = st.selectbox(
+                "Type",
+                type_options,
+                index=type_options.index(st.session_state.get(edit_type_key, "all"))
+                if st.session_state.get(edit_type_key, "all") in type_options
+                else 0,
+                key=edit_type_key,
+                help=get_limits_type_help_text(),
+            )
+
+            if selected_type == "all":
+                filtered_base_metrics = get_all_metrics_list()
+            else:
+                filtered_base_metrics = get_metrics_by_group(selected_type, include_weighted=True)
+                if not filtered_base_metrics:
+                    filtered_base_metrics = get_all_metrics_list()
+
+            edit_metric_key = f"{key_prefix}suite_agg_edit_metric_{suite_key_ver}"
+            if edit_metric_key not in st.session_state:
+                st.session_state[edit_metric_key] = old_base
+            if st.session_state.get(edit_metric_key) not in filtered_base_metrics:
+                st.session_state[edit_metric_key] = filtered_base_metrics[0]
+
+            new_base = st.selectbox(
+                "Metric",
+                filtered_base_metrics,
+                index=filtered_base_metrics.index(st.session_state[edit_metric_key]),
+                key=edit_metric_key,
+                help=get_limits_metric_list_help_text(selected_type, include_weighted=True),
+            )
+
+            new_is_currency = is_currency_metric(new_base)
+            edit_currency_key = f"{key_prefix}suite_agg_edit_currency_{suite_key_ver}"
+            if edit_currency_key not in st.session_state:
+                st.session_state[edit_currency_key] = old_currency_sel
+
+            if new_is_currency:
+                new_currency_sel = st.selectbox(
+                    "Currency",
+                    agg_currency_options,
+                    index=agg_currency_options.index(st.session_state.get(edit_currency_key, "both"))
+                    if st.session_state.get(edit_currency_key, "both") in agg_currency_options
+                    else 0,
+                    key=edit_currency_key,
+                    help="both stores the base key (applies to _usd and _btc); usd/btc store suffixed keys.",
+                )
+            else:
+                st.write("")
+                new_currency_sel = "both"
+
+            edit_method_key = f"{key_prefix}suite_agg_edit_method_{suite_key_ver}"
+            if edit_method_key not in st.session_state:
+                st.session_state[edit_method_key] = old_method
+            new_method = st.selectbox(
+                "Aggregation",
+                aggregate_options,
+                index=aggregate_options.index(st.session_state.get(edit_method_key, "mean"))
+                if st.session_state.get(edit_method_key, "mean") in aggregate_options
+                else 0,
+                key=edit_method_key,
+                help=pbgui_help.suite_add_aggregation,
+            )
+
+            new_metric_key = build_agg_metric_key(new_base, new_currency_sel)
+
+            col_ok, col_cancel, col_del = st.columns([1, 1, 1])
+            with col_ok:
+                if st.button("OK", key=f"{key_prefix}suite_agg_edit_ok_{suite_key_ver}"):
+                    updated = dict(suite.aggregate)
+                    if old_metric_key != new_metric_key and old_metric_key in updated:
+                        del updated[old_metric_key]
+                    updated[new_metric_key] = new_method
+                    suite.aggregate = updated
                     self.config.backtest.suite = suite
+                    st.session_state[edit_key_name] = None
                     st.session_state[agg_ed_key_name] += 1
                     st.rerun()
-            
-            # Display aggregates table
-            column_config = {
-                "metric": st.column_config.SelectboxColumn("Metric", options=metrics, required=True, width="medium"),
-                "aggregation": st.column_config.SelectboxColumn("Aggregation", options=aggregate_options, required=True),
-                "delete": st.column_config.CheckboxColumn("Del", width="small"),
-            }
-            st.data_editor(d_aggregates, column_config=column_config, hide_index=True, key=f"{key_prefix}select_aggregates_{suite_key_ver}_{ed_key}", width="stretch")
-        
-        # Add new metric-specific aggregation
+            with col_cancel:
+                if st.button("Cancel", key=f"{key_prefix}suite_agg_edit_cancel_{suite_key_ver}"):
+                    st.session_state[edit_key_name] = None
+                    st.rerun()
+            with col_del:
+                if st.button("Delete", key=f"{key_prefix}suite_agg_edit_delete_{suite_key_ver}"):
+                    updated = dict(suite.aggregate)
+                    if old_metric_key in updated:
+                        del updated[old_metric_key]
+                    suite.aggregate = updated
+                    self.config.backtest.suite = suite
+                    st.session_state[edit_key_name] = None
+                    st.session_state[agg_ed_key_name] += 1
+                    st.rerun()
+
+            return
+
+        # Add new rule
         st.subheader("Add Metric")
-        col1, col2, col3 = st.columns([1, 1, 2], vertical_alignment="bottom")
-        with col1:
-            new_metric = st.selectbox("Metric", metrics, key=f"{key_prefix}suite_agg_new_metric_{suite_key_ver}", label_visibility="visible", help=pbgui_help.suite_add_metric)
-        with col2:
-            new_agg = st.selectbox("Aggregation", aggregate_options, key=f"{key_prefix}suite_agg_new_method_{suite_key_ver}", label_visibility="visible", help=pbgui_help.suite_add_aggregation)
-        with col3:
-            if st.button("➕", key=f"{key_prefix}suite_agg_add_{suite_key_ver}", help=pbgui_help.suite_add_button):
-                updated_agg = dict(suite.aggregate)
-                updated_agg[new_metric] = new_agg
-                suite.aggregate = updated_agg
+        add_type_key = f"{key_prefix}suite_agg_add_type_{suite_key_ver}"
+        if add_type_key not in st.session_state:
+            st.session_state[add_type_key] = "all"
+
+        col_type, col_metric, col_curr, col_method, col_btn = st.columns(
+            [0.9, 1.5, 0.7, 1.0, 0.6],
+            vertical_alignment="bottom",
+        )
+        with col_type:
+            selected_type = st.selectbox(
+                "Type",
+                type_options,
+                index=type_options.index(st.session_state.get(add_type_key, "all"))
+                if st.session_state.get(add_type_key, "all") in type_options
+                else 0,
+                key=add_type_key,
+                help=get_limits_type_help_text(),
+            )
+
+        if selected_type == "all":
+            filtered_base_metrics = get_all_metrics_list()
+        else:
+            filtered_base_metrics = get_metrics_by_group(selected_type, include_weighted=True)
+            if not filtered_base_metrics:
+                filtered_base_metrics = get_all_metrics_list()
+
+        add_metric_key = f"{key_prefix}suite_agg_add_metric_{suite_key_ver}"
+        if add_metric_key not in st.session_state or st.session_state.get(add_metric_key) not in filtered_base_metrics:
+            st.session_state[add_metric_key] = filtered_base_metrics[0]
+
+        with col_metric:
+            new_base = st.selectbox(
+                "Metric",
+                filtered_base_metrics,
+                index=filtered_base_metrics.index(st.session_state[add_metric_key]),
+                key=add_metric_key,
+                help=get_limits_metric_list_help_text(selected_type, include_weighted=True),
+            )
+
+        is_curr = is_currency_metric(new_base)
+        add_currency_key = f"{key_prefix}suite_agg_add_currency_{suite_key_ver}"
+        if add_currency_key not in st.session_state:
+            st.session_state[add_currency_key] = "both"
+
+        with col_curr:
+            if is_curr:
+                currency_sel = st.selectbox(
+                    "Currency",
+                    agg_currency_options,
+                    index=agg_currency_options.index(st.session_state.get(add_currency_key, "both"))
+                    if st.session_state.get(add_currency_key, "both") in agg_currency_options
+                    else 0,
+                    key=add_currency_key,
+                    help="both stores the base key (applies to _usd and _btc); usd/btc store suffixed keys.",
+                )
+            else:
+                st.write("")
+                currency_sel = "both"
+
+        add_method_key = f"{key_prefix}suite_agg_add_method_{suite_key_ver}"
+        if add_method_key not in st.session_state:
+            st.session_state[add_method_key] = "mean"
+        with col_method:
+            method = st.selectbox(
+                "Aggregation",
+                aggregate_options,
+                index=aggregate_options.index(st.session_state.get(add_method_key, "mean"))
+                if st.session_state.get(add_method_key, "mean") in aggregate_options
+                else 0,
+                key=add_method_key,
+                help=pbgui_help.suite_add_aggregation,
+            )
+
+        with col_btn:
+            if st.button("➕", key=f"{key_prefix}suite_agg_add_btn_{suite_key_ver}", help=pbgui_help.suite_add_button):
+                metric_key = build_agg_metric_key(new_base, currency_sel)
+                updated = dict(suite.aggregate)
+                updated[metric_key] = method
+                suite.aggregate = updated
                 self.config.backtest.suite = suite
                 st.session_state[agg_ed_key_name] += 1
                 st.rerun()
