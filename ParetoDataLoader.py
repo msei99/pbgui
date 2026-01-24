@@ -1333,7 +1333,7 @@ class ParetoDataLoader:
 
         # Find all JSON files in pareto directory
         json_pattern = os.path.join(self.pareto_dir, "*.json")
-        json_files = glob.glob(json_pattern)
+        json_files = sorted(glob.glob(json_pattern))
         
         if not json_files:
             return False
