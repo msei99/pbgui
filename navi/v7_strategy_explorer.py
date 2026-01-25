@@ -166,6 +166,42 @@ def _coin_from_symbol_code(symbol_code: str) -> str:
     return s
 
 
+def _filter_pb7_events_by_coin(events: list[dict], symbol_or_coin: str) -> list[dict]:
+    """Filter PB7 fills events by coin if the events contain a `coin` field.
+
+    Some PB7 backtest folders (suite/multi-coin) write a single fills.csv containing fills for
+    multiple coins. Without filtering, the Movie Builder can jump y-scale (e.g. DOGE ↔ SOL).
+    """
+    try:
+        target = _coin_from_symbol_code(str(symbol_or_coin or "")).strip().upper()
+    except Exception:
+        target = ""
+    if not target:
+        return list(events or [])
+
+    evs = list(events or [])
+    has_coin = False
+    for e in evs:
+        try:
+            c = str((e or {}).get("coin") or "").strip()
+        except Exception:
+            c = ""
+        if c:
+            has_coin = True
+            break
+    if not has_coin:
+        return evs
+
+    out: list[dict] = []
+    for e in evs:
+        if not isinstance(e, dict):
+            continue
+        c = str(e.get("coin") or "").strip().upper()
+        if c == target:
+            out.append(e)
+    return out
+
+
 def _exchange_has_local_ohlcv(exchange: str, symbol: str) -> bool:
     """Return True if there are any local 1m OHLCV shards for (exchange, symbol/coin)."""
     exc = (exchange or "").strip()
@@ -1809,6 +1845,7 @@ def _pb7_fills_to_events(fills_array: Any) -> tuple[list[dict], list[dict]]:
             "qty": float(r.get("fill_qty") or 0.0),
             "price": float(r.get("fill_price") or 0.0),
             "order_type": ot,
+            "coin": str(r.get("coin") or ""),
             "wallet_balance": float(r.get("usd_total_balance") or 0.0),
             "pos_size": float(r.get("position_size") or 0.0),
             "pos_price": float(r.get("position_price") or 0.0),
@@ -1944,6 +1981,7 @@ def _load_pb7_fills_csv_to_events(backtest_dir: str) -> tuple[list[dict], list[d
             "qty": float(r.get("qty") or 0.0),
             "price": float(r.get("price") or 0.0),
             "order_type": ot,
+            "coin": str(r.get("coin") or "") if "coin" in df.columns else "",
             "wallet_balance": float(r.get(wallet_bal_col) or 0.0) if wallet_bal_col else 0.0,
             "pos_size": float(r.get("psize") or 0.0),
             "pos_price": float(r.get("pprice") or 0.0),
@@ -10539,10 +10577,10 @@ def show_visualizer():
                                 frames_for_movie = max(2, int(int(dur_min) // int(step_min)))
                                 if anchor_h is not None:
                                     base = pd.to_datetime(sel_time).normalize()
-                                    anchored = base + pd.Timedelta(hours=int(anchor_h))
-                                    if anchored > pd.to_datetime(sel_time):
-                                        anchored = anchored - pd.Timedelta(days=1)
-                                    start_time_for_movie = anchored
+                                    # Anchor within the selected day (ignore the selected time-of-day).
+                                    # Previously we shifted to the previous day if `sel_time` was earlier than the anchor,
+                                    # which surprised users (e.g., selecting 2025-10-10 09:45 + "12h (12:00)" started at 2025-10-09 12:00).
+                                    start_time_for_movie = base + pd.Timedelta(hours=int(anchor_h))
                         except Exception:
                             pass
 
@@ -10623,15 +10661,20 @@ def show_visualizer():
                             except Exception:
                                 pb7_long, pb7_short = ([], [])
 
-                            events_override = pb7_long if int(side_val) == int(Side.Long.value) else pb7_short
+                            # fills.csv may contain multiple coins (suite/multi-coin). Filter to selected symbol.
+                            sel_coin = _coin_from_symbol_code(str(sel_sym))
+                            pb7_long_f = _filter_pb7_events_by_coin(list(pb7_long or []), sel_coin)
+                            pb7_short_f = _filter_pb7_events_by_coin(list(pb7_short or []), sel_coin)
+
+                            events_override = pb7_long_f if int(side_val) == int(Side.Long.value) else pb7_short_f
                             # Helpful fallback: if selected side has no fills but the other does, switch.
-                            if not events_override and (pb7_long or pb7_short):
-                                if pb7_long and int(side_val) != int(Side.Long.value):
+                            if not events_override and (pb7_long_f or pb7_short_f):
+                                if pb7_long_f and int(side_val) != int(Side.Long.value):
                                     side_val = int(Side.Long.value)
-                                    events_override = pb7_long
-                                elif pb7_short and int(side_val) != int(Side.Short.value):
+                                    events_override = pb7_long_f
+                                elif pb7_short_f and int(side_val) != int(Side.Short.value):
                                     side_val = int(Side.Short.value)
-                                    events_override = pb7_short
+                                    events_override = pb7_short_f
                             if not pb7_dir:
                                 st.error("No PB7 backtest folder set. Fill in 'PB7 backtest folder (contains fills.csv)' in the Compare panel.")
                             elif not events_override:
@@ -13203,7 +13246,27 @@ def generate_animation_v7(start_time, frames, step_mins, hist_df, symbol, contex
         
         # Pre-calculate indicators on the whole set (or relevant subset)
         # We need data from (start - context) to (start + frames * step)
+        # Clamp frames to available historical data to avoid generating empty tail frames.
         end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
+        try:
+            hist_end = pd.to_datetime(hist_df.index.max())
+        except Exception:
+            hist_end = None
+        try:
+            if hist_end is not None and pd.notna(hist_end):
+                total_mins = float((pd.to_datetime(hist_end) - pd.to_datetime(start_time)) / pd.Timedelta(minutes=1))
+                max_frames = int(math.floor(total_mins / float(max(1, int(step_mins))))) + 1
+                max_frames = max(1, int(max_frames))
+                if int(frames) > int(max_frames):
+                    old_frames = int(frames)
+                    frames = int(max_frames)
+                    end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
+                    try:
+                        st.warning(f"Frames reduced to {frames} (from {old_frames}) due to limited historical data.")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         
         calc_params = data_template.normal_bot_params_long if side_val == Side.Long.value else data_template.normal_bot_params_short
         
@@ -13569,6 +13632,7 @@ def generate_animation_v7_modeb(
 
         frames = int(frames or 0)
         step_mins = int(step_mins or 0)
+        requested_frames = int(frames)
         try:
             visible_candles = int(visible_candles or 0)
         except Exception:
@@ -13639,7 +13703,27 @@ def generate_animation_v7_modeb(
                 pass
             start_time = eff_start_time
 
+        # Clamp frames to available historical data to avoid generating empty tail frames.
         end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
+        try:
+            hist_end = pd.to_datetime(hist_df.index.max())
+        except Exception:
+            hist_end = None
+        try:
+            if hist_end is not None and pd.notna(hist_end):
+                total_mins = float((pd.to_datetime(hist_end) - pd.to_datetime(start_time)) / pd.Timedelta(minutes=1))
+                max_frames = int(math.floor(total_mins / float(max(1, int(step_mins))))) + 1
+                max_frames = max(1, int(max_frames))
+                if int(frames) > int(max_frames):
+                    old_frames = int(frames)
+                    frames = int(max_frames)
+                    end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
+                    try:
+                        st.warning(f"Frames reduced to {frames} (from {old_frames}) due to limited historical data.")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         ctx_days = float(context_days or 0.0)
         if ctx_days <= 0:
             ctx_days = 5.0
@@ -13935,6 +14019,50 @@ def generate_animation_v7_modeb(
         else:
             df_plot_source = df_calc
 
+        # Keep only valid OHLC rows (defensive: avoids NaN-padded tails causing weird frames).
+        try:
+            if df_plot_source is not None and not df_plot_source.empty:
+                _ohlc_cols = [c for c in ("open", "high", "low", "close") if c in df_plot_source.columns]
+                if _ohlc_cols:
+                    df_plot_source = df_plot_source.dropna(subset=_ohlc_cols)
+        except Exception:
+            pass
+
+        # Determine the last usable candle timestamp and clamp frames accordingly.
+        # For large step sizes (e.g. 1440m), we must not generate frames beyond the last real candle.
+        plot_end = None
+        try:
+            if df_plot_source is not None and not df_plot_source.empty:
+                _ohlc_cols = [c for c in ("open", "high", "low", "close") if c in df_plot_source.columns]
+                if _ohlc_cols:
+                    vv = df_plot_source[_ohlc_cols].apply(pd.to_numeric, errors="coerce")
+                    vv = vv.replace([np.inf, -np.inf], np.nan).dropna(how="any")
+                    if vv is not None and not vv.empty:
+                        plot_end = pd.to_datetime(vv.index.max())
+                if plot_end is None:
+                    plot_end = pd.to_datetime(df_plot_source.index.max())
+        except Exception:
+            plot_end = None
+
+        try:
+            if plot_end is not None and pd.notna(plot_end):
+                total_mins = float((pd.to_datetime(plot_end) - pd.to_datetime(start_time)) / pd.Timedelta(minutes=1))
+                max_frames = int(math.floor(total_mins / float(max(1, int(step_mins))))) + 1
+                max_frames = max(1, int(max_frames))
+                if int(frames) > int(max_frames):
+                    old_frames = int(frames)
+                    frames = int(max_frames)
+                    end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
+                    try:
+                        st.warning(f"Frames reduced to {frames} (from {old_frames}) due to limited historical data.")
+                    except Exception:
+                        pass
+                # Keep displayed end_time consistent with candle coverage.
+                if pd.to_datetime(end_time) > pd.to_datetime(plot_end):
+                    end_time = pd.to_datetime(plot_end)
+        except Exception:
+            pass
+
         def make_grid_trace(prices: list[float], color: str, name: str, x0, x1, width: int = 1):
             if not prices:
                 return go.Scatter(x=[], y=[])
@@ -13963,7 +14091,9 @@ def generate_animation_v7_modeb(
             current_time = start_time + datetime.timedelta(minutes=int(i) * int(step_mins))
 
             # Pick the closest captured replay frame to this time.
-            # Prefer last-known state at or before current_time (pad), else fall back to nearest.
+            # Always prefer last-known state at or before current_time (pad).
+            # Using "nearest" can pick a future frame and make WE/grids jump before the
+            # plotted candle window reaches that state.
             fr_idx = -1
             try:
                 cur_ns = pd.to_datetime(current_time).value
@@ -13974,14 +14104,7 @@ def generate_animation_v7_modeb(
                     if pad_idx >= len(replay_ts_ns):
                         pad_idx = len(replay_ts_ns) - 1
 
-                    # Nearest: compare pad vs next
-                    next_idx = min(pad_idx + 1, len(replay_ts_ns) - 1)
-                    if next_idx != pad_idx:
-                        d0 = abs(int(replay_ts_ns[pad_idx]) - int(cur_ns))
-                        d1 = abs(int(replay_ts_ns[next_idx]) - int(cur_ns))
-                        fr_idx = next_idx if d1 < d0 else pad_idx
-                    else:
-                        fr_idx = pad_idx
+                    fr_idx = pad_idx
             except Exception:
                 fr_idx = -1
 
@@ -14459,17 +14582,25 @@ def generate_animation_v7_modeb(
                 bal_now = None
             bal_text = ""
             pos_now = None
+            pos_price_now = None
             try:
                 pa = fr.get("pos_after") or {}
                 pos_now = float((pa or {}).get("size"))
+                pos_price_now = float((pa or {}).get("price"))
             except Exception:
                 pos_now = None
+                pos_price_now = None
 
             we_now = None
             try:
                 if bal_now is not None and math.isfinite(float(bal_now)) and float(bal_now) > 0.0:
                     if pos_now is not None and math.isfinite(float(pos_now)):
-                        we_now = abs(float(pos_now) * float(current_price_plot)) / float(bal_now)
+                        # Match PB/PB7 semantics: exposure uses average position price, not mark price.
+                        # This keeps WE stable between fills.
+                        if pos_price_now is not None and math.isfinite(float(pos_price_now)) and float(pos_price_now) > 0.0:
+                            we_now = abs(float(pos_now) * float(pos_price_now)) / float(bal_now)
+                        else:
+                            we_now = abs(float(pos_now) * float(current_price_plot)) / float(bal_now)
             except Exception:
                 we_now = None
 
@@ -14479,6 +14610,8 @@ def generate_animation_v7_modeb(
                     parts.append(f"WE: {float(we_now):.6g}")
                 if pos_now is not None and math.isfinite(float(pos_now)):
                     parts.append(f"posSize: {float(pos_now):.8g}")
+                if pos_price_now is not None and math.isfinite(float(pos_price_now)) and float(pos_price_now) > 0.0:
+                    parts.append(f"posPrice: {float(pos_price_now):.8g}")
                 bal_text = "<br>".join(parts)
 
             ann = []
@@ -14894,6 +15027,43 @@ def generate_animation_v7_modec(
         except Exception:
             cfg = None
 
+        # Baseline wallet balance for frames before the first fill in the window.
+        # When using fills.csv, we often filter fills to (start_time..end_time) which can drop
+        # earlier wallet_balance points; without a baseline, the overlay falls back to the GVData default (1000).
+        baseline_wallet_balance = float(sim_start_balance)
+        if events_override is not None:
+            try:
+                best_ts = None
+                best_wb = None
+                t0 = pd.to_datetime(start_time)
+                for ev in (events_override or []):
+                    if not isinstance(ev, dict):
+                        continue
+                    ts = ev.get("timestamp")
+                    if ts is None:
+                        continue
+                    try:
+                        ts = pd.to_datetime(ts, errors="coerce")
+                    except Exception:
+                        continue
+                    if ts is None or pd.isna(ts):
+                        continue
+                    if ts > t0:
+                        continue
+                    try:
+                        wb = float(ev.get("wallet_balance") or 0.0)
+                    except Exception:
+                        continue
+                    if (not math.isfinite(wb)) or wb <= 0.0:
+                        continue
+                    if best_ts is None or ts > best_ts:
+                        best_ts = ts
+                        best_wb = wb
+                if best_wb is not None and math.isfinite(float(best_wb)) and float(best_wb) > 0.0:
+                    baseline_wallet_balance = float(best_wb)
+            except Exception:
+                pass
+
         # Always compute warmup based on *both* sides (matches Compare).
         try:
             if using_pb7_config and isinstance(cfg, dict):
@@ -14978,6 +15148,48 @@ def generate_animation_v7_modec(
         else:
             df_plot_source = df_calc
 
+        # Keep only valid OHLC rows (defensive: avoids NaN-padded tails causing weird frames).
+        try:
+            if df_plot_source is not None and not df_plot_source.empty:
+                _ohlc_cols = [c for c in ("open", "high", "low", "close") if c in df_plot_source.columns]
+                if _ohlc_cols:
+                    df_plot_source = df_plot_source.dropna(subset=_ohlc_cols)
+        except Exception:
+            pass
+
+        # Determine the last usable candle timestamp and clamp frames accordingly.
+        plot_end = None
+        try:
+            if df_plot_source is not None and not df_plot_source.empty:
+                _ohlc_cols = [c for c in ("open", "high", "low", "close") if c in df_plot_source.columns]
+                if _ohlc_cols:
+                    vv = df_plot_source[_ohlc_cols].apply(pd.to_numeric, errors="coerce")
+                    vv = vv.replace([np.inf, -np.inf], np.nan).dropna(how="any")
+                    if vv is not None and not vv.empty:
+                        plot_end = pd.to_datetime(vv.index.max())
+                if plot_end is None:
+                    plot_end = pd.to_datetime(df_plot_source.index.max())
+        except Exception:
+            plot_end = None
+
+        try:
+            if plot_end is not None and pd.notna(plot_end):
+                total_mins = float((pd.to_datetime(plot_end) - pd.to_datetime(start_time)) / pd.Timedelta(minutes=1))
+                max_frames = int(math.floor(total_mins / float(max(1, int(step_mins))))) + 1
+                max_frames = max(1, int(max_frames))
+                if int(frames) > int(max_frames):
+                    old_frames = int(frames)
+                    frames = int(max_frames)
+                    end_time = start_time + datetime.timedelta(minutes=frames * step_mins)
+                    try:
+                        st.warning(f"Frames reduced to {frames} (from {old_frames}) due to limited historical data.")
+                    except Exception:
+                        pass
+                if pd.to_datetime(end_time) > pd.to_datetime(plot_end):
+                    end_time = pd.to_datetime(plot_end)
+        except Exception:
+            pass
+
         stage_line = st.empty()
         prog_bar = st.progress(0.0)
 
@@ -15054,6 +15266,10 @@ def generate_animation_v7_modec(
             try:
                 if pb7_dir:
                     pb7_long, pb7_short = _load_pb7_fills_csv_to_events(pb7_dir)
+                    # fills.csv may include multiple coins; filter to the selected symbol.
+                    sel_coin = _coin_from_symbol_code(str(symbol))
+                    pb7_long = _filter_pb7_events_by_coin(list(pb7_long or []), sel_coin)
+                    pb7_short = _filter_pb7_events_by_coin(list(pb7_short or []), sel_coin)
                     pb7_ref_events = pb7_long if side_obj == Side.Long else pb7_short
             except Exception:
                 pb7_ref_events = []
@@ -15315,9 +15531,18 @@ def generate_animation_v7_modec(
                 _progress(0.3 + 0.7 * float(i + 1) / float(max(1, int(frames))), f"Mode C: building frames {i + 1}/{int(frames)}")
             current_time = start_time + datetime.timedelta(minutes=int(i) * int(step_mins))
 
+            # Stop once we exceed available plotted candle coverage.
+            try:
+                if plot_end is not None and pd.notna(plot_end) and pd.to_datetime(current_time) > pd.to_datetime(plot_end):
+                    break
+            except Exception:
+                pass
+
             upper_time = current_time
             try:
-                if not df_plot_source.empty and upper_time > df_plot_source.index.max():
+                if plot_end is not None and pd.notna(plot_end) and upper_time > pd.to_datetime(plot_end):
+                    upper_time = pd.to_datetime(plot_end)
+                elif not df_plot_source.empty and upper_time > df_plot_source.index.max():
                     upper_time = df_plot_source.index.max()
             except Exception:
                 pass
@@ -15454,6 +15679,8 @@ def generate_animation_v7_modec(
 
             wb_now = None
             ps_now = None
+            pp_now = None
+            we_now_from_csv = None
             try:
                 if len(fills_df) > 0 and len(ts_arr) == len(fills_df):
                     ct64 = np.datetime64(pd.to_datetime(current_time).to_datetime64())
@@ -15469,22 +15696,39 @@ def generate_animation_v7_modec(
                         wb_now = float(pd.to_numeric(fills_df.iloc[int(kk)].get("wallet_balance"), errors="coerce"))
                     if "pos_size" in fills_df.columns:
                         ps_now = float(pd.to_numeric(fills_df.iloc[int(kk)].get("pos_size"), errors="coerce"))
+                    if "pos_price" in fills_df.columns:
+                        pp_now = float(pd.to_numeric(fills_df.iloc[int(kk)].get("pos_price"), errors="coerce"))
+                    # Prefer PB7's own computed wallet exposure if present.
+                    if "wallet_exposure" in fills_df.columns:
+                        we_now_from_csv = float(pd.to_numeric(fills_df.iloc[int(kk)].get("wallet_exposure"), errors="coerce"))
             except Exception:
                 wb_now = None
                 ps_now = None
+                pp_now = None
+                we_now_from_csv = None
 
             if wb_now is None or (not math.isfinite(float(wb_now))) or float(wb_now) <= 0.0:
                 try:
-                    wb_now = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
+                    wb_now = float(baseline_wallet_balance)
+                    if (not math.isfinite(float(wb_now))) or float(wb_now) <= 0.0:
+                        wb_now = float(getattr(data_template.state_params, "balance", 0.0) or 0.0)
                 except Exception:
                     wb_now = None
             if ps_now is None or (not math.isfinite(float(ps_now))):
                 ps_now = 0.0
+            if pp_now is None or (not math.isfinite(float(pp_now))):
+                pp_now = None
 
             we_now = None
             try:
-                if wb_now is not None and math.isfinite(float(wb_now)) and float(wb_now) > 0.0 and px_now is not None:
-                    we_now = abs(float(ps_now) * float(px_now)) / float(wb_now)
+                if wb_now is not None and math.isfinite(float(wb_now)) and float(wb_now) > 0.0:
+                    if we_now_from_csv is not None and math.isfinite(float(we_now_from_csv)):
+                        we_now = abs(float(we_now_from_csv))
+                    elif pp_now is not None and math.isfinite(float(pp_now)) and float(pp_now) > 0.0:
+                        # Match PB/PB7 semantics: exposure uses average position price, not mark price.
+                        we_now = abs(float(ps_now) * float(pp_now)) / float(wb_now)
+                    elif px_now is not None:
+                        we_now = abs(float(ps_now) * float(px_now)) / float(wb_now)
             except Exception:
                 we_now = None
 
@@ -15496,6 +15740,8 @@ def generate_animation_v7_modec(
                         parts.append(f"WE: {float(we_now):.6g}")
                     if ps_now is not None and math.isfinite(float(ps_now)):
                         parts.append(f"posSize: {float(ps_now):.8g}")
+                    if pp_now is not None and math.isfinite(float(pp_now)) and float(pp_now) > 0.0:
+                        parts.append(f"posPrice: {float(pp_now):.8g}")
                     txt = "<br>".join(parts)
                     ann = [
                         dict(
@@ -15842,10 +16088,13 @@ def generate_animation_v7_modec(
 
         fig = go.Figure(data=init_data, layout=go.Layout(**layout_args), frames=fig_frames)
         try:
+            built_frames = int(len(fig_frames))
             st.session_state["se_movie_fig_modec"] = fig
             st.session_state["se_movie_meta_modec"] = {
                 "start_time": str(start_time),
-                "frames": int(frames),
+                # Persist the actual built frame count.
+                "frames": int(built_frames),
+                "requested_frames": int(requested_frames),
                 "step_mins": int(step_mins),
                 "visible_candles": int(visible_candles),
                 "exchange": str(exchange),
@@ -15883,66 +16132,81 @@ def generate_animation_v7_modec(
                 except Exception:
                     pass
                 st.dataframe(df_fills, use_container_width=True, height=250)
+                # Summary (keep robust: don't hide the whole section due to one parsing error)
+                fills_n = int(len(df_fills))
+                df_s = df_fills
                 try:
-                    fills_n = int(len(df_fills))
+                    if "timestamp" in df_s.columns:
+                        df_s = df_s.sort_values("timestamp")
+                except Exception:
                     df_s = df_fills
-                    try:
-                        if "timestamp" in df_s.columns:
-                            df_s = df_s.sort_values("timestamp")
-                    except Exception:
-                        df_s = df_fills
 
-                    t0 = None
-                    t1 = None
+                t0 = None
+                t1 = None
+                try:
                     if "timestamp" in df_s.columns:
                         ts = pd.to_datetime(df_s["timestamp"], errors="coerce")
                         if hasattr(ts, "min"):
                             t0 = ts.min()
                             t1 = ts.max()
+                except Exception:
+                    t0, t1 = None, None
 
+                orders_by_type = None
+                try:
+                    if "order_type" in df_s.columns:
+                        vc = df_s["order_type"].astype(str).value_counts(dropna=False)
+                        orders_by_type = ", ".join([f"{k}={int(v)}" for k, v in vc.items()][:8])
+                except Exception:
                     orders_by_type = None
-                    try:
-                        if "order_type" in df_s.columns:
-                            vc = df_s["order_type"].astype(str).value_counts(dropna=False)
-                            orders_by_type = ", ".join([f"{k}={int(v)}" for k, v in vc.items()][:8])
-                    except Exception:
-                        orders_by_type = None
 
+                fees_total = None
+                try:
+                    if "fee_paid" in df_s.columns:
+                        fees_total = float(pd.to_numeric(df_s["fee_paid"], errors="coerce").fillna(0.0).sum())
+                except Exception:
                     fees_total = None
-                    try:
-                        if "fee_paid" in df_s.columns:
-                            fees_total = float(pd.to_numeric(df_s["fee_paid"], errors="coerce").fillna(0.0).sum())
-                    except Exception:
-                        fees_total = None
 
-                    wb0 = None
-                    wb1 = None
-                    try:
-                        if "wallet_balance" in df_s.columns:
-                            wb = pd.to_numeric(df_s["wallet_balance"], errors="coerce")
-                            wb = wb.dropna()
-                            if len(wb) > 0:
-                                wb0 = float(wb.iloc[0])
-                                wb1 = float(wb.iloc[-1])
-                    except Exception:
-                        wb0 = None
-                        wb1 = None
+                wb0 = None
+                wb1 = None
+                try:
+                    if "wallet_balance" in df_s.columns:
+                        wb = pd.to_numeric(df_s["wallet_balance"], errors="coerce").dropna()
+                        if len(wb) > 0:
+                            wb0 = float(wb.iloc[0])
+                            wb1 = float(wb.iloc[-1])
+                except Exception:
+                    wb0, wb1 = None, None
 
-                    md = [
-                        "**Summary**",
-                        "- **Engine:** PB7 (C)",
-                        f"- **Frames / Step:** {int(frames)} / {int(step_mins)}m",
-                        f"- **Start:** {str(start_time)}",
-                        f"- **Fills:** {fills_n}",
-                    ]
-                    if orders_by_type:
-                        md.append(f"- **Orders by type:** {orders_by_type}")
-                    if fees_total is not None:
-                        md.append(f"- **Fees:** {fees_total:.8g}")
-                    if wb0 is not None and wb1 is not None:
-                        md.append(f"- **Wallet:** {wb0:.8g} → {wb1:.8g}")
-                    if t0 is not None and t1 is not None and pd.notna(t0) and pd.notna(t1):
-                        md.append(f"- **Fills window:** {str(t0)} → {str(t1)}")
+                try:
+                    built_frames = int(len(fig_frames or []))
+                except Exception:
+                    built_frames = int(frames)
+                try:
+                    req_frames = int(locals().get("requested_frames", frames) or frames)
+                except Exception:
+                    req_frames = int(frames)
+
+                md = [
+                    "**Summary**",
+                    "- **Engine:** PB7 (C)",
+                    (
+                        f"- **Frames / Step:** {int(built_frames)} / {int(step_mins)}m"
+                        if int(req_frames) == int(built_frames)
+                        else f"- **Frames / Step:** {int(built_frames)} / {int(step_mins)}m (requested {int(req_frames)})"
+                    ),
+                    f"- **Start:** {str(start_time)}",
+                    f"- **Fills:** {fills_n}",
+                ]
+                if orders_by_type:
+                    md.append(f"- **Orders by type:** {orders_by_type}")
+                if fees_total is not None:
+                    md.append(f"- **Fees:** {fees_total:.8g}")
+                if wb0 is not None and wb1 is not None:
+                    md.append(f"- **Wallet:** {wb0:.8g} → {wb1:.8g}")
+                if t0 is not None and t1 is not None and pd.notna(t0) and pd.notna(t1):
+                    md.append(f"- **Fills window:** {str(t0)} → {str(t1)}")
+                try:
                     st.markdown("\n".join(md))
                 except Exception:
                     pass
