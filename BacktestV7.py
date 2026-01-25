@@ -313,22 +313,36 @@ class BacktestV7Queue:
                 subprocess.Popen(cmd, stdout=log, stderr=log, cwd=PBGDIR, text=True, start_new_session=True)
 
     def stop(self):
-        if self.is_running():
-            self.pid().kill()
+        p = self.pid()
+        if p:
+            try:
+                p.kill()
+            except Exception:
+                # Can't kill (e.g., zombie or already gone) — ignore
+                pass
 
     def is_running(self):
-        if self.pid():
-            return True
-        return False
+        p = self.pid()
+        return bool(p)
 
     def pid(self):
+        # Return a psutil.Process for the running BacktestV7 process, or None.
         for process in psutil.process_iter():
             try:
+                # If the process is a zombie, skip it (cannot be reaped here).
+                try:
+                    if process.status() == psutil.STATUS_ZOMBIE:
+                        continue
+                except Exception:
+                    # status() can raise for short-lived processes; ignore.
+                    pass
+
                 cmdline = process.cmdline()
-            except psutil.AccessDenied:
+            except (psutil.AccessDenied, psutil.ZombieProcess, psutil.NoSuchProcess):
                 continue
             if any("BacktestV7.py" in sub for sub in cmdline):
                 return process
+        return None
 
     def refresh(self):
         # Remove items from d that are not in items anymore
