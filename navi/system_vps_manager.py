@@ -15,6 +15,10 @@ import concurrent.futures
 from pbgui_purefunc import list_remote_git_branches, list_git_remotes, get_git_remote_url
 
 
+PB7_UPSTREAM_REMOTE_NAME = "origin"
+PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
+
+
 def list_vps():
     vpsmanager = st.session_state.vpsmanager
     pbremote = st.session_state.pbremote
@@ -918,6 +922,10 @@ def manage_master():
                     default_remote_name = ""
                     if pb7_repo_dir:
                         known_remotes = list_git_remotes(pb7_repo_dir)
+                        # Always include common remotes even if not present (UI convenience)
+                        for opt in ("origin", "fork"):
+                            if opt not in known_remotes:
+                                known_remotes.append(opt)
                         default_remote_name = "fork" if "fork" in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
 
                     # Derive an effective remote name/url even if session_state was cleared
@@ -945,11 +953,26 @@ def manage_master():
                     with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                         st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
                         if st.button("✅ Switch to upstream master", key="pb7_switch_upstream_master", width="stretch"):
+                            # Force upstream remote+branch regardless of current git remote config
+                            st.session_state["pb7_remote_name_master"] = PB7_UPSTREAM_REMOTE_NAME
+                            # Clear override so UI shows URL derived from git config (after switch)
+                            st.session_state["pb7_remote_url_master"] = ""
+                            st.session_state["pb7_branch_manual_master"] = ""
+                            st.session_state["pb7_commit_manual_master"] = ""
+                            if "pb7_remote_branch_pick_master" in st.session_state:
+                                st.session_state["pb7_remote_branch_pick_master"] = ""
+                            if "pb7_branch_selector" in st.session_state:
+                                st.session_state["pb7_branch_selector"] = "master"
+
                             vpsmanager.command = "master-switch-pb7-branch"
-                            vpsmanager.command_text = "Switch PB7 to origin/master"
+                            vpsmanager.command_text = "Switch PB7 to upstream origin/master"
                             vpsmanager.update_master(
                                 debug=st.session_state.setup_debug,
-                                extra_vars={"pb7_branch": "master"},
+                                extra_vars={
+                                    "pb7_branch": "master",
+                                    "pb7_remote_name": PB7_UPSTREAM_REMOTE_NAME,
+                                    "pb7_remote_url": PB7_UPSTREAM_REMOTE_URL,
+                                },
                             )
                             if 'master_pb7_commits_loaded' in st.session_state:
                                 del st.session_state.master_pb7_commits_loaded
@@ -1969,12 +1992,26 @@ def manage_vps():
                         with st.expander("🌿 Custom remote (fork) — optional", expanded=False):
                             st.caption("1) Paste remote URL → 2) Load branches → 3) Pick branch → 4) Switch")
                             if st.button("✅ Switch VPS to upstream master", key=f"pb7_switch_upstream_master_vps_{vps.hostname}", width="stretch"):
+                                # Force upstream remote+branch regardless of current git remote config
+                                st.session_state[f"pb7_remote_name_vps_{vps.hostname}"] = PB7_UPSTREAM_REMOTE_NAME
+                                # Clear override so UI shows URL derived from git config (after switch)
+                                st.session_state[f"pb7_remote_url_vps_{vps.hostname}"] = ""
+                                st.session_state[f"pb7_branch_manual_vps_{vps.hostname}"] = ""
+                                st.session_state[f"pb7_commit_manual_vps_{vps.hostname}"] = ""
+                                pick_key = f"pb7_remote_branch_pick_vps_{vps.hostname}"
+                                if pick_key in st.session_state:
+                                    st.session_state[pick_key] = ""
+
                                 vps.command = "vps-switch-pb7-branch"
-                                vps.command_text = "Switch PB7 to origin/master"
+                                vps.command_text = "Switch PB7 to upstream origin/master"
                                 vpsmanager.update_vps(
                                     vps,
                                     debug=st.session_state.setup_debug,
-                                    extra_vars={"pb7_branch": "master"},
+                                    extra_vars={
+                                        "pb7_branch": "master",
+                                        "pb7_remote_name": PB7_UPSTREAM_REMOTE_NAME,
+                                        "pb7_remote_url": PB7_UPSTREAM_REMOTE_URL,
+                                    },
                                 )
                                 if 'vps_pb7_commits_loaded' in st.session_state:
                                     del st.session_state.vps_pb7_commits_loaded
