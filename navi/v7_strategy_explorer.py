@@ -4319,6 +4319,15 @@ def _simulate_backtest_over_historical_candles_pair_core(
         bp_short_master_dict["n_positions"] = int(min(int(bp_short_master_dict.get("n_positions") or 0), 1))
     except Exception:
         pass
+    # Ensure symbol-level integer fields are integers (serde expects usize for some fields).
+    try:
+        bp_long_symbol_dict["n_positions"] = int(bp_long_symbol_dict.get("n_positions") or 0)
+    except Exception:
+        pass
+    try:
+        bp_short_symbol_dict["n_positions"] = int(bp_short_symbol_dict.get("n_positions") or 0)
+    except Exception:
+        pass
 
     def _unstuck_allowance() -> tuple[float, float]:
         def _one(bp: BotParams) -> float:
