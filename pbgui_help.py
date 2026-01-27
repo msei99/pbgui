@@ -608,6 +608,14 @@ auto_gs = """
     open a new position after current position is fully closed.
     ```"""
 
+hedge_mode = """
+    ```
+    If true, allow holding long and short simultaneously on the same coin
+    (two-way / hedge mode). If false, PB7 will avoid opening a position on
+    one side if there is already a position on the other side.
+    Note: effective hedge_mode also depends on exchange capability.
+    ```"""
+
 TWE_long_short = """
     ```
     total wallet exposure limits long and short.
@@ -1424,10 +1432,23 @@ warmup_jitter_seconds = """
     Set to 0 to disable.
     ```"""
 
+warmup_concurrency = """
+    ```
+    Max number of symbols to warm up concurrently on startup.
+    0 means "auto" (PB7 picks exchange-specific defaults).
+    Lower this if you hit rate limits during warmup.
+    ```"""
+
 max_concurrent_api_requests = """
     ```
     Optional hard limit for concurrent exchange API requests.
     Set to 0 to disable (unlimited).
+    ```"""
+
+maker_fee_override = """
+    ```
+    Optional maker fee override (part-per-one; use 0.0002 for 0.02%).
+    Set to -1 to use exchange-derived maker fees.
     ```"""
 
 combine_ohlcvs = """
