@@ -26,6 +26,12 @@ from Status import InstanceStatus, InstancesStatus
 from PBCoinData import CoinData
 import re
 
+
+_PB7_FILL_SUMMARY_RE = re.compile(
+    r"\[fill\]\s+(?P<count>\d+)\s+fills,\s+pnl=(?P<pnl>[+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+"
+)
+_PB7_FILL_PNL_RE = re.compile(r"\bpnl=(?P<pnl>[+-]?(?:\d+\.?\d*|\d*\.\d+))\b")
+
 class Monitor():
     def __init__(self):
         self.path = None
@@ -122,12 +128,52 @@ class Monitor():
                         self.log_info = line
                         self.infos_today += 1
                     # Skip PNLs after restart bot
-                    if "initiating pnl" in line:
+                    # Legacy (PB6/PB7 older): "initiating pnl" / "new pnl"
+                    # PB7 v7.7+: FillEventsManager + boot banner
+                    if (
+                        "initiating pnl" in line
+                        or "[fills] initializing FillEventsManager" in line
+                        or "[boot] starting bot" in line
+                    ):
                         self.init_found = True
-                    if "starting execution loop" in line or "done initiating bot" or "watching" in line:
+                    if (
+                        "[boot] READY - Bot initialization complete" in line
+                        or "starting execution loop" in line
+                        or "done initiating bot" in line
+                        or "watching" in line
+                    ):
                         self.init_found = False
                     if self.init_found:
                         continue
+
+                    # PB7 v7.7+: realized PnL is logged via fill events
+                    # Example per fill: "[fill] ... pnl=+5.5 USDT"
+                    # Example summary: "[fill] 12 fills, pnl=-1.23 USDT"
+                    if "[fill]" in line:
+                        match_summary = _PB7_FILL_SUMMARY_RE.search(line)
+                        if match_summary:
+                            fill_count = int(match_summary.group("count"))
+                            pnl_value = float(match_summary.group("pnl"))
+                            if yesterday:
+                                self.pnl_yesterday += pnl_value
+                                self.pnl_counter_yesterday += fill_count
+                            else:
+                                self.pnl_today += pnl_value
+                                self.pnl_counter_today += fill_count
+                        else:
+                            self_pnl_match = _PB7_FILL_PNL_RE.search(line)
+                            if self_pnl_match:
+                                pnl_value = float(self_pnl_match.group("pnl"))
+                            else:
+                                pnl_value = 0.0
+                            if yesterday:
+                                self.pnl_yesterday += pnl_value
+                                self.pnl_counter_yesterday += 1
+                            else:
+                                self.pnl_today += pnl_value
+                                self.pnl_counter_today += 1
+                        continue
+
                     if "new pnl" in line:
                         if len(elements) == 7:
                             if yesterday:

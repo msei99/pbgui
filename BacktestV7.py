@@ -579,6 +579,43 @@ class BacktestV7Item(ConfigV7Editor):
             st.session_state.edit_bt_v7_gap_tolerance_ohlcvs_minutes = self.config.backtest.gap_tolerance_ohlcvs_minutes
         st.number_input("gap_tolerance_ohlcvs_minutes", min_value=0, step=1, key="edit_bt_v7_gap_tolerance_ohlcvs_minutes", help=pbgui_help.gap_tolerance_ohlcvs_minutes)
 
+    # maker_fee_override
+    @st.fragment
+    def fragment_maker_fee_override(self):
+        enabled_key = "edit_bt_v7_maker_fee_override_enabled"
+        value_key = "edit_bt_v7_maker_fee_override"
+
+        if enabled_key not in st.session_state:
+            st.session_state[enabled_key] = self.config.backtest.maker_fee_override is not None
+
+        if value_key not in st.session_state:
+            st.session_state[value_key] = (
+                float(self.config.backtest.maker_fee_override)
+                if self.config.backtest.maker_fee_override is not None
+                else 0.0
+            )
+
+        col_chk, col_val = st.columns([1, 1], vertical_alignment="center")
+        with col_chk:
+            st.checkbox("maker_fee_override", key=enabled_key, help=pbgui_help.maker_fee_override)
+        with col_val:
+            st.number_input(
+                "maker_fee_override value",
+                min_value=0.0,
+                max_value=0.01,
+                step=0.00001,
+                format="%.5f",
+                key=value_key,
+                disabled=not st.session_state[enabled_key],
+                label_visibility="collapsed",
+            )
+
+        if st.session_state[enabled_key]:
+            # Ensure config is updated on first enable (before any widget interaction)
+            self.config.backtest.maker_fee_override = float(st.session_state[value_key])
+        else:
+            self.config.backtest.maker_fee_override = None
+
     # max_warmup_minutes
     @st.fragment
     def fragment_max_warmup_minutes(self):
@@ -953,6 +990,8 @@ class BacktestV7Item(ConfigV7Editor):
             self.fragment_compress_cache()
         with col3:
             self.fragment_filter_by_min_effective_cost()
+        with col4:
+            self.fragment_maker_fee_override()
         # coin_sources (full width)
         self.fragment_coin_sources()
         # Suite (multi-scenario)
