@@ -1463,6 +1463,8 @@ class Backtest:
         self._exchanges = ["binance", "bybit"]
         self._filter_by_min_effective_cost = False
         self._gap_tolerance_ohlcvs_minutes = 120.0
+        # PB7 backtest defaults (see pb7/src/config_utils.py)
+        self._maker_fee_override = None
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
         self._btc_collateral_cap = 0.0
@@ -1479,6 +1481,7 @@ class Backtest:
             "exchanges": self._exchanges,
             "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
             "gap_tolerance_ohlcvs_minutes": self._gap_tolerance_ohlcvs_minutes,
+            "maker_fee_override": self._maker_fee_override,
             "start_date": self._start_date,
             "starting_balance": self._starting_balance,
             "btc_collateral_cap": self._btc_collateral_cap,
@@ -1515,6 +1518,8 @@ class Backtest:
             self.filter_by_min_effective_cost = new_backtest["filter_by_min_effective_cost"]
         if "gap_tolerance_ohlcvs_minutes" in new_backtest:
             self.gap_tolerance_ohlcvs_minutes = new_backtest["gap_tolerance_ohlcvs_minutes"]
+        if "maker_fee_override" in new_backtest:
+            self.maker_fee_override = new_backtest["maker_fee_override"]
         if "start_date" in new_backtest:
             self.start_date = new_backtest["start_date"]
         if "starting_balance" in new_backtest:
@@ -1555,6 +1560,8 @@ class Backtest:
     def filter_by_min_effective_cost(self): return self._filter_by_min_effective_cost
     @property
     def gap_tolerance_ohlcvs_minutes(self): return self._gap_tolerance_ohlcvs_minutes
+    @property
+    def maker_fee_override(self): return self._maker_fee_override
     @property
     def start_date(self): return self._start_date
     @property
@@ -1602,6 +1609,13 @@ class Backtest:
     def gap_tolerance_ohlcvs_minutes(self, new_gap_tolerance_ohlcvs_minutes):
         self._gap_tolerance_ohlcvs_minutes = new_gap_tolerance_ohlcvs_minutes
         self._backtest["gap_tolerance_ohlcvs_minutes"] = self._gap_tolerance_ohlcvs_minutes
+    @maker_fee_override.setter
+    def maker_fee_override(self, new_maker_fee_override):
+        if new_maker_fee_override in (None, ""):
+            self._maker_fee_override = None
+        else:
+            self._maker_fee_override = float(new_maker_fee_override)
+        self._backtest["maker_fee_override"] = self._maker_fee_override
     @start_date.setter
     def start_date(self, new_start_date):
         self._start_date = new_start_date
@@ -2745,6 +2759,8 @@ class Live:
         self._filter_by_min_effective_cost = True
         self._forced_mode_long = ""
         self._forced_mode_short = ""
+        # PB7 live defaults (see pb7/src/config_utils.py)
+        self._hedge_mode = True
         self._ignored_coins = IgnoredCoins()
         self._leverage = 10.0
         self._market_orders_allowed = True
@@ -2759,9 +2775,9 @@ class Live:
         self._price_distance_threshold = 0.002
         self._recv_window_ms = 5000
         self._time_in_force = "good_till_cancelled"
-        # PB7 live defaults (see pb7/src/config_utils.py)
         self._warmup_jitter_seconds = 30.0
         self._warmup_ratio = 0.2
+        self._warmup_concurrency = 0
         # PBGui uses 0 to mean unlimited (PB7 treats 0 like None)
         self._max_concurrent_api_requests = 0
         self._max_warmup_minutes = 0
@@ -2779,6 +2795,7 @@ class Live:
             "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
             "forced_mode_long": self._forced_mode_long,
             "forced_mode_short": self._forced_mode_short,
+            "hedge_mode": self._hedge_mode,
             "ignored_coins": self._ignored_coins._ignored_coins,
             "leverage": self._leverage,
             "market_orders_allowed": self._market_orders_allowed,
@@ -2795,6 +2812,7 @@ class Live:
             "time_in_force": self._time_in_force,
             "warmup_jitter_seconds": self._warmup_jitter_seconds,
             "warmup_ratio": self._warmup_ratio,
+            "warmup_concurrency": self._warmup_concurrency,
             "max_concurrent_api_requests": self._max_concurrent_api_requests,
             "max_warmup_minutes": self._max_warmup_minutes,
             "candle_lock_timeout_seconds": self._candle_lock_timeout_seconds,
@@ -2826,6 +2844,8 @@ class Live:
             self.forced_mode_long = new_live["forced_mode_long"]
         if "forced_mode_short" in new_live:
             self.forced_mode_short = new_live["forced_mode_short"]
+        if "hedge_mode" in new_live:
+            self.hedge_mode = new_live["hedge_mode"]
         if "ignored_coins" in new_live:
             self.ignored_coins = new_live["ignored_coins"]
         if "leverage" in new_live:
@@ -2858,6 +2878,8 @@ class Live:
             self.warmup_jitter_seconds = new_live["warmup_jitter_seconds"]
         if "warmup_ratio" in new_live:
             self.warmup_ratio = new_live["warmup_ratio"]
+        if "warmup_concurrency" in new_live:
+            self.warmup_concurrency = new_live["warmup_concurrency"]
         if "max_concurrent_api_requests" in new_live:
             self.max_concurrent_api_requests = new_live["max_concurrent_api_requests"]
         if "max_warmup_minutes" in new_live:
@@ -2887,6 +2909,8 @@ class Live:
     def forced_mode_long(self): return self._forced_mode_long
     @property
     def forced_mode_short(self): return self._forced_mode_short
+    @property
+    def hedge_mode(self): return self._hedge_mode
     @property
     def ignored_coins(self): return self._ignored_coins
     @property
@@ -2919,6 +2943,8 @@ class Live:
     def warmup_jitter_seconds(self): return self._warmup_jitter_seconds
     @property
     def warmup_ratio(self): return self._warmup_ratio
+    @property
+    def warmup_concurrency(self): return self._warmup_concurrency
     @property
     def max_concurrent_api_requests(self): return self._max_concurrent_api_requests
     @property
@@ -2964,6 +2990,10 @@ class Live:
     def forced_mode_short(self, new_forced_mode_short):
         self._forced_mode_short = new_forced_mode_short
         self._live["forced_mode_short"] = self._forced_mode_short
+    @hedge_mode.setter
+    def hedge_mode(self, new_hedge_mode):
+        self._hedge_mode = bool(new_hedge_mode)
+        self._live["hedge_mode"] = self._hedge_mode
     @ignored_coins.setter
     def ignored_coins(self, new_ignored_coins):
         self._ignored_coins.ignored_coins = new_ignored_coins
@@ -3028,6 +3058,13 @@ class Live:
     def warmup_ratio(self, new_warmup_ratio):
         self._warmup_ratio = new_warmup_ratio
         self._live["warmup_ratio"] = self._warmup_ratio
+    @warmup_concurrency.setter
+    def warmup_concurrency(self, new_warmup_concurrency):
+        if new_warmup_concurrency in (None, ""):
+            self._warmup_concurrency = 0
+        else:
+            self._warmup_concurrency = max(0, int(new_warmup_concurrency))
+        self._live["warmup_concurrency"] = self._warmup_concurrency
     @max_concurrent_api_requests.setter
     def max_concurrent_api_requests(self, new_max_concurrent_api_requests):
         if new_max_concurrent_api_requests in (None, ""):

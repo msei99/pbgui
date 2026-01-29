@@ -192,6 +192,22 @@ class V7Instance():
         )
 
     @st.fragment
+    def fragment_warmup_concurrency(self):
+        if "edit_run_v7_warmup_concurrency" in st.session_state:
+            if int(st.session_state.edit_run_v7_warmup_concurrency) != int(self.config.live.warmup_concurrency):
+                self.config.live.warmup_concurrency = int(st.session_state.edit_run_v7_warmup_concurrency)
+        else:
+            st.session_state.edit_run_v7_warmup_concurrency = int(self.config.live.warmup_concurrency)
+        st.number_input(
+            "warmup_concurrency",
+            min_value=0,
+            step=1,
+            format="%d",
+            key="edit_run_v7_warmup_concurrency",
+            help=pbgui_help.warmup_concurrency,
+        )
+
+    @st.fragment
     def fragment_max_warmup_minutes(self):
         if "edit_run_v7_max_warmup_minutes" in st.session_state:
             if st.session_state.edit_run_v7_max_warmup_minutes != self.config.live.max_warmup_minutes:
@@ -287,6 +303,15 @@ class V7Instance():
         else:
             st.session_state.edit_run_v7_auto_gs = self.config.live.auto_gs
         st.checkbox("auto_gs", help=pbgui_help.auto_gs, key="edit_run_v7_auto_gs")
+
+    @st.fragment
+    def fragment_hedge_mode(self):
+        if "edit_run_v7_hedge_mode" in st.session_state:
+            if st.session_state.edit_run_v7_hedge_mode != self.config.live.hedge_mode:
+                self.config.live.hedge_mode = st.session_state.edit_run_v7_hedge_mode
+        else:
+            st.session_state.edit_run_v7_hedge_mode = self.config.live.hedge_mode
+        st.checkbox("hedge_mode", help=pbgui_help.hedge_mode, key="edit_run_v7_hedge_mode")
 
     @st.fragment
     def inactive_coin_candle_ttl_minutes(self):
@@ -622,6 +647,7 @@ class V7Instance():
             self.fragment_filter_by_min_effective_cost()
             self.fragment_market_orders_allowed()
         with col4:
+            self.fragment_hedge_mode()
             self.fragment_auto_gs()
 
         # Advanced Settings
@@ -667,6 +693,8 @@ class V7Instance():
             with col1:
                 self.fragment_warmup_jitter_seconds()
             with col2:
+                self.fragment_warmup_concurrency()
+            with col3:
                 self.fragment_max_concurrent_api_requests()
 
         #Filters
@@ -743,6 +771,7 @@ class V7Instance():
                 del st.session_state.edit_run_v7_execution_delay_seconds
                 del st.session_state.edit_run_v7_filter_by_min_effective_cost
                 del st.session_state.edit_run_v7_empty_means_all_approved
+                del st.session_state.edit_run_v7_hedge_mode
                 del st.session_state.edit_run_v7_auto_gs
                 del st.session_state.edit_run_v7_max_n_cancellations_per_batch
                 del st.session_state.edit_run_v7_max_n_creations_per_batch
@@ -752,6 +781,7 @@ class V7Instance():
                 del st.session_state.edit_run_v7_max_n_restarts_per_day
                 del st.session_state.edit_run_v7_max_disk_candles_per_symbol_per_tf
                 del st.session_state.edit_run_v7_max_memory_candles_per_symbol
+                del st.session_state.edit_run_v7_warmup_concurrency
                 del st.session_state.edit_run_v7_market_cap
                 del st.session_state.edit_run_v7_vol_mcap
                 del st.session_state.edit_run_v7_dynamic_ignore
