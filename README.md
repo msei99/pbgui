@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.50
+# v1.51
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,17 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.51 (29-01-2026)
+- PB7 v7.7 compatibility: add `maker_fee_override`, `warmup_concurrency`, and `hedge_mode` to config + UI.
+- BacktestV7: maker fee override can be enabled via checkbox (stores `null` when disabled).
+- RunV7: expose `hedge_mode` and `warmup_concurrency`.
+- Monitor: parse new PB7 fill/PnL log formats (keeps legacy support).
+- VPS Manager: fix PB7 upstream switch logic.
+- Strategy Explorer: Movie Builder fixes; ensure `n_positions` is treated as int.
+- BacktestV7: handle `psutil.ZombieProcess` when checking PID.
+- PB7 suite editor: refactor aggregation editor, fix UI state + aggregate metrics, and prevent invalid suite configs.
+- Pareto Explorer: fix fast-mode pareto JSON loading order to keep config indices consistent.
 
 ## v1.50 (23-01-2026)
 - PBv7 Strategy Explorer (successor to Grid Visualizer): compare Mode B/Mode C, inspect fills on candles, and build Movie replays.
