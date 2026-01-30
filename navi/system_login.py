@@ -11,6 +11,7 @@ from User import Users
 from PBCoinData import CoinData
 import toml
 import os
+import traceback
 from pathlib import Path, PurePath
 
 def change_password():
@@ -222,7 +223,17 @@ def do_init():
     # Init Users
     if 'users' not in st.session_state:
         with st.spinner('Initializing Users...'):
-            st.session_state.users = Users()
+            try:
+                st.session_state.users = Users()
+            except Exception as e:
+                st.error(
+                    "Failed to load users / API-Keys. "
+                    "Please check api-keys.json format (each user must be an object with an 'exchange' field). "
+                    f"Error: {e}"
+                )
+                with st.expander("Details"):
+                    st.code(traceback.format_exc())
+                st.stop()
     # Init Instances
     if 'pbgui_instances' not in st.session_state:
         with st.spinner('Initializing Instances...'):

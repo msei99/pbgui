@@ -3,6 +3,76 @@ from pbgui_func import set_page_config, is_session_state_not_initialized, is_aut
 from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
+import json
+from pathlib import Path
+
+def _docs_index(lang: str) -> list[tuple[str, str]]:
+    ln = str(lang or "EN").strip().upper()
+    folder = "help_de" if ln == "DE" else "help"
+    docs_dir = Path(__file__).resolve().parents[1] / "docs" / folder
+    if not docs_dir.is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for p in sorted(docs_dir.glob("*.md")):
+        label = p.name
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                first = f.readline().strip()
+            if first.startswith("#"):
+                label = first.lstrip("#").strip() or p.name
+        except Exception:
+            label = p.name
+        out.append((label, str(p)))
+    return out
+
+
+def _read_markdown(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Failed to read docs: {e}"
+
+
+@st.dialog("Help & Tutorials", width="large")
+def _help_modal(default_topic: str = "API-Keys"):
+    lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="api_keys_help_lang")
+    docs = _docs_index(str(lang))
+    if not docs:
+        st.info("No help docs found.")
+        return
+
+    labels = [d[0] for d in docs]
+    default_index = 0
+    try:
+        target = str(default_topic or "").strip().lower()
+        if target:
+            for i, lbl in enumerate(labels):
+                if target in str(lbl).lower():
+                    default_index = i
+                    break
+    except Exception:
+        default_index = 0
+
+    sel = st.selectbox(
+        "Select Topic",
+        options=list(range(len(labels))),
+        format_func=lambda i: labels[int(i)],
+        index=int(default_index),
+        key="api_keys_help_sel",
+    )
+    path = docs[int(sel)][1]
+    md = _read_markdown(path)
+    st.markdown(md, unsafe_allow_html=True)
+    try:
+        base = str(st.get_option("server.baseUrlPath") or "").strip("/")
+        prefix = f"/{base}" if base else ""
+        st.markdown(
+            f"<a href='{prefix}/help' target='_blank'>Open full Help page in new tab</a>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
 
 @st.dialog("Delete User?")
 def delete_user(user):
@@ -29,6 +99,8 @@ def edit_user():
     # Display Error
     if "error" in st.session_state:
         st.error(st.session_state.error, icon="🚨")
+    if "api_keys_error" in st.session_state:
+        st.error(st.session_state.api_keys_error, icon="🚨")
     with st.sidebar:
         if st.button(":back:"):
             if "error" in st.session_state:
@@ -45,18 +117,39 @@ def edit_user():
                 users.save()
                 if "error" in st.session_state:
                     del st.session_state.error
+                # Return to API-Keys editor list without clearing session state.
+                # Clearing `users` would make the session look uninitialized and redirect to Welcome.
                 del st.session_state.edit_user
-                del st.session_state.users
+                st.session_state.ed_user_key = int(st.session_state.get("ed_user_key", 0)) + 1
                 # cleanup for Remote Server Manager
                 if "remote" in st.session_state:
                     del st.session_state.remote
                 PBRemote().restart()
                 st.rerun()
-        if user.name and not "error" in st.session_state:
+        if user.name and not "error" in st.session_state and not "api_keys_error" in st.session_state:
             if st.button(":floppy_disk:"):
                 if not users.has_user(user):
                     users.users.append(user)
                 users.save()
+    # Reset editor state when switching between users
+    if st.session_state.get("api_editor_user") != user.name:
+        st.session_state.api_editor_user = user.name
+        for k in [
+            "api_wallet_address",
+            "api_private_key",
+            "api_is_vault",
+            "api_passphrase",
+            "api_secret",
+            "api_exchange",
+            "api_key",
+            "api_quote",
+            "api_options_json",
+            "api_extra_json",
+        ]:
+            if k in st.session_state:
+                del st.session_state[k]
+        if "api_keys_error" in st.session_state:
+            del st.session_state.api_keys_error
     # Init session states for keys
     if "api_wallet_address" in st.session_state:
         if st.session_state.api_wallet_address != user.wallet_address:
@@ -79,6 +172,9 @@ def edit_user():
     if "api_key" in st.session_state:
         if st.session_state.api_key != user.key:
             user.key = st.session_state.api_key
+    if "api_quote" in st.session_state:
+        if st.session_state.api_quote != user.quote:
+            user.quote = st.session_state.api_quote
     col_1, col_2, col_3 = st.columns([1,1,1],vertical_alignment="bottom")
     with col_1:
         new_name = st.text_input("Username", value=user.name, max_chars=32, type="default", help=None, disabled=in_use)
@@ -118,7 +214,45 @@ def edit_user():
         if user.exchange == "hyperliquid":
             st.checkbox("Vault", value=user.is_vault, key="api_is_vault", help=None)
         if user.exchange in Passphrase.list():
-            st.text_input("Passphrase", value=user.passphrase, type="password", key="api_passphrase", help=None)
+            st.text_input("Passphrase / Password", value=user.passphrase, type="password", key="api_passphrase", help=None)
+
+    with st.expander("Advanced (optional)"):
+        st.caption("Optional fields used by PB7/CCXT. See the Guide button for examples.")
+        st.text_input("quote", value=user.quote or "", key="api_quote", help=None)
+
+        options_default = ""
+        if isinstance(user.options, dict) and user.options:
+            options_default = json.dumps(user.options, indent=2)
+        options_raw = st.text_area("options (JSON object)", value=options_default, key="api_options_json", help=None)
+        if options_raw.strip() == "":
+            user.options = None
+        else:
+            try:
+                parsed = json.loads(options_raw)
+                if not isinstance(parsed, dict):
+                    raise ValueError("options must be a JSON object")
+                user.options = parsed
+                if "api_keys_error" in st.session_state:
+                    del st.session_state.api_keys_error
+            except Exception as e:
+                st.session_state.api_keys_error = f"Invalid JSON in 'options': {e}"
+
+        extra_default = ""
+        if isinstance(user.extra, dict) and user.extra:
+            extra_default = json.dumps(user.extra, indent=2)
+        extra_raw = st.text_area("extra (JSON passthrough)", value=extra_default, key="api_extra_json", help=None)
+        if extra_raw.strip() == "":
+            user.extra = {}
+        else:
+            try:
+                parsed = json.loads(extra_raw)
+                if not isinstance(parsed, dict):
+                    raise ValueError("extra must be a JSON object")
+                user.extra = parsed
+                if "api_keys_error" in st.session_state:
+                    del st.session_state.api_keys_error
+            except Exception as e:
+                st.session_state.api_keys_error = f"Invalid JSON in 'extra': {e}"
     col_1, col_2, col_3 = st.columns([1,1,1],vertical_alignment="bottom")
     with col_1:
         st.markdown(f'### <center>Futures Wallet Balance</center>', unsafe_allow_html=True)
@@ -184,7 +318,12 @@ if not is_authenticted() or is_session_state_not_initialized():
 
 # Page Setup
 set_page_config("API-Keys")
-st.header("API-Keys", divider="red")
+c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
+with c_title:
+    st.header("API-Keys", divider="red")
+with c_help:
+    if st.button("📖 Guide", key="api_keys_header_help_btn"):
+        _help_modal("API-Keys")
 
 # Display Setup
 if 'edit_user' in st.session_state:

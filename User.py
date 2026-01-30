@@ -11,6 +11,10 @@ class User:
         self._key = None
         self._secret = None
         self._passphrase = None
+        # CCXT/pb7 passthrough fields (optional)
+        self._quote = None
+        self._options = None
+        self._extra = {}
         # Hyperliquid
         self._wallet_address = None
         self._private_key = None
@@ -32,6 +36,12 @@ class User:
     def private_key(self): return self._private_key
     @property
     def is_vault(self): return self._is_vault
+    @property
+    def quote(self): return self._quote
+    @property
+    def options(self): return self._options
+    @property
+    def extra(self): return self._extra
 
     @name.setter
     def name(self, new_name):
@@ -57,6 +67,15 @@ class User:
     @is_vault.setter
     def is_vault(self, new_is_vault):
         self._is_vault = new_is_vault
+    @quote.setter
+    def quote(self, new_quote):
+        self._quote = new_quote
+    @options.setter
+    def options(self, new_options):
+        self._options = new_options
+    @extra.setter
+    def extra(self, new_extra):
+        self._extra = new_extra
 
 
 class Users:
@@ -66,6 +85,7 @@ class Users:
         self.api_path = f'{pbdir()}/api-keys.json'
         self.api7_path = f'{pb7dir()}/api-keys.json'
         self.api_backup = Path(f'{PBGDIR}/data/api-keys')
+        self._top_level_extras = {}
         self.load()
     
     def __iter__(self):
@@ -142,45 +162,107 @@ class Users:
 
     def load(self):
         self.users = []
-        users = ""
+        users: dict = {}
+        self._top_level_extras = {}
+        load_errors: list[str] = []
         try:
             if Path(self.api_path).exists():
                 with Path(self.api_path).open(encoding="UTF-8") as f:
-                    users = json.load(f)
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        users = loaded
+                    else:
+                        raise ValueError(
+                            f"{self.api_path} has invalid format: expected JSON object at top-level"
+                        )
         except Exception as e:
-            print(f'{self.api_path} is corrupted {e}')
+            load_errors.append(f"{self.api_path}: {e}")
         try:
             if Path(self.api7_path).exists():
                 with Path(self.api7_path).open(encoding="UTF-8") as f:
-                    if users:
-                        users.update(json.load(f))
-                    else:
-                        users = json.load(f)
+                    loaded = json.load(f)
+                    if not isinstance(loaded, dict):
+                        raise ValueError(
+                            f"{self.api7_path} has invalid format: expected JSON object at top-level"
+                        )
+                    users.update(loaded)
         except Exception as e:
-            print(f'{self.api7_path} is corrupted {e}')
-        for user in users:
-            if "exchange" in users[user]:
+            load_errors.append(f"{self.api7_path}: {e}")
+
+        if load_errors:
+            raise ValueError("Failed to load api-keys: " + "; ".join(load_errors))
+
+        if not isinstance(users, dict):
+            raise ValueError("api-keys data has invalid format: expected JSON object")
+
+        def _get_first(dct: dict, keys: list[str]):
+            for k in keys:
+                if k in dct and dct[k] is not None:
+                    return dct[k]
+            return None
+
+        for user_name, user_data in users.items():
+            if user_name == "referrals" or str(user_name).startswith("_"):
+                self._top_level_extras[user_name] = user_data
+                continue
+
+            if not isinstance(user_data, dict):
+                raise ValueError(
+                    f"api-keys entry '{user_name}' has invalid format: expected object with 'exchange', got {type(user_data).__name__}"
+                )
+
+            if "exchange" in user_data:
                 my_user = User()
-                my_user.name = user
+                my_user.name = user_name
                 if my_user.name not in self.list():
-                    my_user.exchange = users[user]["exchange"]
-                    if "key" in users[user]:
-                        my_user.key = users[user]["key"]
-                    if "secret" in users[user]:
-                        my_user.secret = users[user]["secret"]
-                    if "passphrase" in users[user]:
-                        my_user.passphrase = users[user]["passphrase"]
-                    if "wallet_address" in users[user]:
-                        my_user.wallet_address = users[user]["wallet_address"]
-                    if "private_key" in users[user]:
-                        my_user.private_key = users[user]["private_key"]
-                    if "is_vault" in users[user]:
-                        my_user.is_vault = users[user]["is_vault"]
+                    my_user.exchange = user_data["exchange"]
+
+                    # Accept both PBGui-style and CCXT/pb7-style aliases
+                    my_user.key = _get_first(user_data, ["key", "apiKey", "api_key"])
+                    my_user.secret = _get_first(user_data, ["secret"])
+                    my_user.passphrase = _get_first(user_data, ["passphrase", "password"])
+                    my_user.wallet_address = _get_first(user_data, ["wallet_address", "walletAddress", "wallet"])
+                    my_user.private_key = _get_first(user_data, ["private_key", "privateKey"])
+                    if "is_vault" in user_data:
+                        my_user.is_vault = user_data["is_vault"]
+
+                    # Optional passthrough fields used by pb7/ccxt
+                    if "quote" in user_data:
+                        my_user.quote = user_data["quote"]
+                    if "options" in user_data:
+                        if isinstance(user_data["options"], dict):
+                            my_user.options = user_data["options"]
+                        else:
+                            # Preserve invalid/unexpected types without crashing
+                            my_user.options = None
+
+                    # Preserve unknown fields so editing in PBGui doesn't break pb7 configs
+                    canonical_keys = {
+                        "exchange",
+                        "key",
+                        "apiKey",
+                        "api_key",
+                        "secret",
+                        "passphrase",
+                        "password",
+                        "wallet_address",
+                        "walletAddress",
+                        "wallet",
+                        "private_key",
+                        "privateKey",
+                        "is_vault",
+                        "quote",
+                        "options",
+                    }
+                    extras = {k: v for k, v in user_data.items() if k not in canonical_keys}
+                    if "options" in user_data and not isinstance(user_data.get("options"), dict):
+                        extras["options"] = user_data.get("options")
+                    my_user.extra = extras
                     self.users.append(my_user)
         self.users.sort(key=lambda x: x.name)
 
     def save(self):
-        save_users = {}
+        save_users = dict(self._top_level_extras) if isinstance(self._top_level_extras, dict) else {}
         for user in self.users:
             save_users[user.name] = ({
                         "exchange": user.exchange
@@ -197,6 +279,14 @@ class Users:
                 save_users[user.name]["private_key"] = user.private_key
             if user.exchange == "hyperliquid":
                 save_users[user.name]["is_vault"] = user.is_vault
+            if user.quote:
+                save_users[user.name]["quote"] = user.quote
+            if isinstance(user.options, dict) and user.options:
+                save_users[user.name]["options"] = user.options
+            if isinstance(user.extra, dict) and user.extra:
+                for k, v in user.extra.items():
+                    if k not in save_users[user.name]:
+                        save_users[user.name][k] = v
         # Backup api-keys and save new version
         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         if not self.api_backup.exists():

@@ -1,8 +1,7 @@
-# Movie Builder
+# Movie Builder (Strategy Explorer)
 
-Movie Builder creates a time-stepped animation of bot behavior.
+Movie Builder is part of **Strategy Explorer**.
 
-- Step Size (1m, 5m, 1h)
-- Duration / Frames
+Please use the Strategy Explorer docs topic:
 
-Try launching a small demo from Strategy Explorer.
+- **Strategy Explorer: Tutorial – Movie Builder**

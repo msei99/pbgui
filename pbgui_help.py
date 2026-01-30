@@ -70,6 +70,46 @@ price_step = """
 api_error = """
     Check your API-Key and enable spot and/or future trading if you need it
     """
+
+api_keys_guide = """
+**PBGui API-Keys guide (api-keys.json)**
+
+PBGui supports both its own format and PB7/CCXT-style field names. When you edit & save users in the GUI, PBGui will preserve unknown fields (so PB7 configs keep working).
+
+Upstream reference (PB7/Passivbot): https://github.com/enarjord/passivbot
+
+Supported/recognized keys inside each user entry:
+
+- Required: `exchange`
+- Credentials:
+    - `key` (alias: `apiKey`, `api_key`)
+    - `secret`
+    - `passphrase` (alias: `password`)
+- Hyperliquid:
+    - `wallet_address` (alias: `walletAddress`, `wallet`)
+    - `private_key` (alias: `privateKey`)
+    - `is_vault` (boolean)
+- Optional PB7/CCXT passthrough:
+    - `quote` (string)
+    - `options` (JSON object)
+- Any other keys (e.g. subaccount identifiers, exchange-specific fields) are kept under `extra`.
+
+Example:
+
+```json
+{
+    "myuser": {
+        "exchange": "bybit",
+        "apiKey": "...",
+        "secret": "...",
+        "password": "...",
+        "quote": "USDT",
+        "options": {"defaultType": "swap"},
+        "uid": "123456"
+    }
+}
+```
+"""
 upload_pbguidb = """
     ```
     Share your configuration with pbconfigdb
