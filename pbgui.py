@@ -22,5 +22,4 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
 build_navigation()

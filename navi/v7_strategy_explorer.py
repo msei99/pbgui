@@ -9363,11 +9363,12 @@ def _se_open_help_tab():
     existing navigation.
     """
     try:
-        help_page = get_navi_paths().get("HELP") or "navi/help.py"
-        url = f"?page={help_page}"
+        base = str(st.get_option("server.baseUrlPath") or "").strip("/")
+        prefix = f"/{base}" if base else ""
+        url = f"{prefix}/help"
         st.markdown(f"<script>window.open('{url}', '_blank');</script>", unsafe_allow_html=True)
     except Exception:
-        st.markdown("[Open Help Page](?page=navi/help.py)", unsafe_allow_html=True)
+        st.markdown("[Open Help Page](/help)", unsafe_allow_html=True)
 
 
 @st.dialog("Help & Tutorials", width="large")
@@ -9384,7 +9385,12 @@ def _se_help_modal():
     md = _se_read_markdown(path)
     st.markdown(md, unsafe_allow_html=True)
     try:
-        st.markdown(f"<a href='?page=navi/help.py' target='_blank'>Open full Help page in new tab</a>", unsafe_allow_html=True)
+        base = str(st.get_option("server.baseUrlPath") or "").strip("/")
+        prefix = f"/{base}" if base else ""
+        st.markdown(
+            f"<a href='{prefix}/help' target='_blank'>Open full Help page in new tab</a>",
+            unsafe_allow_html=True,
+        )
     except Exception:
         pass
 

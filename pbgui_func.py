@@ -133,6 +133,7 @@ def set_page_config(page : str = "Start"):
 def get_navi_paths():
     NAVI_BASE_DIR = "navi/"
     paths = {
+        "HELP":              os.path.join(NAVI_BASE_DIR, "help.py"),
         "SYSTEM_LOGIN":        os.path.join(NAVI_BASE_DIR, "system_login.py"),
         "SYSTEM_API_KEYS":     os.path.join(NAVI_BASE_DIR, "system_api_keys.py"),
         "SYSTEM_SERVICES":     os.path.join(NAVI_BASE_DIR, "system_services.py"),
@@ -172,6 +173,7 @@ def build_navigation():
 
     pSe1 = st.Page(paths["INFO_DASHBOARDS"], title="Dashboards", icon=":material/dashboard:")
     pSe2 = st.Page(paths["INFO_COIN_DATA"], title="Coin Data", icon=":material/monetization_on:")
+    pH1 = st.Page(paths["HELP"], title="Help", icon=":material/help:", url_path="help")
 
     pS1 = st.Page(paths["V6_SINGLE_RUN"], title="Run", icon=":material/play_arrow:")
     pS2 = st.Page(paths["V6_SINGLE_BACKTEST"], title="Backtest", icon=":material/history:")
@@ -194,7 +196,7 @@ def build_navigation():
     
     # Do not include DEBUGLOG page; centralized debuglog removed
                 
-    InfotmationPages = [pSe1, pSe2]
+    InfotmationPages = [pSe1, pSe2, pH1]
     v7Pages = [p71, p72, p73, p74, p75, p76]
     v6Pages = [p61, p62, p63]
     SinglePages = [pS1, pS2, pS3, pS4]
