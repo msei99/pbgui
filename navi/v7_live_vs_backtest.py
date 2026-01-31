@@ -318,6 +318,24 @@ def live_vs_backtest_page():
     sb_override_key = "v7_live_vs_backtest_starting_balance"
     sb_sig_key = "v7_live_vs_backtest_starting_balance_sig"
     sb_calc_info_key = "v7_live_vs_backtest_starting_balance_calc_info"
+    sb_manual_key = "v7_live_vs_backtest_starting_balance_manual"
+    sb_last_calc_key = "v7_live_vs_backtest_starting_balance_last_calc"
+    sb_calc_val_key = "v7_live_vs_backtest_starting_balance_calc_value"
+
+    def _mark_starting_balance_manual():
+        st.session_state[sb_manual_key] = True
+
+    def _reset_starting_balance_to_calc():
+        try:
+            calc_val = st.session_state.get(sb_calc_val_key)
+            if calc_val is None:
+                return
+            calc_val_f = float(calc_val)
+            st.session_state[sb_manual_key] = False
+            st.session_state[sb_override_key] = calc_val_f
+            st.session_state[sb_last_calc_key] = calc_val_f
+        except Exception:
+            return
 
     sb_start_date = st.session_state.get(compare_start_key, default_start_date)
     if isinstance(sb_start_date, datetime):
@@ -342,13 +360,47 @@ def live_vs_backtest_page():
         calc_sb = None
         calc_info = None
 
-    # Keep the input synced when user or start date changes, but allow manual override otherwise.
-    if st.session_state.get(sb_sig_key) != sb_signature:
+    # Expose the latest calculated value to callbacks (button on_click runs early).
+    try:
+        st.session_state[sb_calc_val_key] = float(calc_sb) if calc_sb is not None else None
+    except Exception:
+        st.session_state[sb_calc_val_key] = None
+
+    # Keep the input synced when user/start changes or when DB-derived balance changes,
+    # unless the user explicitly overrides the value.
+    prev_sig = st.session_state.get(sb_sig_key)
+    if prev_sig != sb_signature:
         st.session_state[sb_sig_key] = sb_signature
+        st.session_state[sb_manual_key] = False
         if calc_sb is not None:
             st.session_state[sb_override_key] = float(calc_sb)
         elif sb_override_key not in st.session_state:
             st.session_state[sb_override_key] = 1000.0
+        st.session_state[sb_last_calc_key] = float(calc_sb) if calc_sb is not None else None
+    else:
+        # Same user/start: if we have a new calculation (e.g. balance table updated)
+        # and the user did not manually override, auto-refresh the input.
+        try:
+            manual = bool(st.session_state.get(sb_manual_key, False))
+        except Exception:
+            manual = False
+        if not manual and calc_sb is not None:
+            prev_calc = st.session_state.get(sb_last_calc_key)
+            try:
+                prev_calc_f = float(prev_calc) if prev_calc is not None else None
+            except Exception:
+                prev_calc_f = None
+            if prev_calc_f is None or abs(prev_calc_f - float(calc_sb)) > 1e-9:
+                # Only overwrite if the current value still matches the previous auto value
+                # or is unset/zero-ish.
+                try:
+                    cur_val = st.session_state.get(sb_override_key)
+                    cur_val_f = float(cur_val) if cur_val is not None else None
+                except Exception:
+                    cur_val_f = None
+                if cur_val_f is None or abs(cur_val_f) < 1e-12 or (prev_calc_f is not None and abs(cur_val_f - prev_calc_f) < 1e-9):
+                    st.session_state[sb_override_key] = float(calc_sb)
+                st.session_state[sb_last_calc_key] = float(calc_sb)
     st.session_state[sb_calc_info_key] = calc_info
 
     with st.container(border=True):
@@ -386,14 +438,26 @@ def live_vs_backtest_page():
             except Exception:
                 sb_help = ""
 
-            st.number_input(
-                "Starting Balance",
-                key=sb_override_key,
-                step=0.01,
-                format="%.2f",
-                label_visibility="collapsed",
-                help=sb_help,
-            )
+            sb_c1, sb_c2 = st.columns([6, 2], vertical_alignment="bottom")
+            with sb_c1:
+                st.number_input(
+                    "Starting Balance",
+                    key=sb_override_key,
+                    step=0.01,
+                    format="%.2f",
+                    label_visibility="collapsed",
+                    help=sb_help,
+                    on_change=_mark_starting_balance_manual,
+                )
+            with sb_c2:
+                st.button(
+                    ":material/replay:",
+                    key="v7_live_vs_backtest_reset_starting_balance",
+                    help="Reset to calculated starting balance",
+                    disabled=(calc_sb is None),
+                    use_container_width=True,
+                    on_click=_reset_starting_balance_to_calc,
+                )
         with c5:
             run_bt = st.button(
                 ":material/play_arrow:",
