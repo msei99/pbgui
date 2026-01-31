@@ -1,8 +1,84 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_authenticted, get_navi_paths
+import time
+import json
+from pathlib import Path
+
+from pbgui_func import PBGDIR, set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_authenticted, get_navi_paths
 from Dashboard import Dashboard
 
+
+def _extract_users_from_dashboard_config(cfg: dict) -> list[str]:
+    """Best-effort: extract user strings from dashboard JSON config."""
+    users: list[str] = []
+    if not isinstance(cfg, dict):
+        return users
+    for k, v in cfg.items():
+        if not isinstance(k, str):
+            continue
+        if "_users_" not in k:
+            continue
+        if isinstance(v, str):
+            if v:
+                users.append(v)
+        elif isinstance(v, (list, tuple)):
+            for item in v:
+                if isinstance(item, str) and item:
+                    users.append(item)
+    return users
+
+
+def _find_best_dashboard_for_user(dashboard_names: list[str], requested_user: str) -> str | None:
+    """Pick the dashboard which most strongly references requested_user."""
+    if not requested_user:
+        return None
+
+    dashboards_dir = Path(f"{PBGDIR}/data/dashboards")
+    best_name: str | None = None
+    best_score = -1
+    best_specificity = 10_000
+    best_mtime = -1.0
+
+    for name in dashboard_names:
+        p = dashboards_dir / f"{name}.json"
+        if not p.exists():
+            continue
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            continue
+
+        extracted = _extract_users_from_dashboard_config(cfg)
+        if not extracted:
+            continue
+
+        # Score: count exact occurrences (case sensitive to match user ids)
+        score = sum(1 for u in extracted if u == requested_user)
+        if score <= 0:
+            continue
+
+        # Prefer dashboards that are more "specific" (fewer total referenced users)
+        specificity = len(set(extracted))
+        try:
+            mtime = p.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+
+        # Higher score wins; then fewer distinct users; then newest file
+        if (score > best_score) or (
+            score == best_score and (specificity < best_specificity or (specificity == best_specificity and mtime > best_mtime))
+        ):
+            best_name = name
+            best_score = score
+            best_specificity = specificity
+            best_mtime = mtime
+
+    return best_name
+
 def dashboard():
+    # Mark Dashboards page as recently active so other pages can infer context
+    # when navigating via menu.
+    st.session_state["dashboards_last_active_ts"] = time.time()
     # Init dashboard
     # if "dashboard" not in st.session_state:
     #     st.session_state.dashboard = Dashboard()
@@ -11,6 +87,30 @@ def dashboard():
     if "dashboards" not in st.session_state:
         st.session_state.dashboards = Dashboard().list_dashboards()
     dashboards = st.session_state.dashboards
+
+    # If another page requested a specific dashboard (by user), pick best matching dashboard.
+    requested = st.session_state.pop("dashboards_open_dashboard", None)
+    if requested:
+        try:
+            best = _find_best_dashboard_for_user(dashboards, str(requested))
+            if best:
+                if "edit_dashboard" in st.session_state:
+                    del st.session_state.edit_dashboard
+                if '_dashboard_edit_original_name' in st.session_state:
+                    del st.session_state['_dashboard_edit_original_name']
+                st.session_state.dashboard = Dashboard(best)
+            else:
+                # If it doesn't exist, show the dashboard selection page (not the last opened dashboard)
+                if "edit_dashboard" in st.session_state:
+                    del st.session_state.edit_dashboard
+                if "dashboard" in st.session_state:
+                    del st.session_state.dashboard
+                if 'selected_dashboard' in st.session_state:
+                    del st.session_state['selected_dashboard']
+                if '_dashboard_edit_original_name' in st.session_state:
+                    del st.session_state['_dashboard_edit_original_name']
+        except Exception:
+            pass
     
     if not "dashboard" in st.session_state:
         # No Dashboard? Create a new one

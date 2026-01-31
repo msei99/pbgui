@@ -1055,9 +1055,9 @@ class Exchange:
             for history in all_histories:
                 income = {}
                 income["symbol"] = history["delta"]["coin"] + "USDC"
-                income["timestamp"] = history["time"]
+                income["timestamp"] = int(history["time"])
                 income["income"] = history["delta"]["usdc"]
-                income["uniqueid"] = history["time"] + "_" + history["delta"]["coin"]
+                income["uniqueid"] = f"{int(history['time'])}_{history['delta']['coin']}"
                 all.append(income)
             since = since_trades
             end = end_trades
