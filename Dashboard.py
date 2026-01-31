@@ -3,11 +3,11 @@ from PBData import PBData
 from pathlib import Path
 import json
 import pandas as pd
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from dateutil.relativedelta import relativedelta, MO
 import numpy as np
 from Exchange import Exchange
-from pbgui_func import PBGDIR
+from pbgui_func import PBGDIR, pb7dir, get_navi_paths
 import plotly.express as px
 import plotly.graph_objects as go
 from Database import Database
@@ -983,7 +983,7 @@ class Dashboard():
             if filter:
                 st.session_state[f'dashboard_income_filter_{position}'] = filter
         st.markdown("#### :blue[Income]")
-        col1, col2, col3, col4 = st.columns([2,1,1,1])
+        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 0.35], vertical_alignment="bottom")
         with col1:
             st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_income_users_{position}")
         with col2:
@@ -992,10 +992,25 @@ class Dashboard():
             st.number_input('Last N', min_value=0, step=10, key=f"dashboard_income_last_{position}", help=pbgui_help.dashboard_last)
         with col4:
             st.number_input('Filter', min_value=0.0, key=f"dashboard_income_filter_{position}", help=pbgui_help.dashboard_filter)
+        with col5:
+            users_selected_state = st.session_state.get(f'dashboard_income_users_{position}', [])
+            single_user = None
+            if users_selected_state and 'ALL' not in users_selected_state and len(users_selected_state) == 1:
+                single_user = users_selected_state[0]
+            if st.button(
+                ":material/swap_horiz:",
+                key=f"dashboard_income_open_live_vs_backtest_{position}",
+                help="Open PBv7 Live vs Backtest",
+                disabled=(single_user is None),
+                use_container_width=True,
+            ):
+                st.session_state["v7_live_vs_backtest_prefill_user"] = single_user
+                st.switch_page(get_navi_paths()["V7_LIVE_VS_BACKTEST"])
         if st.session_state[f'dashboard_income_users_{position}']:
             if st.session_state[f'dashboard_income_period_{position}'] in self.PERIOD:
                 period_index = self.PERIOD.index(st.session_state[f'dashboard_income_period_{position}'])
                 period_range = getattr(self, self.PERIOD[period_index])
+
                 # include Id for delete operations
                 income = self.db.select_income_by_symbol_with_id(
                     st.session_state[f'dashboard_income_users_{position}'], period_range[0], period_range[1]

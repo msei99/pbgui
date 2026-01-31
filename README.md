@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.51
+# v1.52
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,11 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.52 (31-01-2026)
+- New: PBv7 “Live vs Backtest” — compare your Live performance vs a PB7 backtest in one chart.
+- New: Run “compare backtests” directly from the page (and select existing results, incl. combined).
+- New: Built-in Guide/Tutorial (EN/DE) via the 📖 Guide button.
 
 ## v1.51 (29-01-2026)
 - PB7 v7.7 compatibility: add `maker_fee_override`, `warmup_concurrency`, and `hedge_mode` to config + UI.

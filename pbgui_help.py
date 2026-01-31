@@ -2201,6 +2201,14 @@ exchanges = """
     The template ships with ['binance', 'bybit']; additional exchanges can be wired up
     manually if you maintain your own archives."""
 
+compare_backtest_exchange_help = """
+    Select which exchange to use for the backtest data in the Live vs Backtest comparison.
+    This selector controls which exchange's OHLCV archive/backtest results are used for the comparison,
+    independent of your live exchange.
+
+    Note (Hyperliquid): the public candle snapshot endpoint only exposes the most recent 5000 candles.
+    For 1m candles this is ~5000 minutes (~3.5 days), so long-range 1m backtests on Hyperliquid are not supported."""
+
 backtest_start_date = """
     Start date of backtest.
     Format: YYYY-MM-DD (e.g., 2024-01-01)"""

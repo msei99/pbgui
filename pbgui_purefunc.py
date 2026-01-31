@@ -4,6 +4,55 @@ import pprint
 import configparser
 from pathlib import Path
 import subprocess
+import re
+
+
+def coin_from_symbol_code(symbol_code: str) -> str:
+    """Return a normalized base coin from various symbol code formats.
+
+    Examples:
+    - "DOGE_USDT:USDT" -> "DOGE"
+    - "BTC/USDT:USDT"  -> "BTC"
+    - "BTCUSDC"        -> "BTC"
+    - "kPEPEUSDC"      -> "PEPE"
+    - "1000SHIBUSDT"   -> "SHIB"
+
+    This is intentionally lightweight (pure string ops + regex), so it can be
+    used across PBGui without pulling in heavier modules.
+    """
+    s = str(symbol_code or "").strip()
+    if not s:
+        return ""
+
+    # Split on common separators used by ccxt/PB7 cache dirs
+    # (take the base part before the quote/settle).
+    for sep in ("_", "/", ":", "-"):
+        if sep in s:
+            s = s.split(sep, 1)[0]
+            break
+
+    s = s.strip()
+    if not s:
+        return ""
+
+    # Remove quote currency suffixes if present.
+    for quote in ("USDT", "USDC", "BUSD", "TUSD", "USD", "EUR", "GBP", "DAI"):
+        if s.endswith(quote) and len(s) > len(quote):
+            s = s[: -len(quote)]
+            break
+
+    # Hyperliquid multiplier prefix (kPEPE -> PEPE)
+    if s.startswith("k") and len(s) > 1 and s[1].isupper():
+        s = s[1:]
+
+    # Numeric multiplier prefixes (1000SHIB -> SHIB)
+    m = re.match(r"^(\d+)([A-Z].*)$", s)
+    if m:
+        multiplier, coin = m.groups()
+        if multiplier in {"1000", "10000", "100000", "1000000", "10000000", "1000000000"}:
+            s = coin
+
+    return s.strip().upper()
 
 def save_ini(section : str, parameter : str, value : str):
     pb_config = configparser.ConfigParser()

@@ -837,6 +837,95 @@ class Database():
                 return rows
         except sqlite3.Error as e:
             _human_log('Database', f"DB select_pnl error {e}", level='ERROR')
+
+    def sum_income(self, user: str, start: int, end: int) -> float:
+        sql = '''SELECT COALESCE(SUM("income"), 0) FROM "history"
+                WHERE "history"."user" = ?
+                    AND "history"."timestamp" >= ?
+                    AND "history"."timestamp" <= ?'''
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user, start, end))
+                row = cur.fetchone()
+                return float(row[0] if row and row[0] is not None else 0.0)
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB sum_income error {e} user={user}", level='ERROR', user=user)
+            return 0.0
+
+    def min_income_timestamp(self, user: str):
+        sql = '''SELECT MIN("timestamp") FROM "history" WHERE "history"."user" = ?'''
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user,))
+                row = cur.fetchone()
+                if not row or row[0] is None:
+                    return None
+                return int(row[0])
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB min_income_timestamp error {e} user={user}", level='ERROR', user=user)
+            return None
+
+    def max_income_timestamp(self, user: str):
+        sql = '''SELECT MAX("timestamp") FROM "history" WHERE "history"."user" = ?'''
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user,))
+                row = cur.fetchone()
+                if not row or row[0] is None:
+                    return None
+                return int(row[0])
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB max_income_timestamp error {e} user={user}", level='ERROR', user=user)
+            return None
+
+    def list_income_users(self) -> list:
+        """Return distinct users present in the income/history table."""
+        sql = '''SELECT DISTINCT "user" FROM "history" ORDER BY "user"'''
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql)
+                rows = cur.fetchall()
+                return [r[0] for r in rows if r and r[0] is not None]
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB list_income_users error {e}", level='ERROR')
+            return []
+
+    def list_income_symbols(self, user: str, start: int, end: int) -> list:
+        sql = '''SELECT DISTINCT "symbol" FROM "history"
+                WHERE "history"."user" = ?
+                    AND "history"."timestamp" >= ?
+                    AND "history"."timestamp" <= ?
+                ORDER BY "symbol"'''
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user, start, end))
+                rows = cur.fetchall()
+                return [r[0] for r in rows if r and r[0] is not None]
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB list_income_symbols error {e} user={user}", level='ERROR', user=user)
+            return []
+
+    def select_pnl_symbol(self, user: str, symbol: str, start: int, end: int):
+        sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, SUM("income") AS "sum" FROM "history"
+                WHERE "history"."user" = ?
+                    AND "history"."symbol" = ?
+                    AND "history"."timestamp" >= ?
+                    AND "history"."timestamp" <= ?
+                GROUP BY date'''
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user, symbol, start, end))
+                rows = cur.fetchall()
+                return rows
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB select_pnl_symbol error {e} user={user} symbol={symbol}", level='ERROR', user=user)
+            return []
     
     def select_ppl(self, user: list, start: str, end: str, sum_period: str):
     # Define date formats for different sum_period values

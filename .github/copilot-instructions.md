@@ -14,6 +14,16 @@
 - Never open a dialog inside another dialog: within `@st.dialog` do not call `error_popup/info_popup/result_popup`; show errors inline (e.g. `st.error`).
 - When showing/exporting configs as JSON, use real JSON serialization (`json.dumps`) so `null/true/false` are preserved (avoid Python `None/True/False` formatting).
 
+## Guides & tutorials (pattern)
+
+- New user-facing guides/tutorials must be Markdown files in:
+  - `docs/help/` (EN)
+  - `docs/help_de/` (DE)
+- The first Markdown line must be a `# Title` heading; the central Help index uses it as the label.
+- Page UX standard: add a `📖 Guide` button which opens an in-page `@st.dialog("Help & Tutorials")` modal (Language toggle + Topic select), preselected via a substring match on the topic.
+  - Use the same modal behavior as the API-Keys editor in `navi/system_api_keys.py`.
+  - Prefer opening the modal (don’t navigate away) so user context is preserved.
+
 ## Backups before mass edits
 
 - **ALWAYS** create backup before using sed/awk/Python scripts for mass edits (>10 locations).
