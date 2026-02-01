@@ -2016,6 +2016,9 @@ class PBData():
                         elif kind == 'executions':
                             start_ts = datetime.now().timestamp()
                             exchange_for_slot = exch or user.exchange
+                            did_run = False
+                            fetched = None
+                            inserted = None
                             try:
                                 async with self._rest_slot(exchange_for_slot) as got:
                                     if not got:
@@ -2025,7 +2028,14 @@ class PBData():
                                             pass
                                         had_rate_limit = True
                                     else:
-                                        await asyncio.to_thread(self.db.update_executions, user)
+                                        did_run = True
+                                        res = await asyncio.to_thread(self.db.update_executions, user)
+                                        try:
+                                            if isinstance(res, dict):
+                                                fetched = res.get('fetched')
+                                                inserted = res.get('inserted')
+                                        except Exception:
+                                            pass
                                         try:
                                             self._last_fetch_ts[(user.name, 'executions')] = start_ts
                                         except Exception:
@@ -2037,6 +2047,17 @@ class PBData():
                             except Exception:
                                 # Let outer handler log traceback + handle rate-limit keywords.
                                 raise
+                            if did_run:
+                                try:
+                                    dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+                                    _human_log(
+                                        'PBData',
+                                        f"[poll] Shared executions poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms fetched={fetched} inserted={inserted}",
+                                        level='INFO',
+                                        user=user,
+                                    )
+                                except Exception:
+                                    pass
                         elif kind == 'balances':
                             # Skip shared balances poll if user has active WS balances watcher
                             ws_task = self._balance_ws_tasks.get(user.name)

@@ -359,7 +359,7 @@ class Database():
         exchange = Exchange(user.exchange, user)
         # Only fetch executions for exchanges where we have explicit support.
         if exchange.id not in ('hyperliquid',):
-            return
+            return None
 
         try:
             since = self.find_last_execution_timestamp(user, exchange.id)
@@ -382,7 +382,7 @@ class Database():
             n = 0
         _human_log('Database', f"fetch_executions DONE: user={user.name} exchange={exchange.id} duration_s={dur:.3f} items={n}", level='INFO', user=user.name)
         if not executions:
-            return
+            return {'fetched': n, 'prepared': 0, 'inserted': 0}
 
         rows = []
         for ex in executions:
@@ -409,18 +409,35 @@ class Database():
             except Exception:
                 continue
         if not rows:
-            return
+            return {'fetched': n, 'prepared': 0, 'inserted': 0}
 
         sql = (
             'INSERT OR IGNORE INTO executions '
             '(exchange, symbol, timestamp, side, price, qty, fee, realized_pnl, order_id, trade_id, user, raw_json) '
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
+        inserted = 0
         with self._write_lock:
             with self._connect_trades() as conn:
+                before = conn.total_changes
                 cur = conn.cursor()
                 cur.executemany(sql, rows)
                 conn.commit()
+                inserted = max(0, conn.total_changes - before)
+
+        try:
+            ts_vals = [r[2] for r in rows if r and r[2]]
+            ts_min = min(ts_vals) if ts_vals else None
+            ts_max = max(ts_vals) if ts_vals else None
+        except Exception:
+            ts_min, ts_max = None, None
+        _human_log(
+            'Database',
+            f"store_executions DONE: user={user.name} exchange={exchange.id} fetched={n} prepared={len(rows)} inserted={inserted} ts_min={ts_min} ts_max={ts_max}",
+            level='INFO',
+            user=user.name,
+        )
+        return {'fetched': n, 'prepared': len(rows), 'inserted': inserted}
     
     def update_positions(self, user: User):
         positions_db = self.fetch_positions(user)
