@@ -530,7 +530,7 @@ def pbdata_details():
                         st.markdown(f"**WS**: 🟢 {ord_ws}  \n**REST**: 🟠 {ord_rest}")
                     with c_hist:
                         st.markdown("**History**")
-                        st.markdown(f"🔵 Entries: **{hist_count}**")
+                        st.markdown(f"**REST**: 🟠 {hist_count}")
                     with c_exec:
                         st.markdown("**Executions**")
                         st.markdown(f"**REST**: 🟠 {exec_count}")
