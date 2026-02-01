@@ -1391,6 +1391,129 @@ class Exchange:
                 else: 
                     self.save_income_other(history, self.user.name)
         return all
+
+    def fetch_executions(self, since: int = None):
+        """Fetch execution-level trades/fills.
+
+        Returns list of dicts with keys:
+          symbol, timestamp, side, price, qty, fee, realized_pnl, order_id, trade_id, raw_json
+        """
+        if self.user.key == 'key':
+            return []
+        if not self.instance:
+            self.connect()
+
+        if self.id == "hyperliquid":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max_age = 365 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max_age
+
+            limit = 200
+            initial_span = week
+            max_span = week * 4
+            page_span = initial_span
+            end = since + page_span
+
+            all_histories = []
+            while True:
+                trades = self.instance.fetch_my_trades(since=since, limit=limit, params={"endTime": end})
+                if trades:
+                    first_trade = trades[0]
+                    last_trade = trades[-1]
+                    all_histories = trades + all_histories
+                if len(trades) == limit:
+                    _human_log(
+                        'Exchange',
+                        f"Fetched {len(trades)} trades from "
+                        f"{self.instance.iso8601(first_trade['timestamp'])} till "
+                        f"{self.instance.iso8601(last_trade['timestamp'])}",
+                        level='INFO',
+                        user=self.user,
+                    )
+                    since = trades[-1]['timestamp']
+                else:
+                    _human_log(
+                        'Exchange',
+                        f"Fetched {len(trades)} trades from "
+                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
+                        level='INFO',
+                        user=self.user,
+                    )
+                    if not trades:
+                        page_span = min(page_span * 2, max_span)
+                    else:
+                        page_span = initial_span
+                    since = end
+                    end = since + page_span
+                    if since > now:
+                        _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                        break
+                sleep(0.5)
+
+            def _to_float(val):
+                try:
+                    if val is None:
+                        return None
+                    return float(val)
+                except Exception:
+                    return None
+
+            executions = []
+            for t in all_histories:
+                info = t.get('info') or {}
+                trade_id = None
+                try:
+                    trade_id = info.get('tid') or t.get('id')
+                except Exception:
+                    trade_id = None
+                if not trade_id:
+                    continue
+
+                symbol = t.get('symbol')
+                if not symbol:
+                    try:
+                        coin = info.get('coin')
+                        symbol = f"{coin}USDC" if coin else ''
+                    except Exception:
+                        symbol = ''
+
+                fee = _to_float(info.get('fee'))
+                if fee is None:
+                    try:
+                        fee_obj = t.get('fee') or {}
+                        fee = _to_float(fee_obj.get('cost'))
+                    except Exception:
+                        fee = None
+
+                price = _to_float(t.get('price')) or _to_float(info.get('px'))
+                qty = _to_float(t.get('amount')) or _to_float(info.get('sz'))
+                realized_pnl = _to_float(info.get('closedPnl'))
+                side = t.get('side') or info.get('side')
+                order_id = info.get('orderId') or info.get('oid') or t.get('order')
+
+                try:
+                    raw_json = json.dumps(t, default=str)
+                except Exception:
+                    raw_json = None
+
+                executions.append({
+                    'symbol': symbol,
+                    'timestamp': t.get('timestamp'),
+                    'side': side,
+                    'price': price,
+                    'qty': qty,
+                    'fee': fee,
+                    'realized_pnl': realized_pnl,
+                    'order_id': order_id,
+                    'trade_id': str(trade_id),
+                    'raw_json': raw_json,
+                })
+            return executions
+
+        return []
     
     def fetch_trades(self, symbol: str, market_type: str, since: int):
         all_trades = []

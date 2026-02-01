@@ -506,6 +506,7 @@ def pbdata_details():
                 pos = summary_obj.get('positions', {})
                 ords = summary_obj.get('orders', {})
                 hist = summary_obj.get('history', [])
+                execs = summary_obj.get('executions', [])
 
                 # Show counts of ws vs rest for each category
                 try:
@@ -516,7 +517,8 @@ def pbdata_details():
                     ord_ws = len(ords.get('ws') or [])
                     ord_rest = len(ords.get('rest') or [])
                     hist_count = len(hist or [])
-                    c_bal, c_pos, c_ord, c_hist = st.columns(4)
+                    exec_count = len(execs or [])
+                    c_bal, c_pos, c_ord, c_hist, c_exec = st.columns(5)
                     with c_bal:
                         st.markdown("**Balances**")
                         st.markdown(f"**WS**: 🟢 {bal_ws}  \n**REST**: 🟠 {bal_rest}")
@@ -529,6 +531,9 @@ def pbdata_details():
                     with c_hist:
                         st.markdown("**History**")
                         st.markdown(f"🔵 Entries: **{hist_count}**")
+                    with c_exec:
+                        st.markdown("**Executions**")
+                        st.markdown(f"**REST**: 🟠 {exec_count}")
                 except Exception:
                     pass
 
@@ -541,6 +546,7 @@ def pbdata_details():
                 users_set.update(ords.get('ws', []) or [])
                 users_set.update(ords.get('rest', []) or [])
                 users_set.update(hist or [])
+                users_set.update(execs or [])
                 users = sorted(users_set)
 
                 rows = []
@@ -561,12 +567,14 @@ def pbdata_details():
                     pos_status = 'ws' if u in (pos.get('ws') or []) else 'rest'
                     ord_status = 'ws' if u in (ords.get('ws') or []) else 'rest'
                     hist_status = 'rest' if u in (hist or []) else ''
+                    exec_status = 'rest' if u in (execs or []) else ''
                     rows.append({
                         'user': u,
                         'balances': f"{bal_status} ({fmt_minutes(lf.get('balances'))})",
                         'positions': f"{pos_status} ({fmt_minutes(lf.get('positions'))})",
                         'orders': f"{ord_status} ({fmt_minutes(lf.get('orders'))})",
                         'history': f"{hist_status} ({fmt_minutes(lf.get('history'))})" if hist_status else '',
+                        'executions': f"{exec_status} ({fmt_minutes(lf.get('executions'))})" if exec_status else '',
                     })
 
                 # Filters and details: collapse into an expander for a cleaner view
@@ -595,7 +603,7 @@ def pbdata_details():
 
                     filtered = [r for r in rows if matches(r)]
 
-                    # Render table (always include history column)
+                    # Render table (always include history + executions columns)
                     if filtered:
                         def color_for_minutes(mins_text):
                             try:
@@ -633,7 +641,7 @@ def pbdata_details():
                             except Exception:
                                 return _html.escape(display_str)
 
-                        header_cols = ['user', 'balances', 'positions', 'orders', 'history']
+                        header_cols = ['user', 'balances', 'positions', 'orders', 'history', 'executions']
                         html_rows = []
                         style_block = (
                             "<style>"
@@ -652,7 +660,8 @@ def pbdata_details():
                             pos_html = f"<td>{render_cell(r.get('positions',''))}</td>"
                             ord_html = f"<td>{render_cell(r.get('orders',''))}</td>"
                             hist_html = f"<td>{render_cell(r.get('history',''))}</td>"
-                            html_rows.append(f"<tr>{user_html}{bal_html}{pos_html}{ord_html}{hist_html}</tr>")
+                            exec_html = f"<td>{render_cell(r.get('executions',''))}</td>"
+                            html_rows.append(f"<tr>{user_html}{bal_html}{pos_html}{ord_html}{hist_html}{exec_html}</tr>")
 
                         table_html = style_block + f"<table class='pbgui-fetch-table'>{header_html}{''.join(html_rows)}</table>"
                         st.markdown(table_html, unsafe_allow_html=True)

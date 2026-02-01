@@ -1759,15 +1759,44 @@ class PBData():
                 _human_log('PBData', f"[poll] Positions poll failed for {user.name}: {e}", level='ERROR', user=user)
             await asyncio.sleep(interval_seconds)
 
-    async def _shared_poll_serial(self, kind: str, interval_seconds: int, per_exchange: bool = True):
-        """Generic serial poller for 'positions', 'history', 'orders', or 'balances'."""
+    async def _shared_poll_serial(
+        self,
+        kind: str,
+        interval_seconds: int,
+        per_exchange: bool = True,
+        start_immediately: bool = False,
+        start_delay_seconds: float = 0.0,
+        initial_jitter_seconds: float = 0.0,
+    ):
+        """Generic serial poller for 'positions', 'history', 'orders', 'balances', or 'executions'.
+
+        By default, the poller sleeps for `interval_seconds` before the first run.
+        If `start_immediately=True`, it runs one cycle early, optionally after a
+        startup delay. With `start_delay_seconds` and `initial_jitter_seconds`,
+        the first run is delayed by a random amount in the range
+        `[start_delay_seconds - initial_jitter_seconds, start_delay_seconds + initial_jitter_seconds]`.
+        After the first run, the poller follows the regular interval cadence.
+        """
         backoff = 0
         max_backoff = 600
         base_interval = max(10, interval_seconds)
         _human_log('PBData', f"[poll] Starting shared serial poller kind={kind} interval={base_interval}s", level='INFO')
         while True:
-            delay = base_interval + backoff
-            await asyncio.sleep(delay)
+            if start_immediately:
+                # Only the first iteration runs early.
+                start_immediately = False
+                try:
+                    center = float(start_delay_seconds or 0.0)
+                    jitter = float(initial_jitter_seconds or 0.0)
+                    low = max(0.0, center - jitter)
+                    high = max(low, center + jitter)
+                    if high > 0:
+                        await asyncio.sleep(random.uniform(low, high))
+                except Exception:
+                    pass
+            else:
+                delay = base_interval + backoff
+                await asyncio.sleep(delay)
             users = [u for u in self.users if u.name in self.fetch_users]
             if not users:
                 continue
@@ -1984,6 +2013,30 @@ class PBData():
                             except Exception:
                                 pass
                             _human_log('PBData', f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms", level='INFO', user=user)
+                        elif kind == 'executions':
+                            start_ts = datetime.now().timestamp()
+                            exchange_for_slot = exch or user.exchange
+                            try:
+                                async with self._rest_slot(exchange_for_slot) as got:
+                                    if not got:
+                                        try:
+                                            _human_log('PBData', f"[poll] Skipped executions update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                        except Exception:
+                                            pass
+                                        had_rate_limit = True
+                                    else:
+                                        await asyncio.to_thread(self.db.update_executions, user)
+                                        try:
+                                            self._last_fetch_ts[(user.name, 'executions')] = start_ts
+                                        except Exception:
+                                            pass
+                                try:
+                                    self._write_fetch_summary()
+                                except Exception:
+                                    pass
+                            except Exception:
+                                # Let outer handler log traceback + handle rate-limit keywords.
+                                raise
                         elif kind == 'balances':
                             # Skip shared balances poll if user has active WS balances watcher
                             ws_task = self._balance_ws_tasks.get(user.name)
@@ -2731,6 +2784,19 @@ class PBData():
                     self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(90, per_exchange=True))
                 if not hasattr(self, "_shared_history_task") or self._shared_history_task is None or self._shared_history_task.done():
                     self._shared_history_task = asyncio.create_task(self._shared_poll_serial('history', 90, per_exchange=True))
+                if not hasattr(self, "_shared_executions_task") or self._shared_executions_task is None or self._shared_executions_task.done():
+                    # Delay first executions run a bit to avoid a big startup burst.
+                    # First run: ~60s ± 15s. Subsequent runs: every 30 minutes.
+                    self._shared_executions_task = asyncio.create_task(
+                        self._shared_poll_serial(
+                            'executions',
+                            1800,
+                            per_exchange=True,
+                            start_immediately=True,
+                            start_delay_seconds=60,
+                            initial_jitter_seconds=15,
+                        )
+                    )
             except Exception as e:
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
         else:
@@ -2823,6 +2889,11 @@ class PBData():
                 try:
                     # Build machine-readable summary including last-fetch timestamps
                     lf = {}
+                    # Execution-level polling is only meaningful for a subset of exchanges.
+                    try:
+                        exec_users = [u.name for u in self.users if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid',)]
+                    except Exception:
+                        exec_users = []
                     try:
                         for u in all_users:
                             # Prefer the unified _last_fetch_ts mapping, but history
@@ -2847,6 +2918,7 @@ class PBData():
                                 'positions': self._last_fetch_ts.get((u, 'positions')),
                                 'orders': self._last_fetch_ts.get((u, 'orders')),
                                 'history': hist_ts,
+                                'executions': self._last_fetch_ts.get((u, 'executions')),
                             }
                     except Exception:
                         pass
@@ -2856,6 +2928,7 @@ class PBData():
                         'positions': {'ws': positions_ws, 'rest': positions_rest},
                         'orders': {'ws': orders_ws, 'rest': orders_rest},
                         'history': all_users,
+                        'executions': exec_users,
                         'last_fetch_ts': lf,
                     }
                     logs_dir = _Path(f"{PBGDIR}/data/logs")
@@ -2923,6 +2996,12 @@ class PBData():
                 else:
                     orders_rest.append(u.name)
 
+            # Executions polling is only meaningful for a subset of exchanges.
+            try:
+                exec_users = [u.name for u in self.users if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid',)]
+            except Exception:
+                exec_users = []
+
             # Compose last-fetch mapping with history fallback to _history_rest_last
             lf = {}
             for u in all_users:
@@ -2943,6 +3022,7 @@ class PBData():
                     'positions': self._last_fetch_ts.get((u, 'positions')),
                     'orders': self._last_fetch_ts.get((u, 'orders')),
                     'history': hist_ts,
+                    'executions': self._last_fetch_ts.get((u, 'executions')),
                 }
 
             summary_obj = {
@@ -2951,6 +3031,7 @@ class PBData():
                 'positions': {'ws': positions_ws, 'rest': positions_rest},
                 'orders': {'ws': orders_ws, 'rest': orders_rest},
                 'history': all_users,
+                'executions': exec_users,
                 'last_fetch_ts': lf,
             }
             logs_dir = _Path(f"{PBGDIR}/data/logs")
