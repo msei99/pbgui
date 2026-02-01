@@ -13,12 +13,16 @@ import threading
 class Database():
     def __init__(self):
         self.db = Path(f'{PBGDIR}/data/pbgui.db')
+        # Separate DB for high-volume trade/execution storage.
+        # Keeps the main pbgui.db lean for UI queries and existing history logic.
+        self.trades_db = Path(f'{PBGDIR}/data/pbgui_trades.db')
         # Global write lock to serialize all write operations
         self._write_lock = threading.Lock()
         # Thread-local storage for per-thread SQLite connections to avoid
         # repeated open/close syscalls (reduces openat/read activity).
         self._local = threading.local()
         self.create_tables()
+        self.create_trades_tables()
 
     
     def _connect(self):
@@ -64,6 +68,41 @@ class Database():
         except Exception:
             pass
         local.conn = conn
+        return conn
+
+    def _connect_trades(self):
+        """Return a per-thread cached SQLite connection to the trades DB."""
+        local = getattr(self, '_local', None)
+        if local is None:
+            self._local = threading.local()
+            local = self._local
+
+        conn = getattr(local, 'trades_conn', None)
+        try:
+            if conn is not None:
+                try:
+                    conn.execute('SELECT 1')
+                    return conn
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+        except Exception:
+            conn = None
+
+        conn = sqlite3.connect(self.trades_db, timeout=30)
+        try:
+            conn.execute('PRAGMA busy_timeout=30000')
+        except Exception:
+            pass
+        try:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA synchronous=NORMAL')
+        except Exception:
+            pass
+        local.trades_conn = conn
         return conn
     
     # Simple full DB backup: copies the SQLite file to backup/db with timestamp name
@@ -196,6 +235,45 @@ class Database():
         except sqlite3.Error as e:
             _human_log('Database', f"DB create_tables error: {e}", level='ERROR')
 
+    def create_trades_tables(self):
+        sql_statements = [
+            """CREATE TABLE IF NOT EXISTS executions (
+                    id INTEGER PRIMARY KEY,
+                    exchange TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    side TEXT,
+                    price REAL,
+                    qty REAL,
+                    fee REAL,
+                    realized_pnl REAL,
+                    order_id TEXT,
+                    trade_id TEXT NOT NULL,
+                    user TEXT NOT NULL,
+                    raw_json TEXT,
+                    UNIQUE(user, exchange, trade_id)
+            );""",
+        ]
+        try:
+            with self._connect_trades() as conn:
+                cur = conn.cursor()
+                for statement in sql_statements:
+                    cur.execute(statement)
+                try:
+                    cur.execute('PRAGMA journal_mode=WAL')
+                    cur.execute('PRAGMA synchronous=NORMAL')
+                except Exception:
+                    pass
+                try:
+                    cur.execute('CREATE INDEX IF NOT EXISTS idx_exec_user_ts ON executions(user, timestamp)')
+                    cur.execute('CREATE INDEX IF NOT EXISTS idx_exec_user_symbol_ts ON executions(user, symbol, timestamp)')
+                    cur.execute('CREATE INDEX IF NOT EXISTS idx_exec_user_exchange_ts ON executions(user, exchange, timestamp)')
+                except Exception:
+                    pass
+                conn.commit()
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB create_trades_tables error: {e}", level='ERROR')
+
     def close_thread_connections(self):
         """Close any cached per-thread SQLite connection(s).
 
@@ -214,6 +292,16 @@ class Database():
                     pass
                 try:
                     delattr(local, 'conn')
+                except Exception:
+                    pass
+            tconn = getattr(local, 'trades_conn', None)
+            if tconn is not None:
+                try:
+                    tconn.close()
+                except Exception:
+                    pass
+                try:
+                    delattr(local, 'trades_conn')
                 except Exception:
                     pass
         except Exception:
@@ -252,6 +340,87 @@ class Database():
                             self.add_history(conn, income)
         except sqlite3.Error as e:
             _human_log('Database', f"DB update_history error for {user.name}: {e}", level='ERROR', user=user.name)
+
+    def find_last_execution_timestamp(self, user: User, exchange: str):
+        """Return max(timestamp) from executions for this user/exchange."""
+        sql = 'SELECT MAX(timestamp) FROM executions WHERE user = ? AND exchange = ?'
+        try:
+            with self._connect_trades() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user.name, exchange))
+                row = cur.fetchone()
+                ts = row[0] if row else None
+                return int(ts) if ts is not None else None
+        except Exception:
+            return None
+
+    def update_executions(self, user: User):
+        """Fetch and store execution-level trades/fills into the trades DB."""
+        exchange = Exchange(user.exchange, user)
+        # Only fetch executions for exchanges where we have explicit support.
+        if exchange.id not in ('hyperliquid',):
+            return
+
+        try:
+            since = self.find_last_execution_timestamp(user, exchange.id)
+        except Exception:
+            since = None
+        # If we have previous executions, back up slightly to avoid boundary misses.
+        try:
+            if since is not None:
+                since = max(0, int(since) - 5 * 60 * 1000)
+        except Exception:
+            since = None
+
+        _human_log('Database', f"fetch_executions: user={user.name} exchange={exchange.id} since={since}", level='INFO', user=user.name)
+        start_ts = time.time()
+        executions = exchange.fetch_executions(since)
+        dur = time.time() - start_ts
+        try:
+            n = len(executions) if executions is not None else 0
+        except Exception:
+            n = 0
+        _human_log('Database', f"fetch_executions DONE: user={user.name} exchange={exchange.id} duration_s={dur:.3f} items={n}", level='INFO', user=user.name)
+        if not executions:
+            return
+
+        rows = []
+        for ex in executions:
+            try:
+                trade_id = ex.get('trade_id')
+                if not trade_id:
+                    continue
+                rows.append(
+                    (
+                        exchange.id,
+                        ex.get('symbol') or '',
+                        int(ex.get('timestamp') or 0),
+                        ex.get('side'),
+                        ex.get('price'),
+                        ex.get('qty'),
+                        ex.get('fee'),
+                        ex.get('realized_pnl'),
+                        ex.get('order_id'),
+                        str(trade_id),
+                        user.name,
+                        ex.get('raw_json'),
+                    )
+                )
+            except Exception:
+                continue
+        if not rows:
+            return
+
+        sql = (
+            'INSERT OR IGNORE INTO executions '
+            '(exchange, symbol, timestamp, side, price, qty, fee, realized_pnl, order_id, trade_id, user, raw_json) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+        with self._write_lock:
+            with self._connect_trades() as conn:
+                cur = conn.cursor()
+                cur.executemany(sql, rows)
+                conn.commit()
     
     def update_positions(self, user: User):
         positions_db = self.fetch_positions(user)
