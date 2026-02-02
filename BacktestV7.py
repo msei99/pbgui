@@ -491,7 +491,16 @@ class BacktestV7Item(ConfigV7Editor):
                 st.rerun()
         else:
             st.session_state.edit_bt_v7_exchanges = self.config.backtest.exchanges
-        st.multiselect('Exchanges',["binance", "bybit", "gateio", "bitget"], key="edit_bt_v7_exchanges")
+        # PB7 supports additional v7 exchanges; also allow the special "combined" dataset.
+        # Note: "combined" uses coin_sources to select the data feed per coin.
+        options = []
+        try:
+            options = list(V7.list())
+        except Exception:
+            options = ["binance", "bybit", "gateio", "bitget", "hyperliquid", "okx"]
+        if "combined" not in options:
+            options = ["combined"] + options
+        st.multiselect('Exchanges', options, key="edit_bt_v7_exchanges")
 
     # name
     @st.fragment
@@ -676,10 +685,12 @@ class BacktestV7Item(ConfigV7Editor):
         
         self._edit_coin_sources_ui(
             self.config.backtest.coin_sources,
-            self.config.backtest.exchanges if self.config.backtest.exchanges else V7.list(),
+            # coin_sources defines the *data feed* per coin; allow choosing from all exchanges
+            # regardless of which execution exchange(s) are selected.
+            V7.list(),
             key_prefix="bt_",
             save_callback=lambda cs: setattr(self.config.backtest, 'coin_sources', cs),
-            current_exchanges=self.config.backtest.exchanges if self.config.backtest.exchanges else V7.list(),
+            current_exchanges=[e for e in (self.config.backtest.exchanges or []) if e in set(V7.list())],
             all_suite_coin_sources=all_suite_sources
         )
     

@@ -2202,12 +2202,12 @@ exchanges = """
     manually if you maintain your own archives."""
 
 compare_backtest_exchange_help = """
-    Select which exchange to use for the backtest data in the Live vs Backtest comparison.
-    This selector controls which exchange's OHLCV archive/backtest results are used for the comparison,
-    independent of your live exchange.
+        Select which exchange to use for the backtest in the Live vs Backtest comparison.
 
-    Note (Hyperliquid): the public candle snapshot endpoint only exposes the most recent 5000 candles.
-    For 1m candles this is ~5000 minutes (~3.5 days), so long-range 1m backtests on Hyperliquid are not supported."""
+        Hyperliquid behavior:
+        - If you choose 'hyperliquid' and press ▶ (Run Backtest), PBGui will force Binance candles via backtest.coin_sources.
+            PB7 requires backtest.combine_ohlcvs for coin_sources, so the backtest will be stored under the 'combined' results folder
+            (PBGui still shows it when Exchange=hyperliquid)."""
 
 backtest_start_date = """
     Start date of backtest.
