@@ -2911,6 +2911,7 @@ class PBData():
                     # Build machine-readable summary including last-fetch timestamps
                     lf = {}
                     # Execution-level polling is only meaningful for a subset of exchanges.
+                    # Keep in sync with Database.update_executions() support.
                     try:
                         exec_users = [u.name for u in self.users if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid',)]
                     except Exception:
@@ -3018,6 +3019,7 @@ class PBData():
                     orders_rest.append(u.name)
 
             # Executions polling is only meaningful for a subset of exchanges.
+            # Keep in sync with Database.update_executions() support.
             try:
                 exec_users = [u.name for u in self.users if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid',)]
             except Exception:

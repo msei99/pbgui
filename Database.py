@@ -357,6 +357,7 @@ class Database():
     def update_executions(self, user: User):
         """Fetch and store execution-level trades/fills into the trades DB."""
         exchange = Exchange(user.exchange, user)
+
         # Only fetch executions for exchanges where we have explicit support.
         if exchange.id not in ('hyperliquid',):
             return None
@@ -408,6 +409,7 @@ class Database():
                 )
             except Exception:
                 continue
+
         if not rows:
             return {'fetched': n, 'prepared': 0, 'inserted': 0}
 
@@ -1112,6 +1114,204 @@ class Database():
         except sqlite3.Error as e:
             _human_log('Database', f"DB select_pnl_symbol error {e} user={user} symbol={symbol}", level='ERROR', user=user)
             return []
+
+    def select_history_daily(self, user: str, start: int, end: int, symbol: str | None = None):
+        """Return daily sums and counts from history.
+
+        Returns rows: (date_str, sum_income, count_rows)
+        """
+        if symbol:
+            sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date,
+                            COALESCE(SUM("income"), 0) AS sum,
+                            COUNT(*) AS n
+                     FROM "history"
+                     WHERE "user" = ? AND "symbol" = ?
+                       AND "timestamp" >= ? AND "timestamp" <= ?
+                     GROUP BY date
+                     ORDER BY date'''
+            params = (user, symbol, start, end)
+        else:
+            sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date,
+                            COALESCE(SUM("income"), 0) AS sum,
+                            COUNT(*) AS n
+                     FROM "history"
+                     WHERE "user" = ?
+                       AND "timestamp" >= ? AND "timestamp" <= ?
+                     GROUP BY date
+                     ORDER BY date'''
+            params = (user, start, end)
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, params)
+                return cur.fetchall()
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB select_history_daily error {e} user={user}", level='ERROR', user=user)
+            return []
+
+    def select_history_rows(
+        self,
+        user: str,
+        start: int,
+        end: int,
+        symbol: str | None = None,
+        limit: int = 2000,
+        newest_first: bool = False,
+    ):
+        """Return raw history rows for debugging.
+
+        Returns rows: (timestamp, symbol, income, uniqueid)
+        """
+        order = 'DESC' if newest_first else 'ASC'
+        if symbol:
+            sql = f'''SELECT "timestamp", "symbol", "income", "uniqueid"
+                      FROM "history"
+                      WHERE "user" = ? AND "symbol" = ?
+                        AND "timestamp" >= ? AND "timestamp" <= ?
+                      ORDER BY "timestamp" {order}
+                      LIMIT ?'''
+            params = (user, symbol, start, end, int(limit))
+        else:
+            sql = f'''SELECT "timestamp", "symbol", "income", "uniqueid"
+                      FROM "history"
+                      WHERE "user" = ?
+                        AND "timestamp" >= ? AND "timestamp" <= ?
+                      ORDER BY "timestamp" {order}
+                      LIMIT ?'''
+            params = (user, start, end, int(limit))
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, params)
+                return cur.fetchall()
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB select_history_rows error {e} user={user}", level='ERROR', user=user)
+            return []
+
+    def select_executions_daily(
+        self,
+        user: str,
+        exchange: str,
+        start: int,
+        end: int,
+        coin: str | None = None,
+    ):
+        """Return daily aggregates from executions.
+
+        Returns rows: (date_str, n_trades, sum_fee, sum_realized_pnl)
+        """
+        where_coin = ''
+        params: tuple = (user, exchange, start, end)
+        if coin:
+            c = str(coin).strip().upper()
+            if c:
+                # Symbols are typically CCXT-style (e.g. 'ETH/USDC:USDC') or compact (e.g. 'ETHUSDC')
+                where_coin = ' AND ("symbol" LIKE ? OR "symbol" LIKE ?) '
+                params = (user, exchange, start, end, f"{c}/%", f"{c}%")
+
+        sql = (
+            '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date,
+                      COUNT(*) AS n,
+                      COALESCE(SUM("fee"), 0) AS fee_sum,
+                      COALESCE(SUM("realized_pnl"), 0) AS rpnl_sum
+               FROM "executions"
+               WHERE "user" = ? AND "exchange" = ?
+                 AND "timestamp" >= ? AND "timestamp" <= ?'''
+            + where_coin +
+            ''' GROUP BY date
+               ORDER BY date'''
+        )
+        try:
+            with self._connect_trades() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, params)
+                return cur.fetchall()
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB select_executions_daily error {e} user={user}", level='ERROR', user=user)
+            return []
+
+    def select_executions_rows(
+        self,
+        user: str,
+        exchange: str,
+        start: int,
+        end: int,
+        coin: str | None = None,
+        limit: int = 2000,
+        newest_first: bool = False,
+    ):
+        """Return raw executions rows for debugging.
+
+        Returns rows: (timestamp, symbol, side, price, qty, fee, realized_pnl, order_id, trade_id)
+        """
+        order = 'DESC' if newest_first else 'ASC'
+        where_coin = ''
+        params: tuple = (user, exchange, start, end)
+        if coin:
+            c = str(coin).strip().upper()
+            if c:
+                where_coin = ' AND ("symbol" LIKE ? OR "symbol" LIKE ?) '
+                params = (user, exchange, start, end, f"{c}/%", f"{c}%")
+
+        sql = (
+            f'''SELECT "timestamp", "symbol", "side", "price", "qty", "fee", "realized_pnl", "order_id", "trade_id"
+                FROM "executions"
+                WHERE "user" = ? AND "exchange" = ?
+                  AND "timestamp" >= ? AND "timestamp" <= ?'''
+            + where_coin +
+            f''' ORDER BY "timestamp" {order}
+                LIMIT ?'''
+        )
+        try:
+            with self._connect_trades() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, params + (int(limit),))
+                return cur.fetchall()
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB select_executions_rows error {e} user={user}", level='ERROR', user=user)
+            return []
+
+    def select_executions_rows_any_exchange(
+        self,
+        user: str,
+        start: int,
+        end: int,
+        coin: str | None = None,
+        limit: int = 2000,
+        newest_first: bool = False,
+    ):
+        """Return raw executions rows for debugging, across all exchanges.
+
+        Returns rows: (timestamp, exchange, symbol, side, price, qty, fee, realized_pnl, order_id, trade_id)
+        """
+
+        order = 'DESC' if newest_first else 'ASC'
+        where_coin = ''
+        params: tuple = (user, start, end)
+        if coin:
+            c = str(coin).strip().upper()
+            if c:
+                where_coin = ' AND ("symbol" LIKE ? OR "symbol" LIKE ?) '
+                params = (user, start, end, f"{c}/%", f"{c}%")
+
+        sql = (
+            f'''SELECT "timestamp", "exchange", "symbol", "side", "price", "qty", "fee", "realized_pnl", "order_id", "trade_id"
+                FROM "executions"
+                WHERE "user" = ?
+                  AND "timestamp" >= ? AND "timestamp" <= ?'''
+            + where_coin +
+            f''' ORDER BY "timestamp" {order}
+                LIMIT ?'''
+        )
+        try:
+            with self._connect_trades() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, params + (int(limit),))
+                return cur.fetchall()
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB select_executions_rows_any_exchange error {e} user={user}", level='ERROR', user=user)
+            return []
+
     
     def select_ppl(self, user: list, start: str, end: str, sum_period: str):
     # Define date formats for different sum_period values
