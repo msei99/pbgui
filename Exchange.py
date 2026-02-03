@@ -11,11 +11,97 @@ from datetime import datetime
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _human_log
 
+from ccxt.base.errors import (
+    AuthenticationError,
+    BadRequest,
+    DDoSProtection,
+    ExchangeError,
+    ExchangeNotAvailable,
+    NetworkError,
+    OnMaintenance,
+    PermissionDenied,
+    RateLimitExceeded,
+    RequestTimeout,
+)
+
 # Default network timeout for ccxt / ccxt.pro clients (milliseconds)
 # Increased from 60s to 120s to reduce websocket ping/pong keepalive
 # timeouts on resource-constrained VPS instances. Can be made
 # configurable via `pbgui.ini` later.
 DEFAULT_CCXT_TIMEOUT_MS = 120000
+
+
+def _extract_ccxt_error_payload(exchange_instance, exc: Exception) -> dict | None:
+    """Best-effort extraction of the exchange JSON error payload.
+
+    CCXT exceptions often stringify like: "binance {\"code\":..., ...}".
+    Some exchanges also expose `last_http_response` / `last_json_response`.
+    """
+
+    candidates = []
+    try:
+        candidates.append(getattr(exchange_instance, 'last_json_response', None))
+    except Exception:
+        pass
+    try:
+        candidates.append(getattr(exchange_instance, 'last_http_response', None))
+    except Exception:
+        pass
+    candidates.append(str(exc))
+
+    for cand in candidates:
+        if not cand:
+            continue
+        if isinstance(cand, dict):
+            return cand
+        if not isinstance(cand, str):
+            cand = str(cand)
+        s = cand.strip()
+        # Try to locate an embedded JSON object.
+        i = s.find('{')
+        j = s.rfind('}')
+        if i == -1 or j == -1 or j <= i:
+            continue
+        try:
+            return json.loads(s[i : j + 1])
+        except Exception:
+            continue
+    return None
+
+
+def _ccxt_should_retry(exchange_instance, exc: Exception) -> bool:
+    """Return True only for likely-transient errors.
+
+    Non-retryable examples we explicitly know about:
+    - Binance: BadRequest code -1023 (startTime > endTime)
+    - Bitget: ExchangeError code '00001' (interval cannot be > 90 days)
+    - Auth/permission errors
+    """
+
+    if isinstance(exc, (AuthenticationError, PermissionDenied)):
+        return False
+
+    payload = _extract_ccxt_error_payload(exchange_instance, exc)
+    code = None
+    if isinstance(payload, dict):
+        code = payload.get('code')
+
+    if isinstance(exc, BadRequest) and str(code) == '-1023':
+        return False
+    if isinstance(exc, ExchangeError) and str(code) == '00001':
+        return False
+
+    return isinstance(
+        exc,
+        (
+            NetworkError,
+            RequestTimeout,
+            DDoSProtection,
+            RateLimitExceeded,
+            ExchangeNotAvailable,
+            OnMaintenance,
+        ),
+    )
 
 # Per-exchange limits for how many private (per-user) websocket clients
 # the process will create. When the limit is reached `get_private_ws_client`
@@ -1246,14 +1332,38 @@ class Exchange:
         elif self.id == "bitget":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
-            max = 120 * day
+            max = 365 * day
             now = self.instance.milliseconds()
             if not since:
                 since = now - max
+            # Clamp to exchange's maximum lookback window to avoid "since too old" errors.
+            try:
+                since = max(int(since), int(now - max))
+            except Exception:
+                pass
             limit = 100
             end = since + week
             while True:
-                ledgers = self.instance.fetch_ledger(since=since, limit=limit, params = {"type": "swap", "endTime": end})
+                ledgers = None
+                last_err = None
+                for attempt in range(3):
+                    try:
+                        ledgers = self.instance.fetch_ledger(since=since, limit=limit, params = {"type": "swap", "endTime": end})
+                        last_err = None
+                        break
+                    except Exception as e:
+                        if not _ccxt_should_retry(self.instance, e):
+                            raise
+                        last_err = e
+                        _human_log(
+                            'Exchange',
+                            f"bitget fetch_ledger error user={self.user.name} since={since} end={end} attempt={attempt+1}/3: {e}",
+                            level='WARNING',
+                            user=self.user,
+                        )
+                        sleep(min(2 ** attempt, 5))
+                if last_err is not None:
+                    raise last_err
                 # print(ledgers)
                 if ledgers:
                     first_ledger = ledgers[0]
@@ -1340,20 +1450,44 @@ class Exchange:
         elif self.id == "binance":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
-            max = 124 * day
+            max = 240 * day
             now = self.instance.milliseconds()
             if not since:
                 since = now - max
+            # Clamp to exchange's maximum lookback window to avoid "since too old" errors.
+            try:
+                since = max(int(since), int(now - max))
+            except Exception:
+                pass
             limit = 1000
             end = since + week
             while True:
-                imcomes = self.instance.fapiPrivateGetIncome({                        
-                                                        "pageSize": "100",
-                                                        "startTime": since,
-                                                        "limit": limit,
-                                                        "endTime": end,
-                                                        "timestamp": self.instance.milliseconds()
-                                                        })
+                imcomes = None
+                last_err = None
+                for attempt in range(3):
+                    try:
+                        imcomes = self.instance.fapiPrivateGetIncome({                        
+                                                                "pageSize": "100",
+                                                                "startTime": since,
+                                                                "limit": limit,
+                                                                "endTime": end,
+                                                                "timestamp": self.instance.milliseconds()
+                                                                })
+                        last_err = None
+                        break
+                    except Exception as e:
+                        if not _ccxt_should_retry(self.instance, e):
+                            raise
+                        last_err = e
+                        _human_log(
+                            'Exchange',
+                            f"binance fapiPrivateGetIncome error user={self.user.name} since={since} end={end} attempt={attempt+1}/3: {e}",
+                            level='WARNING',
+                            user=self.user,
+                        )
+                        sleep(min(2 ** attempt, 5))
+                if last_err is not None:
+                    raise last_err
                 if imcomes:
                     first_imcome = imcomes[0]
                     last_imcome = imcomes[-1]
@@ -1392,7 +1526,7 @@ class Exchange:
                     self.save_income_other(history, self.user.name)
         return all
 
-    def fetch_executions(self, since: int = None):
+    def fetch_executions(self, since: int = None, symbols: list[str] | None = None):
         """Fetch execution-level trades/fills.
 
         Returns list of dicts with keys:
@@ -1511,6 +1645,304 @@ class Exchange:
                     'trade_id': str(trade_id),
                     'raw_json': raw_json,
                 })
+            return executions
+
+        if self.id == "binance":
+            # Binance futures: ccxt requires symbol for private trades.
+            # Caller (Database) supplies `symbols` discovered from income/history.
+            if not symbols:
+                return []
+
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max_age = 240 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max_age
+            try:
+                since = max(int(since), int(now - max_age))
+            except Exception:
+                pass
+
+            executions = []
+            for sym_id in symbols:
+                try:
+                    sym_id = str(sym_id).strip()
+                    if not sym_id:
+                        continue
+
+                    ccxt_symbol = self.symbol_to_exchange_symbol(sym_id, 'swap')
+                    if not ccxt_symbol:
+                        continue
+
+                    cursor = int(since)
+                    effective_max_age = int(max_age)
+                    while cursor < now:
+                        end_time = min(cursor + week, now)
+                        trades = None
+                        last_err = None
+                        for attempt in range(3):
+                            try:
+                                trades = self.instance.fetch_my_trades(
+                                    ccxt_symbol,
+                                    cursor,
+                                    None,
+                                    {
+                                        'endTime': int(end_time),
+                                    },
+                                )
+                                last_err = None
+                                break
+                            except Exception as e:
+                                if not _ccxt_should_retry(self.instance, e):
+                                    raise
+                                last_err = e
+                                _human_log(
+                                    'Exchange',
+                                    f"binance fetch_my_trades error symbol={ccxt_symbol} attempt={attempt+1}/3: {e}",
+                                    level='WARNING',
+                                    user=self.user,
+                                )
+                                sleep(min(2 ** attempt, 5))
+                        if last_err is not None:
+                            raise last_err
+
+                        if trades:
+                            max_ts = cursor
+                            for t in trades:
+                                try:
+                                    ts = int(t.get('timestamp') or 0)
+                                    if ts <= 0:
+                                        continue
+                                    if ts > max_ts:
+                                        max_ts = ts
+
+                                    info = t.get('info') if isinstance(t.get('info'), dict) else {}
+
+                                    fee_cost = None
+                                    try:
+                                        fee_obj = t.get('fee')
+                                        if isinstance(fee_obj, dict):
+                                            fee_cost = fee_obj.get('cost')
+                                        else:
+                                            fee_cost = fee_obj
+                                        if fee_cost is not None:
+                                            fee_cost = float(fee_cost)
+                                    except Exception:
+                                        fee_cost = None
+
+                                    realized = None
+                                    for k in ('realizedPnl', 'realizedProfit', 'realizedPNL', 'realized_pnl'):
+                                        if k in info and info.get(k) not in (None, ''):
+                                            try:
+                                                realized = float(info.get(k))
+                                            except Exception:
+                                                realized = None
+                                            break
+
+                                    trade_id = t.get('id') or info.get('tradeId') or info.get('id')
+                                    if not trade_id:
+                                        # Avoid inserting rows without unique id.
+                                        continue
+
+                                    executions.append(
+                                        {
+                                            'symbol': t.get('symbol') or ccxt_symbol,
+                                            'timestamp': ts,
+                                            'side': t.get('side'),
+                                            'price': t.get('price'),
+                                            'qty': t.get('amount'),
+                                            'fee': fee_cost,
+                                            'realized_pnl': realized,
+                                            'order_id': t.get('order') or info.get('orderId') or info.get('order_id'),
+                                            'trade_id': str(trade_id),
+                                            'raw_json': json.dumps(t, ensure_ascii=False, default=str),
+                                        }
+                                    )
+                                except Exception:
+                                    continue
+
+                            cursor = int(max_ts) + 1
+                        else:
+                            cursor = int(end_time) + 1
+
+                except Exception:
+                    continue
+
+            return executions
+
+        if self.id == "bitget":
+            # Bitget: safest to fetch per-symbol (keeps requests bounded and avoids spot/swap ambiguity).
+            # Caller (Database) supplies `symbols` discovered from income/history.
+            if not symbols:
+                return []
+
+            day = 24 * 60 * 60 * 1000
+            max_age_total = 365 * day
+            page_span = 90 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max_age_total
+            try:
+                since = max(int(since), int(now - max_age_total))
+            except Exception:
+                pass
+
+            def _to_float(val):
+                try:
+                    if val is None or val == '':
+                        return None
+                    return float(val)
+                except Exception:
+                    return None
+
+            def _bitget_order_side(raw_side: str | None, trade_side: str | None) -> str | None:
+                """Bitget swap trade semantics.
+
+                In Bitget swap trades we commonly see:
+                - info.side: 'buy'/'sell' (position direction)
+                - info.tradeSide: 'open'/'close'
+
+                For our matching logic we want the actual order side (buy/sell):
+                - open: same as info.side
+                - close: opposite of info.side
+                """
+
+                try:
+                    rs = str(raw_side or '').strip().lower()
+                    ts = str(trade_side or '').strip().lower()
+                    if rs not in ('buy', 'sell'):
+                        return rs or None
+                    if ts == 'close':
+                        return 'sell' if rs == 'buy' else 'buy'
+                    if ts == 'open':
+                        return rs
+                    return rs
+                except Exception:
+                    return None
+
+            executions = []
+            for sym_id in symbols:
+                try:
+                    sym_id = str(sym_id).strip()
+                    if not sym_id:
+                        continue
+
+                    ccxt_symbol = self.symbol_to_exchange_symbol(sym_id, 'swap')
+                    if not ccxt_symbol:
+                        continue
+
+                    cursor = int(since)
+                    # Avoid missing trades when many fills share the same timestamp.
+                    # Bitget may return >limit trades at the same millisecond; if we advance
+                    # `cursor = max_ts + 1` we can skip remaining trades at `max_ts`.
+                    # Keep cursor inclusive and dedupe by trade_id.
+                    seen_trade_ids: set[str] = set()
+                    while cursor < now:
+                        end_time = min(cursor + page_span, now)
+                        trades = None
+                        last_err = None
+                        for attempt in range(3):
+                            try:
+                                trades = self.instance.fetch_my_trades(
+                                    symbol=ccxt_symbol,
+                                    since=int(cursor),
+                                    limit=100,
+                                    params={
+                                        'type': 'swap',
+                                        'endTime': int(end_time),
+                                    },
+                                )
+                                last_err = None
+                                break
+                            except Exception as e:
+                                if not _ccxt_should_retry(self.instance, e):
+                                    raise
+                                last_err = e
+                                _human_log(
+                                    'Exchange',
+                                    f"bitget fetch_my_trades error symbol={ccxt_symbol} attempt={attempt+1}/3: {e}",
+                                    level='WARNING',
+                                    user=self.user,
+                                )
+                                sleep(min(2 ** attempt, 5))
+                        if last_err is not None:
+                            # Abort instead of returning partial executions; caller should retry later.
+                            raise last_err
+
+                        if trades:
+                            max_ts = cursor
+                            n_new = 0
+                            for t in trades:
+                                try:
+                                    ts = int(t.get('timestamp') or 0)
+                                    if ts <= 0:
+                                        continue
+                                    if ts > max_ts:
+                                        max_ts = ts
+
+                                    info = t.get('info') if isinstance(t.get('info'), dict) else {}
+
+                                    trade_id = t.get('id') or info.get('tradeId') or info.get('id')
+                                    if not trade_id:
+                                        continue
+                                    trade_id = str(trade_id)
+                                    if trade_id in seen_trade_ids:
+                                        continue
+                                    seen_trade_ids.add(trade_id)
+                                    n_new += 1
+
+                                    fee_cost = None
+                                    try:
+                                        fee_obj = t.get('fee')
+                                        if isinstance(fee_obj, dict):
+                                            fee_cost = fee_obj.get('cost')
+                                        else:
+                                            fee_cost = fee_obj
+                                        fee_cost = _to_float(fee_cost)
+                                    except Exception:
+                                        fee_cost = None
+
+                                    realized = None
+                                    for k in (
+                                        'realizedPnl', 'realizedPNL', 'realizedProfit', 'pnl', 'profit', 'closedPnl'
+                                    ):
+                                        if k in info and info.get(k) not in (None, ''):
+                                            realized = _to_float(info.get(k))
+                                            break
+
+                                    executions.append(
+                                        {
+                                            'symbol': t.get('symbol') or ccxt_symbol,
+                                            'timestamp': ts,
+                                            'side': _bitget_order_side(t.get('side') or info.get('side'), info.get('tradeSide')),
+                                            'price': _to_float(t.get('price')),
+                                            'qty': _to_float(t.get('amount')),
+                                            'fee': fee_cost,
+                                            'realized_pnl': realized,
+                                            'order_id': t.get('order') or info.get('orderId') or info.get('order_id') or info.get('orderId'),
+                                            'trade_id': trade_id,
+                                            'raw_json': json.dumps(t, ensure_ascii=False, default=str),
+                                        }
+                                    )
+                                except Exception:
+                                    continue
+
+                            # If we got no new trade_ids, force progress by jumping beyond end_time.
+                            if n_new == 0:
+                                cursor = int(end_time) + 1
+                            else:
+                                # Keep cursor inclusive to avoid skipping trades at max_ts.
+                                if int(max_ts) <= int(cursor):
+                                    cursor = int(cursor) + 1
+                                else:
+                                    cursor = int(max_ts)
+                        else:
+                            cursor = int(end_time) + 1
+
+                except Exception:
+                    continue
+
             return executions
 
         return []
