@@ -309,7 +309,13 @@ class Database():
 
     def update_history(self, user: User):
         _human_log('Database', f"update_history called for user={getattr(user, 'name', user)}", level='INFO', user=getattr(user, 'name', user))
-        history = self.fetch_history(user)
+        try:
+            history = self.fetch_history(user)
+        except Exception as e:
+            # Important: don't write partial history data. If the exchange fetch fails,
+            # abort this update run so we can retry later without creating gaps.
+            _human_log('Database', f"update_history aborting for user={user.name}: {e}", level='WARNING', user=user.name)
+            return
         try:
             if history is None:
                 _human_log('Database', f"fetch_history returned None for user={user.name}", level='INFO', user=user.name)
@@ -354,18 +360,86 @@ class Database():
         except Exception:
             return None
 
-    def update_executions(self, user: User):
-        """Fetch and store execution-level trades/fills into the trades DB."""
+    def _repair_bitget_execution_sides(self, user: str):
+        """Repair Bitget executions 'side' from raw_json.
+
+        Bitget swap trades often encode position direction in info.side and whether it
+        opened/closed in info.tradeSide. For matching we want the *order* side:
+        - open: same as info.side
+        - close: opposite of info.side
+
+        This is safe to run repeatedly.
+        """
+
+        try:
+            with self._write_lock:
+                with self._connect_trades() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        UPDATE executions
+                        SET side = CASE
+                            WHEN lower(json_extract(raw_json, '$.info.tradeSide')) = 'close' THEN
+                                CASE lower(json_extract(raw_json, '$.info.side'))
+                                    WHEN 'buy' THEN 'sell'
+                                    WHEN 'sell' THEN 'buy'
+                                    ELSE side
+                                END
+                            WHEN lower(json_extract(raw_json, '$.info.tradeSide')) = 'open' THEN
+                                CASE lower(json_extract(raw_json, '$.info.side'))
+                                    WHEN 'buy' THEN 'buy'
+                                    WHEN 'sell' THEN 'sell'
+                                    ELSE side
+                                END
+                            ELSE side
+                        END
+                        WHERE user = ? AND exchange = 'bitget' AND raw_json IS NOT NULL AND LENGTH(raw_json) > 0
+                        """,
+                        (user,),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+
+    def update_executions(
+        self,
+        user: User,
+        *,
+        since_override: int | None = None,
+        ignore_last_execution: bool = False,
+        initial_lookback_days: int | None = None,
+        symbol_lookback_days: int | None = None,
+    ):
+        """Fetch and store execution-level trades/fills into the trades DB.
+
+        By default, this is an incremental updater: it starts from the last stored
+        execution timestamp (with a small overlap), and applies exchange-specific
+        caps for initial backfill.
+
+        Backfill controls:
+        - since_override: force fetching from this ms timestamp (UTC).
+        - ignore_last_execution: ignore existing executions and treat as initial run.
+        - initial_lookback_days: override initial backfill cap (days). Only used
+          when there is no last execution timestamp or when ignore_last_execution.
+        - symbol_lookback_days: override the income-symbol discovery window (days).
+        """
         exchange = Exchange(user.exchange, user)
 
         # Only fetch executions for exchanges where we have explicit support.
-        if exchange.id not in ('hyperliquid',):
+        if exchange.id not in ('hyperliquid', 'binance', 'bitget'):
             return None
 
-        try:
-            since = self.find_last_execution_timestamp(user, exchange.id)
-        except Exception:
-            since = None
+        since = None
+        if since_override is not None:
+            try:
+                since = int(since_override)
+            except Exception:
+                since = None
+        elif not ignore_last_execution:
+            try:
+                since = self.find_last_execution_timestamp(user, exchange.id)
+            except Exception:
+                since = None
         # If we have previous executions, back up slightly to avoid boundary misses.
         try:
             if since is not None:
@@ -373,9 +447,68 @@ class Database():
         except Exception:
             since = None
 
+        # Binance futures userTrades endpoints only allow querying recent history.
+        # For initial backfill, cap to a recent window by default; subsequent runs use since=last_execution.
+        now_ms = None
+        day = 24 * 60 * 60 * 1000
+        try:
+            now_ms = int(datetime.now().timestamp() * 1000)
+        except Exception:
+            now_ms = None
+        if exchange.id == 'binance' and now_ms is not None:
+            try:
+                default_days = 240
+                cap_days = int(initial_lookback_days) if (since is None and initial_lookback_days is not None) else default_days
+                cap_start = max(0, now_ms - cap_days * day)
+                if since is None:
+                    since = cap_start
+                else:
+                    # Keep incremental runs within the endpoint's history window.
+                    since = max(int(since), max(0, now_ms - default_days * day))
+            except Exception:
+                pass
+
+        # Bitget: API enforces max 90-day interval per request, but you can page across
+        # multiple windows to fetch older history.
+        # For initial backfill, use a simple 365-day lookback by default.
+        if exchange.id == 'bitget' and now_ms is not None:
+            try:
+                if since is None:
+                    if initial_lookback_days is not None:
+                        since = max(0, now_ms - int(initial_lookback_days) * day)
+                    else:
+                        since = max(0, now_ms - 365 * day)
+            except Exception:
+                pass
+
         _human_log('Database', f"fetch_executions: user={user.name} exchange={exchange.id} since={since}", level='INFO', user=user.name)
         start_ts = time.time()
-        executions = exchange.fetch_executions(since)
+
+        # For symbol-required exchanges (Binance), discover symbols from income (history)
+        # and delegate the actual fetching/normalization to Exchange.
+        symbols = None
+        if exchange.id in ('binance', 'bitget') and now_ms is not None:
+            # Use caller-provided symbol window if specified; otherwise, cover the fetch window.
+            sym_start = 0
+            try:
+                if symbol_lookback_days is not None:
+                    sym_start = max(0, now_ms - int(symbol_lookback_days) * day)
+                else:
+                    sym_start = int(since) if since is not None else 0
+            except Exception:
+                sym_start = 0
+            symbols = self.list_income_symbols(user.name, int(sym_start), int(now_ms))
+
+        try:
+            executions = exchange.fetch_executions(since, symbols=symbols)
+        except Exception as e:
+            _human_log(
+                'Database',
+                f"fetch_executions ERROR: user={user.name} exchange={exchange.id} since={since} err={e}",
+                level='WARNING',
+                user=user.name,
+            )
+            return {'fetched': 0, 'prepared': 0, 'inserted': 0, 'error': str(e)}
         dur = time.time() - start_ts
         try:
             n = len(executions) if executions is not None else 0
@@ -439,6 +572,11 @@ class Database():
             level='INFO',
             user=user.name,
         )
+
+        # Bitget: existing rows may have side semantics that need normalization.
+        if exchange.id == 'bitget':
+            self._repair_bitget_execution_sides(user.name)
+
         return {'fetched': n, 'prepared': len(rows), 'inserted': inserted}
     
     def update_positions(self, user: User):

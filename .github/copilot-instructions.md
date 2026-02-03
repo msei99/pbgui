@@ -14,6 +14,10 @@
 - Never open a dialog inside another dialog: within `@st.dialog` do not call `error_popup/info_popup/result_popup`; show errors inline (e.g. `st.error`).
 - When showing/exporting configs as JSON, use real JSON serialization (`json.dumps`) so `null/true/false` are preserved (avoid Python `None/True/False` formatting).
 
+## Repo boundaries (important)
+
+- Do not modify PB7/passivbot code (e.g. workspace folder `pb7/` or the upstream `passivbot` repo) unless the user explicitly asks/approves first.
+
 ## Guides & tutorials (pattern)
 
 - New user-facing guides/tutorials must be Markdown files in:

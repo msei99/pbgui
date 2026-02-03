@@ -58,6 +58,24 @@ def _load_pb7_markets_cache(exchange: str) -> dict | None:
     return markets
 
 
+def _pb7_markets_cache_candidates(exchange: str, *, prefer_futures: bool = False) -> list[str]:
+    """Return PB7 cache exchange ids to try for a given logical exchange.
+
+    PBGui often uses CCXT ids like "binance" at the UI level, while PB7 may cache
+    futures markets under "binanceusdm". For diagnostics we can safely try both.
+    """
+
+    ex = str(exchange or "").strip().lower()
+    if not ex:
+        return []
+
+    # Prefer futures markets cache when we know we're dealing with perp/swap symbols.
+    if ex == "binance" and prefer_futures:
+        return ["binanceusdm", "binance"]
+
+    return [ex]
+
+
 def _find_market_for_coin(markets: dict, coin: str, quote: str = "USDT") -> tuple[str, dict] | tuple[None, None]:
     """Find a CCXT market entry for a coin/quote pair.
 
@@ -306,12 +324,30 @@ def _classify_uniqueid(uid: str) -> str:
     return 'other'
 
 
+def _coin_from_exec_symbol(sym: str | None) -> str | None:
+    """Extract base coin from a CCXT-style symbol like 'VET/USDT:USDT'."""
+    if not sym:
+        return None
+    s = str(sym).strip()
+    if not s:
+        return None
+    try:
+        base = s.split('/', 1)[0]
+        base = base.split(':', 1)[0]
+        base = base.replace('_', '').replace('-', '').strip().upper()
+        return base or None
+    except Exception:
+        return None
+
+
 def _match_rows_by_time(
     bt_rows: pd.DataFrame,
     ex_rows: pd.DataFrame,
     tolerance_s: int = 120,
     require_side_match: bool = True,
+    require_coin_match: bool = True,
     include_unmatched_exec_rows: bool = False,
+    suppress_exec_rows_seen_as_candidates: bool = True,
     candidates_from_unmatched_only: bool = True,
 ) -> pd.DataFrame:
     """Greedy match two time-sorted tables by nearest timestamp.
@@ -322,12 +358,12 @@ def _match_rows_by_time(
     if bt_rows is None or ex_rows is None or bt_rows.empty or ex_rows.empty:
         return pd.DataFrame(
             columns=[
-                'bt_time', 'bt_type', 'bt_qty', 'bt_price', 'bt_net', 'bt_expected_side',
+                'bt_time', 'bt_coin', 'bt_type', 'bt_qty', 'bt_price', 'bt_net', 'bt_expected_side',
                 'bt_qty_contracts', 'bt_qty_coin', 'bt_contract_size',
                 'bt_psize_delta', 'bt_psize_delta_coin',
-                'candidate_time', 'candidate_side', 'candidate_qty', 'candidate_price', 'candidate_net',
+                'candidate_time', 'candidate_symbol', 'candidate_side', 'candidate_qty', 'candidate_price', 'candidate_net',
                 'candidate_trade_count', 'candidate_trade_ids',
-                'matched_time', 'matched_side', 'matched_qty', 'matched_price', 'matched_net',
+                'matched_time', 'matched_symbol', 'matched_side', 'matched_qty', 'matched_price', 'matched_net',
                 'matched_trade_count', 'matched_trade_ids',
                 'dt_s', 'match', 'reason',
             ]
@@ -340,6 +376,18 @@ def _match_rows_by_time(
     # Normalize exec side strings
     if 'side' in ex.columns:
         ex['side'] = ex['side'].astype(str).str.lower().replace({'long': 'buy', 'short': 'sell'})
+
+    # Ensure exec coin exists if we have symbols (aggregation may drop derived columns).
+    if 'coin' not in ex.columns and 'symbol' in ex.columns:
+        try:
+            ex['coin'] = ex['symbol'].apply(_coin_from_exec_symbol)
+        except Exception:
+            pass
+
+    # If we have coin/symbol info, prevent cross-coin matching (important in Total scope).
+    has_bt_coin = 'coin' in bt.columns and bt['coin'].notna().any()
+    has_ex_coin = 'coin' in ex.columns and ex['coin'].notna().any()
+    do_coin_match = bool(require_coin_match) and bool(has_bt_coin) and bool(has_ex_coin)
 
     ex_used = set()
     ex_seen_as_candidate = set()
@@ -355,6 +403,15 @@ def _match_rows_by_time(
     j = 0
     for i in range(len(bt)):
         bt_t = bt.at[i, 'time']
+        bt_coin = None
+        if 'coin' in bt.columns:
+            try:
+                bt_coin = str(bt.at[i, 'coin']).strip().upper() or None
+            except Exception:
+                bt_coin = None
+        if do_coin_match and not bt_coin:
+            # If we require coin matching but this row has no coin, disable coin match for it.
+            bt_coin = None
         bt_qty = None
         try:
             bt_qty = float(bt.at[i, 'qty']) if 'qty' in bt.columns else None
@@ -376,9 +433,22 @@ def _match_rows_by_time(
         best_k = None
         best_dt = None
         # check a small window ahead; typical per-day counts are low
+        bt_qty_abs = None
+        try:
+            if bt_qty is not None and math.isfinite(bt_qty):
+                bt_qty_abs = abs(float(bt_qty))
+        except Exception:
+            bt_qty_abs = None
+
         for k in range(max(0, j - 3), min(len(ex_times), j + 10)):
             if k in ex_used:
                 continue
+            if do_coin_match and bt_coin:
+                try:
+                    if str(ex.at[k, 'coin']).strip().upper() != bt_coin:
+                        continue
+                except Exception:
+                    continue
             if require_side_match and bt_expected_side and 'side' in ex.columns:
                 try:
                     if str(ex.at[k, 'side']).lower() != bt_expected_side:
@@ -389,9 +459,23 @@ def _match_rows_by_time(
             if best_dt is None or dt < best_dt:
                 best_dt = dt
                 best_k = k
+            elif best_dt is not None and dt == best_dt and bt_qty_abs is not None and 'qty' in ex.columns:
+                # Tie-breaker: prefer qty-closest candidate when timestamps are identical.
+                try:
+                    cand_qty = float(ex.at[k, 'qty'])
+                    best_qty = float(ex.at[best_k, 'qty']) if best_k is not None else None
+                    if best_qty is None or not math.isfinite(best_qty):
+                        best_k = k
+                    else:
+                        if math.isfinite(cand_qty):
+                            if abs(cand_qty - bt_qty_abs) < abs(best_qty - bt_qty_abs):
+                                best_k = k
+                except Exception:
+                    pass
 
         # Always show nearest candidate (if any), but only consume it if matched.
         cand_t = None
+        cand_symbol = None
         cand_side = None
         cand_qty = None
         cand_price = None
@@ -401,6 +485,7 @@ def _match_rows_by_time(
         if best_k is not None:
             ex_seen_as_candidate.add(best_k)
             cand_t = ex.at[best_k, 'time']
+            cand_symbol = ex.at[best_k, 'symbol'] if 'symbol' in ex.columns else None
             cand_side = ex.at[best_k, 'side'] if 'side' in ex.columns else None
             cand_qty = ex.at[best_k, 'qty'] if 'qty' in ex.columns else None
             cand_price = ex.at[best_k, 'price'] if 'price' in ex.columns else None
@@ -426,6 +511,7 @@ def _match_rows_by_time(
 
         # Matched execution columns: only populate if actually matched
         m_t = cand_t if matched else None
+        m_symbol = cand_symbol if matched else None
         m_side = cand_side if matched else None
         m_qty = cand_qty if matched else None
         m_price = cand_price if matched else None
@@ -435,6 +521,7 @@ def _match_rows_by_time(
 
         out.append({
             'bt_time': bt_t,
+            'bt_coin': bt_coin,
             'bt_type': bt.at[i, 'type'] if 'type' in bt.columns else None,
             'bt_qty': bt.at[i, 'qty'] if 'qty' in bt.columns else None,
             'bt_price': bt.at[i, 'price'] if 'price' in bt.columns else None,
@@ -446,6 +533,7 @@ def _match_rows_by_time(
             'bt_psize_delta': bt.at[i, 'psize_delta'] if 'psize_delta' in bt.columns else None,
             'bt_psize_delta_coin': bt.at[i, 'psize_delta_coin'] if 'psize_delta_coin' in bt.columns else None,
             'candidate_time': cand_t,
+            'candidate_symbol': cand_symbol,
             'candidate_side': cand_side,
             'candidate_qty': cand_qty,
             'candidate_price': cand_price,
@@ -453,6 +541,7 @@ def _match_rows_by_time(
             'candidate_trade_count': cand_trade_count,
             'candidate_trade_ids': cand_trade_ids,
             'matched_time': m_t,
+            'matched_symbol': m_symbol,
             'matched_side': m_side,
             'matched_qty': m_qty,
             'matched_price': m_price,
@@ -484,10 +573,17 @@ def _match_rows_by_time(
                 continue
             bt_t = bt_times[i]
             expected = bt_expected_sides[i]
+            bt_coin = out[i].get('bt_coin')
 
             best_k = None
             best_dt = None
             for k, t in pool_times.items():
+                if do_coin_match and bt_coin:
+                    try:
+                        if str(ex.at[k, 'coin']).strip().upper() != bt_coin:
+                            continue
+                    except Exception:
+                        continue
                 if require_side_match and expected and 'side' in ex.columns:
                     try:
                         if str(ex.at[k, 'side']).lower() != expected:
@@ -514,6 +610,7 @@ def _match_rows_by_time(
 
             # Show the best unmatched candidate (even if dt>tol)
             out[i]['candidate_time'] = ex.at[best_k, 'time']
+            out[i]['candidate_symbol'] = ex.at[best_k, 'symbol'] if 'symbol' in ex.columns else None
             out[i]['candidate_side'] = ex.at[best_k, 'side'] if 'side' in ex.columns else None
             out[i]['candidate_qty'] = ex.at[best_k, 'qty'] if 'qty' in ex.columns else None
             out[i]['candidate_price'] = ex.at[best_k, 'price'] if 'price' in ex.columns else None
@@ -533,35 +630,39 @@ def _match_rows_by_time(
             pass
 
     # Optionally add unmatched executions as separate rows (bt_* empty).
-    # To avoid confusing duplicates, suppress exec rows already shown as candidates.
+    # To avoid confusing duplicates, we can suppress exec rows already shown as candidates.
     if include_unmatched_exec_rows:
         for k in range(len(ex)):
             if k in ex_used:
                 continue
-            if k in ex_seen_as_candidate:
+            if suppress_exec_rows_seen_as_candidates and k in ex_seen_as_candidate:
                 continue
             out.append({
                 'bt_time': None,
+                'bt_coin': None,
                 'bt_type': None,
                 'bt_qty': None,
                 'bt_price': None,
                 'bt_net': None,
                 'bt_expected_side': None,
                 'bt_psize_delta': None,
-                'candidate_time': ex.at[k, 'time'],
-                'candidate_side': ex.at[k, 'side'] if 'side' in ex.columns else None,
-                'candidate_qty': ex.at[k, 'qty'] if 'qty' in ex.columns else None,
-                'candidate_price': ex.at[k, 'price'] if 'price' in ex.columns else None,
-                'candidate_net': ex.at[k, 'net'] if 'net' in ex.columns else None,
-                'candidate_trade_count': ex.at[k, 'trade_count'] if 'trade_count' in ex.columns else None,
-                'candidate_trade_ids': ex.at[k, 'trade_ids_preview'] if 'trade_ids_preview' in ex.columns else None,
-                'matched_time': None,
-                'matched_side': None,
-                'matched_qty': None,
-                'matched_price': None,
-                'matched_net': None,
-                'matched_trade_count': None,
-                'matched_trade_ids': None,
+                # Populate matched_* so exec-only rows are readable without showing candidate columns
+                'candidate_time': None,
+                'candidate_symbol': None,
+                'candidate_side': None,
+                'candidate_qty': None,
+                'candidate_price': None,
+                'candidate_net': None,
+                'candidate_trade_count': None,
+                'candidate_trade_ids': None,
+                'matched_time': ex.at[k, 'time'],
+                'matched_symbol': ex.at[k, 'symbol'] if 'symbol' in ex.columns else None,
+                'matched_side': ex.at[k, 'side'] if 'side' in ex.columns else None,
+                'matched_qty': ex.at[k, 'qty'] if 'qty' in ex.columns else None,
+                'matched_price': ex.at[k, 'price'] if 'price' in ex.columns else None,
+                'matched_net': ex.at[k, 'net'] if 'net' in ex.columns else None,
+                'matched_trade_count': ex.at[k, 'trade_count'] if 'trade_count' in ex.columns else None,
+                'matched_trade_ids': ex.at[k, 'trade_ids_preview'] if 'trade_ids_preview' in ex.columns else None,
                 'dt_s': None,
                 'match': False,
                 'reason': 'unmatched_exec',
@@ -570,8 +671,17 @@ def _match_rows_by_time(
     mdf = pd.DataFrame(out)
     # Stable ordering: bt_time first, then ex_time
     try:
-        mdf['_sort'] = mdf['bt_time'].fillna(mdf['ex_time'])
-        mdf = mdf.sort_values('_sort').drop(columns=['_sort'])
+        sort_series = None
+        for c in ('bt_time', 'matched_time', 'candidate_time'):
+            if c not in mdf.columns:
+                continue
+            if sort_series is None:
+                sort_series = mdf[c]
+            else:
+                sort_series = sort_series.fillna(mdf[c])
+        if sort_series is not None:
+            mdf['_sort'] = sort_series
+            mdf = mdf.sort_values('_sort').drop(columns=['_sort'])
     except Exception:
         pass
     return mdf
@@ -619,6 +729,8 @@ def _aggregate_partial_executions(ex_df: pd.DataFrame) -> pd.DataFrame:
         else:
             df['price_r'] = pd.NA
         gcols = ['time_s', 'side', 'price_r']
+        if 'symbol' in df.columns:
+            gcols.append('symbol')
 
     def _preview_trade_ids(x: pd.Series) -> str:
         vals = [str(v) for v in x.dropna().astype(str).tolist() if str(v).strip()]
@@ -1439,8 +1551,21 @@ def live_vs_backtest_page():
                         if not src_ex:
                             src_ex = "binance" if str(compare_exchange).lower() == "hyperliquid" else str(compare_exchange)
 
-                        src_markets = _load_pb7_markets_cache(str(src_ex))
-                        src_sym, src_m = _find_market_for_coin(src_markets, coin, quote="USDT") if src_markets else (None, None)
+                        src_ex_used = None
+                        src_markets = None
+                        src_sym, src_m = None, None
+                        # For V7, Binance is typically futures; try binanceusdm first for constraints.
+                        src_candidates = _pb7_markets_cache_candidates(str(src_ex), prefer_futures=str(src_ex).strip().lower() == "binance")
+                        for ex_try in (src_candidates or [str(src_ex).strip().lower()]):
+                            mk = _load_pb7_markets_cache(str(ex_try))
+                            sym, m = _find_market_for_coin(mk, coin, quote="USDT") if mk else (None, None)
+                            if m is not None:
+                                src_ex_used = str(ex_try)
+                                src_markets = mk
+                                src_sym, src_m = sym, m
+                                break
+                        if src_ex_used is None:
+                            src_ex_used = str(src_ex)
                         src_cst = _market_constraints_from_ccxt_market(src_m) if src_m is not None else {}
 
                         # Determine a representative start price.
@@ -1529,13 +1654,32 @@ def live_vs_backtest_page():
                                 live_exchange_for_constraints = str(compare_exchange)
                                 live_exchange_inferred_from = "dropdown"
 
+                        live_exchange_used = None
+                        live_any_cache_found = False
                         if live_exchange_for_constraints:
-                            live_markets = _load_pb7_markets_cache(str(live_exchange_for_constraints))
+                            # If we saw a perp-like symbol (':USDT'), prefer futures cache.
+                            prefer_futures = False
+                            try:
+                                prefer_futures = bool(live_exec_symbol and ":" in str(live_exec_symbol))
+                            except Exception:
+                                prefer_futures = False
+
+                            live_candidates = _pb7_markets_cache_candidates(str(live_exchange_for_constraints), prefer_futures=prefer_futures)
                             quote_candidates = [q for q in [live_quote, "USDC", "USDT"] if q]
-                            for q in quote_candidates:
-                                live_sym, live_m = _find_market_for_coin(live_markets, coin, quote=q) if live_markets else (None, None)
-                                if live_m is not None:
-                                    live_cst = _market_constraints_from_ccxt_market(live_m)
+
+                            for ex_try in (live_candidates or [str(live_exchange_for_constraints)]):
+                                mk = _load_pb7_markets_cache(str(ex_try))
+                                if mk is None:
+                                    continue
+                                live_any_cache_found = True
+                                for q in quote_candidates:
+                                    live_sym, live_m = _find_market_for_coin(mk, coin, quote=q) if mk else (None, None)
+                                    if live_m is not None:
+                                        live_markets = mk
+                                        live_exchange_used = str(ex_try)
+                                        live_cst = _market_constraints_from_ccxt_market(live_m)
+                                        break
+                                if live_cst:
                                     break
 
                         bt_qty_eff, bt_coin_eff, bt_notional_eff = _effective_min_order_at_price(
@@ -1560,8 +1704,9 @@ def live_vs_backtest_page():
                             note_parts.append(
                                 f"bt markets cache missing ({_pb7_markets_cache_path(str(src_ex))})" if src_markets is None else "bt symbol not found"
                             )
-                        if live_exchange_for_constraints and live_markets is None:
-                            note_parts.append(f"live markets cache missing ({_pb7_markets_cache_path(str(live_exchange_for_constraints))})")
+                        if live_exchange_for_constraints and not live_any_cache_found:
+                            tried = ",".join(_pb7_markets_cache_candidates(str(live_exchange_for_constraints), prefer_futures=True) or [str(live_exchange_for_constraints)])
+                            note_parts.append(f"live markets cache missing (tried {tried})")
                         if live_exchange_for_constraints and live_markets is not None and not live_cst:
                             tried = ",".join([q for q in [live_quote, "USDC", "USDT"] if q])
                             note_parts.append(f"live symbol not found (tried {tried})")
@@ -1571,7 +1716,7 @@ def live_vs_backtest_page():
 
                         rows.append({
                             "Coin": coin,
-                            "bt_source": str(src_ex),
+                            "bt_source": str(src_ex_used),
                             "bt_symbol": src_sym,
                             "bt_min_cost": src_cst.get("min_cost"),
                             "bt_min_qty": src_cst.get("min_qty"),
@@ -1585,7 +1730,7 @@ def live_vs_backtest_page():
                             "bt_min_coin_eff": bt_coin_eff,
                             "bt_min_notional_eff": bt_notional_eff,
                             "live_start_price": live_price,
-                            "live_exchange": live_exchange_for_constraints,
+                            "live_exchange": live_exchange_used or live_exchange_for_constraints,
                             "live_exchange_src": live_exchange_inferred_from,
                             "live_symbol": live_sym,
                             "live_exec_symbol": live_exec_symbol,
@@ -2142,6 +2287,58 @@ def live_vs_backtest_page():
         # Note: in trades DB, fee is stored as a positive cost.
         comp_df["ExecNet"] = comp_df["ExecRealizedPnL"] - comp_df["ExecFee"]
 
+        # Quick summary: where does the gap come from?
+        # Most commonly: Backtest has fills on days where Live has none (due to fill-model differences,
+        # downtime, post-only orders not filling, etc.).
+        try:
+            bt_has = pd.to_numeric(comp_df.get("BTFills", 0), errors="coerce").fillna(0).astype(float) > 0
+            live_has = (
+                pd.to_numeric(comp_df.get("IncomeRows", 0), errors="coerce").fillna(0).astype(float) > 0
+            ) | (
+                pd.to_numeric(comp_df.get("ExecTrades", 0), errors="coerce").fillna(0).astype(float) > 0
+            )
+
+            comp_df["BT_minus_Live"] = (pd.to_numeric(comp_df.get("Backtest", 0.0), errors="coerce").fillna(0.0) -
+                                       pd.to_numeric(comp_df.get("Live", 0.0), errors="coerce").fillna(0.0))
+
+            cat = pd.Series("No trades", index=comp_df.index)
+            cat[bt_has & ~live_has] = "Backtest-only (fills; no live trades)"
+            cat[~bt_has & live_has] = "Live-only (trades; no backtest fills)"
+            cat[bt_has & live_has] = "Both traded"
+            comp_df["Category"] = cat
+
+            sum_df = comp_df.groupby("Category", dropna=False).agg(
+                Days=("Date", "count"),
+                LiveSum=("Live", "sum"),
+                BacktestSum=("Backtest", "sum"),
+                GapSum=("BT_minus_Live", "sum"),
+                IncomeRows=("IncomeRows", "sum"),
+                ExecTrades=("ExecTrades", "sum"),
+                BTFills=("BTFills", "sum"),
+            ).reset_index()
+
+            # Show as a small overview table (keeps the main plot unchanged)
+            st.dataframe(
+                sum_df.sort_values(["GapSum", "Category"], ascending=[False, True]),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Helpful nudge: show the strongest BT-only day (if any)
+            bt_only = comp_df[bt_has & ~live_has].copy()
+            if not bt_only.empty:
+                top = bt_only.sort_values("BT_minus_Live", ascending=False).iloc[0]
+                try:
+                    top_d = top["Date"].date()
+                except Exception:
+                    top_d = None
+                if top_d is not None:
+                    st.caption(
+                        f"Largest Backtest-only gap day: {top_d.isoformat()} (Backtest-Live = {float(top['BT_minus_Live']):.4f})"
+                    )
+        except Exception:
+            pass
+
         show_top = 30
 
         deviating = comp_df[comp_df["AbsDiff"] >= float(threshold)].copy()
@@ -2160,12 +2357,87 @@ def live_vs_backtest_page():
         first_dev_date = deviating.sort_values("Date").iloc[0]["Date"]
         dev_dates = list(deviating.sort_values("Date")["Date"].dt.date)
 
-        selected_day = st.selectbox(
-            "Inspect day",
-            options=dev_dates,
-            index=0,
-            key="v7_live_vs_backtest_diag_day",
-        )
+        # Allow fast +/-1 day navigation (faster than searching the dropdown).
+        # We expose the full date range in the selector and mark deviation days.
+        day_key = "v7_live_vs_backtest_diag_day"
+        # Filter out days with neither backtest fills nor live activity.
+        # Prefer count columns when available (more reliable than net=0).
+        try:
+            cdf_sorted = comp_df.sort_values("Date").copy()
+            bt_fills_s = pd.to_numeric(cdf_sorted.get("BTFills", 0), errors="coerce").fillna(0)
+            exec_trades_s = pd.to_numeric(cdf_sorted.get("ExecTrades", 0), errors="coerce").fillna(0)
+            income_rows_s = pd.to_numeric(cdf_sorted.get("IncomeRows", 0), errors="coerce").fillna(0)
+            active_mask = (bt_fills_s > 0) | (exec_trades_s > 0) | (income_rows_s > 0)
+            date_series = cdf_sorted.loc[active_mask, "Date"]
+            all_dates = list(date_series.dt.date)
+        except Exception:
+            all_dates = list(comp_df.sort_values("Date")["Date"].dt.date)
+
+        # Ensure uniqueness while preserving chronological order
+        try:
+            seen = set()
+            all_dates = [d for d in all_dates if not (d in seen or seen.add(d))]
+        except Exception:
+            pass
+        dev_set = set(dev_dates)
+        default_day = first_dev_date.date() if hasattr(first_dev_date, "date") else (all_dates[0] if all_dates else date.today())
+        if not all_dates:
+            st.info("No days available in the selected range.")
+            return
+
+        if day_key not in st.session_state or st.session_state.get(day_key) not in all_dates:
+            st.session_state[day_key] = default_day if default_day in all_dates else all_dates[0]
+
+        cur_idx = 0
+        try:
+            cur_idx = all_dates.index(st.session_state.get(day_key))
+        except Exception:
+            cur_idx = 0
+            st.session_state[day_key] = all_dates[0]
+
+        nav_prev, nav_sel, nav_next = st.columns([0.15, 0.7, 0.15], vertical_alignment="bottom")
+
+        # IMPORTANT: handle button clicks *before* instantiating the selectbox with the same key.
+        # Otherwise Streamlit will raise:
+        # "st.session_state.<key> cannot be modified after the widget with key <key> is instantiated."
+        with nav_prev:
+            clicked_prev = st.button(
+                "◀︎ -1d",
+                key="v7_live_vs_backtest_diag_day_prev",
+                disabled=cur_idx <= 0,
+                use_container_width=True,
+                help="Go to previous day",
+            )
+
+        with nav_next:
+            clicked_next = st.button(
+                "+1d ▶︎",
+                key="v7_live_vs_backtest_diag_day_next",
+                disabled=cur_idx >= len(all_dates) - 1,
+                use_container_width=True,
+                help="Go to next day",
+            )
+
+        if clicked_prev:
+            st.session_state[day_key] = all_dates[max(0, cur_idx - 1)]
+            st.rerun()
+        if clicked_next:
+            st.session_state[day_key] = all_dates[min(len(all_dates) - 1, cur_idx + 1)]
+            st.rerun()
+
+        with nav_sel:
+            st.selectbox(
+                "Inspect day",
+                options=all_dates,
+                index=cur_idx,
+                key=day_key,
+                format_func=lambda d: f"{d.isoformat()} (deviation)" if d in dev_set else d.isoformat(),
+            )
+
+        selected_day = st.session_state.get(day_key)
+        if selected_day not in all_dates:
+            selected_day = all_dates[0]
+            st.session_state[day_key] = selected_day
 
         day_start_dt = datetime(selected_day.year, selected_day.month, selected_day.day, tzinfo=timezone.utc)
         day_start_ms = int(day_start_dt.timestamp() * 1000)
@@ -2236,7 +2508,33 @@ def live_vs_backtest_page():
                         edf["net"] = (edf["realized_pnl"].fillna(0.0) - edf["fee"].fillna(0.0)).astype(float)
                         st.dataframe(edf[["time", "symbol", "side", "qty", "price", "fee", "realized_pnl", "net", "trade_id", "order_id"]], use_container_width=True, hide_index=True)
                     else:
-                        st.info("No live executions for this day (or exchange not supported / DB empty).")
+                        # Minimal, user-facing hint: show earliest/latest execution we have.
+                        all_min = all_max = None
+                        try:
+                            with db._connect_trades() as conn:
+                                cur = conn.cursor()
+                                cur.execute(
+                                    "SELECT MIN(timestamp), MAX(timestamp) FROM executions WHERE user=? AND exchange=?",
+                                    (single_user, str(live_exchange)),
+                                )
+                                all_min, all_max = cur.fetchone() or (None, None)
+                        except Exception:
+                            all_min, all_max = None, None
+
+                        st.info("No live executions for this day.")
+                        if all_min is not None and all_max is not None:
+                            min_dt = datetime.fromtimestamp(int(all_min) / 1000, tz=timezone.utc).strftime('%Y-%m-%d')
+                            max_dt = datetime.fromtimestamp(int(all_max) / 1000, tz=timezone.utc).strftime('%Y-%m-%d')
+                            sel_dt = datetime.fromtimestamp(int(day_start_ms) / 1000, tz=timezone.utc).strftime('%Y-%m-%d')
+                            reason = ""
+                            if str(live_exchange).strip().lower() == "binance":
+                                reason = " (Binance: initial backfill capped to last 180 days due to API limits)"
+                            if str(live_exchange).strip().lower() == "bitget":
+                                reason = " (Bitget: initial backfill capped to last 90 days due to API limits)"
+                            if int(day_start_ms) < int(all_min):
+                                st.caption(f"Executions available from {min_dt} to {max_dt} (UTC). Selected day {sel_dt} is earlier than the first stored execution.{reason}")
+                            else:
+                                st.caption(f"Executions available from {min_dt} to {max_dt} (UTC).{reason}")
             except Exception as e:
                 st.info(f"Executions view unavailable: {e}")
 
@@ -2252,9 +2550,43 @@ def live_vs_backtest_page():
 
             # Keep UI minimal: enforce sensible defaults.
             require_side = True
-            show_unmatched_exec = False
             agg_partials = True
             candidates_unmatched_only = True
+
+            # One row: 4 toggles next to each other
+            tcol1, tcol2, tcol3, tcol4 = st.columns(4)
+            with tcol1:
+                show_unmatched_exec = st.toggle(
+                    "Show unmatched execution rows",
+                    value=False,
+                    key="v7_live_vs_backtest_show_unmatched_exec_rows",
+                    help="Adds extra rows for executions that were not matched to any backtest fill (bt_* empty).",
+                )
+            with tcol2:
+                suppress_exec_rows_seen_as_candidates = st.toggle(
+                    "Hide executions already shown as candidates",
+                    value=True,
+                    key="v7_live_vs_backtest_hide_candidate_exec_rows",
+                    help=(
+                        "Only applies when 'Show unmatched execution rows' is enabled. "
+                        "When enabled, executions referenced in candidate columns are not added again as extra rows."
+                    ),
+                    disabled=not bool(show_unmatched_exec),
+                )
+            with tcol3:
+                show_candidate_cols = st.toggle(
+                    "Show candidate columns",
+                    value=False,
+                    key="v7_live_vs_backtest_show_candidate_cols",
+                    help="Shows the nearest candidate execution even if it wasn't matched (useful for debugging).",
+                )
+            with tcol4:
+                show_debug_cols = st.toggle(
+                    "Show debug columns",
+                    value=False,
+                    key="v7_live_vs_backtest_show_debug_cols",
+                    help="Shows extra backtest sizing fields (psize_delta/contract_size/qty breakdown).",
+                )
 
             # Build the same per-day subsets as the other tabs
             bt_day_df = pd.DataFrame()
@@ -2317,6 +2649,11 @@ def live_vs_backtest_page():
                         ex_day_df["time"] = pd.to_datetime(ex_day_df["timestamp"].astype('int64'), unit='ms', utc=True)
                         # fee is stored as a positive cost in executions
                         ex_day_df["net"] = (ex_day_df["realized_pnl"].fillna(0.0) - ex_day_df["fee"].fillna(0.0)).astype(float)
+                        # Add derived coin so Total-scope matching won't cross-match symbols.
+                        try:
+                            ex_day_df["coin"] = ex_day_df["symbol"].apply(_coin_from_exec_symbol)
+                        except Exception:
+                            pass
             except Exception:
                 ex_day_df = pd.DataFrame()
 
@@ -2326,6 +2663,14 @@ def live_vs_backtest_page():
                     ex_day_df = _aggregate_partial_executions(ex_day_df)
                 except Exception:
                     pass
+
+            # Aggregation may drop derived columns; ensure coin exists for matching.
+            if ex_day_df is not None and not ex_day_df.empty:
+                if 'coin' not in ex_day_df.columns and 'symbol' in ex_day_df.columns:
+                    try:
+                        ex_day_df['coin'] = ex_day_df['symbol'].apply(_coin_from_exec_symbol)
+                    except Exception:
+                        pass
 
             agg_exec_count = 0
             try:
@@ -2337,9 +2682,9 @@ def live_vs_backtest_page():
                 st.info("No fills and no executions for this day.")
                 return
             if bt_day_df.empty:
-                st.info("No backtest fills for this day; showing unmatched executions only.")
+                st.info("No backtest fills for this day (in this scope).")
             if ex_day_df.empty:
-                st.info("No live executions for this day; showing unmatched fills only.")
+                st.info("No live executions for this day (in this scope).")
 
             # Ensure time columns exist
             if not bt_day_df.empty:
@@ -2347,7 +2692,7 @@ def live_vs_backtest_page():
                     st.warning("Backtest fills have no 'time' column; cannot match.")
                 else:
                     # keep only matching-relevant columns
-                    keep_cols = [c for c in ['time', 'type', 'qty', 'qty_contracts', 'qty_coin', 'contract_size', 'qty_eff', 'psize_delta', 'psize_delta_coin', 'price', 'net'] if c in bt_day_df.columns]
+                    keep_cols = [c for c in ['time', 'coin', 'type', 'qty', 'qty_contracts', 'qty_coin', 'contract_size', 'qty_eff', 'psize_delta', 'psize_delta_coin', 'price', 'net'] if c in bt_day_df.columns]
                     bt_day_df = bt_day_df[keep_cols].sort_values('time')
                     # Prefer qty_eff (derived from psize_delta) when present
                     try:
@@ -2359,7 +2704,7 @@ def live_vs_backtest_page():
                         pass
 
             if not ex_day_df.empty:
-                keep_cols = [c for c in ['time', 'side', 'qty', 'price', 'net', 'trade_id', 'trade_ids_preview', 'trade_count', 'order_id', 'symbol'] if c in ex_day_df.columns]
+                keep_cols = [c for c in ['time', 'coin', 'side', 'qty', 'price', 'net', 'trade_id', 'trade_ids_preview', 'trade_count', 'order_id', 'symbol'] if c in ex_day_df.columns]
                 ex_day_df = ex_day_df[keep_cols].sort_values('time')
 
             mdf = _match_rows_by_time(
@@ -2367,7 +2712,9 @@ def live_vs_backtest_page():
                 ex_day_df,
                 tolerance_s=int(tol_s),
                 require_side_match=bool(require_side),
+                require_coin_match=True,
                 include_unmatched_exec_rows=bool(show_unmatched_exec),
+                suppress_exec_rows_seen_as_candidates=bool(suppress_exec_rows_seen_as_candidates),
                 candidates_from_unmatched_only=bool(candidates_unmatched_only),
             )
             if mdf.empty:
@@ -2388,17 +2735,110 @@ def live_vs_backtest_page():
             except Exception:
                 pass
 
-            # Keep the table readable: show the most relevant columns.
+            st.caption(f"Δt (s) = |BT time − nearest execution time| (match requires Δt ≤ {int(tol_s)}s)")
+
             cols = [
-                'bt_time', 'bt_type', 'bt_qty', 'bt_qty_contracts', 'bt_qty_coin', 'bt_contract_size', 'bt_price', 'bt_net',
-                'bt_psize_delta', 'bt_psize_delta_coin',
-                'candidate_time', 'candidate_side', 'candidate_qty', 'candidate_price',
-                'candidate_trade_count',
-                'matched_time', 'matched_side', 'matched_qty', 'matched_price',
-                'dt_s', 'match', 'reason',
+                # Time + match metadata
+                'bt_time', 'matched_time', 'dt_s', 'match', 'reason',
+                # Side/type
+                'bt_type', 'bt_expected_side', 'matched_side',
+                # Coin/Symbol context
+                'bt_coin', 'matched_symbol',
+                # Quantity + price + net (BT next to matched)
+                'bt_qty', 'matched_qty',
+                'bt_price', 'matched_price',
+                'bt_net', 'matched_net',
+                # Matched trade context
+                'matched_trade_count', 'matched_trade_ids',
             ]
-            view = mdf[[c for c in cols if c in mdf.columns]]
-            st.dataframe(view, use_container_width=True, hide_index=True)
+            if bool(show_candidate_cols):
+                cols += [
+                    'candidate_time', 'candidate_symbol', 'candidate_side', 'candidate_qty', 'candidate_price', 'candidate_net',
+                    'candidate_trade_count', 'candidate_trade_ids',
+                ]
+            if bool(show_debug_cols):
+                cols += [
+                    'bt_qty_contracts', 'bt_qty_coin', 'bt_contract_size',
+                    'bt_psize_delta', 'bt_psize_delta_coin',
+                ]
+
+            view = mdf[[c for c in cols if c in mdf.columns]].copy()
+
+            # User-facing naming/help for time delta column
+            dt_col = 'dt_s'
+            dt_label = 'Δt (s)'
+
+            # Light formatting for readability
+            try:
+                for c in [
+                    'bt_qty', 'matched_qty', 'bt_price', 'matched_price', 'bt_net', 'matched_net',
+                    'candidate_qty', 'candidate_price', 'candidate_net', 'dt_s',
+                ]:
+                    if c in view.columns:
+                        view[c] = pd.to_numeric(view[c], errors='coerce')
+            except Exception:
+                pass
+
+            # Rename dt column for display (keep internal key in mdf)
+            try:
+                if dt_col in view.columns:
+                    view = view.rename(columns={dt_col: dt_label})
+            except Exception:
+                pass
+
+            # Color legend + coloring
+            try:
+                with st.expander("Color legend", expanded=False):
+                    st.markdown(
+                        "- **Green (two shades)**: matched rows; **BT columns** lighter green, **Live matched** columns darker green\n"
+                        "- **Red (two shades)**: no candidate found; **BT** lighter red, **Live matched** darker red\n"
+                        "- **Amber (two shades)**: nearest exec exists but is outside tolerance (`dt>tol`)\n",
+                    )
+                    st.markdown(
+                        f"- **{dt_label}**: absolute time difference between **BT fill time** and **nearest execution time** (seconds). Match requires **{dt_label} ≤ tolerance** (currently {int(tol_s)}s)."
+                    )
+
+                bt_cols = [c for c in view.columns if str(c).startswith('bt_')]
+                matched_cols = [c for c in view.columns if str(c).startswith('matched_')]
+
+                # Two-tone palette: BT (lighter) vs matched (darker)
+                colors = {
+                    'match_bt': 'background-color: rgba(0, 128, 0, 0.12)',
+                    'match_m': 'background-color: rgba(0, 128, 0, 0.22)',
+                    'fail_bt': 'background-color: rgba(220, 20, 60, 0.12)',
+                    'fail_m': 'background-color: rgba(220, 20, 60, 0.22)',
+                    'warn_bt': 'background-color: rgba(255, 165, 0, 0.12)',
+                    'warn_m': 'background-color: rgba(255, 165, 0, 0.22)',
+                }
+
+                def _cell_style(df: pd.DataFrame) -> pd.DataFrame:
+                    styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                    for idx, row in df.iterrows():
+                        try:
+                            is_match = bool(row.get('match'))
+                        except Exception:
+                            is_match = False
+                        reason = str(row.get('reason') or '')
+
+                        if is_match:
+                            bt_style, m_style = colors['match_bt'], colors['match_m']
+                        elif reason in ('no_candidate', 'no_unmatched_candidate'):
+                            bt_style, m_style = colors['fail_bt'], colors['fail_m']
+                        elif reason == 'dt>tol':
+                            bt_style, m_style = colors['warn_bt'], colors['warn_m']
+                        else:
+                            bt_style = m_style = ''
+
+                        for c in bt_cols:
+                            styles.at[idx, c] = bt_style
+                        for c in matched_cols:
+                            styles.at[idx, c] = m_style
+                    return styles
+
+                styled = view.style.apply(_cell_style, axis=None)
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+            except Exception:
+                st.dataframe(view, use_container_width=True, hide_index=True)
 
 
 # Redirect to Login if not authenticated or session state not initialized
