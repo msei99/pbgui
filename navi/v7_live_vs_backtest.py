@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
 
@@ -20,7 +21,7 @@ from pbgui_func import (
     pb7dir,
     set_page_config,
 )
-from pbgui_purefunc import coin_from_symbol_code
+from pbgui_purefunc import coin_from_symbol_code, compute_pb7_entry_gating_ohlcv_df
 
 
 def _pb7_markets_cache_path(exchange: str) -> Path:
@@ -56,6 +57,127 @@ def _load_pb7_markets_cache(exchange: str) -> dict | None:
 
     st.session_state[cache_key] = markets
     return markets
+
+
+def _make_entry_gate_price_figure(df: pd.DataFrame, *, title: str, show_gate_bands: bool = True) -> go.Figure:
+    fig = go.Figure()
+    if df is None or df.empty:
+        fig.update_layout(title=title)
+        return fig
+
+    fig.add_trace(
+        go.Candlestick(
+            x=df["time"],
+            open=df["open"],
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            name="price",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(x=df["time"], y=df["entry_price"], mode="lines", name="ideal entry", line=dict(width=1.5))
+    )
+    fig.add_trace(
+        go.Scatter(x=df["time"], y=df["gate_price"], mode="lines", name="gate price", line=dict(width=1.5, dash="dash"))
+    )
+
+    dip = df[df.get("dip_only", False) == True]
+    if not dip.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=dip["time"],
+                y=dip["low"],
+                mode="markers",
+                name="dip-only low",
+                marker=dict(size=6, symbol="triangle-down", color="rgba(255, 80, 80, 0.9)"),
+            )
+        )
+    stable = df[(df.get("gate_open_close", False) == True)]
+    if not stable.empty:
+        if bool(show_gate_bands):
+            # Highlight gate-open minutes with a subtle vertical band (very visible even when zooming).
+            try:
+                for t in stable["time"]:
+                    fig.add_vrect(
+                        x0=t - pd.Timedelta(seconds=30),
+                        x1=t + pd.Timedelta(seconds=30),
+                        fillcolor="rgba(60, 180, 75, 0.12)",
+                        opacity=1.0,
+                        line_width=0,
+                        layer="below",
+                    )
+            except Exception:
+                pass
+
+        fig.add_trace(
+            go.Scatter(
+                x=stable["time"],
+                # Plot above candle highs so markers aren't hidden by candlesticks.
+                y=stable["high"],
+                mode="markers",
+                name="gate-open close",
+                marker=dict(
+                    size=7,
+                    symbol="circle",
+                    color="rgba(60, 180, 75, 1.0)",
+                    line=dict(width=2, color="rgba(0, 0, 0, 0.85)"),
+                ),
+            )
+        )
+
+    # Gate-close events: previous minute was gate-open-at-close, current minute is not.
+    try:
+        goc = pd.Series(df.get("gate_open_close", False)).fillna(False).astype(bool)
+        if len(goc) > 1:
+            prev = goc.shift(1, fill_value=bool(goc.iloc[0]))
+            close_mask = (~goc) & (prev)
+            close_ev = df[close_mask]
+        else:
+            close_ev = df.iloc[0:0]
+    except Exception:
+        close_ev = df.iloc[0:0]
+
+    if close_ev is not None and not close_ev.empty:
+        # Subtle orange band + visible marker at the transition
+        if bool(show_gate_bands):
+            try:
+                for t in close_ev["time"]:
+                    fig.add_vrect(
+                        x0=t - pd.Timedelta(seconds=30),
+                        x1=t + pd.Timedelta(seconds=30),
+                        fillcolor="rgba(255, 165, 0, 0.14)",
+                        opacity=1.0,
+                        line_width=0,
+                        layer="below",
+                    )
+            except Exception:
+                pass
+        fig.add_trace(
+            go.Scatter(
+                x=close_ev["time"],
+                y=close_ev["high"],
+                mode="markers",
+                name="gate-close",
+                marker=dict(
+                    size=7,
+                    symbol="circle",
+                    color="rgba(255, 165, 0, 0.95)",
+                    line=dict(width=2, color="rgba(0, 0, 0, 0.85)"),
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title=dict(text=title, x=0.0, xanchor="left"),
+        height=520,
+        margin=dict(l=20, r=20, t=70, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+        xaxis_title="UTC time",
+        yaxis_title="price",
+        xaxis_rangeslider_visible=False,
+    )
+    return fig
 
 
 def _pb7_markets_cache_candidates(exchange: str, *, prefer_futures: bool = False) -> list[str]:
@@ -1889,6 +2011,7 @@ def live_vs_backtest_page():
 
     bt_cum_map = {}
     fills = None
+    bt_cfg: dict = {}
     if has_backtest_results and selected_result_dir is not None:
         fills_path = Path(selected_result_dir) / "fills.csv"
         if not fills_path.exists():
@@ -1908,6 +2031,7 @@ def live_vs_backtest_page():
                         cfg = json.load(f)
                 except Exception:
                     cfg = {}
+                bt_cfg = cfg if isinstance(cfg, dict) else {}
 
                 end_date_str = None
                 try:
@@ -2208,6 +2332,8 @@ def live_vs_backtest_page():
     # --- Diagnostics / Detail Compare (keep main plot unchanged) ---
     with st.expander("Details / Diagnostics", expanded=False):
         st.caption("Find the first deviations and inspect possible causes (income rows vs backtest fills vs live executions).")
+        # Missed fills plots are shown next to the day inspector below (so selecting a day
+        # immediately reveals them without scrolling).
 
         scope_options = list(live_daily_map.keys())
         if len(scope_options) == 1:
@@ -2451,6 +2577,418 @@ def live_vs_backtest_page():
             )
         except Exception:
             pass
+
+        with st.expander("Missed fills / price_distance_threshold", expanded=True):
+            st.caption(
+                "Visualize how close price action was to the ideal initial entry, and when the "
+                "price_distance_threshold gate could only have opened briefly (dip-only)."
+            )
+            if not bt_cfg:
+                st.info("Select a finished backtest result (with config.json) to enable this view.")
+            else:
+                # Pick a symbol/coin scope.
+                symbol_options = [s for s in (selected_symbols or []) if s and s != "Total"]
+                if not symbol_options:
+                    # Fallback: derive options from backtest fills (when user didn't explicitly pick symbols)
+                    try:
+                        if isinstance(fills, pd.DataFrame) and not fills.empty:
+                            if "coin" in fills.columns:
+                                symbol_options = sorted(
+                                    {str(c).strip().upper() for c in fills["coin"].dropna().unique().tolist() if str(c).strip()}
+                                )
+                            elif "symbol" in fills.columns:
+                                symbol_options = sorted(
+                                    {
+                                        coin_from_symbol_code(s)
+                                        for s in fills["symbol"].dropna().unique().tolist()
+                                        if coin_from_symbol_code(s)
+                                    }
+                                )
+                    except Exception:
+                        pass
+
+                default_symbol = symbol_options[0] if symbol_options else None
+                symbol_sel = None
+                if scope != "Total" and scope in symbol_options:
+                    symbol_sel = scope
+                elif default_symbol is not None:
+                    # If nothing is selected (or selection is stale), automatically select the first symbol.
+                    try:
+                        sel_key = "v7_lvbt_missed_symbol"
+                        prev = st.session_state.get(sel_key)
+                        if prev not in symbol_options:
+                            st.session_state[sel_key] = default_symbol
+                        default_index = symbol_options.index(st.session_state.get(sel_key)) if st.session_state.get(sel_key) in symbol_options else 0
+                    except Exception:
+                        default_index = 0
+                    symbol_sel = st.selectbox(
+                        "Symbol",
+                        options=symbol_options,
+                        index=int(default_index),
+                        key="v7_lvbt_missed_symbol",
+                    )
+                else:
+                    st.info("Pick a symbol (not Total) to view entry gating.")
+
+                if symbol_sel:
+                    live_cfg = bt_cfg.get("live", {}) if isinstance(bt_cfg, dict) else {}
+                    default_thr = float(live_cfg.get("price_distance_threshold", 0.002) or 0.002)
+
+                    # Row 1: core parameters
+                    r1c1, r1c2, r1c3, r1c4 = st.columns([1.1, 1.3, 1.2, 1.1], vertical_alignment="center")
+                    with r1c1:
+                        side = st.radio(
+                            "Side",
+                            options=["long", "short"],
+                            index=0,
+                            horizontal=True,
+                            key="v7_lvbt_missed_side",
+                        )
+                    with r1c2:
+                        thr = st.number_input(
+                            "price_distance_threshold",
+                            min_value=0.0,
+                            max_value=0.25,
+                            step=0.001,
+                            value=float(default_thr),
+                            format="%.4f",
+                            key="v7_lvbt_missed_thr",
+                            help="price_distance_threshold used for gating initial entries",
+                        )
+                    with r1c3:
+                        use_prev = st.toggle(
+                            "Prev-minute entry",
+                            value=True,
+                            key="v7_lvbt_missed_prev",
+                            help="Approximate live behavior: initial entry is based on the previous finalized minute.",
+                        )
+                    with r1c4:
+                        warmup_days = st.number_input(
+                            "Warmup days",
+                            min_value=0,
+                            max_value=14,
+                            step=1,
+                            value=3,
+                            key="v7_lvbt_missed_warmup",
+                            help="Extra days loaded before the window to stabilize EMA.",
+                        )
+                    # Always plot the currently selected Inspect day (full day = 1440 minutes)
+                    win_start_ms = int(day_start_ms)
+                    win_end_ms = int(day_end_ms)
+
+                    # Choose OHLCV exchange for the gating plot: prefer compare_exchange selection.
+                    # (If compare_exchange is 'combined', fall back to the live user's exchange when available.)
+                    gate_exchange = str(compare_exchange or "").strip().lower()
+                    if gate_exchange == "combined":
+                        try:
+                            uobj = users.find_user(single_user)
+                            gate_exchange = str(getattr(uobj, "exchange", "") or "").strip().lower() or gate_exchange
+                        except Exception:
+                            pass
+
+                    try:
+                        df_gate = compute_pb7_entry_gating_ohlcv_df(
+                            bt_cfg,
+                            gate_exchange,
+                            symbol_sel,
+                            win_start_ms,
+                            win_end_ms,
+                            side=side,
+                            warmup_days=int(warmup_days),
+                            threshold_override=float(thr),
+                            use_prev_minute_entry=bool(use_prev),
+                        )
+                    except Exception as e:
+                        st.warning(f"Could not compute entry gating series: {e}")
+                        df_gate = None
+
+                    if df_gate is not None and not df_gate.empty:
+                        n_dip = int((df_gate.get("dip_only") == True).sum())
+                        n_gate_close = int((df_gate.get("gate_open_close") == True).sum())
+                        gate_diag_caption = (
+                            f"Dip-only minutes: {n_dip} | Gate-open at close minutes: {n_gate_close} | Rows: {len(df_gate)}"
+                        )
+
+                        # --- Missed initial entries (BT entry_initial vs live executions) ---
+                        # Row 3: overlays + matching sensitivity
+                        init_ui_c1, init_ui_c2, init_ui_c3 = st.columns([1.25, 1.05, 1.7], vertical_alignment="center")
+                        with init_ui_c1:
+                            show_init = st.toggle(
+                                "Show missed initial entries",
+                                value=True,
+                                key="v7_lvbt_missed_show_init",
+                                help="Overlays backtest initial-entry fills and highlights which ones have no matching live execution.",
+                            )
+                        with init_ui_c2:
+                            show_gate_bands = st.toggle(
+                                "Show gate bands",
+                                value=True,
+                                key="v7_lvbt_missed_show_gate_bands",
+                                help="Show/hide the green (gate-open) and orange (gate-close) vertical bands.",
+                            )
+                        with init_ui_c3:
+                            init_tol_s = st.number_input(
+                                "Initial-entry match tolerance (seconds)",
+                                min_value=0,
+                                value=int(st.session_state.get("v7_live_vs_backtest_diag_match_tol_s", 120) or 120),
+                                step=30,
+                                key="v7_lvbt_missed_init_tol_s",
+                                help="Used only for detecting missed initial entries (BT entry_initial vs live executions).",
+                                disabled=not bool(show_init),
+                            )
+
+                        bt_init_mdf = None
+                        bt_init_missed = None
+                        bt_init_overlay = None
+                        if show_init:
+                            try:
+                                win_start_dt = pd.to_datetime(int(win_start_ms), unit="ms", utc=True)
+                                win_end_dt = pd.to_datetime(int(win_end_ms), unit="ms", utc=True)
+
+                                # Backtest initial-entry fills for selected day/scope
+                                bt_init = pd.DataFrame()
+                                if isinstance(fills, pd.DataFrame) and not fills.empty and "date" in fills.columns:
+                                    coin = coin_from_symbol_code(symbol_sel)
+                                    fsub = fills
+                                    if coin and "coin" in fills.columns:
+                                        fsub = fills[fills["coin"].astype(str).str.upper() == str(coin).upper()]
+                                    fday = fsub[fsub["date"].dt.date == selected_day] if not fsub.empty else fsub
+                                    if not fday.empty and "type" in fday.columns:
+                                        bt_init = fday[fday["type"].astype(str).str.contains("entry_initial", case=False, na=False)].copy()
+                                        # Side filter using type naming when available
+                                        if side == "long":
+                                            bt_init = bt_init[bt_init["type"].astype(str).str.contains("long", case=False, na=False)]
+                                        else:
+                                            bt_init = bt_init[bt_init["type"].astype(str).str.contains("short", case=False, na=False)]
+
+                                # Limit to currently selected window (aligns with plotted OHLCV window)
+                                try:
+                                    if bt_init is not None and not bt_init.empty and "time" in bt_init.columns:
+                                        bt_init = bt_init[(bt_init["time"] >= win_start_dt) & (bt_init["time"] <= win_end_dt)].copy()
+                                except Exception:
+                                    pass
+
+                                # Always build an overlay table from BT (even if executions are missing)
+                                if bt_init is not None and not bt_init.empty:
+                                    bt_init_overlay = bt_init.copy()
+                                    # Normalize columns
+                                    if "coin" not in bt_init_overlay.columns:
+                                        bt_init_overlay["coin"] = coin_from_symbol_code(symbol_sel)
+                                    if "price" in bt_init_overlay.columns:
+                                        bt_init_overlay["price"] = pd.to_numeric(bt_init_overlay["price"], errors="coerce")
+                                    if "psize_delta" in bt_init_overlay.columns:
+                                        bt_init_overlay["qty"] = pd.to_numeric(bt_init_overlay["psize_delta"], errors="coerce")
+                                    elif "qty" in bt_init_overlay.columns:
+                                        bt_init_overlay["qty"] = pd.to_numeric(bt_init_overlay["qty"], errors="coerce")
+                                    bt_init_overlay = bt_init_overlay[[c for c in ["time", "coin", "type", "qty", "price", "net"] if c in bt_init_overlay.columns]].copy()
+                                    bt_init_overlay["match"] = False
+                                    bt_init_overlay["reason"] = "no_executions"
+
+                                # Live executions for the selected day/scope
+                                ex_day_df = pd.DataFrame()
+                                try:
+                                    uobj = users.find_user(single_user)
+                                    live_exchange = getattr(uobj, "exchange", None)
+                                except Exception:
+                                    live_exchange = None
+                                if live_exchange and bt_init is not None and not bt_init.empty:
+                                    # IMPORTANT: symbol_sel is usually a symbol-code like DOGEUSDT. Use coin_from_symbol_code first.
+                                    exec_coin = coin_from_symbol_code(symbol_sel) or _coin_from_exec_symbol(symbol_sel)
+                                    erows = db.select_executions_rows(
+                                        single_user,
+                                        str(live_exchange),
+                                        day_start_ms,
+                                        day_end_ms,
+                                        coin=exec_coin,
+                                        limit=5000,
+                                        newest_first=False,
+                                    )
+                                    if erows:
+                                        ex_day_df = pd.DataFrame(
+                                            erows,
+                                            columns=[
+                                                "timestamp",
+                                                "symbol",
+                                                "side",
+                                                "price",
+                                                "qty",
+                                                "fee",
+                                                "realized_pnl",
+                                                "order_id",
+                                                "trade_id",
+                                            ],
+                                        )
+                                        ex_day_df["time"] = pd.to_datetime(ex_day_df["timestamp"].astype("int64"), unit="ms", utc=True)
+                                        ex_day_df["net"] = (
+                                            ex_day_df["realized_pnl"].fillna(0.0) - ex_day_df["fee"].fillna(0.0)
+                                        ).astype(float)
+                                        try:
+                                            ex_day_df["coin"] = ex_day_df["symbol"].apply(_coin_from_exec_symbol)
+                                        except Exception:
+                                            pass
+                                        try:
+                                            ex_day_df = _aggregate_partial_executions(ex_day_df)
+                                        except Exception:
+                                            pass
+
+                                # Limit executions to the same selected window
+                                try:
+                                    if ex_day_df is not None and not ex_day_df.empty and "time" in ex_day_df.columns:
+                                        ex_day_df = ex_day_df[(ex_day_df["time"] >= win_start_dt) & (ex_day_df["time"] <= win_end_dt)].copy()
+                                except Exception:
+                                    pass
+
+                                if not bt_init.empty and ex_day_df is not None and not ex_day_df.empty:
+                                    # Build match inputs
+                                    bt_m = bt_init.copy()
+                                    if "coin" not in bt_m.columns:
+                                        bt_m["coin"] = coin_from_symbol_code(symbol_sel)
+                                    # Ensure signed qty exists for expected side inference
+                                    if "psize_delta" in bt_m.columns:
+                                        bt_m["qty"] = pd.to_numeric(bt_m["psize_delta"], errors="coerce")
+                                    elif "qty" in bt_m.columns:
+                                        bt_m["qty"] = pd.to_numeric(bt_m["qty"], errors="coerce")
+                                    else:
+                                        bt_m["qty"] = None
+                                    if "price" in bt_m.columns:
+                                        bt_m["price"] = pd.to_numeric(bt_m["price"], errors="coerce")
+                                    if "net" in bt_m.columns:
+                                        bt_m["net"] = pd.to_numeric(bt_m["net"], errors="coerce")
+
+                                    bt_m = bt_m[[c for c in ["time", "coin", "type", "qty", "price", "net"] if c in bt_m.columns]].copy()
+                                    ex_m = ex_day_df[[c for c in ["time", "coin", "symbol", "side", "qty", "price", "net", "order_id", "trade_id", "trade_ids_preview", "trade_count"] if c in ex_day_df.columns]].copy()
+
+                                    bt_init_mdf = _match_rows_by_time(
+                                        bt_m,
+                                        ex_m,
+                                        tolerance_s=int(init_tol_s),
+                                        require_side_match=True,
+                                        require_coin_match=True,
+                                        include_unmatched_exec_rows=False,
+                                        suppress_exec_rows_seen_as_candidates=True,
+                                        candidates_from_unmatched_only=True,
+                                    )
+                                    if bt_init_mdf is not None and not bt_init_mdf.empty:
+                                        bt_init_missed = bt_init_mdf[(bt_init_mdf["bt_time"].notna()) & (bt_init_mdf.get("match") != True)].copy()
+                                        # Prefer match results for overlay when available
+                                        try:
+                                            bt_init_overlay = bt_init_mdf.rename(
+                                                columns={
+                                                    "bt_time": "time",
+                                                    "bt_coin": "coin",
+                                                    "bt_type": "type",
+                                                    "bt_qty": "qty",
+                                                    "bt_price": "price",
+                                                    "bt_net": "net",
+                                                }
+                                            )
+                                            bt_init_overlay = bt_init_overlay[[c for c in ["time", "coin", "type", "qty", "price", "net", "match", "reason", "candidate_time", "candidate_price", "dt_s"] if c in bt_init_overlay.columns]].copy()
+                                            bt_init_overlay["price"] = pd.to_numeric(bt_init_overlay.get("price"), errors="coerce")
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                bt_init_mdf = None
+                                bt_init_missed = None
+                                bt_init_overlay = None
+
+                        # Always show counts (even if not plotted yet)
+                        try:
+                            if show_init and bt_init_overlay is not None and not bt_init_overlay.empty:
+                                bt_only = bt_init_overlay[bt_init_overlay["time"].notna()].copy()
+                                matched_n = int((bt_only.get("match") == True).sum())
+                                missed_n = int((bt_only.get("match") != True).sum())
+                                st.caption(f"Initial entries (BT, in window): {len(bt_only)} | matched: {matched_n} | missed: {missed_n}")
+                        except Exception:
+                            pass
+
+                        # Move gate diagnostics below initial-entry stats
+                        try:
+                            st.caption(gate_diag_caption)
+                        except Exception:
+                            pass
+
+                        fig2 = _make_entry_gate_price_figure(
+                            df_gate,
+                            title=f"Price with ideal entry + gate price ({symbol_sel}, {side}, {gate_exchange})",
+                            show_gate_bands=bool(show_gate_bands),
+                        )
+
+                        # Overlay BT initial-entry fills (matched vs missed)
+                        try:
+                            if show_init and bt_init_overlay is not None and not bt_init_overlay.empty:
+                                bt_only = bt_init_overlay[bt_init_overlay["time"].notna()].copy()
+                                bt_only["price"] = pd.to_numeric(bt_only.get("price"), errors="coerce")
+                                matched_bt = bt_only[bt_only.get("match") == True]
+                                missed_bt = bt_only[bt_only.get("match") != True]
+
+                                if not matched_bt.empty:
+                                    fig2.add_trace(
+                                        go.Scatter(
+                                            x=matched_bt["time"],
+                                            y=matched_bt["price"],
+                                            mode="markers",
+                                            name="BT entry_initial (matched)",
+                                            marker=dict(
+                                                size=7,
+                                                symbol="circle-open",
+                                                color="rgba(80, 160, 255, 0.95)",
+                                                line=dict(width=2),
+                                            ),
+                                        )
+                                    )
+                                if not missed_bt.empty:
+                                    fig2.add_trace(
+                                        go.Scatter(
+                                            x=missed_bt["time"],
+                                            y=missed_bt["price"],
+                                            mode="markers",
+                                            name="BT entry_initial (missed)",
+                                            marker=dict(
+                                                size=8,
+                                                symbol="circle",
+                                                color="rgba(200, 80, 255, 0.95)",
+                                                line=dict(width=2, color="rgba(0,0,0,0.85)"),
+                                            ),
+                                        )
+                                    )
+                        except Exception:
+                            pass
+
+                        st.plotly_chart(fig2, use_container_width=True)
+
+                        # Compact table of missed initial entries
+                        try:
+                            if show_init and bt_init_overlay is not None and not bt_init_overlay.empty:
+                                missed_tbl = bt_init_overlay[bt_init_overlay.get("match") != True].copy()
+                                if missed_tbl.empty:
+                                    missed_tbl = None
+                            else:
+                                missed_tbl = None
+
+                            if missed_tbl is not None and not missed_tbl.empty:
+                                st.caption("Missed initial entries (backtest entry_initial without a matched live execution)")
+                                cols_show = [
+                                    c
+                                    for c in [
+                                        "time",
+                                        "type",
+                                        "coin",
+                                        "qty",
+                                        "price",
+                                        "candidate_time",
+                                        "candidate_price",
+                                        "dt_s",
+                                        "reason",
+                                    ]
+                                    if c in missed_tbl.columns
+                                ]
+                                st.dataframe(
+                                    missed_tbl[cols_show].sort_values("time"),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                        except Exception:
+                            pass
 
         tab_income, tab_bt, tab_exec, tab_match = st.tabs(["Live income rows", "Backtest fills", "Live executions", "BT vs Live (matched)"])
 

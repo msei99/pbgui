@@ -119,6 +119,212 @@ def validateJSON(jsonData):
         return False
     return True
 
+
+def compute_pb7_entry_gating_ohlcv_df(
+    cfg: dict,
+    exchange: str,
+    symbol_code: str,
+    start_ms: int,
+    end_ms: int,
+    *,
+    side: str = "long",
+    warmup_days: int = 3,
+    threshold_override: float | None = None,
+    use_prev_minute_entry: bool = True,
+):
+    """Compute an OHLCV-based entry + price_distance_threshold gating series.
+
+    This is meant for PBGui diagnostics and visualization of 'dip-only' opportunities.
+    It intentionally uses 1m OHLCV bounds (open/close + favorable extreme) as a
+    proxy for what the live bot might have seen as last_mprice.
+
+    Returns a pandas.DataFrame with UTC timestamps and columns:
+      time, open, high, low, close,
+      entry_price, gate_price,
+      diff_open, diff_close, diff_best,
+      gate_open_open, gate_open_close, gate_open_best,
+      dip_only
+    """
+
+    from datetime import datetime, timedelta, timezone
+
+    import numpy as np
+    import pandas as pd
+
+    ex = str(exchange or "").strip().lower()
+    side_n = str(side or "").strip().lower()
+    if side_n not in {"long", "short"}:
+        raise ValueError("side must be 'long' or 'short'")
+
+    coin = coin_from_symbol_code(symbol_code)
+    if not coin:
+        raise ValueError("symbol_code has no coin")
+
+    # Parse needed parameters from v7 config.json
+    bot = (cfg or {}).get("bot", {}) if isinstance(cfg, dict) else {}
+    live = (cfg or {}).get("live", {}) if isinstance(cfg, dict) else {}
+    side_cfg = bot.get(side_n, {}) if isinstance(bot, dict) else {}
+
+    span0 = float(side_cfg.get("ema_span_0", 0.0) or 0.0)
+    span1 = float(side_cfg.get("ema_span_1", 0.0) or 0.0)
+    dist = float(side_cfg.get("entry_initial_ema_dist", 0.0) or 0.0)
+
+    if span0 <= 0.0 or span1 <= 0.0:
+        raise ValueError("ema_span_0/ema_span_1 missing or invalid")
+
+    threshold = (
+        float(threshold_override)
+        if threshold_override is not None
+        else float(live.get("price_distance_threshold", 0.0) or 0.0)
+    )
+    if threshold < 0.0:
+        threshold = 0.0
+
+    pb7_root = pb7dir()
+    if not pb7_root:
+        raise FileNotFoundError("pb7dir not configured in pbgui.ini")
+
+    # PB7 stores daily 1m OHLCV as npy under historical_data/ohlcvs_<exchange>/<COIN>/YYYY-MM-DD.npy
+    # Some exchanges have variants (binanceusdm vs binance).
+    exchange_candidates = [ex]
+    if ex == "binance":
+        exchange_candidates = ["binanceusdm", "binance"]
+    
+    # Build date list with warmup
+    start_dt = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+    end_dt = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
+    start_day = (start_dt.date() - timedelta(days=max(0, int(warmup_days))))
+    end_day = end_dt.date()
+
+    def daterange(d0, d1):
+        cur = d0
+        while cur <= d1:
+            yield cur
+            cur = cur + timedelta(days=1)
+
+    arrays = []
+    for cand_ex in exchange_candidates:
+        base = (
+            Path(pb7_root)
+            / "historical_data"
+            / f"ohlcvs_{cand_ex}"
+            / coin
+        )
+        if not base.exists():
+            continue
+        for d in daterange(start_day, end_day):
+            p = base / f"{d.isoformat()}.npy"
+            if not p.exists():
+                continue
+            try:
+                a = np.load(p)
+                if a is None or getattr(a, "size", 0) == 0:
+                    continue
+                arrays.append(a)
+            except Exception:
+                continue
+        if arrays:
+            break
+
+    if not arrays:
+        raise FileNotFoundError(
+            f"No OHLCV npy found for {coin} on {exchange_candidates} in pb7 historical_data"
+        )
+
+    arr = np.vstack(arrays)
+    if arr.shape[1] < 5:
+        raise ValueError("Unexpected OHLCV npy shape")
+
+    ts = arr[:, 0].astype("int64")
+    o = arr[:, 1].astype(float)
+    h = arr[:, 2].astype(float)
+    l = arr[:, 3].astype(float)
+    c = arr[:, 4].astype(float)
+
+    # Sort by timestamp to be safe.
+    idx = np.argsort(ts)
+    ts, o, h, l, c = ts[idx], o[idx], h[idx], l[idx], c[idx]
+
+    # Filter to include warmup pre-window.
+    lo_ms = int(start_ms - max(0, int(warmup_days)) * 86_400_000)
+    hi_ms = int(end_ms)
+    m = (ts >= lo_ms) & (ts <= hi_ms)
+    ts, o, h, l, c = ts[m], o[m], h[m], l[m], c[m]
+    if ts.size < 10:
+        raise ValueError("Not enough OHLCV rows")
+
+    def ema(series: np.ndarray, span: float) -> np.ndarray:
+        span = float(span)
+        alpha = 2.0 / (span + 1.0)
+        out = np.empty_like(series, dtype=float)
+        out[0] = float(series[0])
+        for i in range(1, series.shape[0]):
+            out[i] = out[i - 1] + alpha * (float(series[i]) - out[i - 1])
+        return out
+
+    s2 = (span0 * span1) ** 0.5
+    e0 = ema(c, span0)
+    e1 = ema(c, span1)
+    e2 = ema(c, s2)
+    lower = np.minimum(np.minimum(e0, e1), e2)
+    upper = np.maximum(np.maximum(e0, e1), e2)
+
+    if side_n == "long":
+        entry_raw = lower * (1.0 - dist)
+    else:
+        entry_raw = upper * (1.0 + dist)
+
+    entry_price = entry_raw.copy()
+    if use_prev_minute_entry and entry_price.size > 1:
+        entry_price[1:] = entry_price[:-1]
+        entry_price[0] = np.nan
+
+    # Gate price: market price must cross this bound for gating to open.
+    if side_n == "long":
+        gate_price = entry_price / (1.0 - threshold) if threshold < 1.0 else np.nan
+        # diff = 1 - P/M
+        diff_open = 1.0 - entry_price / o
+        diff_close = 1.0 - entry_price / c
+        diff_best = 1.0 - entry_price / l
+        gate_open_open = o <= gate_price
+        gate_open_close = c <= gate_price
+        gate_open_best = l <= gate_price
+    else:
+        gate_price = entry_price / (1.0 + threshold)
+        # diff = P/M - 1
+        diff_open = entry_price / o - 1.0
+        diff_close = entry_price / c - 1.0
+        diff_best = entry_price / h - 1.0
+        gate_open_open = o >= gate_price
+        gate_open_close = c >= gate_price
+        gate_open_best = h >= gate_price
+
+    dip_only = gate_open_best & (~gate_open_open) & (~gate_open_close)
+
+    df = pd.DataFrame(
+        {
+            "ts_ms": ts,
+            "time": pd.to_datetime(ts, unit="ms", utc=True),
+            "open": o,
+            "high": h,
+            "low": l,
+            "close": c,
+            "entry_price": entry_price,
+            "gate_price": gate_price,
+            "diff_open": diff_open,
+            "diff_close": diff_close,
+            "diff_best": diff_best,
+            "gate_open_open": gate_open_open,
+            "gate_open_close": gate_open_close,
+            "gate_open_best": gate_open_best,
+            "dip_only": dip_only,
+        }
+    )
+
+    # Final filter to requested window
+    df = df[(df["ts_ms"] >= int(start_ms)) & (df["ts_ms"] <= int(end_ms))].reset_index(drop=True)
+    return df
+
 def validateHJSON(hjsonData):
     try:
         hjson.loads(hjsonData)
