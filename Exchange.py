@@ -81,6 +81,13 @@ def _ccxt_should_retry(exchange_instance, exc: Exception) -> bool:
     if isinstance(exc, (AuthenticationError, PermissionDenied)):
         return False
 
+    # Some exchanges (notably Bybit) wrap transient conditions in ExchangeError.
+    # Keep this conservative and only enable retry for explicitly known cases.
+    try:
+        msg_l = str(exc).lower()
+    except Exception:
+        msg_l = ''
+
     payload = _extract_ccxt_error_payload(exchange_instance, exc)
     code = None
     if isinstance(payload, dict):
@@ -90,6 +97,14 @@ def _ccxt_should_retry(exchange_instance, exc: Exception) -> bool:
         return False
     if isinstance(exc, ExchangeError) and str(code) == '00001':
         return False
+
+    # Bybit known transient conditions (empirically common):
+    # - 10006: rate limit
+    # - 10002: invalid request / timestamp / recv_window (often transient; time-sync)
+    if isinstance(exc, ExchangeError) and str(code) in ('10006', '10002'):
+        return True
+    if isinstance(exc, ExchangeError) and 'invalid request, please check your server timestamp or recv_window' in msg_l:
+        return True
 
     return isinstance(
         exc,
@@ -1768,6 +1783,203 @@ class Exchange:
 
                 except Exception:
                     continue
+
+            return executions
+
+        if self.id == "bybit":
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max_age_total = 2 * 365 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max_age_total
+            try:
+                since = max(int(since), int(now - max_age_total))
+            except Exception:
+                pass
+
+            def _to_float(val):
+                try:
+                    if val is None or val == '':
+                        return None
+                    return float(val)
+                except Exception:
+                    return None
+
+            def _extract_next_page_cursor(trades: list[dict]) -> str | None:
+                # CCXT Bybit often attaches response metadata into `trade['info']`.
+                try:
+                    for t in reversed(trades or []):
+                        info = t.get('info') if isinstance(t.get('info'), dict) else None
+                        if info and info.get('nextPageCursor'):
+                            nxt = str(info.get('nextPageCursor'))
+                            return nxt if nxt.strip() else None
+                except Exception:
+                    pass
+                # Fallback: inspect last_json_response
+                try:
+                    lj = getattr(self.instance, 'last_json_response', None)
+                    if isinstance(lj, dict):
+                        res = lj.get('result')
+                        if isinstance(res, dict) and res.get('nextPageCursor'):
+                            nxt = str(res.get('nextPageCursor'))
+                            return nxt if nxt.strip() else None
+                except Exception:
+                    pass
+                return None
+
+            executions = []
+            # Bybit V5 supports querying executions without symbol; the API enforces
+            # endTime - startTime <= 7 days. We therefore fetch in fixed 7-day windows
+            # and use cursor pagination within each window.
+
+            cursor = int(since)
+            seen_trade_ids: set[str] = set()
+
+            while cursor < now:
+                # Keep the range strictly below 7 days to avoid retCode 10001.
+                end_time = min(int(cursor + week - 1), int(now))
+
+                # First page for this time window
+                trades = None
+                last_err = None
+                for attempt in range(3):
+                    try:
+                        trades = self.instance.fetch_my_trades(
+                            symbol=None,
+                            since=int(cursor),
+                            limit=100,
+                            params={
+                                'type': 'swap',
+                                'endTime': int(end_time),
+                            },
+                        )
+                        last_err = None
+                        break
+                    except Exception as e:
+                        if not _ccxt_should_retry(self.instance, e):
+                            raise
+                        last_err = e
+                        _human_log(
+                            'Exchange',
+                            f"bybit fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
+                            level='WARNING',
+                            user=self.user,
+                        )
+                        sleep(min(2 ** attempt, 5))
+                if last_err is not None:
+                    raise last_err
+
+                window_trades: list[dict] = []
+                if trades:
+                    window_trades.extend(trades)
+
+                    # Cursor pagination within the window
+                    seen_page_cursors: set[str] = set()
+                    next_cur = _extract_next_page_cursor(trades)
+                    while next_cur and next_cur not in seen_page_cursors:
+                        seen_page_cursors.add(next_cur)
+                        page = None
+                        page_err = None
+                        for attempt in range(3):
+                            try:
+                                page = self.instance.fetch_my_trades(
+                                    symbol=None,
+                                    since=int(cursor),
+                                    limit=100,
+                                    params={
+                                        'type': 'swap',
+                                        'cursor': str(next_cur),
+                                        'endTime': int(end_time),
+                                    },
+                                )
+                                page_err = None
+                                break
+                            except Exception as e:
+                                if not _ccxt_should_retry(self.instance, e):
+                                    raise
+                                page_err = e
+                                _human_log(
+                                    'Exchange',
+                                    f"bybit fetch_my_trades page error (global) attempt={attempt+1}/3: {e}",
+                                    level='WARNING',
+                                    user=self.user,
+                                )
+                                sleep(min(2 ** attempt, 5))
+                        if page_err is not None:
+                            raise page_err
+                        if not page:
+                            break
+                        window_trades.extend(page)
+                        next_cur = _extract_next_page_cursor(page)
+
+                if window_trades:
+                    for t in window_trades:
+                        try:
+                            ts = int(t.get('timestamp') or 0)
+                            if ts <= 0:
+                                continue
+
+                            info = t.get('info') if isinstance(t.get('info'), dict) else {}
+                            trade_id = (
+                                t.get('id')
+                                or info.get('execId')
+                                or info.get('tradeId')
+                                or info.get('id')
+                            )
+                            if not trade_id:
+                                continue
+                            trade_id = str(trade_id)
+                            if trade_id in seen_trade_ids:
+                                continue
+                            seen_trade_ids.add(trade_id)
+
+                            # Fee: ccxt can report negative fees on Bybit; prefer info.execFee when available.
+                            fee_cost = None
+                            if info.get('execFee') not in (None, ''):
+                                fee_cost = _to_float(info.get('execFee'))
+                            if fee_cost is None:
+                                try:
+                                    fee_obj = t.get('fee')
+                                    if isinstance(fee_obj, dict):
+                                        fee_cost = _to_float(fee_obj.get('cost'))
+                                    else:
+                                        fee_cost = _to_float(fee_obj)
+                                except Exception:
+                                    fee_cost = None
+                            if fee_cost is not None:
+                                try:
+                                    fee_cost = abs(float(fee_cost))
+                                except Exception:
+                                    pass
+
+                            realized = None
+                            for k in (
+                                'closedPnl', 'execPnl', 'realisedPnl', 'realizedPnl', 'realizedProfit', 'pnl', 'profit'
+                            ):
+                                if k in info and info.get(k) not in (None, ''):
+                                    realized = _to_float(info.get(k))
+                                    break
+
+                            executions.append(
+                                {
+                                    'symbol': t.get('symbol') or '',
+                                    'timestamp': ts,
+                                    'side': t.get('side') or info.get('side'),
+                                    'price': _to_float(t.get('price')),
+                                    'qty': _to_float(t.get('amount')),
+                                    'fee': fee_cost,
+                                    'realized_pnl': realized,
+                                    'order_id': t.get('order') or info.get('orderId') or info.get('order_id'),
+                                    'trade_id': trade_id,
+                                    'raw_json': json.dumps(t, ensure_ascii=False, default=str),
+                                }
+                            )
+                        except Exception:
+                            continue
+
+                cursor = int(end_time) + 1
+                sleep(0.2)
 
             return executions
 

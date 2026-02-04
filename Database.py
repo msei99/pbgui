@@ -426,7 +426,7 @@ class Database():
         exchange = Exchange(user.exchange, user)
 
         # Only fetch executions for exchanges where we have explicit support.
-        if exchange.id not in ('hyperliquid', 'binance', 'bitget'):
+        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit'):
             return None
 
         since = None
@@ -481,10 +481,22 @@ class Database():
             except Exception:
                 pass
 
+        # Bybit: generally supports longer history, but for initial backfill keep it bounded.
+        # Use 365 days by default; caller can override.
+        if exchange.id == 'bybit' and now_ms is not None:
+            try:
+                if since is None:
+                    if initial_lookback_days is not None:
+                        since = max(0, now_ms - int(initial_lookback_days) * day)
+                    else:
+                        since = max(0, now_ms - 365 * day)
+            except Exception:
+                pass
+
         _human_log('Database', f"fetch_executions: user={user.name} exchange={exchange.id} since={since}", level='INFO', user=user.name)
         start_ts = time.time()
 
-        # For symbol-required exchanges (Binance), discover symbols from income (history)
+        # For symbol-required exchanges (Binance, Bitget), discover symbols from income (history)
         # and delegate the actual fetching/normalization to Exchange.
         symbols = None
         if exchange.id in ('binance', 'bitget') and now_ms is not None:
