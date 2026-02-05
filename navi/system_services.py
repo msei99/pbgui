@@ -9,7 +9,7 @@ from pathlib import Path
 import pbgui_help
 from Monitor import Monitor
 from logging_view import view_log_filtered
-from Exchange import MAX_PRIVATE_WS_GLOBAL
+from Exchange import MAX_PRIVATE_WS_GLOBAL, Exchanges
 
 
 def pbrun_overview():
@@ -448,29 +448,6 @@ def pbdata_details():
     # Show PBData logfile (use new filtered viewer)
     view_log_filtered("PBData")
 
-    # Global cap for private websocket clients persisted under [pbdata] ws_max
-    try:
-        current_ws = load_ini('pbdata', 'ws_max')
-        if isinstance(current_ws, str) and current_ws.strip() != '':
-            try:
-                cur_ws_val = int(current_ws)
-            except Exception:
-                cur_ws_val = None
-        else:
-            cur_ws_val = None
-    except Exception:
-        cur_ws_val = None
-
-    default_ws = cur_ws_val if cur_ws_val is not None else MAX_PRIVATE_WS_GLOBAL
-    ws_max = st.number_input('Max private WS global', min_value=0, value=default_ws, step=1, key='pbdata_ws_max_input', help=pbgui_help.pbdata_ws_max)
-    if 'pbdata_ws_max_input' in st.session_state and st.session_state['pbdata_ws_max_input'] != cur_ws_val:
-        try:
-            save_ini('pbdata', 'ws_max', str(int(st.session_state['pbdata_ws_max_input'])))
-            st.success('Saved ws_max setting to pbgui.ini')
-        except Exception as e:
-            st.error(f'Failed to save ws_max: {e}')
-        st.rerun()
-
     # PBData log level persisted under [pbdata] log_level
     try:
         current_ll = load_ini('pbdata', 'log_level')
@@ -495,6 +472,199 @@ def pbdata_details():
         except Exception as e:
             st.error(f'Failed to save log_level: {e}')
         st.rerun()
+
+    # -----------------------------
+    # PBData timers
+    # -----------------------------
+    st.markdown('---')
+
+    def _read_int_ini(section: str, key: str):
+        try:
+            v = load_ini(section, key)
+            s = str(v).strip() if v is not None else ''
+            if s == '':
+                return None
+            return int(float(s))
+        except Exception:
+            return None
+
+    def _read_float_ini(section: str, key: str):
+        try:
+            v = load_ini(section, key)
+            s = str(v).strip() if v is not None else ''
+            if s == '':
+                return None
+            return float(s)
+        except Exception:
+            return None
+
+    # Defaults from running PBData instance
+    try:
+        _def_pollers_delay = int(getattr(pbdata, '_pollers_delay_seconds', 60))
+    except Exception:
+        _def_pollers_delay = 60
+    try:
+        _def_combined = int(getattr(pbdata, '_shared_combined_interval_seconds', 90))
+    except Exception:
+        _def_combined = 90
+    try:
+        _def_history = int(getattr(pbdata, '_shared_history_interval_seconds', 90))
+    except Exception:
+        _def_history = 90
+    try:
+        _def_exec = int(getattr(pbdata, '_shared_executions_interval_seconds', 1800))
+    except Exception:
+        _def_exec = 1800
+    try:
+        _def_rest_pause = float(getattr(pbdata, '_shared_rest_user_pause', 0.75))
+    except Exception:
+        _def_rest_pause = 0.75
+
+    cur_ws_val = _read_int_ini('pbdata', 'ws_max')
+    default_ws = cur_ws_val if cur_ws_val is not None else MAX_PRIVATE_WS_GLOBAL
+
+    cur_pollers_delay = _read_int_ini('pbdata', 'pollers_delay_seconds')
+    cur_combined = _read_int_ini('pbdata', 'poll_interval_combined_seconds')
+    cur_history = _read_int_ini('pbdata', 'poll_interval_history_seconds')
+    cur_exec = _read_int_ini('pbdata', 'poll_interval_executions_seconds')
+    cur_rest_pause = _read_float_ini('pbdata', 'shared_rest_user_pause_seconds')
+
+    with st.expander('PBData timers', expanded=False):
+        r1 = st.columns(4)
+        with r1[0]:
+            ws_max = st.number_input(
+                'Max private WS global',
+                min_value=0,
+                value=default_ws,
+                step=1,
+                key='pbdata_ws_max_input',
+                help=pbgui_help.pbdata_ws_max,
+            )
+        with r1[1]:
+            pollers_delay_val = st.number_input(
+                'Startup delay (s)',
+                min_value=0,
+                value=cur_pollers_delay if cur_pollers_delay is not None else _def_pollers_delay,
+                step=5,
+                key='pbdata_pollers_delay_seconds_input',
+                help='Grace period before starting shared REST pollers to avoid startup bursts.',
+            )
+        with r1[2]:
+            combined_val = st.number_input(
+                'Combined interval (s)',
+                min_value=10,
+                value=cur_combined if cur_combined is not None else _def_combined,
+                step=10,
+                key='pbdata_poll_interval_combined_input',
+                help='Interval for shared combined REST poller (balances/positions/orders).',
+            )
+        with r1[3]:
+            history_val = st.number_input(
+                'History interval (s)',
+                min_value=10,
+                value=cur_history if cur_history is not None else _def_history,
+                step=10,
+                key='pbdata_poll_interval_history_input',
+                help='Interval for shared history REST poller.',
+            )
+
+        r2 = st.columns(4)
+        with r2[0]:
+            exec_val = st.number_input(
+                'Executions interval (s)',
+                min_value=60,
+                value=cur_exec if cur_exec is not None else _def_exec,
+                step=60,
+                key='pbdata_poll_interval_executions_input',
+                help='Interval for shared executions (my trades) REST poller.',
+            )
+        with r2[1]:
+            rest_pause_val = st.number_input(
+                'REST pause/user (s)',
+                min_value=0.0,
+                value=cur_rest_pause if cur_rest_pause is not None else _def_rest_pause,
+                step=0.05,
+                key='pbdata_shared_rest_user_pause_input',
+                help='Small pause between users in shared REST pollers to reduce rate limits.',
+            )
+        with r2[2]:
+            st.write('')
+        with r2[3]:
+            st.write('')
+
+        # Per-exchange overrides (stored in INI as JSON, but edited as number inputs)
+        try:
+            raw_json = load_ini('pbdata', 'shared_rest_pause_by_exchange_json')
+            sval = str(raw_json).strip() if raw_json is not None else ''
+            ini_overrides = json.loads(sval) if sval != '' else {}
+            if not isinstance(ini_overrides, dict):
+                ini_overrides = {}
+        except Exception:
+            ini_overrides = {}
+
+        with st.expander('Shared REST pause per exchange', expanded=False):
+            st.caption('Per-exchange pause between users. Default uses the global value above; changes are saved as overrides.')
+            exchange_ids = []
+            try:
+                exchange_ids = Exchanges.list()
+            except Exception:
+                exchange_ids = []
+            for exid in exchange_ids:
+                try:
+                    exid_str = str(exid)
+                except Exception:
+                    continue
+                value_key = f'pbdata_rest_pause_ex_{exid_str}'
+
+                try:
+                    default_val = float(ini_overrides.get(exid_str)) if exid_str in ini_overrides else float(rest_pause_val)
+                except Exception:
+                    default_val = float(rest_pause_val)
+
+                col_a, col_b = st.columns([0.32, 0.68], vertical_alignment='center')
+                with col_a:
+                    st.write(exid_str)
+                with col_b:
+                    st.number_input('seconds', min_value=0.0, value=float(default_val), step=0.05, key=value_key, label_visibility='collapsed')
+
+        if st.button('Save PBData timers', key='pbdata_save_timers_btn'):
+            try:
+                save_ini('pbdata', 'ws_max', str(int(ws_max)))
+                save_ini('pbdata', 'pollers_delay_seconds', str(int(pollers_delay_val)))
+                save_ini('pbdata', 'poll_interval_combined_seconds', str(int(combined_val)))
+                save_ini('pbdata', 'poll_interval_history_seconds', str(int(history_val)))
+                save_ini('pbdata', 'poll_interval_executions_seconds', str(int(exec_val)))
+                save_ini('pbdata', 'shared_rest_user_pause_seconds', str(float(rest_pause_val)))
+            except Exception as e:
+                st.error(f'Failed saving PBData timers: {e}')
+                st.stop()
+
+            # Build per-exchange overrides from number inputs.
+            # Only persist values which differ from the global pause.
+            try:
+                cleaned = {}
+                for exid in Exchanges.list():
+                    exid_str = str(exid)
+                    value_key = f'pbdata_rest_pause_ex_{exid_str}'
+                    try:
+                        v = float(st.session_state.get(value_key, rest_pause_val))
+                    except Exception:
+                        v = float(rest_pause_val)
+                    try:
+                        if abs(v - float(rest_pause_val)) > 1e-9:
+                            cleaned[exid_str] = v
+                    except Exception:
+                        pass
+                if cleaned:
+                    save_ini('pbdata', 'shared_rest_pause_by_exchange_json', json.dumps(cleaned))
+                else:
+                    # Clear overrides when none are enabled
+                    save_ini('pbdata', 'shared_rest_pause_by_exchange_json', '')
+            except Exception as e:
+                st.error(f'Failed saving per-exchange overrides: {e}')
+                st.stop()
+            st.success('Saved PBData timers to pbgui.ini')
+            st.rerun()
 
     # Show fetch summary JSON (generated by PBData)
     try:
