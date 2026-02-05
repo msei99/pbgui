@@ -12,6 +12,75 @@ from logging_view import view_log_filtered
 from Exchange import MAX_PRIVATE_WS_GLOBAL, Exchanges
 
 
+def _docs_index(lang: str) -> list[tuple[str, str]]:
+    ln = str(lang or "EN").strip().upper()
+    folder = "help_de" if ln == "DE" else "help"
+    docs_dir = Path(__file__).resolve().parents[1] / "docs" / folder
+    if not docs_dir.is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for p in sorted(docs_dir.glob("*.md")):
+        label = p.name
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                first = f.readline().strip()
+            if first.startswith("#"):
+                label = first.lstrip("#").strip() or p.name
+        except Exception:
+            label = p.name
+        out.append((label, str(p)))
+    return out
+
+
+def _read_markdown(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Failed to read docs: {e}"
+
+
+@st.dialog("Help & Tutorials", width="large")
+def _help_modal(default_topic: str = "PBData"):
+    lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="pbdata_help_lang")
+    docs = _docs_index(str(lang))
+    if not docs:
+        st.info("No help docs found.")
+        return
+
+    labels = [d[0] for d in docs]
+    default_index = 0
+    try:
+        target = str(default_topic or "").strip().lower()
+        if target:
+            for i, lbl in enumerate(labels):
+                if target in str(lbl).lower():
+                    default_index = i
+                    break
+    except Exception:
+        default_index = 0
+
+    sel = st.selectbox(
+        "Select Topic",
+        options=list(range(len(labels))),
+        format_func=lambda i: labels[int(i)],
+        index=int(default_index),
+        key="pbdata_help_sel",
+    )
+    path = docs[int(sel)][1]
+    md = _read_markdown(path)
+    st.markdown(md, unsafe_allow_html=True)
+    try:
+        base = str(st.get_option("server.baseUrlPath") or "").strip("/")
+        prefix = f"/{base}" if base else ""
+        st.markdown(
+            f"<a href='{prefix}/help' target='_blank'>Open full Help page in new tab</a>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
 def pbrun_overview():
     pbrun = st.session_state.pbrun
     pbrun_status = pbrun.is_running()
@@ -399,14 +468,27 @@ def pbdata_details():
             if st.button(":back:", key="button_pbdata_back"):
                 del st.session_state.pbdata_details
                 st.rerun()
-    st.subheader("PBData Details")
+
+    c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
+    with c_title:
+        st.subheader("PBData Details")
+    with c_help:
+        if st.button('📖 Guide', key='pbdata_guide_btn', help='Open PBData help & tutorials'):
+            _help_modal('PBData')
+
     pbdata_overview()
     users = st.session_state.users
 
     if "pbdata_users" in st.session_state:
         if st.session_state.pbdata_users != pbdata.fetch_users:
             pbdata.fetch_users = st.session_state.pbdata_users
-    st.multiselect('Users', users.list(), default=pbdata.fetch_users ,key="pbdata_users")
+    st.multiselect(
+        'Users',
+        users.list(),
+        default=pbdata.fetch_users,
+        key="pbdata_users",
+        help='Users PBData will actively fetch/update (WS + shared REST pollers).',
+    )
 
     # Separate selection for executions/trades downloading (stored in trades DB)
     # Streamlit keeps widget values in session_state across reruns. If trades_users
@@ -445,38 +527,45 @@ def pbdata_details():
     except Exception:
         pass
 
-    # Show PBData logfile (use new filtered viewer)
-    view_log_filtered("PBData")
-
-    # PBData log level persisted under [pbdata] log_level
-    try:
-        current_ll = load_ini('pbdata', 'log_level')
-        if isinstance(current_ll, str) and current_ll.strip() != '':
-            cur_ll_val = current_ll.strip().upper()
-        else:
-            cur_ll_val = None
-    except Exception:
-        cur_ll_val = None
-
-    ll_options = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'NONE']
-    default_ll = cur_ll_val if cur_ll_val is not None else 'INFO'
-    sel = st.selectbox('PBData Log level', ll_options, index=ll_options.index(default_ll) if default_ll in ll_options else 1, key='pbdata_log_level_select', help='Minimum log level for PBData (messages below this level are suppressed).')
-    if 'pbdata_log_level_select' in st.session_state and st.session_state['pbdata_log_level_select'] != cur_ll_val:
+    def _pbdata_log_level_widget():
+        # PBData log level persisted under [pbdata] log_level
         try:
-            v = st.session_state['pbdata_log_level_select']
-            if v == 'NONE':
-                save_ini('pbdata', 'log_level', '')
+            current_ll = load_ini('pbdata', 'log_level')
+            if isinstance(current_ll, str) and current_ll.strip() != '':
+                cur_ll_val = current_ll.strip().upper()
             else:
-                save_ini('pbdata', 'log_level', v)
-            st.success('Saved log_level setting to pbgui.ini')
-        except Exception as e:
-            st.error(f'Failed to save log_level: {e}')
-        st.rerun()
+                cur_ll_val = None
+        except Exception:
+            cur_ll_val = None
+
+        ll_options = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'NONE']
+        default_ll = cur_ll_val if cur_ll_val is not None else 'INFO'
+        st.selectbox(
+            'PBData Log level',
+            ll_options,
+            index=ll_options.index(default_ll) if default_ll in ll_options else 1,
+            key='pbdata_log_level_select',
+            help='Minimum log level for PBData (messages below this level are suppressed).',
+        )
+        if 'pbdata_log_level_select' in st.session_state and st.session_state['pbdata_log_level_select'] != cur_ll_val:
+            try:
+                v = st.session_state['pbdata_log_level_select']
+                if v == 'NONE':
+                    save_ini('pbdata', 'log_level', '')
+                else:
+                    save_ini('pbdata', 'log_level', v)
+                st.success('Saved log_level setting to pbgui.ini')
+            except Exception as e:
+                st.error(f'Failed to save log_level: {e}')
+            st.rerun()
+
+    # Show PBData logfile (filtered viewer) with log level selector next to Logfiles
+    view_log_filtered("PBData", header_right_fn=_pbdata_log_level_widget)
 
     # -----------------------------
     # PBData timers
     # -----------------------------
-    st.markdown('---')
+
 
     def _read_int_ini(section: str, key: str):
         try:
@@ -603,29 +692,60 @@ def pbdata_details():
             ini_overrides = {}
 
         with st.expander('Shared REST pause per exchange', expanded=False):
-            st.caption('Per-exchange pause between users. Default uses the global value above; changes are saved as overrides.')
+            st.caption('Per-exchange pause between users. Defaults come from PBData (e.g. hyperliquid/bybit) unless you set an override; only differences vs the global pause are saved as overrides.')
             exchange_ids = []
             try:
                 exchange_ids = Exchanges.list()
             except Exception:
                 exchange_ids = []
-            for exid in exchange_ids:
-                try:
-                    exid_str = str(exid)
-                except Exception:
-                    continue
-                value_key = f'pbdata_rest_pause_ex_{exid_str}'
+            try:
+                exchange_ids = sorted([str(x) for x in exchange_ids if str(x).strip() != ''])
+            except Exception:
+                exchange_ids = [str(x) for x in exchange_ids]
 
-                try:
-                    default_val = float(ini_overrides.get(exid_str)) if exid_str in ini_overrides else float(rest_pause_val)
-                except Exception:
-                    default_val = float(rest_pause_val)
+            # 4 per row, to keep UI compact
+            cols_per_row = 4
+            for i in range(0, len(exchange_ids), cols_per_row):
+                row = exchange_ids[i:i + cols_per_row]
+                cols = st.columns(cols_per_row)
+                for col, exid_str in zip(cols, row):
+                    value_key = f'pbdata_rest_pause_ex_{exid_str}'
+                    try:
+                        if exid_str in ini_overrides:
+                            default_val = float(ini_overrides.get(exid_str))
+                        else:
+                            # Fall back to PBData's built-in defaults (e.g. hyperliquid/bybit)
+                            try:
+                                per_ex_defaults = getattr(pbdata, '_shared_rest_pause_by_exchange', {}) or {}
+                                if isinstance(per_ex_defaults, dict) and exid_str in per_ex_defaults:
+                                    default_val = float(per_ex_defaults.get(exid_str))
+                                else:
+                                    default_val = float(rest_pause_val)
+                            except Exception:
+                                default_val = float(rest_pause_val)
+                    except Exception:
+                        default_val = float(rest_pause_val)
 
-                col_a, col_b = st.columns([0.32, 0.68], vertical_alignment='center')
-                with col_a:
-                    st.write(exid_str)
-                with col_b:
-                    st.number_input('seconds', min_value=0.0, value=float(default_val), step=0.05, key=value_key, label_visibility='collapsed')
+                    # Streamlit keeps number_input values in session_state.
+                    # If the widget was previously initialized to the global pause
+                    # (e.g. 0.75) and there's still no INI override, bump it to the
+                    # per-exchange built-in default so hyperliquid/bybit show 3.0.
+                    try:
+                        if exid_str not in ini_overrides and value_key in st.session_state:
+                            cur_v = float(st.session_state.get(value_key))
+                            if abs(cur_v - float(rest_pause_val)) < 1e-9 and abs(float(default_val) - float(rest_pause_val)) > 1e-9:
+                                st.session_state[value_key] = float(default_val)
+                    except Exception:
+                        pass
+                    with col:
+                        st.number_input(
+                            f'{exid_str} (s)',
+                            min_value=0.0,
+                            value=float(default_val),
+                            step=0.05,
+                            key=value_key,
+                            help='Per-exchange pause (seconds) between users for shared REST pollers. Only values differing from the global pause are saved as overrides.',
+                        )
 
         if st.button('Save PBData timers', key='pbdata_save_timers_btn'):
             try:
@@ -792,11 +912,11 @@ def pbdata_details():
                     st.markdown('**Filters:**')
                     fcol1, fcol2, fcol3 = st.columns([1,1,1])
                     with fcol1:
-                        show_bal_ws = st.checkbox('Balances WS only', value=False)
+                        show_bal_ws = st.checkbox('Balances WS only', value=False, help='Show only users currently updated via websocket for balances.')
                     with fcol2:
-                        show_pos_ws = st.checkbox('Positions WS only', value=False)
+                        show_pos_ws = st.checkbox('Positions WS only', value=False, help='Show only users currently updated via websocket for positions.')
                     with fcol3:
-                        show_ord_ws = st.checkbox('Orders WS only', value=False)
+                        show_ord_ws = st.checkbox('Orders WS only', value=False, help='Show only users currently updated via websocket for orders.')
 
                     # Apply filter
                     def matches(row):

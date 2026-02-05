@@ -7,7 +7,7 @@ import streamlit_scrollable_textbox as stx
 import pbgui_help
 import logging_helpers
 
-def view_log_filtered(log_filename: str):
+def view_log_filtered(log_filename: str, header_right_fn=None):
     """A minimal, standalone filtered log viewer.
 
     Supports selecting one or more logfiles (multi-select) and shows a
@@ -28,7 +28,19 @@ def view_log_filtered(log_filename: str):
 
     # default selection: the provided filename if present, otherwise first
     default_sel = [log_filename] if log_filename in candidates else ([candidates[0]] if candidates else [])
-    sel_logs = st.multiselect('Logfiles', sorted(candidates), default=default_sel, key=f'lv_selected_logs_{log_filename}')
+
+    col_logs, col_header_right = st.columns([3, 1])
+    with col_logs:
+        sel_logs = st.multiselect(
+            'Logfiles',
+            sorted(candidates),
+            default=default_sel,
+            key=f'lv_selected_logs_{log_filename}',
+            help='Select one or more log files to view. Multiple selections are merged by timestamp.',
+        )
+    with col_header_right:
+        if header_right_fn is not None:
+            header_right_fn()
     if not sel_logs:
         # nothing selected: show helper and return
         st.info('No logfile selected.')
@@ -298,26 +310,26 @@ def view_log_filtered(log_filename: str):
         # Left: Users + Tags + RAW + buttons. Right: Levels + Free-text.
         col_left, col_right = st.columns([1, 1])
         with col_left:
-            sel_users = st.multiselect('Users (filter)', user_list, key='lv_sel_users')
-            sel_tags = st.multiselect('Tags (from [tag])', tags, key='lv_sel_tags')
+            sel_users = st.multiselect('Users (filter)', user_list, key='lv_sel_users', help='Filter log lines by user name.')
+            sel_tags = st.multiselect('Tags (from [tag])', tags, key='lv_sel_tags', help='Filter by [tag] prefix in log lines.')
             # Move RAW checkbox to the left under the filters
             st.checkbox('RAW', key='lv_show_raw', help=pbgui_help.show_raw_log)
 
             # Buttons row under the filters (left column)
             b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
             with b1:
-                st.button('✖', key=f'lv_{sel_key}_clear', on_click=_clear_filters)
+                st.button('✖', key=f'lv_{sel_key}_clear', on_click=_clear_filters, help='Clear filters')
             with b2:
-                st.button('🔄', key=f'lv_{sel_key}_refresh_btn', on_click=_mark_refresh, args=(refresh_key,))
+                st.button('🔄', key=f'lv_{sel_key}_refresh_btn', on_click=_mark_refresh, args=(refresh_key,), help='Refresh log view')
             with b3:
-                st.button('🗑️', key=f'lv_{sel_key}_truncate', on_click=_truncate_and_mark, args=(str(logfile) if logfile else '', trunc_key))
+                st.button('🗑️', key=f'lv_{sel_key}_truncate', on_click=_truncate_and_mark, args=(str(logfile) if logfile else '', trunc_key), help='Purge/truncate the selected log file(s)')
             with b4:
                 st.empty()
 
         with col_right:
             levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-            sel_levels = st.multiselect('Levels (filter)', levels, key='lv_sel_levels')
-            free_text = st.text_input('Free-text', key='lv_free_text', placeholder='search...')
+            sel_levels = st.multiselect('Levels (filter)', levels, key='lv_sel_levels', help='Filter by log level.')
+            free_text = st.text_input('Free-text', key='lv_free_text', placeholder='search...', help='Case-insensitive substring search.')
 
         # session keys for refresh/truncate actions
         refresh_key = f'lv_{sel_key}_refresh'
