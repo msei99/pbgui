@@ -20,12 +20,26 @@
 
 ## Guides & tutorials (pattern)
 
-- New user-facing guides/tutorials must be Markdown files in:
+- New user-facing guides/tutorials MUST be Markdown files in:
   - `docs/help/` (EN)
   - `docs/help_de/` (DE)
-- The first Markdown line must be a `# Title` heading; the central Help index uses it as the label.
-- Page UX standard: add a `📖 Guide` button which opens an in-page `@st.dialog("Help & Tutorials")` modal (Language toggle + Topic select), preselected via a substring match on the topic.
-  - Use the same modal behavior as the API-Keys editor in `navi/system_api_keys.py`.
+- The first Markdown line MUST be a `# Title` heading; the central Help index uses it as the label.
+
+- Any page that introduces a new guide/tutorial MUST add a persistent `📖 Guide` button in the page header (top-right), opening an in-page `@st.dialog("Help & Tutorials")` modal (Language toggle + Topic select).
+
+- Header placement MUST follow the existing pattern (copy it):
+  - Reference implementations:
+    - `navi/v7_strategy_explorer.py`
+    - `navi/system_api_keys.py`
+  - Use the same layout:
+    - `c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")`
+    - Title/header in `c_title`, `st.button("📖 Guide", ...)` in `c_help`
+
+- Topic preselection MUST be done via substring match (e.g. default_topic contains "PBData").
+
+- DO NOT place the Guide button inside the body, expanders, or between inputs.
+
+- If a Help modal already exists on the page/module, reuse that behavior (do not invent a new modal flow).
   - Prefer opening the modal (don’t navigate away) so user context is preserved.
 
 ## Backups before mass edits
