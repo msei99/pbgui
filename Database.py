@@ -426,7 +426,7 @@ class Database():
         exchange = Exchange(user.exchange, user)
 
         # Only fetch executions for exchanges where we have explicit support.
-        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx'):
+        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio'):
             return None
 
         since = None
@@ -505,6 +505,20 @@ class Database():
                 else:
                     # Clamp incremental runs to the supported lookback window.
                     since = max(int(since), max(0, now_ms - 90 * day))
+            except Exception:
+                pass
+
+        # Gate.io: CCXT supports swap trades without symbol. For initial backfill, keep it bounded.
+        # Note: Gate docs mention the non-time-range personal trades endpoint defaults to the past ~6 months
+        # and recommends using the *_timerange endpoint for longer periods. PBGui defaults to 365 days here,
+        # while allowing callers to override via initial_lookback_days.
+        if exchange.id == 'gateio' and now_ms is not None:
+            try:
+                if since is None:
+                    if initial_lookback_days is not None:
+                        since = max(0, now_ms - int(initial_lookback_days) * day)
+                    else:
+                        since = max(0, now_ms - 365 * day)
             except Exception:
                 pass
 

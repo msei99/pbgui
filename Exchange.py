@@ -106,6 +106,13 @@ def _ccxt_should_retry(exchange_instance, exc: Exception) -> bool:
     if isinstance(exc, ExchangeError) and 'invalid request, please check your server timestamp or recv_window' in msg_l:
         return True
 
+    # Generic rate-limit detection for exchanges that use ExchangeError
+    # (e.g., Gate.io: "Request Rate Limit Exceeded" / "TOO_MANY_REQUESTS").
+    if isinstance(exc, ExchangeError) and (
+        'rate limit' in msg_l or 'too many requests' in msg_l or 'too many visits' in msg_l
+    ):
+        return True
+
     return isinstance(
         exc,
         (
@@ -2134,6 +2141,154 @@ class Exchange:
 
                 cursor = int(end_time) + 1
                 sleep(0.2)
+
+            return executions
+
+        if self.id == "gateio":
+            # Gate.io supports fetching swap trades without symbol using `fetch_my_trades`.
+            # The underlying endpoint caps results, so we slice time windows and shrink
+            # the window when we hit the cap, to avoid missing executions.
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            # Gate docs for personal trades mention a default history window of ~6 months for the
+            # non-time-range endpoint. PBGui uses 365 days as default only when `since` is not provided.
+            default_max_age_total = 365 * day
+            now = self.instance.milliseconds()
+            if since is None:
+                since = max(0, int(now - default_max_age_total))
+            else:
+                try:
+                    since = max(0, int(since))
+                except Exception:
+                    since = max(0, int(now - default_max_age_total))
+
+            def _to_float(val):
+                try:
+                    if val is None or val == '':
+                        return None
+                    return float(val)
+                except Exception:
+                    return None
+
+            executions = []
+            seen_trade_ids: set[str] = set()
+
+            limit = 100
+            # Window slicing is done in seconds because Gate.io uses `to` as seconds.
+            initial_span_s = int(week / 1000)
+            max_span_s = int(4 * week / 1000)
+            min_span_s = 60 * 60  # 1 hour
+            span_s = initial_span_s
+
+            end_s = int(now / 1000)
+            since_s = int(since / 1000)
+
+            while end_s > since_s:
+                start_s = max(since_s, end_s - int(span_s))
+
+                trades = None
+                last_err = None
+                for attempt in range(6):
+                    try:
+                        trades = self.instance.fetch_my_trades(
+                            symbol=None,
+                            since=int(start_s * 1000),
+                            limit=int(limit),
+                            params={
+                                'type': 'swap',
+                                'to': int(end_s),
+                            },
+                        )
+                        last_err = None
+                        break
+                    except Exception as e:
+                        if not _ccxt_should_retry(self.instance, e):
+                            raise
+                        last_err = e
+                        _human_log(
+                            'Exchange',
+                            f"gateio fetch_my_trades error (global) attempt={attempt+1}/6: {e}",
+                            level='WARNING',
+                            user=self.user,
+                        )
+                        sleep(min(2 ** attempt, 30))
+                if last_err is not None:
+                    raise last_err
+
+                # Extra safety: Gate.io private endpoints can be stricter than ccxt's internal limiter.
+                try:
+                    rl_ms = int(getattr(self.instance, 'rateLimit', 0) or 0)
+                except Exception:
+                    rl_ms = 0
+                if rl_ms > 0:
+                    sleep(max(0.5, rl_ms / 1000.0))
+
+                # If we hit the cap, shrink the time window and retry.
+                try:
+                    if trades and len(trades) >= limit and span_s > min_span_s:
+                        span_s = max(min_span_s, span_s // 2)
+                        continue
+                except Exception:
+                    pass
+
+                if trades:
+                    span_s = initial_span_s
+                    for t in trades:
+                        try:
+                            ts = int(t.get('timestamp') or 0)
+                            if ts <= 0:
+                                continue
+
+                            info = t.get('info') if isinstance(t.get('info'), dict) else {}
+                            trade_id = (
+                                t.get('id')
+                                or info.get('trade_id')
+                                or info.get('id')
+                            )
+                            if not trade_id:
+                                continue
+                            trade_id = str(trade_id)
+                            if trade_id in seen_trade_ids:
+                                continue
+                            seen_trade_ids.add(trade_id)
+
+                            fee_cost = None
+                            try:
+                                fee_obj = t.get('fee')
+                                if isinstance(fee_obj, dict):
+                                    fee_cost = _to_float(fee_obj.get('cost'))
+                                else:
+                                    fee_cost = _to_float(fee_obj)
+                                if fee_cost is not None:
+                                    fee_cost = abs(float(fee_cost))
+                            except Exception:
+                                fee_cost = None
+
+                            executions.append(
+                                {
+                                    'symbol': t.get('symbol') or str(info.get('contract') or ''),
+                                    'timestamp': ts,
+                                    'side': t.get('side') or info.get('side'),
+                                    'price': _to_float(t.get('price')),
+                                    'qty': _to_float(t.get('amount')),
+                                    'fee': fee_cost,
+                                    'realized_pnl': None,
+                                    'order_id': t.get('order') or info.get('order_id') or info.get('orderId'),
+                                    'trade_id': trade_id,
+                                    'raw_json': json.dumps(t, ensure_ascii=False, default=str),
+                                }
+                            )
+                        except Exception:
+                            continue
+                else:
+                    # Empty window: expand span to reduce request count.
+                    try:
+                        span_s = min(int(span_s) * 2, int(max_span_s))
+                    except Exception:
+                        span_s = initial_span_s
+
+                end_s = int(start_s) - 1
+                sleep(0.5)
 
             return executions
 
