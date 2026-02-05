@@ -119,6 +119,12 @@ class PBData():
         self._mapping_rebuild_min_interval = 300.0  # seconds per exchange
         self._pollers_delay_seconds = 60.0
         self._pollers_enabled_after_ts = datetime.now().timestamp() + self._pollers_delay_seconds
+        # Shared poller intervals (seconds)
+        self._shared_combined_interval_seconds = 90
+        self._shared_history_interval_seconds = 90
+        self._shared_executions_interval_seconds = 1800
+        # Flag to restart shared poller tasks when intervals change
+        self._poll_intervals_changed = False
         # Track which user/exchange pairs have already logged 'watch_positions not supported'
         self._watch_positions_not_supported_logged = set()
         self._pbgui_ini_mtime = None
@@ -294,6 +300,99 @@ class PBData():
                 except Exception:
                     try:
                         _human_log('PBData', f"Failed to set PBData log level to {log_level}", level='WARNING')
+                    except Exception:
+                        pass
+
+                # -----------------------------
+                # Timers / intervals
+                # -----------------------------
+                def _get_int_opt(section: str, key: str):
+                    try:
+                        if not cfg.has_option(section, key):
+                            return None
+                        raw = cfg.get(section, key)
+                        sval = str(raw).strip() if raw is not None else ''
+                        if sval == '':
+                            return None
+                        return int(float(sval))
+                    except Exception:
+                        return None
+
+                def _get_float_opt(section: str, key: str):
+                    try:
+                        if not cfg.has_option(section, key):
+                            return None
+                        raw = cfg.get(section, key)
+                        sval = str(raw).strip() if raw is not None else ''
+                        if sval == '':
+                            return None
+                        return float(sval)
+                    except Exception:
+                        return None
+
+                # Startup/grace period for starting shared pollers
+                new_pollers_delay = _get_int_opt('pbdata', 'pollers_delay_seconds')
+                if new_pollers_delay is not None and new_pollers_delay >= 0:
+                    if new_pollers_delay != getattr(self, '_pollers_delay_seconds', 60.0):
+                        old_enable_after = getattr(self, '_pollers_enabled_after_ts', None)
+                        self._pollers_delay_seconds = float(new_pollers_delay)
+                        # Only re-apply enable-after if pollers have not started yet
+                        try:
+                            now_ts = datetime.now().timestamp()
+                            if old_enable_after is not None and now_ts < old_enable_after:
+                                self._pollers_enabled_after_ts = now_ts + float(new_pollers_delay)
+                        except Exception:
+                            pass
+
+                # Shared poller intervals
+                new_combined = _get_int_opt('pbdata', 'poll_interval_combined_seconds')
+                if new_combined is not None and new_combined > 0:
+                    if new_combined != getattr(self, '_shared_combined_interval_seconds', 90):
+                        self._shared_combined_interval_seconds = int(new_combined)
+                        self._poll_intervals_changed = True
+
+                new_history = _get_int_opt('pbdata', 'poll_interval_history_seconds')
+                if new_history is not None and new_history > 0:
+                    if new_history != getattr(self, '_shared_history_interval_seconds', 90):
+                        self._shared_history_interval_seconds = int(new_history)
+                        self._poll_intervals_changed = True
+
+                new_exec = _get_int_opt('pbdata', 'poll_interval_executions_seconds')
+                if new_exec is not None and new_exec > 0:
+                    if new_exec != getattr(self, '_shared_executions_interval_seconds', 1800):
+                        self._shared_executions_interval_seconds = int(new_exec)
+                        self._poll_intervals_changed = True
+
+                # Pause between per-user REST calls in shared pollers
+                new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
+                if new_rest_pause is not None and new_rest_pause >= 0:
+                    self._shared_rest_user_pause = float(new_rest_pause)
+
+                # Per-exchange overrides as JSON: {"exchange": seconds, ...}
+                if cfg.has_option('pbdata', 'shared_rest_pause_by_exchange_json'):
+                    try:
+                        raw = cfg.get('pbdata', 'shared_rest_pause_by_exchange_json')
+                        sval = str(raw).strip() if raw is not None else ''
+                        if sval != '':
+                            obj = json.loads(sval)
+                            if isinstance(obj, dict):
+                                cleaned = {}
+                                for k, v in obj.items():
+                                    try:
+                                        if k is None:
+                                            continue
+                                        exid = str(k).strip()
+                                        if exid == '':
+                                            continue
+                                        sec = float(v)
+                                        if sec < 0:
+                                            continue
+                                        cleaned[exid] = sec
+                                    except Exception:
+                                        continue
+                                # merge into existing defaults
+                                if cleaned:
+                                    self._shared_rest_pause_by_exchange.update(cleaned)
                     except Exception:
                         pass
         except Exception:
@@ -2803,6 +2902,25 @@ class PBData():
             self._load_settings()
         except Exception:
             pass
+
+        # If poll intervals changed via settings, restart shared pollers so
+        # new intervals take effect without restarting PBData.
+        try:
+            if getattr(self, '_poll_intervals_changed', False):
+                for tname in ("_shared_combined_task", "_shared_history_task", "_shared_executions_task"):
+                    try:
+                        t = getattr(self, tname, None)
+                        if t and not t.done():
+                            t.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        setattr(self, tname, None)
+                    except Exception:
+                        pass
+                self._poll_intervals_changed = False
+        except Exception:
+            pass
         now_ts = datetime.now().timestamp()
         # Only log when the set changes or periodically
         current_users_set = set(self.fetch_users)
@@ -2874,16 +2992,16 @@ class PBData():
                 # history poller (history can be long-running and is kept separate).
                 if not hasattr(self, "_shared_combined_task") or self._shared_combined_task is None or self._shared_combined_task.done():
                     # Use a slightly longer interval for the combined poller to reduce REST load
-                    self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(90, per_exchange=True))
+                    self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(self._shared_combined_interval_seconds, per_exchange=True))
                 if not hasattr(self, "_shared_history_task") or self._shared_history_task is None or self._shared_history_task.done():
-                    self._shared_history_task = asyncio.create_task(self._shared_poll_serial('history', 90, per_exchange=True))
+                    self._shared_history_task = asyncio.create_task(self._shared_poll_serial('history', self._shared_history_interval_seconds, per_exchange=True))
                 if not hasattr(self, "_shared_executions_task") or self._shared_executions_task is None or self._shared_executions_task.done():
                     # Delay first executions run a bit to avoid a big startup burst.
                     # First run: ~60s ± 15s. Subsequent runs: every 30 minutes.
                     self._shared_executions_task = asyncio.create_task(
                         self._shared_poll_serial(
                             'executions',
-                            1800,
+                            self._shared_executions_interval_seconds,
                             per_exchange=True,
                             start_immediately=True,
                             start_delay_seconds=60,
