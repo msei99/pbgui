@@ -31,7 +31,9 @@ class PBData():
         self.db = Database()
         self.users = Users()
         self._fetch_users = []
+        self._trades_users = []
         self.load_fetch_users()
+        self.load_trades_users()
         self._balance_ws_tasks = {}
         self._position_ws_tasks = {}
         self._order_ws_tasks = {}
@@ -997,6 +999,15 @@ class PBData():
         self._fetch_users = new_fetch_users
         self.save_fetch_users()
 
+    @property
+    def trades_users(self):
+        return self._trades_users
+
+    @trades_users.setter
+    def trades_users(self, new_trades_users):
+        self._trades_users = new_trades_users
+        self.save_trades_users()
+
     def run(self):
         if not self.is_running():
             cmd = [sys.executable, '-u', str(PurePath(f'{PBGDIR}/PBData.py'))]
@@ -1061,6 +1072,38 @@ class PBData():
             self._fetch_users = users
         else:
             self._fetch_users = []  # Default to empty list if not set
+
+    def load_trades_users(self):
+        """Load the user list which is allowed to download/store executions (trades).
+
+        Default: empty list (no trades download) unless explicitly configured.
+        """
+        pb_config = configparser.ConfigParser()
+        try:
+            pb_config.read('pbgui.ini')
+        except Exception as e:
+            _human_log('PBData', f"Warning: failed reading pbgui.ini ({e}); keeping previous trades_users: {self._trades_users}", level='WARNING')
+            return
+
+        if pb_config.has_option("pbdata", "trades_users"):
+            try:
+                raw = pb_config.get("pbdata", "trades_users")
+                sval = str(raw).strip() if raw is not None else ''
+                if sval == '':
+                    users = []
+                else:
+                    users = eval(sval)
+                if not isinstance(users, list):
+                    users = []
+            except Exception:
+                users = []
+            for user in users.copy():
+                if user not in self.users.list():
+                    users.remove(user)
+            self._trades_users = users
+        else:
+            # Default to empty list unless explicitly configured.
+            self._trades_users = []
     
     def save_fetch_users(self):
         pb_config = configparser.ConfigParser()
@@ -1068,6 +1111,15 @@ class PBData():
         if not pb_config.has_section("pbdata"):
             pb_config.add_section("pbdata")
         pb_config.set("pbdata", "fetch_users", f'{self.fetch_users}')
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
+
+    def save_trades_users(self):
+        pb_config = configparser.ConfigParser()
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("pbdata"):
+            pb_config.add_section("pbdata")
+        pb_config.set("pbdata", "trades_users", f'{self.trades_users}')
         with open('pbgui.ini', 'w') as f:
             pb_config.write(f)
 
@@ -1798,6 +1850,16 @@ class PBData():
                 delay = base_interval + backoff
                 await asyncio.sleep(delay)
             users = [u for u in self.users if u.name in self.fetch_users]
+            if kind == 'executions':
+                try:
+                    self.load_trades_users()
+                except Exception:
+                    pass
+                try:
+                    allowed = set(self.trades_users or [])
+                except Exception:
+                    allowed = set()
+                users = [u for u in users if u.name in allowed]
             if not users:
                 continue
             if per_exchange:
@@ -2014,6 +2076,16 @@ class PBData():
                                 pass
                             _human_log('PBData', f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms", level='INFO', user=user)
                         elif kind == 'executions':
+                            # Re-check allowed executions users before each fetch so that
+                            # removing a user in the UI takes effect immediately even
+                            # mid-cycle.
+                            try:
+                                self.load_trades_users()
+                                if user.name not in (self.trades_users or []):
+                                    continue
+                            except Exception:
+                                # Fail-safe: if we cannot determine the allow-list, skip.
+                                continue
                             start_ts = datetime.now().timestamp()
                             exchange_for_slot = exch or user.exchange
                             did_run = False
@@ -2913,7 +2985,17 @@ class PBData():
                     # Execution-level polling is only meaningful for a subset of exchanges.
                     # Keep in sync with Database.update_executions() support.
                     try:
-                        exec_users = [u.name for u in self.users if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')]
+                        try:
+                            self.load_trades_users()
+                        except Exception:
+                            pass
+                        exec_users = [
+                            u.name
+                            for u in self.users
+                            if u.name in self.fetch_users
+                            and u.name in (self.trades_users or [])
+                            and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')
+                        ]
                     except Exception:
                         exec_users = []
                     try:
@@ -2994,6 +3076,10 @@ class PBData():
             except Exception:
                 pass
             self.load_fetch_users()
+            try:
+                self.load_trades_users()
+            except Exception:
+                pass
             balances_ws = []
             balances_rest = []
             positions_ws = []
@@ -3024,7 +3110,9 @@ class PBData():
                 exec_users = [
                     u.name
                     for u in self.users
-                    if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')
+                    if u.name in self.fetch_users
+                    and u.name in (self.trades_users or [])
+                    and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')
                 ]
             except Exception:
                 exec_users = []
