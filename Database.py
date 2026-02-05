@@ -426,7 +426,7 @@ class Database():
         exchange = Exchange(user.exchange, user)
 
         # Only fetch executions for exchanges where we have explicit support.
-        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit'):
+        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx'):
             return None
 
         since = None
@@ -490,6 +490,21 @@ class Database():
                         since = max(0, now_ms - int(initial_lookback_days) * day)
                     else:
                         since = max(0, now_ms - 365 * day)
+            except Exception:
+                pass
+
+        # OKX: CCXT fetchMyTrades uses fills-history (≈90-day lookback). For initial backfill,
+        # default to 90 days; caller can override.
+        if exchange.id == 'okx' and now_ms is not None:
+            try:
+                if since is None:
+                    if initial_lookback_days is not None:
+                        since = max(0, now_ms - int(initial_lookback_days) * day)
+                    else:
+                        since = max(0, now_ms - 90 * day)
+                else:
+                    # Clamp incremental runs to the supported lookback window.
+                    since = max(int(since), max(0, now_ms - 90 * day))
             except Exception:
                 pass
 
