@@ -2913,7 +2913,7 @@ class PBData():
                     # Execution-level polling is only meaningful for a subset of exchanges.
                     # Keep in sync with Database.update_executions() support.
                     try:
-                        exec_users = [u.name for u in self.users if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx')]
+                        exec_users = [u.name for u in self.users if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')]
                     except Exception:
                         exec_users = []
                     try:
@@ -3024,7 +3024,7 @@ class PBData():
                 exec_users = [
                     u.name
                     for u in self.users
-                    if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx')
+                    if u.name in self.fetch_users and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')
                 ]
             except Exception:
                 exec_users = []
