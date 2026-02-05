@@ -408,6 +408,43 @@ def pbdata_details():
             pbdata.fetch_users = st.session_state.pbdata_users
     st.multiselect('Users', users.list(), default=pbdata.fetch_users ,key="pbdata_users")
 
+    # Separate selection for executions/trades downloading (stored in trades DB)
+    # Streamlit keeps widget values in session_state across reruns. If trades_users
+    # is not configured yet, ensure the widget starts empty (opt-in behavior).
+    try:
+        _raw_trades_cfg = load_ini('pbdata', 'trades_users')
+        _trades_cfg_set = bool(str(_raw_trades_cfg).strip()) if _raw_trades_cfg is not None else False
+    except Exception:
+        _trades_cfg_set = False
+
+    # One-time reset of stale widget values when INI has no trades_users.
+    # Do NOT delete on every rerun, otherwise user selections can never persist.
+    if "_pbdata_trades_users_reset_done" not in st.session_state:
+        st.session_state["_pbdata_trades_users_reset_done"] = False
+    if not _trades_cfg_set and not st.session_state.get("_pbdata_trades_users_reset_done", False):
+        st.session_state["pbdata_trades_users"] = []
+        st.session_state["_pbdata_trades_users_reset_done"] = True
+
+    try:
+        trades_default = pbdata.trades_users
+    except Exception:
+        trades_default = []
+    st.multiselect(
+        'Executions download',
+        users.list(),
+        default=trades_default,
+        key="pbdata_trades_users",
+        help='Opt-in list: only these users will download/store executions (my trades) via PBData. Default is none.',
+    )
+
+    # Persist selection to pbgui.ini via PBData setter
+    try:
+        selected_trades_users = st.session_state.get("pbdata_trades_users", [])
+        if selected_trades_users != getattr(pbdata, 'trades_users', []):
+            pbdata.trades_users = selected_trades_users
+    except Exception:
+        pass
+
     # Show PBData logfile (use new filtered viewer)
     view_log_filtered("PBData")
 
