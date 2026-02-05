@@ -1983,6 +1983,160 @@ class Exchange:
 
             return executions
 
+        if self.id == "okx":
+            # OKX supports fetchMyTrades without symbol (global fills), but CCXT's
+            # implementation is backed by fills-history with ~90-day lookback.
+            day = 24 * 60 * 60 * 1000
+            week = 7 * day
+            max_age_total = 90 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max_age_total
+            try:
+                since = max(int(since), int(now - max_age_total))
+            except Exception:
+                pass
+
+            def _to_float(val):
+                try:
+                    if val is None or val == '':
+                        return None
+                    return float(val)
+                except Exception:
+                    return None
+
+            executions = []
+            cursor = int(since)
+            seen_trade_ids: set[str] = set()
+
+            # OKX returns at most 100 fills per request. We slice by time window and
+            # shrink the window if we hit the cap, to avoid missing fills in dense periods.
+            initial_span = week
+            max_span = week * 4
+            min_span = 60 * 60 * 1000  # 1 hour
+            page_span = initial_span
+
+            while cursor < now:
+                span = int(page_span)
+                trades = None
+                end_time = None
+
+                # Adaptive span shrinking when we hit the endpoint cap.
+                while True:
+                    end_time = min(int(cursor + span - 1), int(now))
+
+                    last_err = None
+                    for attempt in range(3):
+                        try:
+                            # Use market type routing via ccxt "type" param, and "until" for end.
+                            trades = self.instance.fetch_my_trades(
+                                symbol=None,
+                                since=int(cursor),
+                                limit=100,
+                                params={
+                                    'type': 'swap',
+                                    'until': int(end_time),
+                                },
+                            )
+                            last_err = None
+                            break
+                        except Exception as e:
+                            if not _ccxt_should_retry(self.instance, e):
+                                raise
+                            last_err = e
+                            _human_log(
+                                'Exchange',
+                                f"okx fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
+                                level='WARNING',
+                                user=self.user,
+                            )
+                            sleep(min(2 ** attempt, 5))
+                    if last_err is not None:
+                        raise last_err
+
+                    # If we hit the max-per-page cap, shrink window and retry.
+                    try:
+                        if trades and len(trades) >= 100 and span > min_span:
+                            span = max(min_span, span // 2)
+                            continue
+                    except Exception:
+                        pass
+                    break
+
+                if trades:
+                    # Reset span after a non-empty page
+                    page_span = initial_span
+                    for t in trades:
+                        try:
+                            ts = int(t.get('timestamp') or 0)
+                            if ts <= 0:
+                                continue
+
+                            info = t.get('info') if isinstance(t.get('info'), dict) else {}
+                            trade_id = (
+                                info.get('billId')
+                                or t.get('id')
+                                or info.get('tradeId')
+                                or info.get('id')
+                            )
+                            if not trade_id:
+                                continue
+                            trade_id = str(trade_id)
+                            if trade_id in seen_trade_ids:
+                                continue
+                            seen_trade_ids.add(trade_id)
+
+                            fee_cost = None
+                            try:
+                                # OKX may return fee as negative; store as positive cost.
+                                if info.get('fee') not in (None, ''):
+                                    fee_cost = _to_float(info.get('fee'))
+                                if fee_cost is None:
+                                    fee_obj = t.get('fee')
+                                    if isinstance(fee_obj, dict):
+                                        fee_cost = _to_float(fee_obj.get('cost'))
+                                    else:
+                                        fee_cost = _to_float(fee_obj)
+                                if fee_cost is not None:
+                                    fee_cost = abs(float(fee_cost))
+                            except Exception:
+                                fee_cost = None
+
+                            symbol = t.get('symbol')
+                            if not symbol:
+                                try:
+                                    symbol = str(info.get('instId') or '')
+                                except Exception:
+                                    symbol = ''
+
+                            executions.append(
+                                {
+                                    'symbol': symbol or '',
+                                    'timestamp': ts,
+                                    'side': t.get('side') or info.get('side'),
+                                    'price': _to_float(t.get('price')) or _to_float(info.get('fillPx')),
+                                    'qty': _to_float(t.get('amount')) or _to_float(info.get('fillSz')),
+                                    'fee': fee_cost,
+                                    'realized_pnl': None,
+                                    'order_id': t.get('order') or info.get('ordId') or info.get('orderId') or info.get('order_id'),
+                                    'trade_id': trade_id,
+                                    'raw_json': json.dumps(t, ensure_ascii=False, default=str),
+                                }
+                            )
+                        except Exception:
+                            continue
+                else:
+                    # If empty, expand the span a bit to reduce request count.
+                    try:
+                        page_span = min(int(page_span) * 2, int(max_span))
+                    except Exception:
+                        page_span = initial_span
+
+                cursor = int(end_time) + 1
+                sleep(0.2)
+
+            return executions
+
         if self.id == "bitget":
             # Bitget: safest to fetch per-symbol (keeps requests bounded and avoids spot/swap ambiguity).
             # Caller (Database) supplies `symbols` discovered from income/history.
