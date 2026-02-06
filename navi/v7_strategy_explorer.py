@@ -50,6 +50,7 @@ from pbgui_func import (
     is_pb7_installed,
     is_session_state_not_initialized,
     pb7dir,
+    render_header_with_guide,
     set_page_config,
 )
 from pbgui_purefunc import load_ini, save_ini
@@ -9372,7 +9373,7 @@ def _se_open_help_tab():
 
 
 @st.dialog("Help & Tutorials", width="large")
-def _se_help_modal():
+def _se_help_modal(default_topic: str = "Strategy Explorer"):
     """Show centralized Help docs in a dialog popup."""
     lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="se_help_modal_lang")
     docs = _se_docs_index(str(lang))
@@ -9380,7 +9381,25 @@ def _se_help_modal():
         st.info("No help docs found.")
         return
     labels = [d[0] for d in docs]
-    sel = st.selectbox("Select Topic", options=list(range(len(labels))), format_func=lambda i: labels[int(i)], index=0, key="se_help_modal_sel")
+
+    default_index = 0
+    try:
+        target = str(default_topic or "").strip().lower()
+        if target:
+            for i, lbl in enumerate(labels):
+                if target in str(lbl).lower():
+                    default_index = i
+                    break
+    except Exception:
+        default_index = 0
+
+    sel = st.selectbox(
+        "Select Topic",
+        options=list(range(len(labels))),
+        format_func=lambda i: labels[int(i)],
+        index=int(default_index),
+        key="se_help_modal_sel",
+    )
     path = docs[int(sel)][1]
     md = _se_read_markdown(path)
     st.markdown(md, unsafe_allow_html=True)
@@ -9413,15 +9432,8 @@ def show_visualizer():
     if "se_hist_symbol" in st.session_state and "se_hist_coin" not in st.session_state:
         st.session_state.se_hist_coin = st.session_state.se_hist_symbol
 
-    # Header row: Title (if exists) + persistent Help button
-    c_title, c_help = st.columns([0.95, 0.05])
-    with c_title:
-        if not data.title == "":
-            st.subheader(data.title)
-    with c_help:
-        # Persistent Help button (opens central Help in dialog)
-        if st.button("📖 Guide", key="se_header_help_btn"):
-            _se_help_modal()
+    if not data.title == "":
+        st.subheader(data.title)
 
     # Create columns for organizing parameters
     col1, col2, col3 = st.columns(3)
@@ -16344,7 +16356,13 @@ if _has_streamlit_session_context():
 
     # Page Setup
     set_page_config("PBv7 Strategy Explorer")
-    st.header("PBv7 Strategy Explorer", divider="red")
+
+    render_header_with_guide(
+        "PBv7 Strategy Explorer",
+        guide_callback=lambda: _se_help_modal(default_topic="Strategy Explorer"),
+        guide_key="se_header_help_btn",
+        guide_help="Open help and tutorials",
+    )
     st.info(
         "📊 **Visual analysis of PB7 grid strategies** – Uses PB7/Rust for authentic grid calculations. "
         "Explore entry/close grids, trailing behavior, and compare with backtest results. "

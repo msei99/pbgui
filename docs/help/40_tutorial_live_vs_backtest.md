@@ -1,6 +1,10 @@
 # Tutorial: Live vs Backtest (PBv7)
 
-This page helps you compare **Live performance** (from exchange income history stored in PBGui’s DB) against a **PB7 backtest result** (from `fills.csv`).
+This page helps you compare **Live performance** (from exchange history stored in PBGui’s DB) against a **PB7 backtest result** (from `fills.csv`).
+
+PBGui can use multiple live data sources:
+- **Income rows** (funding/realized PnL/fees depending on exchange) from PBGui’s main DB (`history` table)
+- **Executions** (trade fills) from PBGui’s trades DB (`executions` table)
 
 The goal is to quickly answer:
 - “Does the backtest roughly reproduce the live equity curve?”
@@ -10,11 +14,15 @@ The goal is to quickly answer:
 
 ## What is compared?
 
-### Live
+### Live (income rows)
 Live is computed from **income events** fetched from the exchange and stored in the PBGui database (`history` table). Depending on exchange and account type this typically includes:
 - realized PnL
 - commissions/fees
 - funding fees
+
+### Live (executions)
+Executions are individual fills/trades fetched from the exchange and stored in PBGui’s trades database (`executions` table). PBGui derives:
+- `exec_net = realized_pnl - fee` (fee is stored as a positive cost)
 
 ### Backtest
 Backtest is computed from the selected PB7 result folder using `fills.csv`.
@@ -27,6 +35,7 @@ PBGui uses:
 ## Prerequisites
 - You have API-Keys configured in **API-Keys**.
 - The user has live income data in the DB (otherwise Live will be empty).
+- For **execution-level matching**, the user must also have live executions in the trades DB.
 - A PB7 backtest exists in PB7’s results folder (`backtests/pbgui/...`).
 
 ---
@@ -67,11 +76,23 @@ PBGui uses:
 - If the curves differ mainly by a constant offset, it’s often just a **starting balance** mismatch.
 - If the difference grows over time and is concentrated in a few coins, it usually indicates **path differences** (different fills/positions), not just fees.
 
+### Details / Diagnostics (new)
+Open **Details / Diagnostics** to debug *where* the curves start to diverge.
+
+Key tools inside:
+- **Deviation day inspector**: jump day-by-day through periods with large Live↔Backtest differences.
+- **Missed fills / price_distance_threshold**: visualizes when initial-entry gating could only open briefly (dip-only minutes), and can overlay **backtest `entry_initial` fills**.
+- Tabs for the selected day/scope:
+	- **Live income rows**
+	- **Backtest fills**
+	- **Live executions**
+	- **BT vs Live (matched)**: matches backtest fills against nearest live executions by timestamp (within a tolerance) to spot **missed orders** and **slippage**.
+
 ---
 
 ## Known limitations (current state)
-- The page compares **income events** (Live) vs **fills-based net** (Backtest). These are not identical sources.
-- Trade-level matching (detecting missed orders + slippage by matching live trades against backtest fills) is planned but not yet integrated into this page.
+- The headline chart compares **income events** (Live) vs **fills-based net** (Backtest). These are not identical sources.
+- Execution-level matching is **time-based** (nearest timestamp within tolerance). In fast markets or with partial fills, you may need to adjust tolerance and interpret results manually.
 - “Combined” results can be selected for comparison, but you cannot run a new compare backtest in “combined” mode from this page.
 
 ---

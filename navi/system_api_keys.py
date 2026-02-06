@@ -1,5 +1,12 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, get_navi_paths, sync_api
+from pbgui_func import (
+    set_page_config,
+    is_session_state_not_initialized,
+    is_authenticted,
+    get_navi_paths,
+    sync_api,
+    render_header_with_guide,
+)
 from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
@@ -318,12 +325,12 @@ if not is_authenticted() or is_session_state_not_initialized():
 
 # Page Setup
 set_page_config("API-Keys")
-c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
-with c_title:
-    st.header("API-Keys", divider="red")
-with c_help:
-    if st.button("📖 Guide", key="api_keys_header_help_btn"):
-        _help_modal("API-Keys")
+
+render_header_with_guide(
+    "API-Keys",
+    guide_callback=lambda: _help_modal("API-Keys"),
+    guide_key="api_keys_header_help_btn",
+)
 
 # Display Setup
 if 'edit_user' in st.session_state:

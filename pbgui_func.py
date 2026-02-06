@@ -12,7 +12,59 @@ from pbgui_purefunc import load_ini, save_ini
 # LogHandler removed: centralized debuglog removed per user request
 from PBRemote import PBRemote
 from MonitorConfig import MonitorConfig
-from typing import Optional
+from typing import Optional, Callable, Literal
+
+
+def render_header_with_guide(
+    title: str,
+    *,
+    guide_callback: Callable[[], None] | None = None,
+    guide_key: str = "guide_btn",
+    guide_label: str = "📖 Guide",
+    guide_help: str = "Open help and tutorials",
+    divider: bool = True,
+    divider_color_hex: str = "#ff4b4b",
+    divider_thickness_px: int = 2,
+    level: Literal["header", "subheader"] = "header",
+) -> None:
+    """Render a consistent page header with optional Guide button.
+
+    Streamlit's built-in `divider=` only spans the column it is rendered in.
+    When a Guide button lives in a right-side column, we draw a full-width
+    divider below the row so the header looks consistent.
+    """
+
+    t = str(title or "").strip()
+
+    if guide_callback is None:
+        if level == "subheader":
+            st.subheader(t)
+        else:
+            if divider:
+                st.header(t, divider="red")
+            else:
+                st.header(t)
+        return
+
+    c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
+    with c_title:
+        if level == "subheader":
+            st.subheader(t)
+        else:
+            st.header(t)
+
+    with c_help:
+        if st.button(str(guide_label), key=str(guide_key), help=str(guide_help)):
+            guide_callback()
+
+    if divider:
+        st.markdown(
+            (
+                "<hr style='width:100%;margin-top:-0.5rem;margin-bottom:1rem;"
+                f"border:0;border-top:{int(divider_thickness_px)}px solid {divider_color_hex};' />"
+            ),
+            unsafe_allow_html=True,
+        )
 
 @st.dialog("Select file")
 def change_ini(section, parameter):
@@ -121,7 +173,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.52 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': "Passivbot GUI v1.53 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Check VPS Errors

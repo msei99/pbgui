@@ -1,5 +1,15 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, error_popup, info_popup, get_navi_paths, sync_api, PBGDIR
+from pbgui_func import (
+    set_page_config,
+    is_session_state_not_initialized,
+    is_authenticted,
+    error_popup,
+    info_popup,
+    get_navi_paths,
+    sync_api,
+    PBGDIR,
+    render_header_with_guide,
+)
 from pbgui_purefunc import load_ini, save_ini
 import json
 import time
@@ -469,12 +479,7 @@ def pbdata_details():
                 del st.session_state.pbdata_details
                 st.rerun()
 
-    c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
-    with c_title:
-        st.subheader("PBData Details")
-    with c_help:
-        if st.button('📖 Guide', key='pbdata_guide_btn', help='Open PBData help & tutorials'):
-            _help_modal('PBData')
+    st.subheader("PBData Details")
 
     pbdata_overview()
     users = st.session_state.users
@@ -1023,7 +1028,17 @@ if not is_authenticted() or is_session_state_not_initialized():
 
 # Page Setup
 set_page_config("PBGUI Services")
-st.header("PBGUI Services", divider="red")
+
+# Header: show PBData Guide in the top header row (above a full-width divider)
+if 'pbdata_details' in st.session_state:
+    render_header_with_guide(
+        "PBGUI Services",
+        guide_callback=lambda: _help_modal('PBData'),
+        guide_key='pbdata_guide_btn',
+        guide_help='Open PBData help & tutorials',
+    )
+else:
+    render_header_with_guide("PBGUI Services")
 
 if 'monitor_edit' in st.session_state:
     st.session_state.monitor.edit_monitor_config()
