@@ -730,75 +730,85 @@ class V7Instance():
 
     @st.dialog("Paste config", width="large")
     def import_instance(self):
-        invalid_json = False
-        # Init session_state for keys
-        if "import_run_v7_user" in st.session_state:
-            if st.session_state.import_run_v7_user != self.user:
-                self.user = st.session_state.import_run_v7_user
-                st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
-        else:
-            st.session_state.import_run_v7_user = self.user
-        if "import_run_v7_config" in st.session_state:
-            if st.session_state.import_run_v7_config != json.dumps(self.config.config, indent=4):
-                try:
-                    self.config.config = json.loads(st.session_state.import_run_v7_config)
-                except Exception:
-                    invalid_json = True
-            st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
-            if self.config.live.user in self._users.list_v7():
-                self._user = self.config.live.user
-        else:
-            st.session_state.import_run_v7_config = ""
+        users = self._users.list_v7()
 
-        if invalid_json:
-            st.error('Invalid JSON (use true/false/null, not True/False/None)', icon="⚠️")
-        # Display import
-        st.selectbox('User',self._users.list_v7(), key="import_run_v7_user")
-        st.text_area(f'config', key="import_run_v7_config", height=500)
-        # st.text_area(f'config', json.dumps(self.config.config, indent=4), key="import_run_v7_config", height=500)
-        col1, col2 = st.columns([1,1])
+        reset_flag_key = "import_run_v7_config_reset"
+
+        # Keep the target user stable while the dialog is open.
+        if "import_run_v7_user" not in st.session_state:
+            st.session_state.import_run_v7_user = self.user
+
+        selected_user = st.selectbox(
+            "User",
+            users,
+            index=users.index(st.session_state.import_run_v7_user) if st.session_state.import_run_v7_user in users else 0,
+            key="import_run_v7_user",
+            disabled=not bool(users),
+        )
+
+        # If the user selection changed, retarget the instance and reset the textarea.
+        if selected_user and selected_user != self.user:
+            self.user = selected_user
+            st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
+
+        # If a previous action requested a reset, seed the textarea BEFORE creating the widget.
+        if st.session_state.get(reset_flag_key, False):
+            st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
+            st.session_state.pop(reset_flag_key, None)
+
+        # Keep the raw text stable while the user is editing/pasting.
+        if "import_run_v7_config" not in st.session_state:
+            st.session_state.import_run_v7_config = json.dumps(self.config.config, indent=4)
+
+        st.text_area(
+            "config",
+            key="import_run_v7_config",
+            height=500,
+            help="Paste full JSON config here",
+        )
+
+        col1, col2 = st.columns([1, 1])
         with col1:
             if st.button("OK"):
-                self.initialize()
-                del st.session_state.edit_run_v7_user
-                del st.session_state.edit_run_v7_enabled_on
-                del st.session_state.edit_run_v7_version
-                del st.session_state.edit_run_v7_leverage
-                del st.session_state.edit_run_v7_market_orders_allowed
-                del st.session_state.edit_run_v7_pnls_max_lookback_days
-                del st.session_state.edit_run_v7_minimum_coin_age_days
-                del st.session_state.edit_run_v7_price_distance_threshold
-                del st.session_state.edit_run_v7_execution_delay_seconds
-                del st.session_state.edit_run_v7_filter_by_min_effective_cost
-                del st.session_state.edit_run_v7_empty_means_all_approved
-                del st.session_state.edit_run_v7_hedge_mode
-                del st.session_state.edit_run_v7_auto_gs
-                del st.session_state.edit_run_v7_max_n_cancellations_per_batch
-                del st.session_state.edit_run_v7_max_n_creations_per_batch
-                del st.session_state.edit_run_v7_forced_mode_long
-                del st.session_state.edit_run_v7_forced_mode_short
-                del st.session_state.edit_run_v7_time_in_force
-                del st.session_state.edit_run_v7_max_n_restarts_per_day
-                del st.session_state.edit_run_v7_max_disk_candles_per_symbol_per_tf
-                del st.session_state.edit_run_v7_max_memory_candles_per_symbol
-                del st.session_state.edit_run_v7_warmup_concurrency
-                del st.session_state.edit_run_v7_market_cap
-                del st.session_state.edit_run_v7_vol_mcap
-                del st.session_state.edit_run_v7_dynamic_ignore
-                del st.session_state.edit_run_v7_approved_coins_long
-                del st.session_state.edit_run_v7_approved_coins_short
-                del st.session_state.edit_run_v7_ignored_coins_long
-                del st.session_state.edit_run_v7_ignored_coins_short
-                del st.session_state.edit_configv7_long_twe
-                del st.session_state.edit_configv7_short_twe
-                del st.session_state.edit_configv7_long_positions
-                del st.session_state.edit_configv7_short_positions
-                del st.session_state.edit_configv7_long
-                del st.session_state.edit_configv7_short
+                try:
+                    raw_txt = str(st.session_state.get("import_run_v7_config") or "")
+                    parsed = json.loads(raw_txt)
+                except Exception:
+                    st.error('Invalid JSON (use true/false/null, not True/False/None)', icon="⚠️")
+                    return
+
+                # Keep instance identity stable: importing a config should not switch the instance user.
+                if isinstance(parsed, dict):
+                    parsed.setdefault("live", {})
+                    if isinstance(parsed.get("live"), dict):
+                        parsed["live"]["user"] = self.user
+
+                # Apply config via setter
+                self.config.config = parsed
+
+                # Reset widget state so UI reflects the imported config values.
+                self._clear_config_widget_session_state_after_import()
+
+                # Request textarea reset on next run (can't mutate widget key after instantiation).
+                st.session_state[reset_flag_key] = True
                 st.rerun()
+
         with col2:
             if st.button("Cancel"):
+                # Request textarea reset on next run (can't mutate widget key after instantiation).
+                st.session_state[reset_flag_key] = True
                 st.rerun()
+
+    def _clear_config_widget_session_state_after_import(self) -> None:
+        """Clear Streamlit widget state so imported configs are reflected in UI.
+
+        Without this, existing session_state keys (especially edit_configv7_* bot
+        parameters) can override freshly imported JSON and get written back to config.
+        """
+
+        for k in list(st.session_state.keys()):
+            if k.startswith("edit_run_v7_") or k.startswith("edit_configv7_"):
+                st.session_state.pop(k, None)
 
     def activate(self):
         self.remote.local_run.activate(self.user, False, "7")
