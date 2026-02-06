@@ -1676,10 +1676,16 @@ class Bot:
 
     @long.setter
     def long(self, new_long):
+        # Create a fresh Long so missing keys fall back to defaults
+        # instead of inheriting stale values from a previously loaded config.
+        self._long = Long()
         self._long.long = new_long
         self._bot["long"] = self._long.long
     @short.setter
     def short(self, new_short):
+        # Create a fresh Short so missing keys fall back to defaults
+        # instead of inheriting stale values from a previously loaded config.
+        self._short = Short()
         self._short.short = new_short
         self._bot["short"] = self._short.short
     
@@ -7314,6 +7320,8 @@ class ConfigV7():
         return self._config
     @config.setter
     def config(self, new_value):
+        if not isinstance(new_value, dict):
+            return
         if "logging" in new_value:
             self.logging = new_value["logging"]
         if "backtest" in new_value:
@@ -7329,9 +7337,9 @@ class ConfigV7():
         if "pbgui" in new_value:
             self.pbgui = new_value["pbgui"]
         # Convert coin_flags to coin_overrides
-        if "coin_flags" in new_value["live"]:
-            if new_value["live"]["coin_flags"]:
-                for symbol, flags in new_value["live"]["coin_flags"].items():
+        live = new_value.get("live")
+        if isinstance(live, dict) and live.get("coin_flags"):
+            for symbol, flags in live["coin_flags"].items():
                     # remove USDT and USDC from symbol
                     # if symbol.endswith("USDT"):
                     #     symbol = symbol[:-4]
