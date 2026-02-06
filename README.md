@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.52
+# v1.53
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,15 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.53 (06-02-2026)
+- New: PBData can optionally download/store **Executions (my trades)** into a dedicated trades DB.
+- New: PBData **Executions download allow-list** (opt-in user list).
+- New: PBData timers + shared REST pause overrides are configurable via `pbgui.ini`.
+- Improve: PBData log viewer + built-in PBData guide/tutorial (EN/DE).
+- Improve: PBv7 “Live vs Backtest” diagnostics (live executions view + matching + entry gating/missed fills tools); tutorial updated (EN/DE).
+- Fix: PBv7 Run/Backtest import stability (no stale values injected; apply-on-OK behavior).
+- UI: Standardized 📖 Guide header layout (full-width divider, no overlap) across key pages.
 
 ## v1.52 (31-01-2026)
 - New: PBv7 “Live vs Backtest” — compare your Live performance vs a PB7 backtest in one chart.
