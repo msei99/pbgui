@@ -19,6 +19,7 @@ from pbgui_func import (
     is_pb7_installed,
     is_session_state_not_initialized,
     pb7dir,
+    render_header_with_guide,
     set_page_config,
 )
 from pbgui_purefunc import coin_from_symbol_code, compute_pb7_entry_gating_ohlcv_df
@@ -3387,13 +3388,12 @@ if not is_authenticted() or is_session_state_not_initialized():
 # Page Setup
 set_page_config("PBv7 Live vs Backtest")
 
-# Header row: Title + quick link to the new guide
-col_title, col_guide = st.columns([0.9, 0.1], vertical_alignment="center")
-with col_title:
-    st.header("PBv7 Live vs Backtest", divider="red")
-with col_guide:
-    if st.button("📖 Guide", key="v7_live_vs_backtest_guide_btn", help="Open help and tutorials"):
-        _help_modal(default_topic="Live vs Backtest")
+render_header_with_guide(
+    "PBv7 Live vs Backtest",
+    guide_callback=lambda: _help_modal(default_topic="Live vs Backtest"),
+    guide_key="v7_live_vs_backtest_guide_btn",
+    guide_help="Open help and tutorials",
+)
 
 # Check if PB7 is installed
 if not is_pb7_installed():

@@ -1,6 +1,10 @@
 # Tutorial: Live vs Backtest (PBv7)
 
-Diese Seite vergleicht **Live-Performance** (aus der Exchange-Income-History, gespeichert in der PBGui-DB) mit einem **PB7 Backtest Resultat** (aus `fills.csv`).
+Diese Seite vergleicht **Live-Performance** (aus Exchange-History, gespeichert in der PBGui-DB) mit einem **PB7 Backtest Resultat** (aus `fills.csv`).
+
+PBGui kann mehrere Live-Datenquellen nutzen:
+- **Income Rows** (Funding/Realized PnL/Fees je nach Exchange) aus der PBGui-DB (`history` Tabelle)
+- **Executions** (Trade-Fills) aus der Trades-DB (`executions` Tabelle)
 
 Ziel:
 - “Passt die Backtest Equity Curve grob zur Live Curve?”
@@ -10,11 +14,15 @@ Ziel:
 
 ## Was wird verglichen?
 
-### Live
+### Live (Income Rows)
 Live wird aus **Income-Events** berechnet, die PBGui von der Exchange abruft und in der Datenbank speichert (`history` Tabelle). Je nach Exchange/Account umfasst das typischerweise:
 - Realized PnL
 - Kommissionen/Fees
 - Funding Fees
+
+### Live (Executions)
+Executions sind einzelne Fills/Trades, die von der Exchange abgerufen und in PBGui’s Trades-Datenbank gespeichert werden (`executions` Tabelle). PBGui berechnet daraus:
+- `exec_net = realized_pnl - fee` (Fee ist als positiver Kostenwert gespeichert)
 
 ### Backtest
 Backtest wird aus dem gewählten PB7 Result-Ordner (`fills.csv`) berechnet.
@@ -27,6 +35,7 @@ PBGui verwendet:
 ## Voraussetzungen
 - API-Keys sind in **API-Keys** konfiguriert.
 - Der User hat Live-Income Daten in der DB (sonst ist die Live Curve leer).
+- Für **Execution/Trade Matching** müssen ausserdem Executions in der Trades-DB vorhanden sein.
 - Ein PB7 Backtest existiert im PB7 Result-Folder (`backtests/pbgui/...`).
 
 ---
@@ -67,11 +76,23 @@ PBGui verwendet:
 - Wenn die Curves nur einen konstanten Offset haben, ist es oft einfach ein **Starting Balance** Thema.
 - Wenn die Abweichung über die Zeit wächst und auf wenige Coins konzentriert ist, ist es meist **anderer Trade-/Fill-Pfad** (nicht nur Fees).
 
+### Details / Diagnostics (neu)
+Unter **Details / Diagnostics** findest du Tools um *wo* die Abweichung beginnt zu debuggen.
+
+Wichtigste Features:
+- **Deviation Day Inspector**: springe Tag-für-Tag durch die grössten Abweichungen.
+- **Missed fills / price_distance_threshold**: zeigt, wann das Initial-Entry-Gating nur kurz offen war (Dip-only Minutes) und kann **Backtest `entry_initial` Fills** überlagern.
+- Tabs pro Tag/Scope:
+	- **Live income rows**
+	- **Backtest fills**
+	- **Live executions**
+	- **BT vs Live (matched)**: matcht Backtest-Fills gegen die nächsten Live-Executions (Zeitstempel + Toleranz), um **missed orders** und **Slippage** sichtbar zu machen.
+
 ---
 
 ## Bekannte Limitationen (aktuell)
-- Live basiert auf **Income-Events**, Backtest auf **fills-basierter net** Berechnung. Das sind nicht identische Datenquellen.
-- Trade-Level Matching (Missed Orders + Slippage via Matching Live Trades ↔ Backtest Fills) ist geplant, aber noch nicht in diese Seite integriert.
+- Der Haupt-Chart vergleicht **Income-Events** (Live) vs **fills-basierte net** Berechnung (Backtest). Das sind nicht identische Datenquellen.
+- Execution/Trade Matching ist **zeitbasiert** (nächster Zeitstempel innerhalb der Toleranz). In schnellen Märkten/bei Partial Fills ist Interpretation + evtl. Toleranz-Anpassung nötig.
 - “Combined” Results können verglichen werden, aber von dieser Seite aus wird kein neuer Compare-Backtest im “combined” Mode gestartet.
 
 ---
