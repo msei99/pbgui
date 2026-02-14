@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.53
+# v1.55
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,13 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.55 (14-02-2026)
+- New: PB7 v7.8.x sync (candle interval, suite enablement, OHLCV source dir, market settings sources, volume normalization)
+- New: Optimizer supports candle_interval_minutes
+- New: BacktestV7 shows total_wallet_exposure, pnl_cumsum, and balance_and_equity_logy plots when available
+- Fix: Balance Calculator works with short coin names
+- Fix: Suite preflight warning logic aligned with PB7 behavior
 
 ## v1.54 (14-02-2026)
 - New: **Hyperliquid Market Data** — download l2Book from AWS S3 and automatically convert to 1-minute candles
