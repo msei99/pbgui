@@ -323,6 +323,15 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.54 (14-02-2026)
+- New: **Hyperliquid Market Data** — download l2Book from AWS S3 and automatically convert to 1-minute candles
+- New: **Simplified Coin Names** — use `DOGE` instead of `DOGEUSDT`, `BONK` instead of `kBONKUSDC` everywhere (configs, inputs, all UI)
+- New: **Market Data Management Page** — centralized interface for downloading, managing, and optimizing Hyperliquid market data
+- New: **Auto-trigger Jobs** — after downloading l2Book, 1m-candle generation starts automatically (no manual step needed)
+- New: **Auto-refresh Latest 1m Candles** — PBData automatically downloads and updates the latest 1m candles from Hyperliquid API in the background (keeps your data always current)
+- New: **Use PBGui Market Data in Backtest/Optimize** — select PBGui OHLCV data as your data source for backtests and optimization runs
+- New: **Comprehensive Market Data Guides** — detailed workflows, troubleshooting, and optimization tips (EN/DE)
+
 ## v1.53 (06-02-2026)
 - New: PBData can optionally download/store **Executions (my trades)** into a dedicated trades DB.
 - New: PBData **Executions download allow-list** (opt-in user list).
