@@ -573,7 +573,8 @@ def pb7_suite_preflight_errors(config: dict) -> list[str]:
             "Suite is enabled with include_base_scenario=false, but no coins are defined in any scenario "
             "(and no coin_sources are set). PB7 will build an empty master coin list and fail with "
             "'No coin data found on any exchange for the requested date range.'\n"
-            "Fix: enable include_base_scenario, OR set scenario coins, OR set coin_sources."
+            "Fix: enable include_base_scenario, OR set scenario coins, OR set coin_sources, "
+            "OR use 'Add base coins to empty scenarios'."
         )
 
     return errors

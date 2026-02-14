@@ -1318,6 +1318,12 @@ max_warmup_minutes = """
     Default: 0 (disabled)
     ```"""
 
+candle_interval_minutes = """
+    ```
+    Aggregate 1m candles into larger intervals for backtests. Use 1 for full resolution.
+    Example: 5 builds 5-minute candles from 1m data.
+    ```"""
+
 memory_snapshot_interval_minutes = """
     ```
     Interval between memory snapshot telemetry entries (RSS, cache footprint, 
@@ -1485,17 +1491,22 @@ max_concurrent_api_requests = """
     Set to 0 to disable (unlimited).
     ```"""
 
+enable_archive_candle_fetch = """
+    ```
+    Allow live candle fetching to use exchange archive data for missing ranges.
+    Disabled by default to avoid potential timeouts.
+    ```"""
+
+max_ohlcv_fetches_per_minute = """
+    ```
+    Maximum OHLCV fetches per minute in live mode.
+    Set lower to reduce API pressure if you hit rate limits.
+    ```"""
+
 maker_fee_override = """
     ```
     Optional maker fee override (part-per-one; use 0.0002 for 0.02%).
     Set to -1 to use exchange-derived maker fees.
-    ```"""
-
-combine_ohlcvs = """
-    ```
-    When true, build a single "combined" dataset by taking the best-quality feed
-    for each coin across all configured exchanges. When false, the
-    backtester/optimizer runs each exchange independently.
     ```"""
 
 ohlcv_source_dir = """
@@ -1530,6 +1541,19 @@ btc_collateral_ltv_cap = """
     Optional loan-to-value ceiling (USD debt ÷ equity) enforced when topping up BTC.
     Leave null (default) to allow unlimited debt, or set to a float (e.g., 0.6) to stop
     buying BTC once leverage exceeds that threshold.
+    ```"""
+
+market_settings_sources = """
+    ```
+    Override which exchange provides market settings (fees, min quantities, etc.) for each coin during backtest.
+    By default, each coin uses the same exchange for both price data (OHLCV) and market settings.
+    Use this to test with different fee structures or market conditions.
+    ```"""
+
+volume_normalization = """
+    ```
+    If true, normalizes volume data by dividing quoted volume by mid price to get base asset volume.
+    If false, uses quoted volume as-is (legacy behavior).
     ```"""
 
 compress_results_file = """
@@ -2179,7 +2203,7 @@ coin_sources_coin = """Coin symbol to override"""
 coin_sources_exchange = """Target exchange for this coin"""
 
 coin_sources_select_exchange = """
-    Optional mapping of coin → exchange to override automatic selection when combine_ohlcvs is true.
+    Optional mapping of coin → exchange to override automatic selection in multi-exchange backtests.
     You can choose any exchange to force this coin to use specific exchange data."""
 
 coin_sources_select_coin = """
@@ -2213,7 +2237,7 @@ compare_backtest_exchange_help = """
 
         Hyperliquid behavior:
         - If you choose 'hyperliquid' and press ▶ (Run Backtest), PBGui will force Binance candles via backtest.coin_sources.
-            PB7 requires backtest.combine_ohlcvs for coin_sources, so the backtest will be stored under the 'combined' results folder
+            The backtest will be stored under the 'combined' results folder
             (PBGui still shows it when Exchange=hyperliquid)."""
 
 backtest_start_date = """

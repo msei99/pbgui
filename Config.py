@@ -269,6 +269,28 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         weighted_variant="exponential_fit_error_w",
         description="Log-linear equity fit error (lower is better) and weighted variant.",
     ),
+
+    # Exposure Metrics
+    "high_exposure_hours_mean_long": MetricDef(
+        group="Exposure Metrics",
+        has_currency=False,
+        description="Mean number of hours with long position above high exposure threshold.",
+    ),
+    "high_exposure_hours_max_long": MetricDef(
+        group="Exposure Metrics",
+        has_currency=False,
+        description="Maximum consecutive hours with long position above high exposure threshold.",
+    ),
+    "high_exposure_hours_mean_short": MetricDef(
+        group="Exposure Metrics",
+        has_currency=False,
+        description="Mean number of hours with short position above high exposure threshold.",
+    ),
+    "high_exposure_hours_max_short": MetricDef(
+        group="Exposure Metrics",
+        has_currency=False,
+        description="Maximum consecutive hours with short position above high exposure threshold.",
+    ),
 }
 
 
@@ -1457,7 +1479,6 @@ class Backtest:
     def __init__(self):
         self._balance_sample_divider = 60
         self._base_dir = "backtests"
-        self._combine_ohlcvs = True
         self._compress_cache = True
         self._end_date = "now"
         self._exchanges = ["binance", "bybit"]
@@ -1470,13 +1491,16 @@ class Backtest:
         self._btc_collateral_cap = 0.0
         self._btc_collateral_ltv_cap = None
         self._max_warmup_minutes = 0.0
+        self._candle_interval_minutes = 1
+        self._market_settings_sources = {}
+        self._volume_normalization = True
         self._coin_sources = {}
         self._ohlcv_source_dir = None
         self._suite = Suite()
+        self._suite_enabled = bool(self._suite.enabled)
         self._backtest = {
             "balance_sample_divider": self._balance_sample_divider,
             "base_dir": self._base_dir,
-            "combine_ohlcvs": self._combine_ohlcvs,
             "compress_cache": self._compress_cache,
             "end_date": self._end_date,
             "exchanges": self._exchanges,
@@ -1488,8 +1512,12 @@ class Backtest:
             "btc_collateral_cap": self._btc_collateral_cap,
             "btc_collateral_ltv_cap": self._btc_collateral_ltv_cap,
             "max_warmup_minutes": self._max_warmup_minutes,
+            "candle_interval_minutes": self._candle_interval_minutes,
+            "market_settings_sources": self._market_settings_sources,
+            "volume_normalization": self._volume_normalization,
             "coin_sources": self._coin_sources,
             "ohlcv_source_dir": self._ohlcv_source_dir,
+            "suite_enabled": self._suite_enabled,
             "suite": self._suite.suite
         }
     
@@ -1500,6 +1528,7 @@ class Backtest:
     def backtest(self):
         # Dynamically update suite to ensure scenarios are current
         self._backtest["suite"] = self._suite.suite
+        self._backtest["suite_enabled"] = self._suite_enabled
         self._backtest["coin_sources"] = self._coin_sources
         return self._backtest
     @backtest.setter
@@ -1508,8 +1537,6 @@ class Backtest:
             self.balance_sample_divider = new_backtest["balance_sample_divider"]
         if "base_dir" in new_backtest:
             self.base_dir = new_backtest["base_dir"]
-        if "combine_ohlcvs" in new_backtest:
-            self.combine_ohlcvs = new_backtest["combine_ohlcvs"]
         if "compress_cache" in new_backtest:
             self.compress_cache = new_backtest["compress_cache"]
         if "end_date" in new_backtest:
@@ -1538,19 +1565,25 @@ class Backtest:
                 self.btc_collateral_cap = 0.0
         if "max_warmup_minutes" in new_backtest:
             self.max_warmup_minutes = new_backtest["max_warmup_minutes"]
+        if "candle_interval_minutes" in new_backtest:
+            self.candle_interval_minutes = new_backtest["candle_interval_minutes"]
+        if "market_settings_sources" in new_backtest:
+            self.market_settings_sources = new_backtest["market_settings_sources"]
+        if "volume_normalization" in new_backtest:
+            self.volume_normalization = new_backtest["volume_normalization"]
         if "coin_sources" in new_backtest:
             self.coin_sources = new_backtest["coin_sources"]
         if "ohlcv_source_dir" in new_backtest:
             self.ohlcv_source_dir = new_backtest["ohlcv_source_dir"]
         if "suite" in new_backtest:
             self.suite = new_backtest["suite"]
+        if "suite_enabled" in new_backtest:
+            self.suite_enabled = new_backtest["suite_enabled"]
     
     @property
     def balance_sample_divider(self): return self._balance_sample_divider
     @property
     def base_dir(self): return self._base_dir
-    @property
-    def combine_ohlcvs(self): return self._combine_ohlcvs
     @property
     def compress_cache(self): return self._compress_cache
     @property
@@ -1577,9 +1610,17 @@ class Backtest:
     @property
     def max_warmup_minutes(self): return self._max_warmup_minutes
     @property
+    def candle_interval_minutes(self): return self._candle_interval_minutes
+    @property
+    def market_settings_sources(self): return self._market_settings_sources
+    @property
+    def volume_normalization(self): return self._volume_normalization
+    @property
     def coin_sources(self): return self._coin_sources
     @property
     def ohlcv_source_dir(self): return self._ohlcv_source_dir
+    @property
+    def suite_enabled(self): return self._suite_enabled
     @property
     def suite(self): return self._suite
 
@@ -1591,10 +1632,6 @@ class Backtest:
     def base_dir(self, new_base_dir):
         self._base_dir = new_base_dir
         self._backtest["base_dir"] = self._base_dir
-    @combine_ohlcvs.setter
-    def combine_ohlcvs(self, new_combine_ohlcvs):
-        self._combine_ohlcvs = new_combine_ohlcvs
-        self._backtest["combine_ohlcvs"] = self._combine_ohlcvs
     @compress_cache.setter
     def compress_cache(self, new_compress_cache):
         self._compress_cache = new_compress_cache
@@ -1642,6 +1679,22 @@ class Backtest:
     def max_warmup_minutes(self, new_max_warmup_minutes):
         self._max_warmup_minutes = new_max_warmup_minutes
         self._backtest["max_warmup_minutes"] = self._max_warmup_minutes
+    @candle_interval_minutes.setter
+    def candle_interval_minutes(self, new_candle_interval_minutes):
+        try:
+            value = int(new_candle_interval_minutes)
+        except (TypeError, ValueError):
+            value = 1
+        self._candle_interval_minutes = max(1, value)
+        self._backtest["candle_interval_minutes"] = self._candle_interval_minutes
+    @market_settings_sources.setter
+    def market_settings_sources(self, new_market_settings_sources):
+        self._market_settings_sources = new_market_settings_sources if new_market_settings_sources else {}
+        self._backtest["market_settings_sources"] = self._market_settings_sources
+    @volume_normalization.setter
+    def volume_normalization(self, new_volume_normalization):
+        self._volume_normalization = bool(new_volume_normalization)
+        self._backtest["volume_normalization"] = self._volume_normalization
     @coin_sources.setter
     def coin_sources(self, new_coin_sources):
         self._coin_sources = new_coin_sources if new_coin_sources else {}
@@ -1653,12 +1706,20 @@ class Backtest:
         else:
             self._ohlcv_source_dir = str(new_ohlcv_source_dir)
         self._backtest["ohlcv_source_dir"] = self._ohlcv_source_dir
+    @suite_enabled.setter
+    def suite_enabled(self, new_suite_enabled):
+        self._suite_enabled = bool(new_suite_enabled)
+        if self._suite:
+            self._suite.enabled = self._suite_enabled
+        self._backtest["suite_enabled"] = self._suite_enabled
     @suite.setter
     def suite(self, new_suite):
         if isinstance(new_suite, Suite):
             self._suite = new_suite
         elif isinstance(new_suite, dict):
             self._suite.suite = new_suite
+        self._suite_enabled = bool(self._suite.enabled)
+        self._backtest["suite_enabled"] = self._suite_enabled
         self._backtest["suite"] = self._suite.suite
 
 class Bot:
@@ -2793,6 +2854,8 @@ class Live:
         self._candle_lock_timeout_seconds = 10
         self._balance_override = None
         self._balance_hysteresis_snap_pct = 0.02
+        self._enable_archive_candle_fetch = False
+        self._max_ohlcv_fetches_per_minute = 30
         self._user = "bybit_01"
 
         self._live = {
@@ -2827,6 +2890,8 @@ class Live:
             "candle_lock_timeout_seconds": self._candle_lock_timeout_seconds,
             "balance_override": self._balance_override,
             "balance_hysteresis_snap_pct": self._balance_hysteresis_snap_pct,
+            "enable_archive_candle_fetch": self._enable_archive_candle_fetch,
+            "max_ohlcv_fetches_per_minute": self._max_ohlcv_fetches_per_minute,
             "user": self._user
         }
     
@@ -2899,6 +2964,10 @@ class Live:
             self.balance_override = new_live["balance_override"]
         if "balance_hysteresis_snap_pct" in new_live:
             self.balance_hysteresis_snap_pct = new_live["balance_hysteresis_snap_pct"]
+        if "enable_archive_candle_fetch" in new_live:
+            self.enable_archive_candle_fetch = new_live["enable_archive_candle_fetch"]
+        if "max_ohlcv_fetches_per_minute" in new_live:
+            self.max_ohlcv_fetches_per_minute = new_live["max_ohlcv_fetches_per_minute"]
         if "user" in new_live:
             self.user = new_live["user"]
     
@@ -2964,6 +3033,10 @@ class Live:
     def balance_override(self): return self._balance_override
     @property
     def balance_hysteresis_snap_pct(self): return self._balance_hysteresis_snap_pct
+    @property
+    def enable_archive_candle_fetch(self): return self._enable_archive_candle_fetch
+    @property
+    def max_ohlcv_fetches_per_minute(self): return self._max_ohlcv_fetches_per_minute
     @property
     def user(self): return self._user
 
@@ -3097,6 +3170,14 @@ class Live:
     def balance_hysteresis_snap_pct(self, new_balance_hysteresis_snap_pct):
         self._balance_hysteresis_snap_pct = new_balance_hysteresis_snap_pct
         self._live["balance_hysteresis_snap_pct"] = self._balance_hysteresis_snap_pct
+    @enable_archive_candle_fetch.setter
+    def enable_archive_candle_fetch(self, new_enable_archive_candle_fetch):
+        self._enable_archive_candle_fetch = bool(new_enable_archive_candle_fetch)
+        self._live["enable_archive_candle_fetch"] = self._enable_archive_candle_fetch
+    @max_ohlcv_fetches_per_minute.setter
+    def max_ohlcv_fetches_per_minute(self, new_max_ohlcv_fetches_per_minute):
+        self._max_ohlcv_fetches_per_minute = int(new_max_ohlcv_fetches_per_minute)
+        self._live["max_ohlcv_fetches_per_minute"] = self._max_ohlcv_fetches_per_minute
     @user.setter
     def user(self, new_user):
         self._user = new_user
@@ -7086,7 +7167,7 @@ class ConfigV7Editor:
                     st.session_state[suite_ed_key_name] += 1
                 st.rerun()
 
-    def _add_scenario_ui(self, suite):
+    def _add_scenario_ui(self, suite, suite_ed_key_name):
         """UI for adding a new scenario."""
         st.subheader("Add Scenario")
         
@@ -7107,7 +7188,9 @@ class ConfigV7Editor:
                     suite.add_scenario(new_scenario)
                     # Trigger setter to update _backtest dict (like limits pattern)
                     self.config.backtest.suite = suite
-                    st.session_state.suite_ed_key += 1
+                    if suite_ed_key_name not in st.session_state:
+                        st.session_state[suite_ed_key_name] = 0
+                    st.session_state[suite_ed_key_name] += 1
                     # Clear add fields
                     if "add_scenario_label" in st.session_state:
                         del st.session_state["add_scenario_label"]
@@ -7227,12 +7310,36 @@ class ConfigV7Editor:
                 st.info("No scenarios configured. Add a scenario below to test your config across different coin sets, date ranges, or parameter variations.")
 
             # Add new scenario UI
-            self._add_scenario_ui(suite)
+            self._add_scenario_ui(suite, suite_ed_key_name)
 
             # Prevent creating invalid suite configs: PB7 ignores approved_coins when include_base_scenario=false.
             preflight_errors = pb7_suite_preflight_errors(self.config.config)
             if preflight_errors:
                 st.error("\n\n".join(preflight_errors))
+                needs_base_coins = any(
+                    "include_base_scenario=false" in err for err in preflight_errors
+                )
+                if needs_base_coins:
+                    approved = self.config.live.approved_coins.approved_coins
+                    base_coins = sorted(
+                        set((approved.get("long") or []) + (approved.get("short") or []))
+                    )
+                    if base_coins:
+                        if st.button(
+                            "Add base coins to empty scenarios",
+                            key=f"{key_prefix}suite_add_base_coins_{suite_key_ver}",
+                        ):
+                            updated = False
+                            for scenario in suite.scenarios:
+                                if not scenario.coins:
+                                    scenario.coins = list(base_coins)
+                                    updated = True
+                            if updated:
+                                self.config.backtest.suite = suite
+                                st.session_state[suite_ed_key_name] += 1
+                                st.rerun()
+                    else:
+                        st.info("No base coins found in live.approved_coins.")
 
 # ============================================================================
 # ConfigV7 - Main configuration class
