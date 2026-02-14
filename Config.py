@@ -7312,34 +7312,10 @@ class ConfigV7Editor:
             # Add new scenario UI
             self._add_scenario_ui(suite, suite_ed_key_name)
 
-            # Prevent creating invalid suite configs: PB7 ignores approved_coins when include_base_scenario=false.
+            # Display suite preflight warnings
             preflight_errors = pb7_suite_preflight_errors(self.config.config)
             if preflight_errors:
                 st.error("\n\n".join(preflight_errors))
-                needs_base_coins = any(
-                    "include_base_scenario=false" in err for err in preflight_errors
-                )
-                if needs_base_coins:
-                    approved = self.config.live.approved_coins.approved_coins
-                    base_coins = sorted(
-                        set((approved.get("long") or []) + (approved.get("short") or []))
-                    )
-                    if base_coins:
-                        if st.button(
-                            "Add base coins to empty scenarios",
-                            key=f"{key_prefix}suite_add_base_coins_{suite_key_ver}",
-                        ):
-                            updated = False
-                            for scenario in suite.scenarios:
-                                if not scenario.coins:
-                                    scenario.coins = list(base_coins)
-                                    updated = True
-                            if updated:
-                                self.config.backtest.suite = suite
-                                st.session_state[suite_ed_key_name] += 1
-                                st.rerun()
-                    else:
-                        st.info("No base coins found in live.approved_coins.")
 
 # ============================================================================
 # ConfigV7 - Main configuration class
@@ -7865,7 +7841,12 @@ class BalanceCalculator:
                     with st.empty():
                         for counter, coin in enumerate(coins):
                             st.text(f'{counter + 1}/{len(coins)}: {coin}')
-                            min_order_price, price, contractSize, min_amount, min_cost, lev = self.exchange.fetch_symbol_infos(coin)
+                            # Convert short coin name to full symbol (e.g., "BTC" -> "BTCUSDT")
+                            if self.exchange.id == 'hyperliquid':
+                                symbol = f"{coin}USDC"
+                            else:
+                                symbol = f"{coin}USDT"
+                            min_order_price, price, contractSize, min_amount, min_cost, lev = self.exchange.fetch_symbol_infos(symbol)
                             self.coin_infos.append({
                                 "coin": coin,
                                 "currentPrice": price,

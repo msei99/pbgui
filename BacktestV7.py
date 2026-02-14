@@ -1656,12 +1656,21 @@ class BacktestV7Result:
         # Note: liquidation banner is displayed once above `view_chart_be`
         balance_and_equity = Path(f'{self.result_path}/balance_and_equity.png')
         balance_and_equity_btc = Path(f'{self.result_path}/balance_and_equity_btc.png')
+        balance_and_equity_logy = Path(f'{self.result_path}/balance_and_equity_logy.png')
+        total_wallet_exposure = Path(f'{self.result_path}/total_wallet_exposure.png')
+        pnl_cumsum = Path(f'{self.result_path}/pnl_cumsum.png')
         if balance_and_equity.exists():
             st.image(str(balance_and_equity), width="stretch")
         else:
             st.warning("No balance and equity plot found")
         if balance_and_equity_btc.exists():
             st.image(str(balance_and_equity_btc), width="stretch")
+        if balance_and_equity_logy.exists():
+            st.image(str(balance_and_equity_logy), width="stretch")
+        if total_wallet_exposure.exists():
+            st.image(str(total_wallet_exposure), width="stretch")
+        if pnl_cumsum.exists():
+            st.image(str(pnl_cumsum), width="stretch")
 
     def view_fills(self):
         # Fills are always shown; liquidation banner shown above charts

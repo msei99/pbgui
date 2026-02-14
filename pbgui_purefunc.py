@@ -545,6 +545,18 @@ def pb7_suite_preflight_errors(config: dict) -> list[str]:
     if include_base:
         return []
 
+    def _has_any_coins(value) -> bool:
+        if isinstance(value, dict):
+            return any(_has_any_coins(v) for v in value.values())
+        if isinstance(value, (list, tuple, set)):
+            return any(str(x).strip() for x in value if x is not None)
+        if isinstance(value, str):
+            return bool(value.strip())
+        return False
+
+    live_section = config.get("live") or {}
+    has_base_approved = _has_any_coins(live_section.get("approved_coins"))
+
     base_coin_sources = backtest.get("coin_sources") or {}
     has_base_coin_sources = isinstance(base_coin_sources, dict) and any(
         v is not None and str(v).strip() for v in base_coin_sources.values()
@@ -568,13 +580,17 @@ def pb7_suite_preflight_errors(config: dict) -> list[str]:
         ):
             has_any_scenario_coin_sources = True
 
-    if not (has_base_coin_sources or has_any_scenario_coins or has_any_scenario_coin_sources):
+    if not (
+        has_base_coin_sources
+        or has_any_scenario_coins
+        or has_any_scenario_coin_sources
+        or has_base_approved
+    ):
         errors.append(
             "Suite is enabled with include_base_scenario=false, but no coins are defined in any scenario "
             "(and no coin_sources are set). PB7 will build an empty master coin list and fail with "
             "'No coin data found on any exchange for the requested date range.'\n"
-            "Fix: enable include_base_scenario, OR set scenario coins, OR set coin_sources, "
-            "OR use 'Add base coins to empty scenarios'."
+            "Fix: enable include_base_scenario, OR set scenario coins, OR set coin_sources."
         )
 
     return errors
