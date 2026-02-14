@@ -1201,13 +1201,15 @@ def view_market_data():
                             except Exception:
                                 pass
 
+                        total_bytes = r.get("total_bytes", 0) or 0
+                        size_mb = float(total_bytes) / (1024.0 * 1024.0)
                         _rows.append(
                             {
                                 "exchange": r.get("exchange", ""),
                                 "dataset": r.get("dataset", ""),
                                 "coin": r.get("coin", ""),
                                 "n_files": r.get("n_files", 0),
-                                "size": _fmt_bytes(r.get("total_bytes", 0)),
+                                "size": float(size_mb),
                                 "oldest_day": r.get("oldest_day", ""),
                                 "newest_day": r.get("newest_day", ""),
                                 "n_days": r.get("n_days", 0),
@@ -1232,6 +1234,12 @@ def view_market_data():
                         df_view = df_cached.drop(columns=drop_cols)
 
                 # ---- stable st.dataframe with on_select ----
+                column_config = {
+                    "size": st.column_config.NumberColumn(
+                        "size",
+                        format="%.2f MB",
+                    )
+                }
                 event = st.dataframe(
                     df_view,
                     use_container_width=True,
@@ -1239,6 +1247,7 @@ def view_market_data():
                     on_select="rerun",
                     selection_mode="single-row",
                     key=f"market_data_have_table_{tab_key}",
+                    column_config=column_config,
                 )
 
                 # Track selection per tab so we can distinguish
