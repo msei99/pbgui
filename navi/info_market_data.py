@@ -550,6 +550,7 @@ def view_market_data():
                     "aws_access_key_id",
                     value=str(creds_settings.get("aws_access_key_id") or ""),
                     key="market_data_hl_aws_access_key_id",
+                    type="password",
                     help="AWS Access Key ID for Requester-Pays S3 access.",
                 )
             with c_sk:
