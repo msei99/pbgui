@@ -1216,16 +1216,6 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.edit_opt_v7_starting_config = self.config.pbgui.starting_config
         st.checkbox("starting_config", key="edit_opt_v7_starting_config", help=pbgui_help.starting_config)
 
-    # combine_ohlcvs
-    @st.fragment
-    def fragment_combine_ohlcvs(self):
-        if "edit_opt_v7_combine_ohlcvs" in st.session_state:
-            if st.session_state.edit_opt_v7_combine_ohlcvs != self.config.backtest.combine_ohlcvs:
-                self.config.backtest.combine_ohlcvs = st.session_state.edit_opt_v7_combine_ohlcvs
-        else:
-            st.session_state.edit_opt_v7_combine_ohlcvs = self.config.backtest.combine_ohlcvs
-        st.checkbox("combine_ohlcvs", key="edit_opt_v7_combine_ohlcvs", help=pbgui_help.combine_ohlcvs)
-
     # ohlcv_source_dir
     @st.fragment
     def fragment_ohlcv_source_dir(self):
@@ -6257,7 +6247,6 @@ class OptimizeV7Item(ConfigV7Editor):
             self.fragment_logging()
         with col5:
             self.fragment_starting_config()
-            self.fragment_combine_ohlcvs()
         with col6:
             self.fragment_compress_results_file()
             self.fragment_write_all_results()

@@ -696,6 +696,22 @@ class BacktestV7Item(ConfigV7Editor):
             st.session_state.edit_bt_v7_max_warmup_minutes = self.config.backtest.max_warmup_minutes
         st.number_input("max_warmup_minutes", min_value=0.0, step=1440.0, key="edit_bt_v7_max_warmup_minutes", help=pbgui_help.max_warmup_minutes)
 
+    # candle_interval_minutes
+    @st.fragment
+    def fragment_candle_interval_minutes(self):
+        if "edit_bt_v7_candle_interval_minutes" in st.session_state:
+            if st.session_state.edit_bt_v7_candle_interval_minutes != self.config.backtest.candle_interval_minutes:
+                self.config.backtest.candle_interval_minutes = st.session_state.edit_bt_v7_candle_interval_minutes
+        else:
+            st.session_state.edit_bt_v7_candle_interval_minutes = self.config.backtest.candle_interval_minutes
+        st.number_input(
+            "candle_interval_minutes",
+            min_value=1,
+            step=1,
+            key="edit_bt_v7_candle_interval_minutes",
+            help=pbgui_help.candle_interval_minutes,
+        )
+
     # filter_by_min_effective_cost
     @st.fragment
     def fragment_filter_by_min_effective_cost(self):
@@ -705,16 +721,6 @@ class BacktestV7Item(ConfigV7Editor):
         else:
             st.session_state.edit_bt_v7_filter_by_min_effective_cost = self.config.backtest.filter_by_min_effective_cost
         st.checkbox("filter_by_min_effective_cost", key="edit_bt_v7_filter_by_min_effective_cost", help=pbgui_help.bt_filter_by_min_effective_cost)
-
-    # combine_ohlcvs
-    @st.fragment
-    def fragment_combine_ohlcvs(self):
-        if "edit_bt_v7_combine_ohlcvs" in st.session_state:
-            if st.session_state.edit_bt_v7_combine_ohlcvs != self.config.backtest.combine_ohlcvs:
-                self.config.backtest.combine_ohlcvs = st.session_state.edit_bt_v7_combine_ohlcvs
-        else:
-            st.session_state.edit_bt_v7_combine_ohlcvs = self.config.backtest.combine_ohlcvs
-        st.checkbox("combine_ohlcvs", key="edit_bt_v7_combine_ohlcvs", help=pbgui_help.combine_ohlcvs)
 
     # compress_cache
     @st.fragment
@@ -810,6 +816,142 @@ class BacktestV7Item(ConfigV7Editor):
             # Convert None to 0 for the UI
             st.session_state.edit_bt_v7_btc_collateral_ltv_cap = self.config.backtest.btc_collateral_ltv_cap if self.config.backtest.btc_collateral_ltv_cap is not None else 0.0
         st.number_input("btc_collateral_ltv_cap", min_value=0.0, max_value=1.0, step=0.1, format="%.2f", key="edit_bt_v7_btc_collateral_ltv_cap", help=pbgui_help.btc_collateral_ltv_cap)
+
+    # market_settings_sources
+    @st.fragment
+    def fragment_market_settings_sources(self):
+        """UI for editing market_settings_sources with table and add/delete controls."""
+        
+        mss = self.config.backtest.market_settings_sources
+        # Show all V7 exchanges, not just the configured ones
+        available_exchanges = V7.list()
+        
+        # Expander with count
+        has_mss = bool(mss)
+        expander_title = f"**Market Settings Sources** ({len(mss)} configured)" if has_mss else "**Market Settings Sources**"
+        
+        with st.expander(expander_title, expanded=has_mss):
+            # Display existing mappings
+            if mss:
+                # Build DataFrame
+                rows = []
+                for coin, exchange in sorted(mss.items()):
+                    rows.append({
+                        "Delete": False,
+                        "Coin": coin,
+                        "Exchange": exchange
+                    })
+                df = pd.DataFrame(rows)
+                
+                # Show table with delete checkbox
+                edited_df = st.data_editor(
+                    df,
+                    width="stretch",
+                    num_rows="fixed",
+                    hide_index=True,
+                    column_config={
+                        "Delete": st.column_config.CheckboxColumn(
+                            "Delete",
+                            default=False
+                        ),
+                        "Coin": st.column_config.TextColumn(
+                            "Coin",
+                            disabled=True
+                        ),
+                        "Exchange": st.column_config.TextColumn(
+                            "Exchange",
+                            disabled=True
+                        )
+                    },
+                    key="edit_bt_v7_market_settings_sources_table"
+                )
+                
+                # Process deletions
+                coins_to_delete = []
+                for _, row in edited_df.iterrows():
+                    if row["Delete"]:
+                        coins_to_delete.append(row["Coin"])
+                
+                if coins_to_delete:
+                    for coin in coins_to_delete:
+                        if coin in mss:
+                            del mss[coin]
+                    self.config.backtest.market_settings_sources = mss
+                    st.rerun()
+            
+            # Add new mapping section
+            col1, col2, col3 = st.columns([1.5, 1.5, 1], vertical_alignment="bottom")
+            
+            with col1:
+                # Step 1: Select coin from approved_coins (with "All Coins" option)
+                available_coins = []
+                try:
+                    raw_coins = list(set(
+                        self.config.live.approved_coins.long + 
+                        self.config.live.approved_coins.short
+                    ))
+                    # Normalize coins (remove USDT, etc.) and filter
+                    available_coins = sorted([c for c in {normalize_symbol(coin) for coin in raw_coins if coin} if c not in mss])
+                except:
+                    available_coins = []
+                
+                # Add "All Coins" option at the beginning
+                coin_options = (["✻ All Coins"] + available_coins) if available_coins else []
+                
+                if coin_options:
+                    selected_coin = st.selectbox(
+                        "Coin",
+                        options=coin_options,
+                        key="edit_bt_v7_mss_coin",
+                        help="Select a coin or '✻ All Coins' to apply same exchange to all coins at once"
+                    )
+                else:
+                    st.info("No more coins available to configure")
+                    selected_coin = None
+            
+            with col2:
+                # Step 2: Select exchange
+                if selected_coin:
+                    selected_exchange = st.selectbox(
+                        "Exchange",
+                        options=available_exchanges,
+                        key="edit_bt_v7_mss_exchange",
+                        help="Exchange to use for market settings (fees, min quantities, etc.)"
+                    )
+                else:
+                    selected_exchange = None
+            
+            with col3:
+                # Button changes based on whether "All Coins" is selected
+                is_all_coins = selected_coin and selected_coin.startswith("✻")
+                button_label = "🔄 Apply to All" if is_all_coins else "➕ Add"
+                button_key = f"edit_bt_v7_mss_{'apply_all' if is_all_coins else 'add'}"
+                
+                if st.button(button_label, key=button_key,
+                            disabled=not (selected_coin and selected_exchange)):
+                    if is_all_coins and available_coins:
+                        # Apply to all coins
+                        for coin in available_coins:
+                            mss[coin] = selected_exchange
+                        self.config.backtest.market_settings_sources = mss
+                        st.success(f"Applied {selected_exchange} to {len(available_coins)} coins ✓")
+                        st.rerun()
+                    elif not is_all_coins and selected_coin not in mss:
+                        # Add single coin
+                        mss[selected_coin] = selected_exchange
+                        self.config.backtest.market_settings_sources = mss
+                        st.rerun()
+
+
+    # volume_normalization
+    @st.fragment
+    def fragment_volume_normalization(self):
+        if "edit_bt_v7_volume_normalization" in st.session_state:
+            if st.session_state.edit_bt_v7_volume_normalization != self.config.backtest.volume_normalization:
+                self.config.backtest.volume_normalization = st.session_state.edit_bt_v7_volume_normalization
+        else:
+            st.session_state.edit_bt_v7_volume_normalization = self.config.backtest.volume_normalization
+        st.checkbox("volume_normalization", help=pbgui_help.volume_normalization, key="edit_bt_v7_volume_normalization")
 
     # filters
     def fragment_filter_coins(self):
@@ -1123,32 +1265,36 @@ class BacktestV7Item(ConfigV7Editor):
             self.fragment_btc_collateral_cap()
         with col6:
             self.fragment_btc_collateral_ltv_cap()
-        col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5])
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1,0.5,0.5,0.5,0.5,0.5,0.5])
         with col1:
             self.fragment_starting_balance()
         with col2:
-            self.fragment_minimum_coin_age_days()
+            self.fragment_candle_interval_minutes()
         with col3:
-            self.fragment_gap_tolerance_ohlcvs_minutes()
+            self.fragment_minimum_coin_age_days()
         with col4:
-            self.fragment_max_warmup_minutes()
+            self.fragment_gap_tolerance_ohlcvs_minutes()
         with col5:
-            self.fragment_balance_sample_divider()
+            self.fragment_max_warmup_minutes()
         with col6:
+            self.fragment_balance_sample_divider()
+        with col7:
             self.fragment_logging()
-        col1, col2, col3 = st.columns([2, 1, 1])
+        col1, col2 = st.columns([1, 1], vertical_alignment="bottom")
         with col1:
             self.fragment_ohlcv_source_dir()
+        with col2:
+            self.fragment_market_settings_sources()
         # Backtest Options
         col1, col2, col3, col4 = st.columns([1,1,1,1])
         with col1:
-            self.fragment_combine_ohlcvs()
-        with col2:
             self.fragment_compress_cache()
-        with col3:
+        with col2:
             self.fragment_filter_by_min_effective_cost()
-        with col4:
+        with col3:
             self.fragment_maker_fee_override()
+        with col4:
+            self.fragment_volume_normalization()
         # coin_sources (full width)
         self.fragment_coin_sources()
         # Suite (multi-scenario)

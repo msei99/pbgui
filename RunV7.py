@@ -234,6 +234,35 @@ class V7Instance():
         )
 
     @st.fragment
+    def fragment_enable_archive_candle_fetch(self):
+        if "edit_run_v7_enable_archive_candle_fetch" in st.session_state:
+            if st.session_state.edit_run_v7_enable_archive_candle_fetch != self.config.live.enable_archive_candle_fetch:
+                self.config.live.enable_archive_candle_fetch = st.session_state.edit_run_v7_enable_archive_candle_fetch
+        else:
+            st.session_state.edit_run_v7_enable_archive_candle_fetch = bool(self.config.live.enable_archive_candle_fetch)
+        st.checkbox(
+            "enable_archive_candle_fetch",
+            key="edit_run_v7_enable_archive_candle_fetch",
+            help=pbgui_help.enable_archive_candle_fetch,
+        )
+
+    @st.fragment
+    def fragment_max_ohlcv_fetches_per_minute(self):
+        if "edit_run_v7_max_ohlcv_fetches_per_minute" in st.session_state:
+            if int(st.session_state.edit_run_v7_max_ohlcv_fetches_per_minute) != self.config.live.max_ohlcv_fetches_per_minute:
+                self.config.live.max_ohlcv_fetches_per_minute = int(st.session_state.edit_run_v7_max_ohlcv_fetches_per_minute)
+        else:
+            st.session_state.edit_run_v7_max_ohlcv_fetches_per_minute = int(self.config.live.max_ohlcv_fetches_per_minute)
+        st.number_input(
+            "max_ohlcv_fetches_per_minute",
+            min_value=1,
+            step=1,
+            format="%d",
+            key="edit_run_v7_max_ohlcv_fetches_per_minute",
+            help=pbgui_help.max_ohlcv_fetches_per_minute,
+        )
+
+    @st.fragment
     def fragment_memory_snapshot_interval_minutes(self):
         if "edit_run_v7_memory_snapshot_interval_minutes" in st.session_state:
             if st.session_state.edit_run_v7_memory_snapshot_interval_minutes != self.config.logging.memory_snapshot_interval_minutes:
@@ -729,6 +758,12 @@ class V7Instance():
             with col2:
                 self.fragment_warmup_concurrency()
             with col3:
+                self.fragment_enable_archive_candle_fetch()
+            with col4:
+                self.fragment_max_ohlcv_fetches_per_minute()
+
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
                 self.fragment_max_concurrent_api_requests()
 
         #Filters

@@ -1555,11 +1555,6 @@ def live_vs_backtest_page():
                 bt = BacktestV7Item(str(run_cfg))
                 bt.config.backtest.exchanges = [compare_exchange]
                 # Run per-exchange backtests (avoid combined dataset runs).
-                # Do not auto-override coin_sources for Hyperliquid.
-                try:
-                    bt.config.backtest.combine_ohlcvs = False
-                except Exception:
-                    pass
 
                 # Normalize approved/ignored coins to base coin names for BacktestV7 UI
                 try:
