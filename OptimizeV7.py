@@ -1226,6 +1226,29 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.edit_opt_v7_combine_ohlcvs = self.config.backtest.combine_ohlcvs
         st.checkbox("combine_ohlcvs", key="edit_opt_v7_combine_ohlcvs", help=pbgui_help.combine_ohlcvs)
 
+    # ohlcv_source_dir
+    @st.fragment
+    def fragment_ohlcv_source_dir(self):
+        key = "edit_opt_v7_ohlcv_source_dir"
+        if not hasattr(self.config.backtest, "ohlcv_source_dir"):
+            setattr(self.config.backtest, "_ohlcv_source_dir", None)
+            if hasattr(self.config.backtest, "_backtest") and isinstance(self.config.backtest._backtest, dict):
+                self.config.backtest._backtest.setdefault("ohlcv_source_dir", None)
+        if key in st.session_state:
+            value = str(st.session_state.get(key) or "").strip()
+            if hasattr(type(self.config.backtest), "ohlcv_source_dir"):
+                self.config.backtest.ohlcv_source_dir = value if value else None
+            else:
+                self.config.backtest._ohlcv_source_dir = value if value else None
+                if hasattr(self.config.backtest, "_backtest") and isinstance(self.config.backtest._backtest, dict):
+                    self.config.backtest._backtest["ohlcv_source_dir"] = self.config.backtest._ohlcv_source_dir
+        else:
+            current = getattr(self.config.backtest, "ohlcv_source_dir", None)
+            if current is None and hasattr(self.config.backtest, "_backtest"):
+                current = self.config.backtest._backtest.get("ohlcv_source_dir")
+            st.session_state[key] = current or ""
+        st.text_input("ohlcv_source_dir", key=key, help=pbgui_help.ohlcv_source_dir)
+
     # compress_results_file
     @st.fragment
     def fragment_compress_results_file(self):
@@ -1585,39 +1608,80 @@ class OptimizeV7Item(ConfigV7Editor):
             self.fragment_only_cpt()
         with col5:
             st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_opt_v7_apply_filters")
+        def _normalize_list(items):
+            normalized = []
+            for item in items:
+                base = normalize_symbol(item)
+                if base and base not in normalized:
+                    normalized.append(base)
+            return normalized
         # Init session state for approved_coins
         if "edit_opt_v7_approved_coins_long" in st.session_state:
             if st.session_state.edit_opt_v7_approved_coins_long != self.config.live.approved_coins.long:
                 self.config.live.approved_coins.long = st.session_state.edit_opt_v7_approved_coins_long
         else:
+            self.config.live.approved_coins.long = _normalize_list(self.config.live.approved_coins.long)
             st.session_state.edit_opt_v7_approved_coins_long = self.config.live.approved_coins.long
         if "edit_opt_v7_approved_coins_short" in st.session_state:
             if st.session_state.edit_opt_v7_approved_coins_short != self.config.live.approved_coins.short:
                 self.config.live.approved_coins.short = st.session_state.edit_opt_v7_approved_coins_short
         else:
+            self.config.live.approved_coins.short = _normalize_list(self.config.live.approved_coins.short)
             st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
         # Apply filters
         if st.session_state.edit_opt_v7_apply_filters:
-            self.config.live.approved_coins.long = list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins + st.session_state.coindata_gateio.approved_coins + st.session_state.coindata_bitget.approved_coins))
-            self.config.live.approved_coins.short = list(set(st.session_state.coindata_bybit.approved_coins + st.session_state.coindata_binance.approved_coins + st.session_state.coindata_gateio.approved_coins + st.session_state.coindata_bitget.approved_coins))
+            def _extend_coins(target, items):
+                # Items are already normalized SHORT names from PBCoinData
+                for item in items:
+                    if item:
+                        target.append(item)
+
+            approved = []
+            if "bybit" in self.config.backtest.exchanges:
+                _extend_coins(approved, st.session_state.coindata_bybit.approved_coins)
+            if "binance" in self.config.backtest.exchanges:
+                _extend_coins(approved, st.session_state.coindata_binance.approved_coins)
+            if "gateio" in self.config.backtest.exchanges:
+                _extend_coins(approved, st.session_state.coindata_gateio.approved_coins)
+            if "bitget" in self.config.backtest.exchanges:
+                _extend_coins(approved, st.session_state.coindata_bitget.approved_coins)
+            if "hyperliquid" in self.config.backtest.exchanges and "coindata_hyperliquid" in st.session_state:
+                _extend_coins(approved, st.session_state.coindata_hyperliquid.approved_coins)
+            self.config.live.approved_coins.long = sorted(set(approved))
+            self.config.live.approved_coins.short = sorted(set(approved))
         # Remove unavailable symbols
-        symbols = []
+        symbols_raw = []
         if "bybit" in self.config.backtest.exchanges:
-            symbols.extend(st.session_state.coindata_bybit.symbols)
+            symbols_raw.extend(st.session_state.coindata_bybit.symbols)
         if "binance" in self.config.backtest.exchanges:
-            symbols.extend(st.session_state.coindata_binance.symbols)
+            symbols_raw.extend(st.session_state.coindata_binance.symbols)
         if "gateio" in self.config.backtest.exchanges:
-            symbols.extend(st.session_state.coindata_gateio.symbols)
+            symbols_raw.extend(st.session_state.coindata_gateio.symbols)
         if "bitget" in self.config.backtest.exchanges:
-            symbols.extend(st.session_state.coindata_bitget.symbols)
-        symbols = list(set(symbols))
-        # sort symbols
-        symbols.sort()
+            symbols_raw.extend(st.session_state.coindata_bitget.symbols)
+        if "hyperliquid" in self.config.backtest.exchanges and "coindata_hyperliquid" in st.session_state:
+            symbols_raw.extend(st.session_state.coindata_hyperliquid.symbols)
+        symbols_raw = list(set(symbols_raw))
+        base_to_full = {}
+        for sym in symbols_raw:
+            base = normalize_symbol(sym)
+            if base:
+                base_to_full.setdefault(base, set()).add(sym)
+        symbols = sorted({normalize_symbol(sym) for sym in symbols_raw if sym})
+
+        def is_available(coin: str) -> bool:
+            if not coin:
+                return False
+            if coin in symbols_raw:
+                return True
+            base = normalize_symbol(coin)
+            return base in base_to_full
+
         for symbol in self.config.live.approved_coins.long.copy():
-            if symbol not in symbols:
+            if not is_available(symbol):
                 self.config.live.approved_coins.long.remove(symbol)
         for symbol in self.config.live.approved_coins.short.copy():
-            if symbol not in symbols:
+            if not is_available(symbol):
                 self.config.live.approved_coins.short.remove(symbol)
         # Correct Display of Symbols
         if "edit_opt_v7_approved_coins_long" in st.session_state:
@@ -1641,6 +1705,8 @@ class OptimizeV7Item(ConfigV7Editor):
                 st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
                 st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
                 st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
+                if "coindata_hyperliquid" in st.session_state:
+                    st.session_state.coindata_hyperliquid.market_cap = self.config.pbgui.market_cap
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
@@ -1649,6 +1715,8 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
             st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
             st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
+            if "coindata_hyperliquid" in st.session_state:
+                st.session_state.coindata_hyperliquid.market_cap = self.config.pbgui.market_cap
         st.number_input("market_cap", min_value=0, step=50, format="%.d", key="edit_opt_v7_market_cap", help=pbgui_help.market_cap)
     
     @st.fragment
@@ -1661,6 +1729,8 @@ class OptimizeV7Item(ConfigV7Editor):
                 st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
                 st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
                 st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
+                if "coindata_hyperliquid" in st.session_state:
+                    st.session_state.coindata_hyperliquid.vol_mcap = self.config.pbgui.vol_mcap
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
@@ -1669,6 +1739,8 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
             st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
             st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
+            if "coindata_hyperliquid" in st.session_state:
+                st.session_state.coindata_hyperliquid.vol_mcap = self.config.pbgui.vol_mcap
         st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
 
     @st.fragment
@@ -1681,6 +1753,8 @@ class OptimizeV7Item(ConfigV7Editor):
                 st.session_state.coindata_binance.tags = self.config.pbgui.tags
                 st.session_state.coindata_gateio.tags = self.config.pbgui.tags
                 st.session_state.coindata_bitget.tags = self.config.pbgui.tags
+                if "coindata_hyperliquid" in st.session_state:
+                    st.session_state.coindata_hyperliquid.tags = self.config.pbgui.tags
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
@@ -1689,8 +1763,13 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.coindata_binance.tags = self.config.pbgui.tags
             st.session_state.coindata_gateio.tags = self.config.pbgui.tags
             st.session_state.coindata_bitget.tags = self.config.pbgui.tags
+            if "coindata_hyperliquid" in st.session_state:
+                st.session_state.coindata_hyperliquid.tags = self.config.pbgui.tags
         # remove duplicates from tags and sort them
-        tags = sorted(list(set(st.session_state.coindata_bybit.all_tags + st.session_state.coindata_binance.all_tags + st.session_state.coindata_gateio.all_tags + st.session_state.coindata_bitget.all_tags)))
+        hyperliquid_tags = []
+        if "coindata_hyperliquid" in st.session_state:
+            hyperliquid_tags = st.session_state.coindata_hyperliquid.all_tags
+        tags = sorted(list(set(st.session_state.coindata_bybit.all_tags + st.session_state.coindata_binance.all_tags + st.session_state.coindata_gateio.all_tags + st.session_state.coindata_bitget.all_tags + hyperliquid_tags)))
         st.multiselect("tags", tags, key="edit_opt_v7_tags", help=pbgui_help.coindata_tags)
 
     # only_cpt
@@ -1702,6 +1781,8 @@ class OptimizeV7Item(ConfigV7Editor):
                 st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
                 st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
                 st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
+                if "coindata_hyperliquid" in st.session_state:
+                    st.session_state.coindata_hyperliquid.only_cpt = self.config.pbgui.only_cpt
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
@@ -1709,6 +1790,8 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
             st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
+            if "coindata_hyperliquid" in st.session_state:
+                st.session_state.coindata_hyperliquid.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", key="edit_opt_v7_only_cpt", help=pbgui_help.only_cpt)
 
     # long_close_grid_markup_end
@@ -6178,6 +6261,10 @@ class OptimizeV7Item(ConfigV7Editor):
         with col6:
             self.fragment_compress_results_file()
             self.fragment_write_all_results()
+
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            self.fragment_ohlcv_source_dir()
         
         # Coin Sources - full width for better layout consistency with scenarios
         self.fragment_coin_sources()

@@ -47,9 +47,22 @@ def build_symbol_mappings(symbols):
     for symbol in symbols:
         # Remove quote currency suffixes
         base = symbol
+        
+        # Check for stablecoin/quote-like patterns
+        if base in ["USDC", "USDT", "BUSD", "TUSD", "DAI"]:
+            coins.add(base)
+            continue
+        
         for quote in ["USDT", "USDC", "BUSD", "USD"]:
             if base.endswith(quote):
-                base = base[:-len(quote)]
+                remaining = base[:-len(quote)]
+                if not remaining:
+                    continue
+                # After stripping, check if result looks like a quote-based coin
+                if remaining.startswith(("USD", "EUR", "GBP")) and len(remaining) <= 5:
+                    base = remaining
+                    break
+                base = remaining
                 break
         
         # Create variants like passivbot
@@ -84,9 +97,26 @@ def normalize_symbol(symbol, symbol_mappings=None):
     
     # Remove quote currency suffixes
     base = symbol
+    
+    # Check for stablecoin/quote-like patterns that should NOT be stripped further
+    # These are coins whose names resemble quotes (USDe, USDC as trading pair, etc.)
+    if base in ["USDC", "USDT", "BUSD", "TUSD", "DAI"]:
+        # These are either stablecoins traded as pairs or the coin itself
+        return base
+    
     for quote in ["USDT", "USDC", "BUSD", "TUSD", "USD", "EUR", "GBP", "DAI"]:
         if base.endswith(quote):
-            base = base[:-len(quote)]
+            remaining = base[:-len(quote)]
+            if not remaining:
+                continue  # Don't strip if nothing remains
+            # After stripping, check if result looks like a quote-based coin (USDe, USD1, EURo)
+            # Pattern: starts with quote prefix + has only 1-2 additional chars
+            if remaining.startswith(("USD", "EUR", "GBP")) and len(remaining) <= 5:
+                # This is likely a coin with quote prefix (USDe, USD1, etc.), keep it
+                base = remaining
+                break
+            # Strip the quote
+            base = remaining
             break
     
     # Handle Hyperliquid format: kPEPE -> PEPE
@@ -97,9 +127,9 @@ def normalize_symbol(symbol, symbol_mappings=None):
     if symbol_mappings and base in symbol_mappings:
         return symbol_mappings[base]
     
-    # Fallback to static SYMBOLMAP
-    if base in SYMBOLMAP:
-        return SYMBOLMAP[base]
+    # NOTE: SYMBOLMAP is intentionally NOT used here!
+    # It maps exchange symbols to CoinMarketCap API names (different purpose).
+    # SYMBOLMAP is used in list_symbols()/filter_by_market_cap() for CMC matching only.
     
     # Dynamic pattern matching for multiplier prefixes (e.g., 1000X, 10000X, 1000000X)
     # This handles cases like 10000ELON -> ELON, 1000PEPE -> PEPE, etc.
@@ -221,10 +251,17 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
     else:
         # Fallback: guess quote currency
         quote = "USDC" if "hyperliquid" in exchange else "USDT"
+        # Special handling for Hyperliquid k-prefix coins
+        if "hyperliquid" in exchange.lower():
+            k_prefix_coins = {"BONK", "FLOKI", "LUNC", "PEPE", "SHIB", "DOGS", "NEIRO"}
+            if coin.upper() in k_prefix_coins:
+                return f"k{coin.upper()}{quote}"
         return f"{coin}{quote}"
 
 
-# Static manual mappings (legacy compatibility)
+# SYMBOLMAP: Maps exchange symbols to CoinMarketCap API symbol names
+# WARNING: Used ONLY for CMC matching, NOT for coin normalization!
+# Example: Exchange has "RONIN" but CMC API returns "RON"
 SYMBOLMAP = {
     #Binance
     "RONIN": "RON",
@@ -800,8 +837,11 @@ class CoinData:
         for symbol in self.symbols:
             market_cap = 0
             sym = normalize_symbol(symbol, self._symbol_mappings)
+            # Map to CMC symbol name (different from exchange symbol!)
+            cmc_sym = SYMBOLMAP.get(sym.upper(), sym)
             for id, coin in enumerate(self.data["data"]):
-                if coin["symbol"] == sym or (sym == "NEIROETH" and coin["id"] == 32461):
+                # Case-insensitive match (CMC sometimes uses mixed case like "USDe")
+                if coin["symbol"].upper() == cmc_sym.upper() or (sym == "NEIROETH" and coin["id"] == 32461):
                     if coin["quote"]["USD"]["market_cap"]:
                         coin_data = coin
                         market_cap = coin["quote"]["USD"]["market_cap"]
@@ -818,8 +858,8 @@ class CoinData:
                     if symbol_id in self.metadata["data"]:
                         notice = self.metadata["data"][symbol_id]["notice"]
                         if notice:
-                            self._symbols_notice.append(symbol)
-                            self._symbols_notices[symbol] = notice
+                            self._symbols_notice.append(sym.upper())  # Force uppercase
+                            self._symbols_notices[sym.upper()] = notice
                     symbol_data = {
                         "id": id,
                         "symbol": symbol,
@@ -854,14 +894,14 @@ class CoinData:
                 if self.only_cpt and not symbol_data["copy_trading"]:
                     cpt = False
                 no_notice = True
-                if self.notices_ignore and symbol in self._symbols_notice:
+                if self.notices_ignore and sym.upper() in self._symbols_notice:
                     no_notice = False
                 # if self.market_cap != 0 or self.vol_mcap != 10.0:
                 if no_notice and cpt and market_cap >= self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap and (not self.tags or any(tag in symbol_data["tags"] for tag in self.tags)):
                     self._symbols_data.append(symbol_data)
-                    self.approved_coins.append(symbol)
+                    self.approved_coins.append(sym.upper())  # Force uppercase for Passivbot
                 else:
-                    self.ignored_coins.append(symbol)
+                    self.ignored_coins.append(sym.upper())  # Force uppercase for Passivbot
         #Sort approved and ignored coins and symbols_Data
         self.approved_coins.sort()
         self.ignored_coins.sort()
@@ -873,16 +913,18 @@ class CoinData:
         self.load_data()
         for symbol in symbols:
             sym = normalize_symbol(symbol, self._symbol_mappings)
+            # Map to CMC symbol name (different from exchange symbol!)
+            cmc_sym = SYMBOLMAP.get(sym.upper(), sym)
             for coin in self.data["data"]:
-                if coin["symbol"] == sym:
+                if coin["symbol"].upper() == cmc_sym.upper():
                     if coin["quote"]["USD"]["market_cap"] and coin["quote"]["USD"]["market_cap"] > mc:
-                        approved_coins.append(symbol)
+                        approved_coins.append(sym.upper())  # Force uppercase
                         break
                     elif coin["self_reported_market_cap"] and coin["self_reported_market_cap"] > mc:
-                        approved_coins.append(symbol)
+                        approved_coins.append(sym.upper())  # Force uppercase
                         break
-            if symbol not in approved_coins:
-                ignored_coins.append(symbol)
+            if sym.upper() not in approved_coins:
+                ignored_coins.append(sym.upper())  # Force uppercase
         return approved_coins, ignored_coins
 
 def main():

@@ -8,12 +8,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
-
 import pbgui_help
+
 from BacktestV7 import BacktestV7Item, BacktestV7Queue
 from Database import Database
 from pbgui_func import (
     PBGDIR,
+    error_popup,
     get_navi_paths,
     is_authenticted,
     is_pb7_installed,
@@ -95,22 +96,50 @@ def _make_entry_gate_price_figure(df: pd.DataFrame, *, title: str, show_gate_ban
             )
         )
     stable = df[(df.get("gate_open_close", False) == True)]
-    if not stable.empty:
-        if bool(show_gate_bands):
-            # Highlight gate-open minutes with a subtle vertical band (very visible even when zooming).
-            try:
-                for t in stable["time"]:
-                    fig.add_vrect(
-                        x0=t - pd.Timedelta(seconds=30),
-                        x1=t + pd.Timedelta(seconds=30),
-                        fillcolor="rgba(60, 180, 75, 0.12)",
-                        opacity=1.0,
-                        line_width=0,
-                        layer="below",
-                    )
-            except Exception:
-                pass
 
+    # Gate-close events: previous minute was gate-open-at-close, current minute is not.
+    try:
+        goc = pd.Series(df.get("gate_open_close", False)).fillna(False).astype(bool)
+        if len(goc) > 1:
+            prev = goc.shift(1, fill_value=bool(goc.iloc[0]))
+            close_mask = (~goc) & (prev)
+            close_ev = df[close_mask]
+        else:
+            close_ev = df.iloc[0:0]
+    except Exception:
+        close_ev = df.iloc[0:0]
+
+    # Build all vrect shapes in a single batch (avoids O(n²) add_vrect loop).
+    if bool(show_gate_bands):
+        batch_shapes = []
+        if not stable.empty:
+            for t in stable["time"]:
+                batch_shapes.append(dict(
+                    type="rect",
+                    x0=t - pd.Timedelta(seconds=30),
+                    x1=t + pd.Timedelta(seconds=30),
+                    y0=0, y1=1, yref="paper",
+                    fillcolor="rgba(60, 180, 75, 0.12)",
+                    opacity=1.0,
+                    line_width=0,
+                    layer="below",
+                ))
+        if close_ev is not None and not close_ev.empty:
+            for t in close_ev["time"]:
+                batch_shapes.append(dict(
+                    type="rect",
+                    x0=t - pd.Timedelta(seconds=30),
+                    x1=t + pd.Timedelta(seconds=30),
+                    y0=0, y1=1, yref="paper",
+                    fillcolor="rgba(255, 165, 0, 0.14)",
+                    opacity=1.0,
+                    line_width=0,
+                    layer="below",
+                ))
+        if batch_shapes:
+            fig.update_layout(shapes=batch_shapes)
+
+    if not stable.empty:
         fig.add_trace(
             go.Scatter(
                 x=stable["time"],
@@ -127,33 +156,7 @@ def _make_entry_gate_price_figure(df: pd.DataFrame, *, title: str, show_gate_ban
             )
         )
 
-    # Gate-close events: previous minute was gate-open-at-close, current minute is not.
-    try:
-        goc = pd.Series(df.get("gate_open_close", False)).fillna(False).astype(bool)
-        if len(goc) > 1:
-            prev = goc.shift(1, fill_value=bool(goc.iloc[0]))
-            close_mask = (~goc) & (prev)
-            close_ev = df[close_mask]
-        else:
-            close_ev = df.iloc[0:0]
-    except Exception:
-        close_ev = df.iloc[0:0]
-
     if close_ev is not None and not close_ev.empty:
-        # Subtle orange band + visible marker at the transition
-        if bool(show_gate_bands):
-            try:
-                for t in close_ev["time"]:
-                    fig.add_vrect(
-                        x0=t - pd.Timedelta(seconds=30),
-                        x1=t + pd.Timedelta(seconds=30),
-                        fillcolor="rgba(255, 165, 0, 0.14)",
-                        opacity=1.0,
-                        line_width=0,
-                        layer="below",
-                    )
-            except Exception:
-                pass
         fig.add_trace(
             go.Scatter(
                 x=close_ev["time"],
@@ -349,9 +352,9 @@ def _infer_coins_from_config_dict(cfg: dict) -> list[str]:
         if not isinstance(vals, list):
             continue
         for sym in vals:
-            c = coin_from_symbol_code(_coerce_usdc_to_usdt(sym))
+            c = _normalize_coin(sym)
             if c:
-                coins.add(str(c).upper())
+                coins.add(c)
 
     return sorted(coins)
 
@@ -365,13 +368,18 @@ def _live_exchange_from_config_dict(cfg: dict) -> str | None:
     return ex or None
 
 
-def _coerce_usdc_to_usdt(sym: str) -> str:
-    s = str(sym or "").strip()
-    if not s:
-        return ""
-    if s.endswith("USDC") and len(s) > 4:
-        return s[:-4] + "USDT"
-    return s
+def _normalize_coin(sym: str) -> str:
+    c = coin_from_symbol_code(sym)
+    return str(c).upper() if c else ""
+
+
+def _normalize_coin_list(items: list) -> list[str]:
+    out: list[str] = []
+    for sym in items or []:
+        c = _normalize_coin(sym)
+        if c and c not in out:
+            out.append(c)
+    return out
 
 
 def _extract_quote_from_symbol(sym: str) -> str | None:
@@ -406,11 +414,11 @@ def _infer_coins_for_coin_sources(bt_config, *, fallback_symbols: list[str] | No
     # Prefer explicit approved coin lists from the config (these are what the bot intends to trade).
     try:
         for sym in (bt_config.live.approved_coins.long or []):
-            c = coin_from_symbol_code(_coerce_usdc_to_usdt(sym))
+            c = _normalize_coin(sym)
             if c:
                 coins.add(str(c))
         for sym in (bt_config.live.approved_coins.short or []):
-            c = coin_from_symbol_code(_coerce_usdc_to_usdt(sym))
+            c = _normalize_coin(sym)
             if c:
                 coins.add(str(c))
     except Exception:
@@ -419,11 +427,107 @@ def _infer_coins_for_coin_sources(bt_config, *, fallback_symbols: list[str] | No
     # If the config doesn't have explicit lists (or they are empty), fall back to DB-derived symbols.
     if not coins and fallback_symbols:
         for sym in fallback_symbols:
-            c = coin_from_symbol_code(_coerce_usdc_to_usdt(sym))
+            c = _normalize_coin(sym)
             if c:
                 coins.add(str(c))
 
     return sorted(coins)
+
+
+def _normalize_day_key(day_key: str) -> str | None:
+    s = str(day_key or "").strip()
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        yyyy, mm, dd = s[:4], s[5:7], s[8:10]
+        if yyyy.isdigit() and mm.isdigit() and dd.isdigit():
+            return s
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return None
+
+
+def _collect_source_day_keys(exchange_root: Path, coin: str) -> set[str]:
+    coin_u = str(coin or "").strip().upper()
+    if not coin_u or not exchange_root.exists():
+        return set()
+
+    day_keys: set[str] = set()
+    try:
+        for d in exchange_root.iterdir():
+            if not d.is_dir():
+                continue
+            n = str(d.name or "").strip().upper()
+            if not (n == coin_u or n.startswith(f"{coin_u}_") or n.startswith(f"{coin_u}-") or n.startswith(f"{coin_u}:")):
+                continue
+            for fp in d.iterdir():
+                if not fp.is_file():
+                    continue
+                if fp.suffix.lower() not in (".npz", ".npy"):
+                    continue
+                dk = _normalize_day_key(fp.stem)
+                if dk:
+                    day_keys.add(dk)
+    except Exception:
+        return set()
+    return day_keys
+
+
+def _precheck_hyperliquid_ohlcv_source(
+    *,
+    source_root: Path,
+    coins: list[str],
+    start_date: date,
+    end_date: date,
+    warmup_days: int = 4,
+) -> tuple[bool, str]:
+    if not source_root.exists():
+        return False, f"OHLCV source dir not found: {source_root}"
+
+    exchange_root = source_root / "hyperliquid" / "1m"
+    if not exchange_root.exists():
+        return False, f"Missing source data folder: {exchange_root}"
+
+    coins_to_check = sorted({str(c).upper() for c in (coins or []) if str(c).strip()} | {"BTC"})
+    if not coins_to_check:
+        coins_to_check = ["BTC"]
+
+    check_start = start_date - timedelta(days=max(0, int(warmup_days)))
+    if check_start > end_date:
+        check_start = start_date
+
+    missing_summaries: list[str] = []
+    for coin in coins_to_check:
+        day_keys = _collect_source_day_keys(exchange_root, coin)
+        if not day_keys:
+            missing_summaries.append(f"{coin}: no local files")
+            continue
+
+        total_days = 0
+        missing_days = 0
+        first_missing = None
+        d = check_start
+        while d <= end_date:
+            total_days += 1
+            dk = d.strftime("%Y-%m-%d")
+            if dk not in day_keys:
+                missing_days += 1
+                if first_missing is None:
+                    first_missing = dk
+            d += timedelta(days=1)
+
+        if missing_days > 0:
+            first_txt = f", first missing {first_missing}" if first_missing else ""
+            missing_summaries.append(f"{coin}: {missing_days}/{total_days} days missing{first_txt}")
+
+    if missing_summaries:
+        preview = "; ".join(missing_summaries[:4])
+        if len(missing_summaries) > 4:
+            preview += f"; +{len(missing_summaries) - 4} more"
+        return False, (
+            "Cannot enqueue backtest: missing Hyperliquid OHLCV source data "
+            f"(checked {check_start} to {end_date}, incl. warmup window). {preview}"
+        )
+
+    return True, ""
 
 
 def _classify_uniqueid(uid: str) -> str:
@@ -1148,6 +1252,21 @@ def live_vs_backtest_page():
     compare_pending_end_key = "v7_live_vs_backtest_pending_end"
     compare_symbols_key = "v7_live_vs_backtest_symbols"
     compare_result_key = "v7_live_vs_backtest_result"
+    ohlcv_source_mode_key = "v7_live_vs_backtest_ohlcv_source_mode"
+    ohlcv_source_mode_options = ["Default (PB7)", "Use PBGui OHLCV data"]
+    ohlcv_source_mode_prev_exchange_key = "v7_live_vs_backtest_ohlcv_source_mode_prev_exchange"
+
+    def _default_ohlcv_source_mode_for_exchange(exchange_name: str | None) -> str:
+        return "Use PBGui OHLCV data" if str(exchange_name or "").lower() == "hyperliquid" else "Default (PB7)"
+
+    if ohlcv_source_mode_key not in st.session_state:
+        st.session_state[ohlcv_source_mode_key] = _default_ohlcv_source_mode_for_exchange(
+            st.session_state.get(compare_exchange_key)
+        )
+    if st.session_state.get(ohlcv_source_mode_key) not in ohlcv_source_mode_options:
+        st.session_state[ohlcv_source_mode_key] = _default_ohlcv_source_mode_for_exchange(
+            st.session_state.get(compare_exchange_key)
+        )
 
     min_picker_date = date(1970, 1, 1)
     max_picker_date = today
@@ -1174,6 +1293,16 @@ def live_vs_backtest_page():
         st.session_state[compare_exchange_key] = (
             default_compare_exchange if default_compare_exchange in available_compare_exchanges else "binance"
         )
+        st.session_state[ohlcv_source_mode_key] = _default_ohlcv_source_mode_for_exchange(
+            st.session_state.get(compare_exchange_key)
+        )
+
+    # If exchange changed, apply sensible default source mode for that exchange.
+    cur_exchange_for_mode = str(st.session_state.get(compare_exchange_key) or "")
+    prev_exchange_for_mode = str(st.session_state.get(ohlcv_source_mode_prev_exchange_key) or "")
+    if cur_exchange_for_mode != prev_exchange_for_mode:
+        st.session_state[ohlcv_source_mode_key] = _default_ohlcv_source_mode_for_exchange(cur_exchange_for_mode)
+        st.session_state[ohlcv_source_mode_prev_exchange_key] = cur_exchange_for_mode
 
     # Apply any pending sync values BEFORE instantiating the date_input widgets
     try:
@@ -1305,7 +1434,7 @@ def live_vs_backtest_page():
     st.session_state[sb_calc_info_key] = calc_info
 
     with st.container(border=True):
-        c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1, 1.1, 0.9, 0.6, 0.35, 0.35], vertical_alignment="bottom")
+        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1, 1.1, 0.9, 0.9, 0.6, 0.35, 0.35], vertical_alignment="bottom")
         with c1:
             compare_start_date = st.date_input(
                 "Start",
@@ -1360,6 +1489,14 @@ def live_vs_backtest_page():
                     on_click=_reset_starting_balance_to_calc,
                 )
         with c5:
+            st.selectbox(
+                "OHLCV Source",
+                ohlcv_source_mode_options,
+                key=ohlcv_source_mode_key,
+                label_visibility="collapsed",
+                help="Choose data source for the started backtest. 'Use PBGui OHLCV data' sets backtest.ohlcv_source_dir to pbgui/data/ohlcv.",
+            )
+        with c6:
             run_bt = st.button(
                 ":material/play_arrow:",
                 key="v7_live_vs_backtest_run_bt",
@@ -1370,7 +1507,7 @@ def live_vs_backtest_page():
                 disabled=(compare_exchange == "combined"),
                 use_container_width=True,
             )
-        with c6:
+        with c7:
             if st.button(
                 ":material/refresh:",
                 key="v7_live_vs_backtest_refresh",
@@ -1380,7 +1517,7 @@ def live_vs_backtest_page():
                 # Clear cached DB-derived user list
                 st.session_state.pop(user_with_income_cache_key, None)
                 st.rerun()
-        with c7:
+        with c8:
             if st.button(
                 ":material/home:",
                 key="v7_live_vs_backtest_back_to_dashboards",
@@ -1417,36 +1554,19 @@ def live_vs_backtest_page():
             else:
                 bt = BacktestV7Item(str(run_cfg))
                 bt.config.backtest.exchanges = [compare_exchange]
-                # Default behavior for most exchanges: run per-exchange backtests (avoid combined dataset runs).
-                # Special case: Hyperliquid often lacks long-term candles, so we keep execution exchange
-                # as Hyperliquid but force candle sourcing from Binance via coin_sources.
+                # Run per-exchange backtests (avoid combined dataset runs).
+                # Do not auto-override coin_sources for Hyperliquid.
                 try:
-                    if str(compare_exchange).lower() == "hyperliquid":
-                        bt.config.backtest.combine_ohlcvs = True
-                        coins = _infer_coins_for_coin_sources(
-                            bt.config,
-                            fallback_symbols=symbols_in_range,
-                        )
-                        bt.config.backtest.coin_sources = {c: "binance" for c in coins}
-                    else:
-                        bt.config.backtest.combine_ohlcvs = False
+                    bt.config.backtest.combine_ohlcvs = False
                 except Exception:
                     pass
 
-                # Translate USDC symbols to USDT symbols so BacktestV7 UI can display them
+                # Normalize approved/ignored coins to base coin names for BacktestV7 UI
                 try:
-                    bt.config.live.approved_coins.long = [
-                        _coerce_usdc_to_usdt(x) for x in (bt.config.live.approved_coins.long or []) if str(x or "").strip()
-                    ]
-                    bt.config.live.approved_coins.short = [
-                        _coerce_usdc_to_usdt(x) for x in (bt.config.live.approved_coins.short or []) if str(x or "").strip()
-                    ]
-                    bt.config.live.ignored_coins.long = [
-                        _coerce_usdc_to_usdt(x) for x in (bt.config.live.ignored_coins.long or []) if str(x or "").strip()
-                    ]
-                    bt.config.live.ignored_coins.short = [
-                        _coerce_usdc_to_usdt(x) for x in (bt.config.live.ignored_coins.short or []) if str(x or "").strip()
-                    ]
+                    bt.config.live.approved_coins.long = _normalize_coin_list(bt.config.live.approved_coins.long)
+                    bt.config.live.approved_coins.short = _normalize_coin_list(bt.config.live.approved_coins.short)
+                    bt.config.live.ignored_coins.long = _normalize_coin_list(bt.config.live.ignored_coins.long)
+                    bt.config.live.ignored_coins.short = _normalize_coin_list(bt.config.live.ignored_coins.short)
                 except Exception:
                     pass
 
@@ -1458,6 +1578,38 @@ def live_vs_backtest_page():
                     bt.config.backtest.starting_balance = float(st.session_state.get(sb_override_key))
                 except Exception:
                     pass
+
+                # Optional OHLCV source override for started comparison backtest
+                try:
+                    mode = str(st.session_state.get(ohlcv_source_mode_key) or "Default (PB7)")
+                    if mode == "Use PBGui OHLCV data":
+                        bt.config.backtest.ohlcv_source_dir = str(PBGDIR / "data" / "ohlcv")
+                    else:
+                        bt.config.backtest.ohlcv_source_dir = None
+                except Exception:
+                    pass
+
+                # Prevent queueing Hyperliquid jobs when required local source OHLCV data is missing.
+                try:
+                    mode = str(st.session_state.get(ohlcv_source_mode_key) or "Default (PB7)")
+                    if str(compare_exchange).lower() == "hyperliquid" and mode == "Use PBGui OHLCV data":
+                        precheck_coins = _infer_coins_for_coin_sources(
+                            bt.config,
+                            fallback_symbols=symbols_in_range,
+                        )
+                        ok, msg = _precheck_hyperliquid_ohlcv_source(
+                            source_root=Path(str(bt.config.backtest.ohlcv_source_dir or "")),
+                            coins=precheck_coins,
+                            start_date=compare_start_date,
+                            end_date=compare_end_date,
+                            warmup_days=4,
+                        )
+                        if not ok:
+                            error_popup(msg)
+                            return
+                except Exception as e:
+                    error_popup(f"Cannot validate Hyperliquid source OHLCV data: {e}")
+                    return
 
                 # Optional info for debugging/calibration
                 latest_balance_info = st.session_state.get(sb_calc_info_key)
@@ -1477,11 +1629,17 @@ def live_vs_backtest_page():
     result_dirs = [p.parent for p in analysis_files]
 
     has_any_combined = any(d.parent.name == "combined" for d in result_dirs)
+    has_any_hyperliquid = any(d.parent.name == "hyperliquid" for d in result_dirs)
 
     compare_exchange = st.session_state.get(compare_exchange_key)
-    results_exchange = "combined" if str(compare_exchange).lower() == "hyperliquid" else compare_exchange
-    if results_exchange:
-        result_dirs = [d for d in result_dirs if d.parent.name == results_exchange]
+    compare_exchange_l = str(compare_exchange).lower() if compare_exchange else ""
+    results_exchanges = [compare_exchange] if compare_exchange else []
+    if compare_exchange_l == "hyperliquid":
+        results_exchanges = ["hyperliquid"]
+    elif compare_exchange_l == "combined":
+        results_exchanges = ["combined"]
+    if results_exchanges:
+        result_dirs = [d for d in result_dirs if d.parent.name in results_exchanges]
     result_dirs = sorted(result_dirs, key=lambda p: p.stat().st_mtime, reverse=True)
 
     labels = []
@@ -1505,8 +1663,8 @@ def live_vs_backtest_page():
         extra = ""
         if str(compare_exchange).lower() not in ("combined", "hyperliquid") and has_any_combined:
             extra = " (You have combined results; set Exchange to 'combined' to compare them.)"
-        shown_root = results_exchange if results_exchange else compare_exchange
-        st.caption(f"No backtest results found under {results_root}/{shown_root}. Showing Live only.{extra}")
+        shown_root = ",".join(results_exchanges) if results_exchanges else str(compare_exchange)
+        st.caption(f"No backtest results found under {results_root}/[{shown_root}]. Showing Live only.{extra}")
 
         if symbols_in_range:
             selected_symbols = st.multiselect(
@@ -1540,6 +1698,24 @@ def live_vs_backtest_page():
             else:
                 st.caption("")
         selected_result_dir = label_to_dir.get(selected_label)
+
+        # Reset result-specific UI/cache state when the selected backtest result changes.
+        try:
+            _prev_result_dir_key = "v7_live_vs_backtest_prev_result_dir"
+            _prev_result_dir = str(st.session_state.get(_prev_result_dir_key) or "")
+            _cur_result_dir = str(selected_result_dir or "")
+            if _prev_result_dir != _cur_result_dir:
+                for _k in (
+                    compare_symbols_key,
+                    "v7_lvbt_missed_symbol",
+                    "v7_lvbt_gate_df_cache",
+                    "v7_live_vs_backtest_diag_scope",
+                    "v7_live_vs_backtest_diag_day",
+                ):
+                    st.session_state.pop(_k, None)
+                st.session_state[_prev_result_dir_key] = _cur_result_dir
+        except Exception:
+            pass
 
         try:
             if selected_result_dir is not None:
@@ -1652,7 +1828,7 @@ def live_vs_backtest_page():
                 coins: list[str] = []
                 if selected_symbols:
                     for sym in selected_symbols:
-                        c = coin_from_symbol_code(_coerce_usdc_to_usdt(sym))
+                        c = _normalize_coin(sym)
                         if c:
                             coins.append(str(c))
                 elif isinstance(bt_coin_sources, dict) and bt_coin_sources:
@@ -1672,7 +1848,8 @@ def live_vs_backtest_page():
                         if isinstance(bt_coin_sources, dict):
                             src_ex = bt_coin_sources.get(coin) or bt_coin_sources.get(coin.upper())
                         if not src_ex:
-                            src_ex = "binance" if str(compare_exchange).lower() == "hyperliquid" else str(compare_exchange)
+                            # Use the backtest exchange from config, not a hardcoded fallback to Binance
+                            src_ex = str(compare_exchange)
 
                         src_ex_used = None
                         src_markets = None
@@ -1681,11 +1858,19 @@ def live_vs_backtest_page():
                         src_candidates = _pb7_markets_cache_candidates(str(src_ex), prefer_futures=str(src_ex).strip().lower() == "binance")
                         for ex_try in (src_candidates or [str(src_ex).strip().lower()]):
                             mk = _load_pb7_markets_cache(str(ex_try))
-                            sym, m = _find_market_for_coin(mk, coin, quote="USDT") if mk else (None, None)
-                            if m is not None:
-                                src_ex_used = str(ex_try)
-                                src_markets = mk
-                                src_sym, src_m = sym, m
+                            if mk is None:
+                                continue
+                            # Try multiple quote currencies: USDT, USDC, BUSD etc.
+                            # (different exchanges use different quote currencies)
+                            quote_candidates = ["USDT", "USDC", "BUSD", "USD"]
+                            for q in quote_candidates:
+                                sym, m = _find_market_for_coin(mk, coin, quote=q)
+                                if m is not None:
+                                    src_ex_used = str(ex_try)
+                                    src_markets = mk
+                                    src_sym, src_m = sym, m
+                                    break
+                            if src_m is not None:
                                 break
                         if src_ex_used is None:
                             src_ex_used = str(src_ex)
@@ -1984,6 +2169,7 @@ def live_vs_backtest_page():
     all_days = pd.date_range(compare_start_date, compare_end_date, freq="D")
 
     live_daily_map: dict[str, pd.Series] = {}
+    live_event_map: dict[str, pd.DataFrame] = {}
     bt_daily_map: dict[str, pd.Series] = {}
 
     selected_symbols = st.session_state.get(compare_symbols_key, []) or []
@@ -2000,6 +2186,30 @@ def live_vs_backtest_page():
                 daily = pd.Series(0.0, index=all_days)
             live_daily_map[sym] = daily
             live_cum_map[sym] = daily.cumsum()
+
+            # Event-based curve (matches real backtest chart style)
+            try:
+                hrows = db.select_history_rows(single_user, start_ms, end_ms, symbol=sym, limit=500000)
+                hdf = pd.DataFrame(hrows, columns=["timestamp", "symbol", "income", "uniqueid"])
+                if not hdf.empty:
+                    hdf["Date"] = pd.to_datetime(pd.to_numeric(hdf["timestamp"], errors="coerce"), unit="ms", utc=True, errors="coerce")
+                    hdf["Income"] = pd.to_numeric(hdf["income"], errors="coerce").fillna(0.0)
+                    hdf = hdf.dropna(subset=["Date"]).sort_values("Date")
+                    hdf["Income"] = hdf["Income"].cumsum()
+                    hdf["Date"] = hdf["Date"].dt.tz_localize(None)
+                    # Anchor at range start so empty early windows still render from zero
+                    anchor = pd.DataFrame([{"Date": start_dt.replace(tzinfo=None), "Income": 0.0}])
+                    live_event_map[sym] = pd.concat([anchor, hdf[["Date", "Income"]]], ignore_index=True)
+                else:
+                    live_event_map[sym] = pd.DataFrame([
+                        {"Date": start_dt.replace(tzinfo=None), "Income": 0.0},
+                        {"Date": end_dt.replace(tzinfo=None), "Income": 0.0},
+                    ])
+            except Exception:
+                live_event_map[sym] = pd.DataFrame([
+                    {"Date": start_dt.replace(tzinfo=None), "Income": 0.0},
+                    {"Date": end_dt.replace(tzinfo=None), "Income": 0.0},
+                ])
     else:
         pnl_rows = db.select_pnl([single_user], start_ms, end_ms)
         live_df = pd.DataFrame(pnl_rows, columns=["Date", "Income"])
@@ -2010,7 +2220,31 @@ def live_vs_backtest_page():
         live_daily_map = {"Total": live_daily}
         live_cum_map = {"Total": live_daily.cumsum()}
 
+        # Event-based curve (matches real backtest chart style)
+        try:
+            hrows = db.select_history_rows(single_user, start_ms, end_ms, symbol=None, limit=500000)
+            hdf = pd.DataFrame(hrows, columns=["timestamp", "symbol", "income", "uniqueid"])
+            if not hdf.empty:
+                hdf["Date"] = pd.to_datetime(pd.to_numeric(hdf["timestamp"], errors="coerce"), unit="ms", utc=True, errors="coerce")
+                hdf["Income"] = pd.to_numeric(hdf["income"], errors="coerce").fillna(0.0)
+                hdf = hdf.dropna(subset=["Date"]).sort_values("Date")
+                hdf["Income"] = hdf["Income"].cumsum()
+                hdf["Date"] = hdf["Date"].dt.tz_localize(None)
+                anchor = pd.DataFrame([{"Date": start_dt.replace(tzinfo=None), "Income": 0.0}])
+                live_event_map["Total"] = pd.concat([anchor, hdf[["Date", "Income"]]], ignore_index=True)
+            else:
+                live_event_map["Total"] = pd.DataFrame([
+                    {"Date": start_dt.replace(tzinfo=None), "Income": 0.0},
+                    {"Date": end_dt.replace(tzinfo=None), "Income": 0.0},
+                ])
+        except Exception:
+            live_event_map["Total"] = pd.DataFrame([
+                {"Date": start_dt.replace(tzinfo=None), "Income": 0.0},
+                {"Date": end_dt.replace(tzinfo=None), "Income": 0.0},
+            ])
+
     bt_cum_map = {}
+    bt_event_map: dict[str, pd.DataFrame] = {}
     fills = None
     bt_cfg: dict = {}
     if has_backtest_results and selected_result_dir is not None:
@@ -2020,6 +2254,13 @@ def live_vs_backtest_page():
         config_path = Path(selected_result_dir) / "config.json"
 
         bt_cum_map = {k: pd.Series(0.0, index=all_days) for k in live_cum_map.keys()}
+        bt_event_map = {
+            k: pd.DataFrame([
+                {"Date": start_dt.replace(tzinfo=None), "Income": 0.0},
+                {"Date": end_dt.replace(tzinfo=None), "Income": 0.0},
+            ])
+            for k in live_cum_map.keys()
+        }
         bt_daily_map = {k: pd.Series(0.0, index=all_days) for k in live_cum_map.keys()}
 
     if has_backtest_results and selected_result_dir is not None and fills_path.exists() and config_path.exists():
@@ -2138,12 +2379,38 @@ def live_vs_backtest_page():
                         bt_daily = bt_daily.reindex(all_days, fill_value=0.0)
                         bt_daily_map[sym] = bt_daily
                         bt_cum_map[sym] = bt_daily.cumsum()
+
+                        # Event-based backtest curve
+                        try:
+                            ev = sub[["time", "net"]].copy()
+                            ev["Date"] = pd.to_datetime(ev["time"], utc=True, errors="coerce")
+                            ev["Income"] = pd.to_numeric(ev["net"], errors="coerce").fillna(0.0)
+                            ev = ev.dropna(subset=["Date"]).sort_values("Date")
+                            ev["Income"] = ev["Income"].cumsum()
+                            ev["Date"] = ev["Date"].dt.tz_localize(None)
+                            anchor = pd.DataFrame([{"Date": start_dt.replace(tzinfo=None), "Income": 0.0}])
+                            bt_event_map[sym] = pd.concat([anchor, ev[["Date", "Income"]]], ignore_index=True)
+                        except Exception:
+                            pass
                 else:
                     bt_daily = fills.groupby(fills["time"].dt.tz_convert("UTC").dt.floor("D"))["net"].sum()
                     bt_daily.index = bt_daily.index.tz_localize(None)
                     bt_daily = bt_daily.reindex(all_days, fill_value=0.0)
                     bt_daily_map["Total"] = bt_daily
                     bt_cum_map["Total"] = bt_daily.cumsum()
+
+                    # Event-based backtest curve
+                    try:
+                        ev = fills[["time", "net"]].copy()
+                        ev["Date"] = pd.to_datetime(ev["time"], utc=True, errors="coerce")
+                        ev["Income"] = pd.to_numeric(ev["net"], errors="coerce").fillna(0.0)
+                        ev = ev.dropna(subset=["Date"]).sort_values("Date")
+                        ev["Income"] = ev["Income"].cumsum()
+                        ev["Date"] = ev["Date"].dt.tz_localize(None)
+                        anchor = pd.DataFrame([{"Date": start_dt.replace(tzinfo=None), "Income": 0.0}])
+                        bt_event_map["Total"] = pd.concat([anchor, ev[["Date", "Income"]]], ignore_index=True)
+                    except Exception:
+                        pass
             else:
                 st.warning("Backtest fills.csv has no 'minute' column; cannot compute income curve.")
         except Exception as e:
@@ -2185,13 +2452,17 @@ def live_vs_backtest_page():
     st.session_state[interaction_key] = "Select range" if st.session_state.get(select_toggle_key) else "Zoom"
 
     rows = []
-    for sym, s in live_cum_map.items():
-        for d, v in zip(all_days, s.values):
-            rows.append({"Date": d, "Symbol": sym, "Source": "Live", "Income": float(v)})
-    if bt_cum_map:
-        for sym, s in bt_cum_map.items():
-            for d, v in zip(all_days, s.values):
-                rows.append({"Date": d, "Symbol": sym, "Source": "Backtest", "Income": float(v)})
+    for sym, df_curve in live_event_map.items():
+        if df_curve is None or df_curve.empty:
+            continue
+        for _, row in df_curve.iterrows():
+            rows.append({"Date": row.get("Date"), "Symbol": sym, "Source": "Live", "Income": float(row.get("Income", 0.0))})
+    if bt_event_map:
+        for sym, df_curve in bt_event_map.items():
+            if df_curve is None or df_curve.empty:
+                continue
+            for _, row in df_curve.iterrows():
+                rows.append({"Date": row.get("Date"), "Symbol": sym, "Source": "Backtest", "Income": float(row.get("Income", 0.0))})
 
     plot_long = pd.DataFrame(rows)
     fig = px.line(plot_long, x="Date", y="Income", color="Symbol", line_dash="Source", hover_data={"Income": ":.2f"})
@@ -2588,25 +2859,37 @@ def live_vs_backtest_page():
                 st.info("Select a finished backtest result (with config.json) to enable this view.")
             else:
                 # Pick a symbol/coin scope.
-                symbol_options = [s for s in (selected_symbols or []) if s and s != "Total"]
-                if not symbol_options:
-                    # Fallback: derive options from backtest fills (when user didn't explicitly pick symbols)
-                    try:
-                        if isinstance(fills, pd.DataFrame) and not fills.empty:
-                            if "coin" in fills.columns:
-                                symbol_options = sorted(
-                                    {str(c).strip().upper() for c in fills["coin"].dropna().unique().tolist() if str(c).strip()}
-                                )
-                            elif "symbol" in fills.columns:
-                                symbol_options = sorted(
-                                    {
-                                        coin_from_symbol_code(s)
-                                        for s in fills["symbol"].dropna().unique().tolist()
-                                        if coin_from_symbol_code(s)
-                                    }
-                                )
-                    except Exception:
-                        pass
+                symbol_options: list[str] = []
+                # Build symbols primarily from selected backtest fills (source of truth for this view).
+                fills_symbols: list[str] = []
+                try:
+                    if isinstance(fills, pd.DataFrame) and not fills.empty:
+                        if "coin" in fills.columns:
+                            fills_symbols = sorted(
+                                {str(c).strip().upper() for c in fills["coin"].dropna().unique().tolist() if str(c).strip()}
+                            )
+                        elif "symbol" in fills.columns:
+                            fills_symbols = sorted(
+                                {
+                                    coin_from_symbol_code(s)
+                                    for s in fills["symbol"].dropna().unique().tolist()
+                                    if coin_from_symbol_code(s)
+                                }
+                            )
+                except Exception:
+                    fills_symbols = []
+
+                selected_symbol_coins = [coin_from_symbol_code(s) for s in (selected_symbols or []) if s and s != "Total"]
+                selected_symbol_coins = [str(c).strip().upper() for c in selected_symbol_coins if str(c).strip()]
+
+                if fills_symbols:
+                    if selected_symbol_coins:
+                        symbol_options = [c for c in selected_symbol_coins if c in set(fills_symbols)]
+                    else:
+                        symbol_options = fills_symbols
+                else:
+                    # Fallback when fills are unavailable.
+                    symbol_options = selected_symbol_coins
 
                 default_symbol = symbol_options[0] if symbol_options else None
                 symbol_sel = None
@@ -2688,17 +2971,34 @@ def live_vs_backtest_page():
                             pass
 
                     try:
-                        df_gate = compute_pb7_entry_gating_ohlcv_df(
-                            bt_cfg,
-                            gate_exchange,
-                            symbol_sel,
-                            win_start_ms,
-                            win_end_ms,
-                            side=side,
-                            warmup_days=int(warmup_days),
-                            threshold_override=float(thr),
-                            use_prev_minute_entry=bool(use_prev),
+                        gate_cache_key = "v7_lvbt_gate_df_cache"
+                        gate_sig = (
+                            str(selected_result_dir or ""),
+                            str(gate_exchange or ""),
+                            str(symbol_sel or ""),
+                            int(win_start_ms),
+                            int(win_end_ms),
+                            str(side or ""),
+                            int(warmup_days),
+                            float(thr),
+                            bool(use_prev),
                         )
+                        gate_cache = st.session_state.get(gate_cache_key)
+                        if isinstance(gate_cache, dict) and gate_cache.get("sig") == gate_sig:
+                            df_gate = gate_cache.get("df")
+                        else:
+                            df_gate = compute_pb7_entry_gating_ohlcv_df(
+                                bt_full_cfg,
+                                gate_exchange,
+                                symbol_sel,
+                                win_start_ms,
+                                win_end_ms,
+                                side=side,
+                                warmup_days=int(warmup_days),
+                                threshold_override=float(thr),
+                                use_prev_minute_entry=bool(use_prev),
+                            )
+                            st.session_state[gate_cache_key] = {"sig": gate_sig, "df": df_gate}
                     except Exception as e:
                         st.warning(f"Could not compute entry gating series: {e}")
                         df_gate = None

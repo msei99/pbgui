@@ -202,16 +202,15 @@ def compute_pb7_entry_gating_ohlcv_df(
             yield cur
             cur = cur + timedelta(days=1)
 
-    arrays = []
-    for cand_ex in exchange_candidates:
-        base = (
-            Path(pb7_root)
-            / "historical_data"
-            / f"ohlcvs_{cand_ex}"
-            / coin
-        )
+    # Determine ohlcv_source_dir from backtest config (if set)
+    backtest_cfg = (cfg or {}).get("backtest", {}) if isinstance(cfg, dict) else {}
+    ohlcv_source_dir = str(backtest_cfg.get("ohlcv_source_dir") or "").strip() or None
+
+    def _load_npy_dir(base: Path) -> list:
+        """Load YYYY-MM-DD.npy files from a directory."""
+        out = []
         if not base.exists():
-            continue
+            return out
         for d in daterange(start_day, end_day):
             p = base / f"{d.isoformat()}.npy"
             if not p.exists():
@@ -220,15 +219,98 @@ def compute_pb7_entry_gating_ohlcv_df(
                 a = np.load(p)
                 if a is None or getattr(a, "size", 0) == 0:
                     continue
-                arrays.append(a)
+                out.append(a)
             except Exception:
                 continue
-        if arrays:
-            break
+        return out
+
+    def _load_npz_dir(base: Path) -> list:
+        """Load YYYY-MM-DD.npz (PBGui format) from a directory."""
+        out = []
+        if not base.exists():
+            return out
+        for d in daterange(start_day, end_day):
+            p = base / f"{d.isoformat()}.npz"
+            if not p.exists():
+                continue
+            try:
+                z = np.load(p)
+                candles = z.get("candles")
+                if candles is None or getattr(candles, "size", 0) == 0:
+                    continue
+                plain = np.column_stack([
+                    candles["ts"].astype("int64"),
+                    candles["o"].astype(float),
+                    candles["h"].astype(float),
+                    candles["l"].astype(float),
+                    candles["c"].astype(float),
+                ])
+                out.append(plain)
+            except Exception:
+                continue
+        return out
+
+    # Build candidate coin directory names for PBGui npz format
+    pbgui_coin_dirs = [f"{coin}_USDC:USDC"]
+    if coin.upper() not in ("USDC", "USDT"):
+        pbgui_coin_dirs.append(f"{coin}_USDT:USDT")
+
+    arrays = []
+    searched_paths: list[str] = []
+
+    # --- 1) If ohlcv_source_dir is set in config, search ONLY there ---
+    if ohlcv_source_dir:
+        src_root = Path(ohlcv_source_dir)
+        for cand_ex in exchange_candidates:
+            # PBGui layout: <ohlcv_source_dir>/<exchange>/1m/<COIN_USDC:USDC>/YYYY-MM-DD.npz
+            for coin_dir_name in pbgui_coin_dirs:
+                base = src_root / cand_ex / "1m" / coin_dir_name
+                searched_paths.append(str(base))
+                arrays = _load_npz_dir(base)
+                if arrays:
+                    break
+            if arrays:
+                break
+            # Also try npy layout: <ohlcv_source_dir>/<exchange>/<coin>/YYYY-MM-DD.npy
+            if not arrays:
+                base = src_root / cand_ex / coin
+                searched_paths.append(str(base))
+                arrays = _load_npy_dir(base)
+                if arrays:
+                    break
+
+        if not arrays:
+            raise FileNotFoundError(
+                f"No OHLCV data found for {coin} in configured backtest.ohlcv_source_dir={src_root} "
+                f"(searched: {', '.join(searched_paths[:6])})"
+            )
+
+    # --- 2) PB7 historical_data fallback (only when no explicit source dir) ---
+    if not arrays and not ohlcv_source_dir:
+        for cand_ex in exchange_candidates:
+            base = Path(pb7_root) / "historical_data" / f"ohlcvs_{cand_ex}" / coin
+            searched_paths.append(str(base))
+            arrays = _load_npy_dir(base)
+            if arrays:
+                break
+
+    # --- 3) PBGui default data/ohlcv fallback (only when no explicit source dir) ---
+    if not arrays and not ohlcv_source_dir:
+        pbgui_root = Path(__file__).resolve().parent
+        for cand_ex in exchange_candidates:
+            for coin_dir_name in pbgui_coin_dirs:
+                base = pbgui_root / "data" / "ohlcv" / cand_ex / "1m" / coin_dir_name
+                searched_paths.append(str(base))
+                arrays = _load_npz_dir(base)
+                if arrays:
+                    break
+            if arrays:
+                break
 
     if not arrays:
         raise FileNotFoundError(
-            f"No OHLCV npy found for {coin} on {exchange_candidates} in pb7 historical_data"
+            f"No OHLCV data found for {coin} on {exchange_candidates} "
+            f"(searched: {', '.join(searched_paths[:6])})"
         )
 
     arr = np.vstack(arrays)

@@ -12,6 +12,7 @@
 
 - Streamlit/UI helpers live in `pbgui_func.py`. Pure helpers (no Streamlit) live in `pbgui_purefunc.py`.
 - Never open a dialog inside another dialog: within `@st.dialog` do not call `error_popup/info_popup/result_popup`; show errors inline (e.g. `st.error`).
+- Use `:material/...:` icon buttons for compact inline navigation (e.g. `:material/arrow_left:` / `:material/arrow_right:` for month navigation). Prefer material icons for concise controls consistent with existing UI.
 - When showing/exporting configs as JSON, use real JSON serialization (`json.dumps`) so `null/true/false` are preserved (avoid Python `None/True/False` formatting).
 
 ## Repo boundaries (important)
@@ -66,3 +67,16 @@
 
 - Default: PBGui + PB7 use Python 3.12.
 - PB6 stays on Python 3.10.
+
+## Testing
+
+- **ALWAYS** use `venv_pbgui` virtual environment for running PBGui tests.
+- Test command: `/home/mani/software/venv_pbgui/bin/python -m pytest tests/`
+- Test structure follows Passivbot conventions:
+  - Tests organized in subdirectories: `market_data/`, `config/`, `ui/`
+  - Test files: `test_*.py`, functions: `test_*()`
+  - Use test classes to group related tests
+  - Use `@pytest.mark.parametrize` for multiple similar cases
+  - Document with docstrings: module, class, and function level
+- Write clear, focused tests with descriptive names and assertion messages.
+- See `tests/README.md` for complete testing documentation.

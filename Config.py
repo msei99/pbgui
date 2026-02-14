@@ -1471,6 +1471,7 @@ class Backtest:
         self._btc_collateral_ltv_cap = None
         self._max_warmup_minutes = 0.0
         self._coin_sources = {}
+        self._ohlcv_source_dir = None
         self._suite = Suite()
         self._backtest = {
             "balance_sample_divider": self._balance_sample_divider,
@@ -1488,6 +1489,7 @@ class Backtest:
             "btc_collateral_ltv_cap": self._btc_collateral_ltv_cap,
             "max_warmup_minutes": self._max_warmup_minutes,
             "coin_sources": self._coin_sources,
+            "ohlcv_source_dir": self._ohlcv_source_dir,
             "suite": self._suite.suite
         }
     
@@ -1538,6 +1540,8 @@ class Backtest:
             self.max_warmup_minutes = new_backtest["max_warmup_minutes"]
         if "coin_sources" in new_backtest:
             self.coin_sources = new_backtest["coin_sources"]
+        if "ohlcv_source_dir" in new_backtest:
+            self.ohlcv_source_dir = new_backtest["ohlcv_source_dir"]
         if "suite" in new_backtest:
             self.suite = new_backtest["suite"]
     
@@ -1574,6 +1578,8 @@ class Backtest:
     def max_warmup_minutes(self): return self._max_warmup_minutes
     @property
     def coin_sources(self): return self._coin_sources
+    @property
+    def ohlcv_source_dir(self): return self._ohlcv_source_dir
     @property
     def suite(self): return self._suite
 
@@ -1640,6 +1646,13 @@ class Backtest:
     def coin_sources(self, new_coin_sources):
         self._coin_sources = new_coin_sources if new_coin_sources else {}
         self._backtest["coin_sources"] = self._coin_sources
+    @ohlcv_source_dir.setter
+    def ohlcv_source_dir(self, new_ohlcv_source_dir):
+        if new_ohlcv_source_dir in (None, ""):
+            self._ohlcv_source_dir = None
+        else:
+            self._ohlcv_source_dir = str(new_ohlcv_source_dir)
+        self._backtest["ohlcv_source_dir"] = self._ohlcv_source_dir
     @suite.setter
     def suite(self, new_suite):
         if isinstance(new_suite, Suite):
@@ -2700,21 +2713,11 @@ class ApprovedCoins:
     def short(self): return self._short
     @long.setter
     def long(self, new_long):
-        # Add 'USDT' to each coin if it does not already end with 'USDT'
-        updated_long = [
-            coin if coin.endswith("USDT") or coin.endswith("USDC") else coin + "USDT"
-            for coin in new_long
-        ]
-        self._long = updated_long
+        self._long = [str(coin).strip() for coin in new_long if str(coin).strip()]
         self._approved_coins["long"] = self._long
     @short.setter
     def short(self, new_short):
-        # Add 'USDT' to each coin if it does not already end with 'USDT'
-        updated_short = [
-            coin if coin.endswith("USDT") or coin.endswith("USDC") else coin + "USDT"
-            for coin in new_short
-        ]
-        self._short = updated_short
+        self._short = [str(coin).strip() for coin in new_short if str(coin).strip()]
         self._approved_coins["short"] = self._short
 
 class IgnoredCoins:
