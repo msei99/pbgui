@@ -1498,6 +1498,13 @@ combine_ohlcvs = """
     backtester/optimizer runs each exchange independently.
     ```"""
 
+ohlcv_source_dir = """
+    ```
+    Optional path to a local OHLCV archive to use for backtests/optimizations.
+    Expected layout: <source_root>/<exchange>/1m/<COIN or SYMBOL>/YYYY-MM-DD.npz
+    Leave empty to use the default CandlestickManager/CCXT fetch.
+    ```"""
+
 compress_cache = """
     ```
     Set to true to save disk space. Set to false for faster loading.

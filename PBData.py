@@ -20,6 +20,8 @@ import asyncio
 import random
 from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
 from Exchange import set_ws_limits
+from market_data import load_market_data_config, get_daily_hour_coverage_for_dataset
+from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
 
 class PBData():
     def __init__(self):
@@ -168,6 +170,18 @@ class PBData():
         # Metrics sampling interval (seconds), configurable via env PB_METRICS_INTERVAL
         self._metrics_interval = 60
         # (IO debugging disabled) -- per-metrics-cycle DB/process IO logging removed
+        # Latest 1m candles (API) auto-refresh settings
+        self._latest_1m_enabled = True
+        self._latest_1m_interval_seconds = 120
+        self._latest_1m_coin_pause_seconds = 0.5
+        self._latest_1m_api_timeout_seconds = 30.0
+        self._latest_1m_min_lookback_days = 2
+        self._latest_1m_max_lookback_days = 4
+        self._latest_1m_gap_stale_minutes = 15
+        self._latest_1m_hist_interval_seconds = 1800
+        self._latest_1m_last_hist_scan_ts = 0.0
+        self._latest_1m_task = None
+        self._market_data_status_path = _Path(f"{PBGDIR}/data/logs/market_data_status.json")
         # Load initial settings (ws_max, log_level, ...)
         try:
             self._load_settings()
@@ -363,6 +377,31 @@ class PBData():
                         self._shared_executions_interval_seconds = int(new_exec)
                         self._poll_intervals_changed = True
 
+                # Latest 1m API fetch interval
+                new_latest_1m_interval = _get_int_opt('pbdata', 'latest_1m_interval_seconds')
+                if new_latest_1m_interval is not None and new_latest_1m_interval > 0:
+                    if new_latest_1m_interval != getattr(self, '_latest_1m_interval_seconds', 120):
+                        self._latest_1m_interval_seconds = int(new_latest_1m_interval)
+
+                # Latest 1m pause between coins
+                new_latest_1m_coin_pause = _get_float_opt('pbdata', 'latest_1m_coin_pause_seconds')
+                if new_latest_1m_coin_pause is not None and new_latest_1m_coin_pause >= 0:
+                    self._latest_1m_coin_pause_seconds = float(new_latest_1m_coin_pause)
+
+                # Latest 1m API timeout
+                new_latest_1m_timeout = _get_float_opt('pbdata', 'latest_1m_api_timeout_seconds')
+                if new_latest_1m_timeout is not None and new_latest_1m_timeout > 0:
+                    self._latest_1m_api_timeout_seconds = float(new_latest_1m_timeout)
+
+                # Latest 1m lookback days (min/max)
+                new_latest_1m_min_lb = _get_int_opt('pbdata', 'latest_1m_min_lookback_days')
+                if new_latest_1m_min_lb is not None and new_latest_1m_min_lb > 0:
+                    self._latest_1m_min_lookback_days = int(new_latest_1m_min_lb)
+
+                new_latest_1m_max_lb = _get_int_opt('pbdata', 'latest_1m_max_lookback_days')
+                if new_latest_1m_max_lb is not None and new_latest_1m_max_lb > 0:
+                    self._latest_1m_max_lookback_days = int(new_latest_1m_max_lb)
+
                 # Pause between per-user REST calls in shared pollers
                 new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
                 if new_rest_pause is not None and new_rest_pause >= 0:
@@ -410,6 +449,127 @@ class PBData():
                 self._private_client_manager_task = asyncio.create_task(self._private_client_manager_loop())
         except Exception:
             pass
+
+    def _write_market_data_status(self, payload: dict) -> None:
+        try:
+            logs_dir = _Path(f"{PBGDIR}/data/logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self._market_data_status_path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, sort_keys=True)
+            os.replace(tmp, self._market_data_status_path)
+        except Exception:
+            pass
+
+    async def _latest_1m_loop(self):
+        await asyncio.sleep(5)
+        while True:
+            try:
+                # Reload settings from pbgui.ini each loop so GUI changes
+                # to latest_1m_* settings take effect without restart.
+                try:
+                    self._load_settings()
+                except Exception:
+                    pass
+                
+                if not self._latest_1m_enabled:
+                    await asyncio.sleep(5)
+                    continue
+
+                cfg = load_market_data_config()
+                coins = list(cfg.enabled_coins.get("hyperliquid", []) or [])
+                coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+                now = datetime.now()
+                now_ts = now.timestamp()
+                status = {
+                    "timestamp": now.isoformat(sep=" ", timespec="seconds"),
+                    "latest_1m": {
+                        "exchange": "hyperliquid",
+                        "interval_seconds": int(self._latest_1m_interval_seconds),
+                        "last_run_ts": int(now_ts),
+                        "coins": {},
+                    },
+                }
+
+                for coin in coins:
+                    coin_status = {
+                        "last_fetch": None,
+                        "result": "skipped",
+                    }
+                    max_lb = int(self._latest_1m_max_lookback_days)
+                    lookback_days = int(self._latest_1m_min_lookback_days)
+                    newest_day = ""
+                    try:
+                        cov = get_daily_hour_coverage_for_dataset("hyperliquid", "1m_api", coin)
+                        newest_day = str(cov.get("newest_day") or "")
+                        if newest_day:
+                            d_new = datetime.strptime(newest_day, "%Y%m%d").date()
+                            days_since = (datetime.utcnow().date() - d_new).days
+                            if days_since < 0:
+                                days_since = 0
+                            lookback_days = max(lookback_days, days_since + 1)
+                        else:
+                            # No local API data yet: pull the full allowed lookback window.
+                            lookback_days = max_lb
+                            coin_status["note"] = "no_local_api_data"
+                    except Exception as e:
+                        coin_status["error"] = f"coverage:{type(e).__name__}"
+
+                    if lookback_days > max_lb:
+                        coin_status["note"] = "api_window_limited"
+                        lookback_days = max_lb
+
+                    try:
+                        res = await asyncio.to_thread(
+                            update_latest_hyperliquid_1m_api_for_coin,
+                            coin=coin,
+                            lookback_days=int(lookback_days),
+                            overwrite=False,
+                            dry_run=False,
+                            timeout_s=float(self._latest_1m_api_timeout_seconds),
+                        )
+                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "ok"
+                        coin_status["lookback_days"] = int(lookback_days)
+                        coin_status["newest_day"] = newest_day
+                        coin_status["api_result"] = res
+                    except Exception as e:
+                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "error"
+                        coin_status["error"] = str(e)
+
+                    status["latest_1m"]["coins"][coin] = coin_status
+
+                    # Pause between coins to avoid rate limits
+                    if self._latest_1m_coin_pause_seconds > 0:
+                        await asyncio.sleep(float(self._latest_1m_coin_pause_seconds))
+
+                if now_ts - float(self._latest_1m_last_hist_scan_ts or 0.0) >= float(self._latest_1m_hist_interval_seconds):
+                    self._latest_1m_last_hist_scan_ts = now_ts
+                    hist = {
+                        "exchange": "hyperliquid",
+                        "last_scan_ts": int(now_ts),
+                        "coins": {},
+                    }
+                    for coin in coins:
+                        cov = get_daily_hour_coverage_for_dataset("hyperliquid", "l2Book", coin)
+                        hist["coins"][coin] = {
+                            "oldest_day": str(cov.get("oldest_day") or ""),
+                            "newest_day": str(cov.get("newest_day") or ""),
+                            "missing_days_count": int(cov.get("missing_days_count") or 0),
+                            "coverage_pct": float(cov.get("coverage_pct") or 0.0),
+                        }
+                    status["historical"] = hist
+
+                self._write_market_data_status(status)
+            except Exception as e:
+                try:
+                    _human_log('PBData', f"[market-data] latest_1m loop error: {e}", level='WARNING')
+                except Exception:
+                    pass
+
+            await asyncio.sleep(float(self._latest_1m_interval_seconds))
 
     async def request_private_client(self, exchange_id: str, user, caller: str = None):
         """Public API for callers to request a private client.
@@ -3008,6 +3168,8 @@ class PBData():
                             initial_jitter_seconds=15,
                         )
                     )
+                if not hasattr(self, "_latest_1m_task") or self._latest_1m_task is None or self._latest_1m_task.done():
+                    self._latest_1m_task = asyncio.create_task(self._latest_1m_loop())
             except Exception as e:
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
         else:
