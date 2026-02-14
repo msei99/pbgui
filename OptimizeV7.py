@@ -1219,25 +1219,78 @@ class OptimizeV7Item(ConfigV7Editor):
     # ohlcv_source_dir
     @st.fragment
     def fragment_ohlcv_source_dir(self):
+        from pbgui_func import PBGDIR
+
         key = "edit_opt_v7_ohlcv_source_dir"
+        use_pbgui_key = "edit_opt_v7_use_pbgui_ohlcv"
+        pbgui_ohlcv_path = str(PBGDIR / "data" / "ohlcv")
+
         if not hasattr(self.config.backtest, "ohlcv_source_dir"):
             setattr(self.config.backtest, "_ohlcv_source_dir", None)
             if hasattr(self.config.backtest, "_backtest") and isinstance(self.config.backtest._backtest, dict):
                 self.config.backtest._backtest.setdefault("ohlcv_source_dir", None)
-        if key in st.session_state:
-            value = str(st.session_state.get(key) or "").strip()
-            if hasattr(type(self.config.backtest), "ohlcv_source_dir"):
-                self.config.backtest.ohlcv_source_dir = value if value else None
-            else:
-                self.config.backtest._ohlcv_source_dir = value if value else None
-                if hasattr(self.config.backtest, "_backtest") and isinstance(self.config.backtest._backtest, dict):
-                    self.config.backtest._backtest["ohlcv_source_dir"] = self.config.backtest._ohlcv_source_dir
-        else:
+
+        # Initialize session state for checkbox
+        if use_pbgui_key not in st.session_state:
+            current = getattr(self.config.backtest, "ohlcv_source_dir", None)
+            if current is None and hasattr(self.config.backtest, "_backtest"):
+                current = self.config.backtest._backtest.get("ohlcv_source_dir")
+            st.session_state[use_pbgui_key] = current == pbgui_ohlcv_path
+
+        # Initialize session state for text input
+        if key not in st.session_state:
             current = getattr(self.config.backtest, "ohlcv_source_dir", None)
             if current is None and hasattr(self.config.backtest, "_backtest"):
                 current = self.config.backtest._backtest.get("ohlcv_source_dir")
             st.session_state[key] = current or ""
-        st.text_input("ohlcv_source_dir", key=key, help=pbgui_help.ohlcv_source_dir)
+
+        # Determine the actual value to use
+        use_pbgui = st.session_state[use_pbgui_key]
+        if use_pbgui:
+            value = pbgui_ohlcv_path
+            st.session_state[key] = value
+        else:
+            value = str(st.session_state.get(key) or "").strip()
+
+        # Update config
+        if hasattr(type(self.config.backtest), "ohlcv_source_dir"):
+            self.config.backtest.ohlcv_source_dir = value if value else None
+        else:
+            self.config.backtest._ohlcv_source_dir = value if value else None
+            if hasattr(self.config.backtest, "_backtest") and isinstance(self.config.backtest._backtest, dict):
+                self.config.backtest._backtest["ohlcv_source_dir"] = self.config.backtest._ohlcv_source_dir
+
+        # Layout: Checkbox and text input side by side
+        col_chk, col_val = st.columns([1, 3], vertical_alignment="top")
+        with col_chk:
+            st.checkbox(
+                "Use PBGui OHLCV data",
+                key=use_pbgui_key,
+                help="When enabled, use PBGui's market data from data/ohlcv instead of PB7's cache/historical_data",
+            )
+        with col_val:
+            st.text_input(
+                "ohlcv_source_dir",
+                key=key,
+                help=pbgui_help.ohlcv_source_dir,
+                disabled=use_pbgui,
+            )
+
+    # candle_interval_minutes
+    @st.fragment
+    def fragment_candle_interval_minutes(self):
+        if "edit_opt_v7_candle_interval_minutes" in st.session_state:
+            if st.session_state.edit_opt_v7_candle_interval_minutes != self.config.backtest.candle_interval_minutes:
+                self.config.backtest.candle_interval_minutes = st.session_state.edit_opt_v7_candle_interval_minutes
+        else:
+            st.session_state.edit_opt_v7_candle_interval_minutes = self.config.backtest.candle_interval_minutes
+        st.number_input(
+            "candle_interval_minutes",
+            min_value=1,
+            step=1,
+            key="edit_opt_v7_candle_interval_minutes",
+            help=pbgui_help.candle_interval_minutes,
+        )
 
     # compress_results_file
     @st.fragment
@@ -5320,6 +5373,7 @@ class OptimizeV7Item(ConfigV7Editor):
         for key in keys_to_remove:
             del st.session_state[key]
 
+
     @st.fragment
     def fragment_suite(self):
         """UI for configuring multi-scenario suite for backtesting/optimization."""
@@ -6251,9 +6305,11 @@ class OptimizeV7Item(ConfigV7Editor):
             self.fragment_compress_results_file()
             self.fragment_write_all_results()
 
-        col1, col2, col3 = st.columns([2, 1, 1])
+        col1, col2, col3 = st.columns([2, 0.5, 1.5])
         with col1:
             self.fragment_ohlcv_source_dir()
+        with col2:
+            self.fragment_candle_interval_minutes()
         
         # Coin Sources - full width for better layout consistency with scenarios
         self.fragment_coin_sources()
