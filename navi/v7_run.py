@@ -36,6 +36,8 @@ def edit_v7_instance():
                 del st.session_state.config_v7_config_archive
             st.switch_page(get_navi_paths()["V7_BACKTEST"])
         if st.button("Caclulate Balance"):
+            exchange_id = v7_instance._users.find_exchange(v7_instance.user)
+            st.session_state.bc_context_exchanges = [exchange_id] if exchange_id else []
             st.session_state.balance_calc = BalanceCalculator(v7_instance.config.config_file)
             st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
         if st.button("Strategy Explorer"):
