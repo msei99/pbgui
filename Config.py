@@ -7893,20 +7893,50 @@ class BalanceCalculator:
                 self.coin_infos = []
                 self.balance_long = []
                 self.balance_short = []
-                with st.spinner(text=f'fetching coin infos from exchange...'):
+                coindata = st.session_state.pbcoindata
+                mapping = coindata.load_mapping(exchange=self.exchange.id, use_cache=True)
+                preferred_quote = "USDC" if self.exchange.id == "hyperliquid" else "USDT"
+                best_rows_by_coin = {}
+
+                for record in mapping:
+                    coin = (record.get("coin") or "").upper()
+                    if not coin or coin not in coins:
+                        continue
+
+                    quote = (record.get("quote") or "").upper()
+                    price = float(record.get("price_last") or 0.0)
+                    contract_size = float(record.get("contract_size") or 1.0)
+                    min_amount = float(record.get("min_amount") or record.get("precision_amount") or 0.0)
+                    min_cost = float(record.get("min_cost") or 0.0)
+                    min_order_price = float(record.get("min_order_price") or 0.0)
+                    if min_order_price <= 0 and price > 0:
+                        min_order_price = max(min_cost, min_amount * contract_size * price)
+
+                    score = (
+                        0 if quote == preferred_quote else 1,
+                        0 if bool(record.get("active", True)) else 1,
+                        0 if bool(record.get("linear", True)) else 1,
+                        0 if min_order_price > 0 else 1,
+                        -price,
+                    )
+
+                    prev = best_rows_by_coin.get(coin)
+                    if prev is None or score < prev[0]:
+                        best_rows_by_coin[coin] = (score, record, min_order_price, price, contract_size, min_amount, min_cost)
+
+                with st.spinner(text='loading coin infos from mapping...'):
                     with st.empty():
-                        for counter, coin in enumerate(coins):
+                        for counter, coin in enumerate(sorted(coins)):
                             st.text(f'{counter + 1}/{len(coins)}: {coin}')
-                            # Convert short coin name to full symbol (e.g., "BTC" -> "BTCUSDT")
-                            if self.exchange.id == 'hyperliquid':
-                                symbol = f"{coin}USDC"
-                            else:
-                                symbol = f"{coin}USDT"
-                            min_order_price, price, contractSize, min_amount, min_cost, lev = self.exchange.fetch_symbol_infos(symbol)
+                            best = best_rows_by_coin.get(coin)
+                            if best is None:
+                                continue
+                            _, record, min_order_price, price, contract_size, min_amount, min_cost = best
+                            lev = record.get("max_leverage")
                             self.coin_infos.append({
                                 "coin": coin,
                                 "currentPrice": price,
-                                "contractSize": contractSize,
+                                "contractSize": contract_size,
                                 "min_amount": min_amount,
                                 "min_cost": min_cost,
                                 "min_order_price": min_order_price,
@@ -7928,7 +7958,6 @@ class BalanceCalculator:
                                         "coin": coin,
                                         "balance": balance
                                     })
-                            sleep(0.1)  # to avoid rate limit issues
 
         # sort coin_infos by min_order_price
         self.coin_infos = sorted(self.coin_infos, key=lambda x: x['min_order_price'], reverse=True)
