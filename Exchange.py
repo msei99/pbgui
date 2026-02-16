@@ -330,6 +330,17 @@ class Exchange:
                         self.instance.options.setdefault('adjustForTimeDifference', True)
                     except Exception:
                         pass
+                    # HIP-3: Configure Hyperliquid to include stock perpetuals
+                    if self.id == 'hyperliquid':
+                        try:
+                            self.instance.options['fetchMarkets'] = {
+                                'types': ['swap', 'hip3'],
+                                'hip3': {
+                                    'dexes': [],  # Empty = auto-discover all HIP-3 DEXes
+                                }
+                            }
+                        except Exception:
+                            pass
                 except Exception:
                     pass
         except Exception:
@@ -369,6 +380,14 @@ class Exchange:
         try:
             kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
             kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
+            # HIP-3: Configure Hyperliquid to include stock perpetuals
+            if ex_id == 'hyperliquid':
+                kwargs.setdefault('options', {})['fetchMarkets'] = {
+                    'types': ['swap', 'hip3'],
+                    'hip3': {
+                        'dexes': [],  # Empty = auto-discover all HIP-3 DEXes
+                    }
+                }
         except Exception:
             pass
 
@@ -421,6 +440,14 @@ class Exchange:
             try:
                 kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
                 kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
+                # HIP-3: Configure Hyperliquid to include stock perpetuals
+                if ex_id == 'hyperliquid':
+                    kwargs.setdefault('options', {})['fetchMarkets'] = {
+                        'types': ['swap', 'hip3'],
+                        'hip3': {
+                            'dexes': [],  # Empty = auto-discover all HIP-3 DEXes
+                        }
+                    }
             except Exception:
                 pass
 
@@ -608,6 +635,14 @@ class Exchange:
                 try:
                     kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
                     kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
+                    # HIP-3: Configure Hyperliquid to include stock perpetuals
+                    if ex_id == 'hyperliquid':
+                        kwargs.setdefault('options', {})['fetchMarkets'] = {
+                            'types': ['swap', 'hip3'],
+                            'hip3': {
+                                'dexes': [],  # Empty = auto-discover all HIP-3 DEXes
+                            }
+                        }
                 except Exception:
                     pass
 
@@ -818,6 +853,11 @@ class Exchange:
         if not self.instance: self.connect()
         # Fix for Hyperliquid
         if self.id == "hyperliquid":
+            try:
+                if not getattr(self.instance, 'markets', None):
+                    self.instance.load_markets()
+            except Exception:
+                pass
             fetched = self.instance.fetch(
                 "https://api.hyperliquid.xyz/info",
                 method="POST",
@@ -826,11 +866,50 @@ class Exchange:
             )
             prices = {}
             for symbol in symbols:
-                sym = symbol[0:-10]
-                if sym in fetched:
+                base = symbol.split('/')[0] if '/' in symbol else symbol
+                candidates = [base]
+
+                # K-prefix variants (KPEPE -> kPEPE)
+                if base.startswith('K') and len(base) > 1:
+                    candidates.append('k' + base[1:])
+
+                # DEX prefixed symbols (e.g. XYZ-TSLA, FLX-XMR)
+                if '-' in base:
+                    tail = base.split('-', 1)[1]
+                    candidates.append(tail)
+                    prefix = base.split('-', 1)[0].lower()
+                    candidates.append(f"{prefix}:{tail}")
+
+                # Generic case variants
+                candidates.append(base.lower())
+                candidates.append(base.upper())
+
+                last = None
+                for cand in candidates:
+                    if cand in fetched:
+                        last = fetched[cand]
+                        break
+
+                if last is not None:
                     prices[symbol] = {
                         "timestamp": int(datetime.now().timestamp() * 1000),
-                        "last": fetched[sym]
+                        "last": last,
+                    }
+                    continue
+
+                # Fallback to market metadata prices (available for HIP-3 and
+                # some builder DEX symbols not keyed in allMids).
+                market = None
+                try:
+                    market = self.instance.market(symbol)
+                except Exception:
+                    market = None
+                info = (market or {}).get('info', {}) if market else {}
+                md_price = info.get('markPx') or info.get('midPx') or info.get('oraclePx')
+                if md_price is not None:
+                    prices[symbol] = {
+                        "timestamp": int(datetime.now().timestamp() * 1000),
+                        "last": md_price,
                     }
         else:
             prices = self.instance.fetch_tickers(symbols=symbols)
@@ -2745,16 +2824,19 @@ class Exchange:
         cpSymbols = []
         if self.id == 'binance':
             users = Users()
-            self.user = users.find_binance_user()
-            if self.user:
-                self.connect()
-                try:
-                    symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
-                except Exception as e:
-                    _human_log('Exchange', f'Error: {e}', level='ERROR', user=self.user)
-                    return
-                for symbol in symbols["data"]:
-                    cpSymbols.append(symbol["symbol"])
+            all_users = users.find_binance_users()
+            if all_users:
+                for user in all_users:
+                    self.user = user
+                    self.connect()
+                    try:
+                        symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
+                        if symbols and symbols.get("data"):
+                            for symbol in symbols["data"]:
+                                cpSymbols.append(symbol["symbol"])
+                            break
+                    except Exception as e:
+                        _human_log('Exchange', f'User:{self.user.name} Error: {e}', level='ERROR', user=self.user)
         elif self.id == 'bybit':
             # print(self.instance.__dir__())
             symbols = self.instance.publicGetContractV3PublicCopytradingSymbolList()
@@ -2788,6 +2870,10 @@ class Exchange:
         for (k,v) in list(self._markets.items()):
             if v["swap"] and v["active"] and v["linear"]:
                 if self.id == "hyperliquid":
+                    # Skip HIP-3 stock perpetuals — only regular crypto swaps belong in ini
+                    info = v.get("info", {})
+                    if isinstance(info, dict) and info.get("hip3"):
+                        continue
                     if v["symbol"].endswith('USDC'):
                         self.swap.append(v["symbol"][0:-5].replace("/", "").replace("-", ""))
                 if self.id == "bitget":
@@ -2831,6 +2917,7 @@ class Exchange:
 
     def save_symbols(self):
         pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
         pb_config.read('pbgui.ini')
         if not pb_config.has_section("exchanges"):
             pb_config.add_section("exchanges")
@@ -2844,6 +2931,7 @@ class Exchange:
 
     def load_symbols(self):
         pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
         pb_config.read('pbgui.ini')
         if pb_config.has_option("exchanges", f'{self.id}.spot'):
             self.spot = eval(pb_config.get("exchanges", f'{self.id}.spot'))

@@ -1412,6 +1412,14 @@ coindata_metadata_interval = """
     You need 1 credit for 100 coins. So count your coins and interval to not exceed the limit.
     ```"""
 
+coindata_mapping_interval = """
+    ```
+    interval in hours to refresh CCXT market data and exchange symbol mappings.
+    This includes HIP-3 (stock perpetuals) detection on Hyperliquid.
+    Lower values give faster updates when new markets are listed,
+    but increase exchange API usage. Default: 24 hours.
+    ```"""
+
 market_orders_allowed = """
     ```
     If true, allow Passivbot to place market orders when order price is very close to current

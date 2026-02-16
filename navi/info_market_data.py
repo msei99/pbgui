@@ -13,7 +13,7 @@ import inspect
 import json
 
 from Exchange import Exchanges
-from PBCoinData import get_normalized_coins, get_symbol_for_coin
+from PBCoinData import get_normalized_coins, get_symbol_for_coin, compute_coin_name
 from pbgui_purefunc import load_ini, save_ini
 
 from pbgui_func import (
@@ -404,7 +404,24 @@ def _normalize_archive_range(v: object) -> dict[str, str]:
 def _coin_options_for_exchange(exchange: str) -> list[str]:
     try:
         symbols = load_symbols_from_ini(exchange, "swap")
-        return sorted(get_normalized_coins(symbols))
+        coins = sorted(get_normalized_coins(symbols))
+        if coins:
+            return coins
+
+        mapping_path = Path(__file__).resolve().parents[1] / "data" / "coindata" / str(exchange).lower() / "mapping.json"
+        if mapping_path.exists():
+            mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+            mapped_coins = set()
+            for row in mapping if isinstance(mapping, list) else []:
+                symbol = str(row.get("symbol") or "").strip()
+                quote = str(row.get("quote") or "").strip().upper()
+                if not symbol:
+                    continue
+                coin = compute_coin_name(symbol, quote)
+                if coin:
+                    mapped_coins.add(str(coin).upper())
+            return sorted(mapped_coins)
+        return []
     except Exception:
         return []
 
@@ -424,15 +441,22 @@ def view_market_data():
     )
 
     cfg = load_market_data_config()
-    enabled_default = list(cfg.enabled_coins.get(str(exchange).lower(), []) or [])
+    enabled_default_raw = [str(c).strip().upper() for c in (cfg.enabled_coins.get(str(exchange).lower(), []) or []) if str(c).strip()]
 
     coin_options = _coin_options_for_exchange(str(exchange))
+    option_set = set(coin_options)
+    enabled_default = [c for c in enabled_default_raw if c in option_set]
+    dropped_defaults = sorted(set(enabled_default_raw) - option_set)
     enabled_key = f"market_data_enabled_{str(exchange).lower()}"
 
     enabled_preview = enabled_default
     try:
         if enabled_key in st.session_state and isinstance(st.session_state.get(enabled_key), list):
-            enabled_preview = list(st.session_state.get(enabled_key) or [])
+            enabled_preview = [
+                str(c).strip().upper()
+                for c in (st.session_state.get(enabled_key) or [])
+                if str(c).strip().upper() in option_set
+            ]
     except Exception:
         enabled_preview = enabled_default
 
@@ -446,6 +470,11 @@ def view_market_data():
                 default=enabled_default,
                 key=enabled_key,
             )
+            if dropped_defaults:
+                st.warning(
+                    "Ignored missing saved coins (not in current options): " + ", ".join(dropped_defaults),
+                    icon="⚠️",
+                )
             st.caption(f"Enabled: {len(enabled_in_settings)}")
 
             def _read_int_ini(section: str, key: str, default: int) -> int:

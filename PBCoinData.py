@@ -434,6 +434,7 @@ class CoinData:
         self._exchange_mappings = {}  # {exchange: [mapping_records]}
         self._exchange_mapping_ts = {}  # {exchange: mtime}
         self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
+        self._mapping_self_heal_state = {}  # {exchange: {fails:int, next_retry_ts:float}}
     
     def _get_exchange_dir(self, exchange: str) -> Path:
         """Get coindata directory for a specific exchange."""
@@ -558,8 +559,10 @@ class CoinData:
             quote = (record.get("quote") or "").upper()
             if quote_filter and quote not in {q.upper() for q in quote_filter}:
                 continue
-            symbol = record.get("symbol") or ""
-            coin = compute_coin_name(symbol, quote)
+            coin = (record.get("coin") or "").upper()
+            if not coin:
+                symbol = record.get("symbol") or ""
+                coin = compute_coin_name(symbol, quote)
             if coin:
                 coins.append(coin.upper())
         return sorted(set(coins))
@@ -574,8 +577,10 @@ class CoinData:
             quote = (record.get("quote") or "").upper()
             if quote_filter and quote not in {q.upper() for q in quote_filter}:
                 continue
-            symbol = record.get("symbol") or ""
-            coin = compute_coin_name(symbol, quote)
+            coin = (record.get("coin") or "").upper()
+            if not coin:
+                symbol = record.get("symbol") or ""
+                coin = compute_coin_name(symbol, quote)
             if coin:
                 coins.append(coin.upper())
         return sorted(set(coins))
@@ -623,8 +628,10 @@ class CoinData:
             if quote_whitelist and quote not in quote_whitelist:
                 continue
 
-            symbol = record.get("symbol") or ""
-            coin = compute_coin_name(symbol, quote)
+            coin = (record.get("coin") or "").upper()
+            if not coin:
+                symbol = record.get("symbol") or ""
+                coin = compute_coin_name(symbol, quote)
             if not coin:
                 continue
             coin = coin.upper()
@@ -656,6 +663,98 @@ class CoinData:
         ignored -= approved
         return sorted(approved), sorted(ignored)
 
+    def get_mapping_tags(
+        self,
+        exchange: str,
+        quote_filter: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> list[str]:
+        """Return sorted unique tags from mapping records for an exchange."""
+        mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
+        quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
+
+        tags = set()
+        for record in mapping:
+            quote = (record.get("quote") or "").upper()
+            if quote_whitelist and quote not in quote_whitelist:
+                continue
+            for tag in (record.get("tags") or []):
+                if tag:
+                    tags.add(tag)
+        return sorted(tags)
+
+    def filter_mapping_rows(
+        self,
+        exchange: str,
+        market_cap_min_m: int | float | None = None,
+        vol_mcap_max: float | None = None,
+        only_cpt: bool | None = None,
+        notices_ignore: bool | None = None,
+        tags: list[str] | None = None,
+        active_only: bool | None = None,
+        linear_only: bool | None = None,
+        quote_filter: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> list[dict]:
+        """Filter mapping and return row dicts for table display.
+
+        Uses the same pass/fail logic as filter_mapping(), but returns records
+        (one per mapping row) enriched with derived display fields.
+        """
+        mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
+        market_cap_min_m = self.market_cap if market_cap_min_m is None else market_cap_min_m
+        vol_mcap_max = self.vol_mcap if vol_mcap_max is None else vol_mcap_max
+        only_cpt = self.only_cpt if only_cpt is None else only_cpt
+        notices_ignore = self.notices_ignore if notices_ignore is None else notices_ignore
+        tags = self.tags if tags is None else tags
+        active_only = True if active_only is None else active_only
+        linear_only = True if linear_only is None else linear_only
+        quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
+
+        filtered_rows = []
+        for record in mapping:
+            quote = (record.get("quote") or "").upper()
+            if quote_whitelist and quote not in quote_whitelist:
+                continue
+
+            coin = (record.get("coin") or "").upper()
+            if not coin:
+                symbol = record.get("symbol") or ""
+                coin = compute_coin_name(symbol, quote)
+            if not coin:
+                continue
+
+            market_cap = float(record.get("market_cap") or 0)
+            volume_24h = float(record.get("volume_24h") or 0)
+            vol_mcap = volume_24h / market_cap if market_cap > 0 else 0.0
+            has_notice = bool(record.get("notice"))
+            is_cpt = bool(record.get("copy_trading", False))
+            record_tags = record.get("tags") or []
+            is_active = bool(record.get("active", True))
+            is_linear = bool(record.get("linear", True))
+
+            passes = (
+                (not active_only or is_active)
+                and (not linear_only or is_linear)
+                and market_cap >= float(market_cap_min_m) * 1_000_000
+                and vol_mcap < float(vol_mcap_max)
+                and (not only_cpt or is_cpt)
+                and (not notices_ignore or not has_notice)
+                and (not tags or any(tag in record_tags for tag in tags))
+            )
+
+            if not passes:
+                continue
+
+            row = dict(record)
+            row["coin"] = coin.upper()
+            row["vol/mcap"] = vol_mcap
+            row["price"] = row.get("price_last")
+            filtered_rows.append(row)
+
+        filtered_rows.sort(key=lambda x: float(x.get("market_cap") or 0), reverse=True)
+        return filtered_rows
+
     def filter_by_market_cap_mapping(
         self,
         exchange: str,
@@ -683,8 +782,10 @@ class CoinData:
                 continue
             if linear_only and not is_linear:
                 continue
-            symbol = record.get("symbol") or ""
-            coin = compute_coin_name(symbol, quote)
+            coin = (record.get("coin") or "").upper()
+            if not coin:
+                symbol = record.get("symbol") or ""
+                coin = compute_coin_name(symbol, quote)
             if not coin:
                 continue
             coin = coin.upper()
@@ -1181,6 +1282,12 @@ class CoinData:
         
         try:
             from Exchange import Exchange
+
+            # Ensure CMC datasets are available for market-cap/tag enrichment
+            if not self.data:
+                self.load_data()
+            if not self.metadata:
+                self.load_metadata()
             
             # Load or fetch CCXT markets
             markets = self.load_ccxt_markets(exchange_id)
@@ -1242,11 +1349,27 @@ class CoinData:
                     exchange = Exchange(exchange_id)
                     exchange.connect()
                     ccxt_symbols = [s for s, m in markets.items() if m.get("swap")]
-                    ticker_data = exchange.fetch_prices(ccxt_symbols, "swap")
+                    ticker_data = {}
+                    linear_symbols = [s for s in ccxt_symbols if markets.get(s, {}).get("linear", True)]
+                    inverse_symbols = [s for s in ccxt_symbols if not markets.get(s, {}).get("linear", True)]
+                    if linear_symbols and inverse_symbols:
+                        try:
+                            ticker_data.update(exchange.fetch_prices(linear_symbols, "swap"))
+                        except Exception as e:
+                            _log('PBCoinData', f'Could not fetch linear prices for {exchange_id} disambiguation: {e}', level='WARNING')
+                        try:
+                            ticker_data.update(exchange.fetch_prices(inverse_symbols, "swap"))
+                        except Exception as e:
+                            _log('PBCoinData', f'Could not fetch inverse prices for {exchange_id} disambiguation: {e}', level='WARNING')
+                    else:
+                        ticker_data = exchange.fetch_prices(ccxt_symbols, "swap")
                     for ccxt_sym, data in ticker_data.items():
                         if ccxt_sym in markets:
                             market_id = markets[ccxt_sym].get("id", "")
-                            price = float(data.get("last", 0))
+                            try:
+                                price = float(data.get("last", 0) or 0)
+                            except Exception:
+                                price = 0.0
                             if market_id and price > 0:
                                 prev_prices[market_id] = price
                     _log('PBCoinData', f'Fetched {len(prev_prices)} live prices for {exchange_id} CMC disambiguation', level='INFO')
@@ -1316,13 +1439,16 @@ class CoinData:
                 is_hip3 = self._detect_hip3(exchange_id, market, cmc_best)
                 
                 # Find CMC data for this coin
-                # Use normalize_symbol + SYMBOLMAP for proper matching
+                # Use market_id-derived coin when possible; for exchanges like
+                # Hyperliquid where market_id may be numeric, fall back to base.
                 cmc_record = {}
+                coin_from_market_id = compute_coin_name(market_id, market.get("quote", ""))
+                if re.search(r"[A-Z]", coin_from_market_id):
+                    coin_name = coin_from_market_id
+                else:
+                    coin_name = normalize_symbol(base, self._symbol_mappings)
                 if not is_hip3 and cmc_best:
-                    sym = compute_coin_name(market_id, market.get("quote", ""))
-                    if not sym:
-                        sym = normalize_symbol(base, self._symbol_mappings)
-                    cmc_sym = SYMBOLMAP.get(sym.upper(), sym).upper()
+                    cmc_sym = SYMBOLMAP.get(coin_name.upper(), coin_name).upper()
                     candidates = cmc_all.get(cmc_sym, [])
                     
                     if len(candidates) == 1:
@@ -1355,7 +1481,7 @@ class CoinData:
                     "symbol": market_id,
                     "ccxt_symbol": symbol,
                     "base": base,
-                    "coin": compute_coin_name(market_id, market.get("quote", "")),
+                    "coin": coin_name,
                     "quote": market.get("quote", ""),
                     "swap": market.get("swap", False),
                     "linear": market.get("linear", True),
@@ -1536,16 +1662,62 @@ class CoinData:
             # Create exchange instance
             exchange = Exchange(exchange_id)
             exchange.connect()
+
+            def _to_float(value, default=0.0):
+                try:
+                    if value is None:
+                        return float(default)
+                    return float(value)
+                except Exception:
+                    return float(default)
             
             # Get all active symbol IDs for batch price fetch
-            symbols = [r["ccxt_symbol"] for r in mapping if r.get("active", True)]
+            active_rows = [r for r in mapping if r.get("active", True) and r.get("ccxt_symbol")]
+            symbols = [r["ccxt_symbol"] for r in active_rows]
             
             # Fetch prices in batch
             try:
-                prices = exchange.fetch_prices(symbols, "swap")
+                prices = {}
+                linear_symbols = [r["ccxt_symbol"] for r in active_rows if r.get("linear", True)]
+                inverse_symbols = [r["ccxt_symbol"] for r in active_rows if not r.get("linear", True)]
+                if linear_symbols and inverse_symbols:
+                    if linear_symbols:
+                        prices.update(exchange.fetch_prices(linear_symbols, "swap"))
+                    if inverse_symbols:
+                        prices.update(exchange.fetch_prices(inverse_symbols, "swap"))
+                else:
+                    prices = exchange.fetch_prices(symbols, "swap")
             except Exception as e:
                 _log('PBCoinData', f'Error fetching prices for {exchange_id}: {e}', level='ERROR')
                 return False
+
+            # Fallback: some exchanges do not include all symbols in batch ticker
+            # responses (notably some USDC/stock-perp markets). Fetch missing
+            # symbols individually to maximize price coverage.
+            missing_symbols = [s for s in symbols if s not in prices]
+            if missing_symbols:
+                if exchange_id == "hyperliquid":
+                    _log(
+                        'PBCoinData',
+                        f'Missing {len(missing_symbols)} prices after batch fetch on hyperliquid; skipping slow per-symbol fallback',
+                        level='WARNING'
+                    )
+                    missing_symbols = []
+                recovered = 0
+                for sym in missing_symbols:
+                    try:
+                        ticker = exchange.fetch_price(sym, "swap")
+                        if ticker and ticker.get("last") is not None:
+                            prices[sym] = ticker
+                            recovered += 1
+                    except Exception:
+                        continue
+                if recovered:
+                    _log(
+                        'PBCoinData',
+                        f'Recovered {recovered}/{len(missing_symbols)} missing prices via per-symbol fallback on {exchange_id}',
+                        level='INFO'
+                    )
             
             # Update each record
             current_ts = int(datetime.now().timestamp() * 1000)
@@ -1555,7 +1727,7 @@ class CoinData:
                     continue
                 
                 price_data = prices[ccxt_symbol]
-                price = float(price_data.get("last", 0))
+                price = _to_float(price_data.get("last", 0), 0.0)
                 
                 if price <= 0:
                     continue
@@ -1565,9 +1737,9 @@ class CoinData:
                 record["price_ts"] = price_data.get("timestamp", current_ts)
                 
                 # Calculate min_order_price
-                contract_size = record.get("contract_size", 1.0)
-                min_amount = record.get("min_amount", 0.0)
-                min_cost = record.get("min_cost", 0.0)
+                contract_size = _to_float(record.get("contract_size", 1.0), 1.0)
+                min_amount = _to_float(record.get("min_amount", 0.0), 0.0)
+                min_cost = _to_float(record.get("min_cost", 0.0), 0.0)
                 
                 min_qty = min_amount * contract_size
                 min_price_from_qty = min_qty * price
@@ -1782,18 +1954,123 @@ class CoinData:
         hyperliquid, okx). Legacy exchanges (bingx, kucoin) are excluded.
         """
         now_ts = datetime.now().timestamp()
+
+        def _refresh_exchange_mapping(exchange: str):
+            started_ts = datetime.now().timestamp()
+
+            markets_ok = bool(self.fetch_ccxt_markets(exchange))
+            markets = self.load_ccxt_markets(exchange)
+            self.fetch_copy_trading_symbols(exchange, markets)
+            mapping_ok = bool(self.build_mapping(exchange))
+            prices_ok = bool(self.update_prices(exchange))
+
+            rows = self.load_exchange_mapping(exchange)
+            active = sum(1 for r in rows if r.get("active", True))
+            priced = sum(1 for r in rows if r.get("active", True) and float(r.get("price_last") or 0) > 0)
+
+            elapsed = datetime.now().timestamp() - started_ts
+            return {
+                "exchange": exchange,
+                "markets_ok": markets_ok,
+                "mapping_ok": mapping_ok,
+                "prices_ok": prices_ok,
+                "active": active,
+                "priced": priced,
+                "elapsed": elapsed,
+                "ok": markets_ok and mapping_ok and prices_ok,
+            }
+
+        def _source_is_newer_than_mapping(exchange: str):
+            exchange_dir = self._get_exchange_dir(exchange)
+            mapping_file = exchange_dir / "mapping.json"
+            if not mapping_file.exists():
+                return True, "missing mapping.json"
+
+            mapping_ts = mapping_file.stat().st_mtime
+            pbgdir = Path.cwd()
+            coindata_file = pbgdir / "data" / "coindata" / "coindata.json"
+            metadata_file = pbgdir / "data" / "coindata" / "metadata.json"
+            markets_file = exchange_dir / "ccxt_markets.json"
+
+            if coindata_file.exists() and coindata_file.stat().st_mtime > mapping_ts:
+                return True, "coindata.json newer than mapping"
+            if metadata_file.exists() and metadata_file.stat().st_mtime > mapping_ts:
+                return True, "metadata.json newer than mapping"
+            if markets_file.exists() and markets_file.stat().st_mtime > mapping_ts:
+                return True, "ccxt_markets.json newer than mapping"
+            return False, ""
+
+        refreshed_in_self_heal = set()
+
+        # Self-heal pass: if mapping is missing/stale, rebuild immediately
+        # independent of interval, with exponential backoff up to 24h.
+        for exchange in V7.list():
+            needs_heal, reason = _source_is_newer_than_mapping(exchange)
+            if not needs_heal:
+                continue
+
+            state = self._mapping_self_heal_state.get(exchange, {"fails": 0, "next_retry_ts": 0.0})
+            if now_ts < float(state.get("next_retry_ts", 0.0)):
+                continue
+
+            _log('PBCoinData', f'Self-heal mapping trigger for {exchange}: {reason}', level='WARNING')
+            try:
+                _refresh_exchange_mapping(exchange)
+                refreshed_in_self_heal.add(exchange)
+                if exchange in self._mapping_self_heal_state:
+                    del self._mapping_self_heal_state[exchange]
+                _log('PBCoinData', f'Self-heal mapping succeeded for {exchange}', level='INFO')
+            except Exception as e:
+                fails = int(state.get("fails", 0)) + 1
+                backoff_hours = min(2 ** (fails - 1), 24)
+                next_retry_ts = now_ts + 3600 * backoff_hours
+                self._mapping_self_heal_state[exchange] = {
+                    "fails": fails,
+                    "next_retry_ts": next_retry_ts,
+                }
+                _log(
+                    'PBCoinData',
+                    f'Self-heal mapping failed for {exchange}: {e}. '
+                    f'Next retry in {backoff_hours}h (fail #{fails})',
+                    level='ERROR'
+                )
+
         if self.update_mappings_ts < now_ts - 3600 * self._mapping_interval:
+            cycle_started_ts = datetime.now().timestamp()
+            cycle_results = []
             _log('PBCoinData', 'Starting mapping update for all exchanges', level='INFO')
             for exchange in V7.list():
                 try:
-                    self.fetch_ccxt_markets(exchange)
-                    markets = self.load_ccxt_markets(exchange)
-                    self.fetch_copy_trading_symbols(exchange, markets)
-                    self.build_mapping(exchange)
-                    self.update_prices(exchange)
+                    if exchange in refreshed_in_self_heal:
+                        continue
+                    cycle_results.append(_refresh_exchange_mapping(exchange))
                 except Exception as e:
+                    cycle_results.append({
+                        "exchange": exchange,
+                        "markets_ok": False,
+                        "mapping_ok": False,
+                        "prices_ok": False,
+                        "active": 0,
+                        "priced": 0,
+                        "elapsed": 0.0,
+                        "ok": False,
+                    })
                     _log('PBCoinData', f'Failed to update mapping for {exchange}: {e}', level='ERROR')
             self.update_mappings_ts = now_ts
+
+            total_elapsed = datetime.now().timestamp() - cycle_started_ts
+            ok_count = sum(1 for r in cycle_results if r.get("ok"))
+            total_count = len(cycle_results)
+            per_exchange = ", ".join(
+                f'{r.get("exchange")}: {"ok" if r.get("ok") else "fail"} '
+                f'({r.get("elapsed", 0.0):.1f}s, {r.get("priced", 0)}/{r.get("active", 0)} priced)'
+                for r in cycle_results
+            )
+            _log(
+                'PBCoinData',
+                f'Mapping update summary: {ok_count}/{total_count} exchanges ok in {total_elapsed:.1f}s | {per_exchange}',
+                level='INFO'
+            )
             _log('PBCoinData', 'Mapping update complete', level='INFO')
 
     def load_symbols(self):
