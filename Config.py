@@ -7779,13 +7779,29 @@ class ConfigV7():
 class BalanceCalculator:
     def __init__(self, config_file: str = None):
         self.config = ConfigV7()
+        self.exchange = Exchange("binance", None)
         if config_file:
             self.config.config_file = config_file
             self.config.load_config()
-        self.exchange = Exchange("binance", None)
+            self._sync_exchange_from_config_user()
+            st.session_state.bc_exchange_id = self.exchange.id
+            if "edit_bc_config" in st.session_state:
+                del st.session_state.edit_bc_config
         self.coin_infos = []
         self.balance_long = []
         self.balance_short = []
+
+    def _sync_exchange_from_config_user(self):
+        user = self.config.live.user
+        if not user:
+            return
+        try:
+            from User import Users
+            exchange_id = Users().find_exchange(user)
+            if exchange_id in V7.list() and exchange_id != self.exchange.id:
+                self.exchange = Exchange(exchange_id, None)
+        except Exception:
+            pass
     
     @property
     def balance(self):
@@ -7794,36 +7810,42 @@ class BalanceCalculator:
     def init_coindata(self):
         if "pbcoindata" not in st.session_state:
             st.session_state.pbcoindata = CoinData()
-        st.session_state.pbcoindata.exchange = self.exchange.id
+        coindata = st.session_state.pbcoindata
+        coindata.exchange = self.exchange.id
         if self.config.pbgui.dynamic_ignore:
-            st.session_state.pbcoindata.tags = self.config.pbgui.tags
-            st.session_state.pbcoindata.only_cpt = self.config.pbgui.only_cpt
-            st.session_state.pbcoindata.market_cap = self.config.pbgui.market_cap
-            st.session_state.pbcoindata.vol_mcap = self.config.pbgui.vol_mcap
-            st.session_state.pbcoindata.notices_ignore = self.config.pbgui.notices_ignore
-            self.config.live.approved_coins = st.session_state.pbcoindata.approved_coins
+            approved_coins, _ = coindata.filter_mapping(
+                exchange=self.exchange.id,
+                market_cap_min_m=self.config.pbgui.market_cap,
+                vol_mcap_max=self.config.pbgui.vol_mcap,
+                only_cpt=self.config.pbgui.only_cpt,
+                notices_ignore=self.config.pbgui.notices_ignore,
+                tags=self.config.pbgui.tags,
+                quote_filter=None,
+                use_cache=True,
+            )
+            self.config.live.approved_coins = approved_coins
 
     def view(self):
+        if "bc_exchange_id" in st.session_state:
+            if st.session_state.bc_exchange_id != self.exchange.id:
+                self.exchange = Exchange(st.session_state.bc_exchange_id, None)
+                # st.session_state.bc_exchange = bc_exchange
+        else:
+            st.session_state.bc_exchange_id = self.exchange.id
+
         # Init coindata
         self.init_coindata()
         if "edit_bc_config" in st.session_state:
             if st.session_state.edit_bc_config != json.dumps(self.config.config, indent=4):
                 try:
                     self.config.config = json.loads(st.session_state.edit_bc_config)
+                    self._sync_exchange_from_config_user()
                     self.init_coindata()
                 except:
                     error_popup("Invalid JSON")
                     st.session_state.edit_bc_config = json.dumps(self.config.config, indent=4)
         else:
             st.session_state.edit_bc_config = json.dumps(self.config.config, indent=4)
-
-        if "bc_exchange_id" in st.session_state:
-            if st.session_state.bc_exchange_id != self.exchange.id:
-                self.exchange = Exchange(st.session_state.bc_exchange_id, None)
-                # st.session_state.bc_exchange = bc_exchange
-        else:
-            if self.config.backtest.exchanges:
-                st.session_state.bc_exchange_id = self.config.backtest.exchanges[0]
         col1, col2 = st.columns([1, 1])
         with col1:
             st.text_area(f'config', key="edit_bc_config", height=500)

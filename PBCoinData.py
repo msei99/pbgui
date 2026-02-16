@@ -421,13 +421,12 @@ class CoinData:
         self.ignored_coins = []
         self._all_tags = []
         self._tags = []
+        self._symbol_mappings = {}
         self.load_symbols()
         self._market_cap = 0
         self._vol_mcap = 10.0
         self._only_cpt = False
         self._notices_ignore = False
-        # Dynamic symbol mappings (built from exchange symbols)
-        self._symbol_mappings = {}
         
         # HIP-3: Exchange-specific data caches
         self._ccxt_markets = {}  # {exchange: markets_dict}
@@ -2087,6 +2086,7 @@ class CoinData:
                 self._symbols_cpt = self._symbols
         else:
             self._symbols_cpt = self._symbols
+        self._symbol_mappings = build_symbol_mappings(self._symbols)
         
         # Don't build mappings here - will be built from all exchanges in load_symbols_all()
     
