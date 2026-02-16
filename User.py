@@ -149,6 +149,17 @@ class Users:
                         return user
         return None
 
+    def find_binance_users(self):
+        users = []
+        for user in self.users:
+            if user.exchange == "binance":
+                if user.key and user.secret:
+                    if len(user.key) > 20 and len(user.secret) > 20:
+                        users.append(user)
+        if users:
+            return users
+        return None
+
     def find_bitget_users(self):
         users = []
         for user in self.users:

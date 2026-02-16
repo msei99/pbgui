@@ -190,6 +190,7 @@ def get_navi_paths():
         "SYSTEM_API_KEYS":     os.path.join(NAVI_BASE_DIR, "system_api_keys.py"),
         "SYSTEM_SERVICES":     os.path.join(NAVI_BASE_DIR, "system_services.py"),
         "SYSTEM_VPS_MANAGER":  os.path.join(NAVI_BASE_DIR, "system_vps_manager.py"),
+        "SYSTEM_LOGGING":      os.path.join(NAVI_BASE_DIR, "system_logging.py"),
         "SYSTEM_DEBUGLOG":     os.path.join(NAVI_BASE_DIR, "system_debuglog.py"),
 
         "INFO_DASHBOARDS":     os.path.join(NAVI_BASE_DIR, "info_dashboards.py"),
@@ -223,6 +224,7 @@ def build_navigation():
     pM2 = st.Page(paths["SYSTEM_API_KEYS"], title="API-Keys", icon=":material/key:")
     pM3 = st.Page(paths["SYSTEM_SERVICES"], title="PBGUI Services", icon=":material/build:")
     pM4 = st.Page(paths["SYSTEM_VPS_MANAGER"], title="VPS Manager", icon=":material/computer:")
+    pM5 = st.Page(paths["SYSTEM_LOGGING"], title="Logging", icon=":material/article:")
     # Debuglog page removed
 
     pSe1 = st.Page(paths["INFO_DASHBOARDS"], title="Dashboards", icon=":material/dashboard:")
@@ -248,7 +250,7 @@ def build_navigation():
     p77 = st.Page(paths["V7_LIVE_VS_BACKTEST"], title="Live vs Backtest", icon=":material/swap_horiz:")
        
     # Page Groups
-    SystemPages = [pM1, pM2, pM3, pM4]
+    SystemPages = [pM1, pM2, pM3, pM4, pM5]
     
     # Do not include DEBUGLOG page; centralized debuglog removed
                 
