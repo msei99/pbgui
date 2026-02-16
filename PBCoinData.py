@@ -13,8 +13,8 @@ import sys
 import os
 import traceback
 import re
-from io import TextIOWrapper
-from Exchange import Exchange, Exchanges
+from Exchange import Exchange, Exchanges, V7
+from logging_helpers import human_log as _log
 
 
 def remove_powers_of_ten(text):
@@ -25,6 +25,69 @@ def remove_powers_of_ten(text):
     """
     pattern = r"(?<!\d)1(?:0+)(?!\d)"
     return re.sub(pattern, "", text)
+
+
+_HYPERLIQUID_K_PREFIX_COINS = {"BONK", "FLOKI", "LUNC", "PEPE", "SHIB", "DOGS", "NEIRO"}
+
+
+def _strip_hyperliquid_k_prefix(name: str) -> str:
+    """Normalize Hyperliquid k/K prefix coins to short name (kPEPE/ KPEPE -> PEPE)."""
+    if not name:
+        return name
+    if len(name) <= 1:
+        return name
+    if name[0] in ("k", "K"):
+        tail = name[1:]
+        if tail.upper() in _HYPERLIQUID_K_PREFIX_COINS:
+            return tail
+    return name
+
+
+def compute_coin_name(market_id, quote=""):
+    """
+    Compute PB7-compatible coin name from exchange market_id and quote currency.
+    
+    Derives the coin name the same way the ini pipeline does:
+    1. Strip contract type suffixes (-SWAP, -PERP, _PERP)
+    2. Remove exchange-specific separators (dashes, underscores)
+    3. Strip quote currency suffix (USDT, USDC, etc.)
+    4. Strip bare PERP suffix (Bybit/Bitget USDC: BTCPERP → BTC)
+    5. Handle k-prefix (Hyperliquid: kPEPE → PEPE)
+    6. Strip 1000x multiplier prefixes (1000SHIB → SHIB)
+    
+    Uses market_id (not CCXT base) because CCXT sometimes returns display
+    names that differ from the trading symbol (e.g. DegenReborn for DEGENUSDT
+    on Bitget, RedLang for RED_USDT on Gateio).
+    
+    Args:
+        market_id: Exchange market ID (e.g., "DEGENUSDT", "BTC-USDT-SWAP",
+                   "BTC_USDT", "1000SHIBUSDT", "BTCPERP")
+        quote: Quote currency to strip (e.g., "USDT", "USDC", "SUSDT")
+    
+    Returns:
+        str: Normalized coin name, uppercase (e.g., "DEGEN", "BTC", "SHIB")
+    """
+    if not market_id:
+        return ""
+    name = market_id
+    # Strip contract type suffixes (OKX: -SWAP; some: -PERP, _PERP)
+    for suffix in ("-SWAP", "-PERP", "_PERP"):
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+            break
+    # Remove exchange-specific separators (OKX dashes, Gateio underscores)
+    name = name.replace("-", "").replace("_", "")
+    # Strip quote currency suffix
+    if quote and name.upper().endswith(quote.upper()):
+        name = name[:-len(quote)]
+    # Strip bare PERP suffix (Bybit/Bitget USDC markets: BTCPERP -> BTC)
+    if name.upper().endswith("PERP") and len(name) > 4:
+        name = name[:-4]
+    # Handle Hyperliquid k/K-prefix (kPEPE/KPEPE -> PEPE)
+    name = _strip_hyperliquid_k_prefix(name)
+    # Strip 1000x multiplier prefixes (1000SHIB -> SHIB)
+    name = remove_powers_of_ten(name)
+    return name.upper()
 
 
 def build_symbol_mappings(symbols):
@@ -50,7 +113,6 @@ def build_symbol_mappings(symbols):
         
         # Check for stablecoin/quote-like patterns
         if base in ["USDC", "USDT", "BUSD", "TUSD", "DAI"]:
-            coins.add(base)
             continue
         
         for quote in ["USDT", "USDC", "BUSD", "USD"]:
@@ -119,9 +181,8 @@ def normalize_symbol(symbol, symbol_mappings=None):
             base = remaining
             break
     
-    # Handle Hyperliquid format: kPEPE -> PEPE
-    if base.startswith('k') and len(base) > 1 and base[1].isupper():
-        base = base[1:]
+    # Handle Hyperliquid format: kPEPE/KPEPE -> PEPE
+    base = _strip_hyperliquid_k_prefix(base)
     
     # Use dynamic mappings if provided (already contains all normalization logic)
     if symbol_mappings and base in symbol_mappings:
@@ -210,6 +271,7 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
     
     # Load from pbgui.ini
     config = configparser.ConfigParser()
+    config.optionxform = str
     pbgui_dir = Path(__file__).parent
     ini_path = pbgui_dir / "pbgui.ini"
     
@@ -252,10 +314,8 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
         # Fallback: guess quote currency
         quote = "USDC" if "hyperliquid" in exchange else "USDT"
         # Special handling for Hyperliquid k-prefix coins
-        if "hyperliquid" in exchange.lower():
-            k_prefix_coins = {"BONK", "FLOKI", "LUNC", "PEPE", "SHIB", "DOGS", "NEIRO"}
-            if coin.upper() in k_prefix_coins:
-                return f"k{coin.upper()}{quote}"
+        if "hyperliquid" in exchange.lower() and coin.upper() in _HYPERLIQUID_K_PREFIX_COINS:
+            return f"K{coin.upper()}{quote}"
         return f"{coin}{quote}"
 
 
@@ -339,6 +399,7 @@ class CoinData:
         self._fetch_limit = 5000
         self._fetch_interval = 24
         self._metadata_interval = 1
+        self._mapping_interval = 24
         self.ini_ts = 0
         self.load_config()
         self.data = None
@@ -349,6 +410,7 @@ class CoinData:
         self.exchanges = Exchanges.list()
         self.exchange_index = self.exchanges.index(self.exchange)
         self.update_symbols_ts = 0
+        self.update_mappings_ts = 0
         self._symbols = []
         self._symbols_cpt = []
         self._symbols_all = []
@@ -366,6 +428,483 @@ class CoinData:
         self._notices_ignore = False
         # Dynamic symbol mappings (built from exchange symbols)
         self._symbol_mappings = {}
+        
+        # HIP-3: Exchange-specific data caches
+        self._ccxt_markets = {}  # {exchange: markets_dict}
+        self._exchange_mappings = {}  # {exchange: [mapping_records]}
+        self._exchange_mapping_ts = {}  # {exchange: mtime}
+        self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
+    
+    def _get_exchange_dir(self, exchange: str) -> Path:
+        """Get coindata directory for a specific exchange."""
+        pbgdir = Path.cwd()
+        exchange_dir = pbgdir / "data" / "coindata" / exchange
+        return exchange_dir
+    
+    def _ensure_exchange_dir(self, exchange: str) -> Path:
+        """Ensure exchange directory exists and return path."""
+        exchange_dir = self._get_exchange_dir(exchange)
+        if not exchange_dir.exists():
+            exchange_dir.mkdir(parents=True, exist_ok=True)
+        return exchange_dir
+    
+    def load_ccxt_markets(self, exchange: str) -> dict:
+        """Load CCXT markets from cache for a specific exchange."""
+        if exchange in self._ccxt_markets:
+            return self._ccxt_markets[exchange]
+        
+        markets_file = self._get_exchange_dir(exchange) / "ccxt_markets.json"
+        if not markets_file.exists():
+            return {}
+        
+        try:
+            with markets_file.open('r') as f:
+                markets = json.load(f)
+                self._ccxt_markets[exchange] = markets
+                return markets
+        except Exception as e:
+            _log('PBCoinData', f'Error loading CCXT markets for {exchange}: {e}', level='ERROR')
+            return {}
+    
+    def save_ccxt_markets(self, exchange: str, markets: dict):
+        """Save CCXT markets to cache. Only writes on success."""
+        if not markets:
+            _log('PBCoinData', f'Empty markets data for {exchange}, not saving', level='WARNING')
+            return
+        
+        exchange_dir = self._ensure_exchange_dir(exchange)
+        markets_file = exchange_dir / "ccxt_markets.json"
+        
+        try:
+            # Atomic write: temp file + rename
+            temp_file = markets_file.with_suffix('.json.tmp')
+            with temp_file.open('w') as f:
+                json.dump(markets, f, indent=4)
+            temp_file.replace(markets_file)
+            self._ccxt_markets[exchange] = markets
+            _log('PBCoinData', f'Saved CCXT markets for {exchange}', level='DEBUG')
+        except Exception as e:
+            _log('PBCoinData', f'Error saving CCXT markets for {exchange}: {e}', level='ERROR')
+            if temp_file.exists():
+                temp_file.unlink()
+    
+    def load_mapping(self, exchange: str, use_cache: bool = True) -> list:
+        """Load mapping.json for an exchange with optional mtime-aware caching."""
+        mapping_file = self._get_exchange_dir(exchange) / "mapping.json"
+        if not mapping_file.exists():
+            self._exchange_mapping_ts.pop(exchange, None)
+            self._exchange_mappings.pop(exchange, None)
+            return []
+
+        file_mtime = mapping_file.stat().st_mtime
+        if use_cache and exchange in self._exchange_mappings and self._exchange_mapping_ts.get(exchange) == file_mtime:
+            return self._exchange_mappings[exchange]
+
+        try:
+            with mapping_file.open('r') as f:
+                mapping = json.load(f)
+            self._exchange_mappings[exchange] = mapping
+            self._exchange_mapping_ts[exchange] = file_mtime
+            return mapping
+        except Exception as e:
+            _log('PBCoinData', f'Error loading mapping for {exchange}: {e}', level='ERROR')
+            return []
+
+    def load_exchange_mapping(self, exchange: str) -> list:
+        """Backward-compatible wrapper for load_mapping()."""
+        return self.load_mapping(exchange=exchange, use_cache=True)
+    
+    def save_exchange_mapping(self, exchange: str, mapping: list):
+        """Save exchange mapping to cache. Only writes on success."""
+        if not mapping:
+            _log('PBCoinData', f'Empty mapping data for {exchange}, not saving', level='WARNING')
+            return
+        
+        exchange_dir = self._ensure_exchange_dir(exchange)
+        mapping_file = exchange_dir / "mapping.json"
+        
+        try:
+            # Atomic write: temp file + rename
+            temp_file = mapping_file.with_suffix('.json.tmp')
+            with temp_file.open('w') as f:
+                json.dump(mapping, f, indent=4)
+            temp_file.replace(mapping_file)
+            self._exchange_mappings[exchange] = mapping
+            self._exchange_mapping_ts[exchange] = mapping_file.stat().st_mtime
+            _log('PBCoinData', f'Saved mapping for {exchange}', level='DEBUG')
+        except Exception as e:
+            _log('PBCoinData', f'Error saving mapping for {exchange}: {e}', level='ERROR')
+            if temp_file.exists():
+                temp_file.unlink()
+
+    def get_mapping_symbols(self, exchange: str, quote_filter: list[str] | None = None, use_cache: bool = True) -> list[str]:
+        """Return symbol strings from mapping.json for an exchange."""
+        mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
+        symbols = []
+        for record in mapping:
+            quote = (record.get("quote") or "").upper()
+            if quote_filter and quote not in {q.upper() for q in quote_filter}:
+                continue
+            symbol = record.get("symbol")
+            if symbol:
+                symbols.append(symbol)
+        return sorted(set(symbols))
+
+    def get_mapping_coins(self, exchange: str, quote_filter: list[str] | None = None, use_cache: bool = True) -> list[str]:
+        """Return normalized coin names computed from mapping symbols."""
+        mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
+        coins = []
+        for record in mapping:
+            quote = (record.get("quote") or "").upper()
+            if quote_filter and quote not in {q.upper() for q in quote_filter}:
+                continue
+            symbol = record.get("symbol") or ""
+            coin = compute_coin_name(symbol, quote)
+            if coin:
+                coins.append(coin.upper())
+        return sorted(set(coins))
+
+    def get_cpt_coins(self, exchange: str, quote_filter: list[str] | None = None, use_cache: bool = True) -> list[str]:
+        """Return normalized coin names where mapping marks copy_trading=True."""
+        mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
+        coins = []
+        for record in mapping:
+            if not record.get("copy_trading", False):
+                continue
+            quote = (record.get("quote") or "").upper()
+            if quote_filter and quote not in {q.upper() for q in quote_filter}:
+                continue
+            symbol = record.get("symbol") or ""
+            coin = compute_coin_name(symbol, quote)
+            if coin:
+                coins.append(coin.upper())
+        return sorted(set(coins))
+
+    def filter_mapping(
+        self,
+        exchange: str,
+        market_cap_min_m: int | float | None = None,
+        vol_mcap_max: float | None = None,
+        only_cpt: bool | None = None,
+        notices_ignore: bool | None = None,
+        tags: list[str] | None = None,
+        active_only: bool | None = None,
+        linear_only: bool | None = None,
+        quote_filter: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> tuple[list[str], list[str]]:
+        """Filter mapping records and return (approved_coins, ignored_coins).
+
+        Args mirror existing CoinData filter knobs:
+        - market_cap_min_m: minimum market cap in millions of USD (defaults to self.market_cap)
+        - vol_mcap_max: maximum volume/market_cap ratio (defaults to self.vol_mcap)
+        - only_cpt: include only copy-trading symbols (defaults to self.only_cpt)
+        - notices_ignore: exclude records with a notice (defaults to self.notices_ignore)
+        - tags: any-tag match; empty means no tag filter (defaults to self.tags)
+        - active_only: include only active markets (defaults to True; legacy-compatible)
+        - linear_only: include only linear markets (defaults to True; legacy-compatible)
+        - quote_filter: optional quote whitelist (e.g. ["USDT"])
+        """
+        mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
+        market_cap_min_m = self.market_cap if market_cap_min_m is None else market_cap_min_m
+        vol_mcap_max = self.vol_mcap if vol_mcap_max is None else vol_mcap_max
+        only_cpt = self.only_cpt if only_cpt is None else only_cpt
+        notices_ignore = self.notices_ignore if notices_ignore is None else notices_ignore
+        tags = self.tags if tags is None else tags
+        active_only = True if active_only is None else active_only
+        linear_only = True if linear_only is None else linear_only
+        quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
+
+        approved = set()
+        ignored = set()
+
+        for record in mapping:
+            quote = (record.get("quote") or "").upper()
+            if quote_whitelist and quote not in quote_whitelist:
+                continue
+
+            symbol = record.get("symbol") or ""
+            coin = compute_coin_name(symbol, quote)
+            if not coin:
+                continue
+            coin = coin.upper()
+
+            market_cap = float(record.get("market_cap") or 0)
+            volume_24h = float(record.get("volume_24h") or 0)
+            vol_mcap = volume_24h / market_cap if market_cap > 0 else 0.0
+            has_notice = bool(record.get("notice"))
+            is_cpt = bool(record.get("copy_trading", False))
+            record_tags = record.get("tags") or []
+            is_active = bool(record.get("active", True))
+            is_linear = bool(record.get("linear", True))
+
+            passes = (
+                (not active_only or is_active)
+                and (not linear_only or is_linear)
+                and market_cap >= float(market_cap_min_m) * 1_000_000
+                and vol_mcap < float(vol_mcap_max)
+                and (not only_cpt or is_cpt)
+                and (not notices_ignore or not has_notice)
+                and (not tags or any(tag in record_tags for tag in tags))
+            )
+
+            if passes:
+                approved.add(coin)
+            else:
+                ignored.add(coin)
+
+        ignored -= approved
+        return sorted(approved), sorted(ignored)
+
+    def filter_by_market_cap_mapping(
+        self,
+        exchange: str,
+        mc: int,
+        active_only: bool | None = None,
+        linear_only: bool | None = None,
+        quote_filter: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> tuple[list[str], list[str]]:
+        """Return (approved, ignored) using only an absolute market-cap threshold in USD."""
+        mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
+        active_only = True if active_only is None else active_only
+        linear_only = True if linear_only is None else linear_only
+        quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
+
+        approved = set()
+        ignored = set()
+        for record in mapping:
+            quote = (record.get("quote") or "").upper()
+            if quote_whitelist and quote not in quote_whitelist:
+                continue
+            is_active = bool(record.get("active", True))
+            is_linear = bool(record.get("linear", True))
+            if active_only and not is_active:
+                continue
+            if linear_only and not is_linear:
+                continue
+            symbol = record.get("symbol") or ""
+            coin = compute_coin_name(symbol, quote)
+            if not coin:
+                continue
+            coin = coin.upper()
+            market_cap = float(record.get("market_cap") or 0)
+            if market_cap > float(mc):
+                approved.add(coin)
+            else:
+                ignored.add(coin)
+
+        ignored -= approved
+        return sorted(approved), sorted(ignored)
+    
+    def load_copy_trading_symbols(self, exchange: str) -> list:
+        """Load cached copy trading symbols for an exchange."""
+        if exchange in self._copy_trading_cache:
+            return self._copy_trading_cache[exchange]
+        
+        cpt_file = self._get_exchange_dir(exchange) / "copy_trading.json"
+        if not cpt_file.exists():
+            return []
+        
+        try:
+            with cpt_file.open('r') as f:
+                symbols = json.load(f)
+                self._copy_trading_cache[exchange] = symbols
+                return symbols
+        except Exception as e:
+            _log('PBCoinData', f'Error loading copy trading symbols for {exchange}: {e}', level='ERROR')
+            return []
+    
+    def save_copy_trading_symbols(self, exchange: str, symbols: list):
+        """Save copy trading symbols to cache."""
+        exchange_dir = self._ensure_exchange_dir(exchange)
+        cpt_file = exchange_dir / "copy_trading.json"
+        
+        try:
+            temp_file = cpt_file.with_suffix('.json.tmp')
+            with temp_file.open('w') as f:
+                json.dump(sorted(symbols), f, indent=4)
+            temp_file.replace(cpt_file)
+            self._copy_trading_cache[exchange] = sorted(symbols)
+            _log('PBCoinData', f'Saved {len(symbols)} copy trading symbols for {exchange}', level='DEBUG')
+        except Exception as e:
+            _log('PBCoinData', f'Error saving copy trading symbols for {exchange}: {e}', level='ERROR')
+            if temp_file.exists():
+                temp_file.unlink()
+    
+    def fetch_copy_trading_symbols(self, exchange_id: str, markets: dict = None) -> list:
+        """Fetch copy trading symbols for an exchange.
+        
+        Sources per exchange:
+        - bybit: CCXT market data (info.copyTrading == "both"), no auth needed
+        - binance: sapi copy trading endpoint (requires authenticated user)
+        - bitget: copy trading endpoint (requires authenticated user)
+        - others: no known copy trading API
+        
+        For binance/bitget: remembers working user in pbgui.ini and tries
+        that user first on subsequent runs. Falls back to scanning all users
+        if the remembered user no longer works.
+        
+        Args:
+            exchange_id: Exchange identifier
+            markets: Pre-loaded CCXT markets dict (used for bybit to avoid re-fetch)
+        
+        Returns:
+            List of market IDs (exchange format, e.g. "BTCUSDT")
+        """
+        cpt_symbols = []
+        
+        try:
+            if exchange_id == 'bybit':
+                # bybit: copy trading info is in CCXT market data
+                if not markets:
+                    markets = self.load_ccxt_markets(exchange_id)
+                if not markets:
+                    _log('PBCoinData', f'No markets available for bybit copy trading detection', level='WARNING')
+                    return []
+                
+                for symbol, market in markets.items():
+                    if not market.get("swap", False) or not market.get("active", True):
+                        continue
+                    if not market.get("linear", False):
+                        continue
+                    info = market.get("info", {})
+                    if info.get("copyTrading") == "both":
+                        market_id = market.get("id", "")
+                        if market_id:
+                            cpt_symbols.append(market_id)
+                
+                _log('PBCoinData', f'Found {len(cpt_symbols)} copy trading symbols for bybit (from market data)', level='INFO')
+            
+            elif exchange_id in ('binance', 'bitget'):
+                cpt_symbols = self._fetch_cpt_with_user_discovery(exchange_id)
+            
+            else:
+                # No copy trading API known for this exchange
+                _log('PBCoinData', f'No copy trading API for {exchange_id}', level='DEBUG')
+            
+            # Cache the result
+            if cpt_symbols:
+                self.save_copy_trading_symbols(exchange_id, cpt_symbols)
+            
+        except Exception as e:
+            _log('PBCoinData', f'Error fetching copy trading symbols for {exchange_id}: {e}', level='ERROR')
+            # Fall back to cached data
+            cpt_symbols = self.load_copy_trading_symbols(exchange_id)
+            if cpt_symbols:
+                _log('PBCoinData', f'Using {len(cpt_symbols)} cached copy trading symbols for {exchange_id}', level='INFO')
+        
+        return cpt_symbols
+    
+    def _fetch_cpt_with_user_discovery(self, exchange_id: str) -> list:
+        """Fetch copy trading symbols for binance/bitget with smart user caching.
+        
+        1. Try remembered user from pbgui.ini first
+        2. If that fails, scan all eligible users
+        3. Remember the working user for next time
+        
+        Returns:
+            List of market IDs or empty list
+        """
+        from Exchange import Exchange
+        from User import Users
+        
+        # Load remembered user from pbgui.ini
+        remembered_user_name = self._load_cpt_user(exchange_id)
+        
+        # Get all eligible users for this exchange
+        users_obj = Users()
+        candidate_users = self._get_cpt_candidate_users(users_obj, exchange_id)
+        
+        if not candidate_users:
+            _log('PBCoinData', f'No eligible users found for {exchange_id} copy trading', level='WARNING')
+            return []
+        
+        # Build ordered list: remembered user first, then others
+        ordered_users = []
+        if remembered_user_name:
+            for u in candidate_users:
+                if u.name == remembered_user_name:
+                    ordered_users.append(u)
+                    break
+        for u in candidate_users:
+            if u.name != remembered_user_name:
+                ordered_users.append(u)
+        
+        # Try each user until one works
+        for user in ordered_users:
+            result = self._try_fetch_cpt_for_user(exchange_id, user)
+            if result is not None:
+                # Success - remember this user
+                if user.name != remembered_user_name:
+                    self._save_cpt_user(exchange_id, user.name)
+                    _log('PBCoinData', f'Remembered {user.name} as copy trading user for {exchange_id}', level='INFO')
+                else:
+                    _log('PBCoinData', f'Using remembered user {user.name} for {exchange_id} copy trading', level='DEBUG')
+                _log('PBCoinData', f'Fetched {len(result)} copy trading symbols for {exchange_id} via user {user.name}', level='INFO')
+                return result
+        
+        _log('PBCoinData', f'No user could fetch copy trading symbols for {exchange_id}', level='WARNING')
+        return []
+    
+    def _get_cpt_candidate_users(self, users_obj, exchange_id: str) -> list:
+        """Get users with valid credentials for an exchange."""
+        if exchange_id == 'binance':
+            users = users_obj.find_binance_users()
+            return users if users else []
+        elif exchange_id == 'bitget':
+            users = users_obj.find_bitget_users()
+            return users if users else []
+        return []
+    
+    def _try_fetch_cpt_for_user(self, exchange_id: str, user) -> list | None:
+        """Try to fetch copy trading symbols with a specific user.
+        
+        Returns:
+            List of symbols on success, None on failure
+        """
+        from Exchange import Exchange
+        
+        try:
+            exchange = Exchange(exchange_id, user)
+            exchange.connect()
+            
+            if exchange_id == 'binance':
+                symbols = exchange.instance.sapiGetCopytradingFuturesLeadsymbol()
+                return [s["symbol"] for s in symbols.get("data", [])]
+            
+            elif exchange_id == 'bitget':
+                symbols = exchange.instance.privateCopyGetV2CopyMixTraderConfigQuerySymbols(
+                    {"productType": "USDT-FUTURES"}
+                )
+                if symbols and symbols.get("data"):
+                    return [s["symbol"] for s in symbols["data"]]
+                return None
+            
+        except Exception as e:
+            _log('PBCoinData', f'User {user.name} failed for {exchange_id} copy trading: {e}', level='DEBUG')
+            return None
+    
+    def _load_cpt_user(self, exchange_id: str) -> str | None:
+        """Load remembered copy trading user from pbgui.ini."""
+        pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
+        pb_config.read('pbgui.ini')
+        key = f'cpt_user.{exchange_id}'
+        if pb_config.has_option("coinmarketcap", key):
+            return pb_config.get("coinmarketcap", key)
+        return None
+    
+    def _save_cpt_user(self, exchange_id: str, user_name: str):
+        """Save working copy trading user to pbgui.ini."""
+        pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
+        pb_config.read('pbgui.ini')
+        if not pb_config.has_section("coinmarketcap"):
+            pb_config.add_section("coinmarketcap")
+        pb_config.set("coinmarketcap", f'cpt_user.{exchange_id}', user_name)
+        with open('pbgui.ini', 'w') as f:
+            pb_config.write(f)
     
     @property
     def api_key(self):
@@ -394,6 +933,13 @@ class CoinData:
     @metadata_interval.setter
     def metadata_interval(self, new_metadata_interval):
         self._metadata_interval = new_metadata_interval
+
+    @property
+    def mapping_interval(self):
+        return self._mapping_interval
+    @mapping_interval.setter
+    def mapping_interval(self, new_mapping_interval):
+        self._mapping_interval = new_mapping_interval
 
     @property
     def exchange(self):
@@ -505,7 +1051,7 @@ class CoinData:
             count = 0
             while True:
                 if count > 5:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBCoinData')
+                    _log('PBCoinData', 'Can not start PBCoinData', level='ERROR')
                 sleep(1)
                 if self.is_running():
                     break
@@ -513,7 +1059,7 @@ class CoinData:
 
     def stop(self):
         if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBCoinData')
+            _log('PBCoinData', 'Stop: PBCoinData', level='INFO')
             psutil.Process(self.my_pid).kill()
 
     def restart(self):
@@ -574,6 +1120,7 @@ class CoinData:
     def load_config(self):
         if self.has_new_config():
             pb_config = configparser.ConfigParser()
+            pb_config.optionxform = str
             pb_config.read('pbgui.ini')
             if pb_config.has_option("coinmarketcap", "api_key"):
                 self._api_key = pb_config.get("coinmarketcap", "api_key")
@@ -583,9 +1130,12 @@ class CoinData:
                 self._fetch_interval = int(pb_config.get("coinmarketcap", "fetch_interval"))
             if pb_config.has_option("coinmarketcap", "metadata_interval"):
                 self._metadata_interval = int(pb_config.get("coinmarketcap", "metadata_interval"))
+            if pb_config.has_option("coinmarketcap", "mapping_interval"):
+                self._mapping_interval = int(pb_config.get("coinmarketcap", "mapping_interval"))
     
     def save_config(self):
         pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
         pb_config.read('pbgui.ini')
         if not pb_config.has_section("coinmarketcap"):
             pb_config.add_section("coinmarketcap")
@@ -593,8 +1143,447 @@ class CoinData:
         pb_config.set("coinmarketcap", "fetch_limit", str(self.fetch_limit))
         pb_config.set("coinmarketcap", "fetch_interval", str(self.fetch_interval))
         pb_config.set("coinmarketcap", "metadata_interval", str(self.metadata_interval))
+        pb_config.set("coinmarketcap", "mapping_interval", str(self.mapping_interval))
         with open('pbgui.ini', 'w') as pbgui_configfile:
             pb_config.write(pbgui_configfile)
+    
+    def fetch_ccxt_markets(self, exchange_id: str):
+        """Fetch CCXT markets for a specific exchange and save to coindata/{exchange}/ccxt_markets.json"""
+        from Exchange import Exchange
+        
+        _log('PBCoinData', f'Fetching CCXT markets for {exchange_id}', level='INFO')
+        
+        try:
+            # Create exchange instance without user (public API)
+            exchange = Exchange(exchange_id)
+            exchange.connect()
+            
+            # Load markets from CCXT
+            markets = exchange.instance.load_markets()
+            
+            if not markets:
+                _log('PBCoinData', f'No markets returned for {exchange_id}', level='WARNING')
+                return False
+            
+            # Save raw CCXT markets (all types)
+            self.save_ccxt_markets(exchange_id, markets)
+            
+            _log('PBCoinData', f'Successfully fetched {len(markets)} markets for {exchange_id}', level='INFO')
+            return True
+            
+        except Exception as e:
+            _log('PBCoinData', f'Error fetching CCXT markets for {exchange_id}: {e}', level='ERROR')
+            return False
+    
+    def build_mapping(self, exchange_id: str, force_fetch: bool = False):
+        """Build mapping.json for an exchange by merging CCXT markets + CMC data"""
+        _log('PBCoinData', f'Building mapping for {exchange_id}', level='INFO')
+        
+        try:
+            from Exchange import Exchange
+            
+            # Load or fetch CCXT markets
+            markets = self.load_ccxt_markets(exchange_id)
+            if not markets or force_fetch:
+                success = self.fetch_ccxt_markets(exchange_id)
+                if not success:
+                    _log('PBCoinData', f'Failed to fetch markets for {exchange_id}', level='ERROR')
+                    return False
+                markets = self.load_ccxt_markets(exchange_id)
+            
+            if not markets:
+                _log('PBCoinData', f'No markets available for {exchange_id}', level='ERROR')
+                return False
+            
+            # Build CMC lookup dicts from self.data
+            # cmc_best: best-rank entry per symbol (fallback)
+            # cmc_all: ALL entries per symbol (for price-based disambiguation)
+            cmc_best = {}
+            cmc_all = {}
+            metadata_by_id = {}
+            if self.data and "data" in self.data:
+                for coin in self.data["data"]:
+                    sym = coin["symbol"].upper()
+                    # Collect all entries for each symbol
+                    if sym not in cmc_all:
+                        cmc_all[sym] = []
+                    cmc_all[sym].append(coin)
+                    # Track best-rank entry as fallback
+                    if sym in cmc_best:
+                        existing_rank = cmc_best[sym].get("cmc_rank", 99999) or 99999
+                        new_rank = coin.get("cmc_rank", 99999) or 99999
+                        if new_rank < existing_rank:
+                            cmc_best[sym] = coin
+                    else:
+                        cmc_best[sym] = coin
+                dupes = sum(1 for v in cmc_all.values() if len(v) > 1)
+                _log('PBCoinData', f'CMC data available: {len(cmc_best)} coins ({dupes} with duplicates)', level='DEBUG')
+            else:
+                _log('PBCoinData', 'No CMC data loaded, using defaults', level='WARNING')
+
+            if self.metadata and isinstance(self.metadata, dict):
+                raw_md = self.metadata.get("data", {})
+                if isinstance(raw_md, dict):
+                    metadata_by_id = raw_md
+            
+            # Load previous mapping for price-based CMC disambiguation
+            # When multiple CMC entries share the same symbol (e.g. HOT, ACT, BABY),
+            # we use the exchange price from the previous mapping to pick the correct one
+            prev_prices = {}
+            prev_mapping = self.load_exchange_mapping(exchange_id)
+            if prev_mapping:
+                for rec in prev_mapping:
+                    if rec.get("price_last") and rec["price_last"] > 0:
+                        prev_prices[rec["symbol"]] = rec["price_last"]
+            
+            # If no previous prices available, fetch live prices for disambiguation
+            if not prev_prices:
+                try:
+                    exchange = Exchange(exchange_id)
+                    exchange.connect()
+                    ccxt_symbols = [s for s, m in markets.items() if m.get("swap")]
+                    ticker_data = exchange.fetch_prices(ccxt_symbols, "swap")
+                    for ccxt_sym, data in ticker_data.items():
+                        if ccxt_sym in markets:
+                            market_id = markets[ccxt_sym].get("id", "")
+                            price = float(data.get("last", 0))
+                            if market_id and price > 0:
+                                prev_prices[market_id] = price
+                    _log('PBCoinData', f'Fetched {len(prev_prices)} live prices for {exchange_id} CMC disambiguation', level='INFO')
+                except Exception as e:
+                    _log('PBCoinData', f'Could not fetch live prices for {exchange_id}: {e}', level='WARNING')
+            
+            # Load copy trading symbols (from cache, populated by update_mappings)
+            cpt_symbols = self.load_copy_trading_symbols(exchange_id)
+            cpt_symbols_set = set(cpt_symbols)
+
+            # Resilience for authenticated CPT sources (binance/bitget):
+            # if CPT symbols are unavailable, preserve previous mapping flags
+            # to avoid wiping all copy_trading=True records on rebuild.
+            previous_cpt_symbols = set()
+            if exchange_id in ("binance", "bitget") and not cpt_symbols_set and prev_mapping:
+                previous_cpt_symbols = {
+                    rec.get("symbol")
+                    for rec in prev_mapping
+                    if rec.get("symbol") and rec.get("copy_trading")
+                }
+                if previous_cpt_symbols:
+                    _log(
+                        'PBCoinData',
+                        f'Using {len(previous_cpt_symbols)} copy trading symbols from previous mapping for {exchange_id} (no fresh CPT data available)',
+                        level='WARNING'
+                    )
+
+            # Cold-start fallback for authenticated CPT sources:
+            # if there is no CPT cache and no previous mapping, use legacy
+            # ini CPT list so mapping does not start with all-False flags.
+            legacy_cpt_symbols = set()
+            if exchange_id in ("binance", "bitget") and not cpt_symbols_set and not previous_cpt_symbols:
+                pb_config = configparser.ConfigParser()
+                pb_config.optionxform = str
+                pb_config.read('pbgui.ini')
+                exchange_cfg = "kucoinfutures" if exchange_id == "kucoin" else exchange_id
+                cpt_key = f'{exchange_cfg}.cpt'
+                if pb_config.has_option("exchanges", cpt_key):
+                    try:
+                        legacy_cpt_symbols = set(eval(pb_config.get("exchanges", cpt_key)))
+                    except Exception as e:
+                        _log('PBCoinData', f'Failed to parse legacy CPT list {cpt_key}: {e}', level='ERROR')
+                if legacy_cpt_symbols:
+                    _log(
+                        'PBCoinData',
+                        f'Using {len(legacy_cpt_symbols)} legacy ini copy trading symbols for {exchange_id} (cold start without fresh CPT data)',
+                        level='WARNING'
+                    )
+            
+            # Build mapping records
+            mapping = []
+            price_disambiguated = 0
+            for symbol, market in markets.items():
+                # Only process swap/perpetual markets (NOT spot!)
+                if not market.get("swap", False):
+                    continue
+                
+                # Get CCXT market ID (exchange format)
+                market_id = market.get("id", "")
+                if not market_id:
+                    continue
+                
+                # Extract base coin (e.g., "BTC" from "BTC/USDT:USDT")
+                base = market.get("base", "")
+                
+                # Detect HIP-3 (stock perpetuals)
+                is_hip3 = self._detect_hip3(exchange_id, market, cmc_best)
+                
+                # Find CMC data for this coin
+                # Use normalize_symbol + SYMBOLMAP for proper matching
+                cmc_record = {}
+                if not is_hip3 and cmc_best:
+                    sym = compute_coin_name(market_id, market.get("quote", ""))
+                    if not sym:
+                        sym = normalize_symbol(base, self._symbol_mappings)
+                    cmc_sym = SYMBOLMAP.get(sym.upper(), sym).upper()
+                    candidates = cmc_all.get(cmc_sym, [])
+                    
+                    if len(candidates) == 1:
+                        # Single match — use it directly
+                        cmc_record = candidates[0]
+                    elif len(candidates) > 1:
+                        # Multiple CMC entries for same symbol — disambiguate
+                        exchange_price = prev_prices.get(market_id)
+                        if exchange_price and exchange_price > 0:
+                            # Price-based: pick CMC entry whose price is closest
+                            cmc_record = self._pick_cmc_by_price(
+                                candidates, exchange_price, cmc_sym
+                            )
+                            price_disambiguated += 1
+                        else:
+                            # No price available — fall back to best rank
+                            cmc_record = cmc_best.get(cmc_sym, {})
+                
+                # Build mapping record
+                cmc_id = cmc_record.get("id") if cmc_record else None
+                notice = ""
+                if cmc_id is not None:
+                    md = metadata_by_id.get(str(cmc_id), {}) if metadata_by_id else {}
+                    if isinstance(md, dict):
+                        notice = md.get("notice") or ""
+
+                record = {
+                    # Exchange identity
+                    "exchange": exchange_id,
+                    "symbol": market_id,
+                    "ccxt_symbol": symbol,
+                    "base": base,
+                    "coin": compute_coin_name(market_id, market.get("quote", "")),
+                    "quote": market.get("quote", ""),
+                    "swap": market.get("swap", False),
+                    "linear": market.get("linear", True),
+                    
+                    # Copy trading
+                    "copy_trading": market_id in cpt_symbols_set or market_id in previous_cpt_symbols or market_id in legacy_cpt_symbols,
+                    
+                    # CMC data (0/null/[] defaults for HIP-3)
+                    "cmc_id": cmc_id,
+                    "cmc_rank": cmc_record.get("cmc_rank", 0) if cmc_record else 0,
+                    "market_cap": (cmc_record.get("quote", {}).get("USD", {}).get("market_cap", 0) or cmc_record.get("self_reported_market_cap", 0) or 0) if cmc_record else 0,
+                    "volume_24h": cmc_record.get("quote", {}).get("USD", {}).get("volume_24h", 0) if cmc_record else 0,
+                    "tags": cmc_record.get("tags", []) if cmc_record else [],
+                    "notice": notice,
+                    
+                    # Balance calc fields from CCXT
+                    "contract_size": market.get("contractSize", 1.0),
+                    "min_amount": market.get("limits", {}).get("amount", {}).get("min") or market.get("precision", {}).get("amount", 0.0),
+                    "min_cost": market.get("limits", {}).get("cost", {}).get("min", 0.0),
+                    "precision_amount": market.get("precision", {}).get("amount", 0.0),
+                    "max_leverage": market.get("limits", {}).get("leverage", {}).get("max"),
+                    
+                    # Price fields — use fetched prices if available
+                    "price_last": prev_prices.get(market_id),
+                    "price_ts": None,
+                    "min_order_price": None,
+                    
+                    # HIP-3 flag
+                    "is_hip3": is_hip3,
+                    "dex": market.get("info", {}).get("dex") if is_hip3 else None,
+                    
+                    # Active flag
+                    "active": market.get("active", True),
+                }
+                
+                mapping.append(record)
+            
+            # Save mapping
+            self.save_exchange_mapping(exchange_id, mapping)
+            
+            if price_disambiguated:
+                _log('PBCoinData', f'Successfully built mapping with {len(mapping)} records for {exchange_id} ({price_disambiguated} CMC matches resolved by price)', level='INFO')
+            else:
+                _log('PBCoinData', f'Successfully built mapping with {len(mapping)} records for {exchange_id}', level='INFO')
+            return True
+            
+        except Exception as e:
+            _log('PBCoinData', f'Error building mapping for {exchange_id}: {e}', level='ERROR')
+            return False
+    
+    def _detect_hip3(self, exchange_id: str, market: dict, cmc_data: dict) -> bool:
+        """
+        Detect if a market is a HIP-3 stock perpetual.
+        
+        HIP-3 markets are perpetual futures on Hyperliquid deployed by third-party
+        builder DEXes (xyz, flx, cash, hyna, km, vntl, etc.).
+        
+        CCXT marks these with info.hip3=True and info.dex=<dex_name>.
+        Symbol format: {DEX}-{TICKER}/USDC:USDC (e.g. XYZ-TSLA/USDC:USDC)
+        All HIP-3 markets are type=swap, onlyIsolated=True.
+        
+        Args:
+            exchange_id: Exchange identifier
+            market: CCXT market dict
+            cmc_data: CMC data dict (unused)
+        
+        Returns:
+            True if the market is a HIP-3 perpetual
+        """
+        if exchange_id != 'hyperliquid':
+            return False
+        info = market.get('info', {})
+        return info.get('hip3', False) is True
+    
+    @staticmethod
+    def _pick_cmc_by_price(candidates: list, exchange_price: float, symbol: str) -> dict:
+        """Pick the CMC entry whose price is closest to the exchange price.
+        
+        When multiple CMC coins share the same ticker symbol (e.g. HOT: Holo vs
+        HOT Protocol, ACT: Act I vs Acet), we use the exchange price to identify
+        which CMC entry actually corresponds to the traded asset.
+        
+        Uses relative price similarity: 1 - |p1-p2| / max(p1,p2).
+        Falls back to best-rank entry if no CMC entry has a valid price.
+        
+        Args:
+            candidates: List of CMC coin dicts sharing the same symbol
+            exchange_price: Last known exchange price for this symbol
+            symbol: Symbol name for logging
+        
+        Returns:
+            Best-matching CMC coin dict
+        """
+        best_entry = None
+        best_score = -1.0
+        best_rank_entry = None
+        best_rank = 99999
+        
+        for coin in candidates:
+            # Track best-rank as fallback
+            rank = coin.get("cmc_rank", 99999) or 99999
+            if rank < best_rank:
+                best_rank = rank
+                best_rank_entry = coin
+            
+            # Calculate price similarity
+            cmc_price = coin.get("quote", {}).get("USD", {}).get("price", 0) or 0
+            if cmc_price and cmc_price > 0:
+                max_price = max(exchange_price, cmc_price)
+                rel_diff = abs(exchange_price - cmc_price) / max_price
+                score = 1.0 - min(rel_diff, 1.0)
+                
+                if score > best_score:
+                    best_score = score
+                    best_entry = coin
+        
+        # Rank-first policy:
+        # - Prefer best-rank candidate by default.
+        # - Override with price-based candidate only if rank candidate deviates
+        #   strongly from exchange price and the alternative is materially better.
+        if not best_entry:
+            return best_rank_entry or candidates[0]
+
+        if not best_rank_entry:
+            return best_entry if best_score >= 0.3 else candidates[0]
+
+        rank_price = best_rank_entry.get("quote", {}).get("USD", {}).get("price", 0) or 0
+        rank_score = -1.0
+        if rank_price and rank_price > 0:
+            max_price = max(exchange_price, rank_price)
+            rel_diff = abs(exchange_price - rank_price) / max_price
+            rank_score = 1.0 - min(rel_diff, 1.0)
+
+        # If rank entry has no price, use best viable price match when available.
+        if rank_score < 0:
+            if best_score >= 0.3:
+                if best_entry != best_rank_entry:
+                    _log('PBCoinData',
+                         f'CMC price disambiguation for {symbol}: '
+                         f'rank entry has no valid price, chose "{best_entry.get("name", "?")}" '
+                         f'(score={best_score:.2f})',
+                         level='DEBUG')
+                return best_entry
+            return best_rank_entry
+
+        score_gain = best_score - rank_score
+
+        # Override only on clear evidence:
+        # 1) rank is a poor fit and best candidate is a strong fit, or
+        # 2) best candidate improves score substantially.
+        strong_rank_mismatch = rank_score < 0.8 and best_score >= 0.9
+        substantial_gain = score_gain >= 0.15 and best_score >= 0.85
+
+        if best_entry != best_rank_entry and (strong_rank_mismatch or substantial_gain):
+            _log('PBCoinData',
+                 f'CMC price disambiguation for {symbol}: '
+                 f'chose "{best_entry.get("name", "?")}" (score={best_score:.2f}) '
+                 f'over rank-based "{best_rank_entry.get("name", "?")}" '
+                 f'(rank_score={rank_score:.2f}, gain={score_gain:.2f})',
+                 level='DEBUG')
+            return best_entry
+
+        return best_rank_entry
+    
+    def update_prices(self, exchange_id: str):
+        """Update price fields in mapping.json for an exchange"""
+        from Exchange import Exchange
+        
+        _log('PBCoinData', f'Updating prices for {exchange_id}', level='INFO')
+        
+        try:
+            # Load existing mapping
+            mapping = self.load_exchange_mapping(exchange_id)
+            if not mapping:
+                _log('PBCoinData', f'No mapping found for {exchange_id}', level='ERROR')
+                return False
+            
+            # Create exchange instance
+            exchange = Exchange(exchange_id)
+            exchange.connect()
+            
+            # Get all active symbol IDs for batch price fetch
+            symbols = [r["ccxt_symbol"] for r in mapping if r.get("active", True)]
+            
+            # Fetch prices in batch
+            try:
+                prices = exchange.fetch_prices(symbols, "swap")
+            except Exception as e:
+                _log('PBCoinData', f'Error fetching prices for {exchange_id}: {e}', level='ERROR')
+                return False
+            
+            # Update each record
+            current_ts = int(datetime.now().timestamp() * 1000)
+            for record in mapping:
+                ccxt_symbol = record.get("ccxt_symbol")
+                if not ccxt_symbol or ccxt_symbol not in prices:
+                    continue
+                
+                price_data = prices[ccxt_symbol]
+                price = float(price_data.get("last", 0))
+                
+                if price <= 0:
+                    continue
+                
+                # Update price fields
+                record["price_last"] = price
+                record["price_ts"] = price_data.get("timestamp", current_ts)
+                
+                # Calculate min_order_price
+                contract_size = record.get("contract_size", 1.0)
+                min_amount = record.get("min_amount", 0.0)
+                min_cost = record.get("min_cost", 0.0)
+                
+                min_qty = min_amount * contract_size
+                min_price_from_qty = min_qty * price
+                
+                # Use max of min_cost and calculated min_price
+                record["min_order_price"] = max(min_cost, min_price_from_qty)
+            
+            # Save updated mapping
+            self.save_exchange_mapping(exchange_id, mapping)
+            
+            _log('PBCoinData', f'Successfully updated prices for {len(symbols)} symbols on {exchange_id}', level='INFO')
+            return True
+            
+        except Exception as e:
+            _log('PBCoinData', f'Error updating prices for {exchange_id}: {e}', level='ERROR')
+            return False
 
     def fetch_api_status(self):
         url = 'https://pro-api.coinmarketcap.com/v1/key/info'
@@ -640,9 +1629,9 @@ class CoinData:
             if response.status_code == 200:
                 self.data = json.loads(response.text)
                 self.fetch_api_status()
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap data. Credits left this month: {self.credits_left}')
+                _log('PBCoinData', f'Fetched CoinMarketCap data. Credits left: {self.credits_left}', level='INFO')
             else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap data')
+                _log('PBCoinData', 'Can not fetch CoinMarketCap data', level='ERROR')
                 self.data = None
         except (ConnectionError, Timeout, TooManyRedirects) as e:
             return e
@@ -681,9 +1670,9 @@ class CoinData:
             if response.status_code == 200:
                 self.metadata = json.loads(response.text)
                 self.fetch_api_status()
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Fetched CoinMarketCap metadata. Credits left this month: {self.credits_left}')
+                _log('PBCoinData', f'Fetched CoinMarketCap metadata. Credits left: {self.credits_left}', level='INFO')
             else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not fetch CoinMarketCap metadata')
+                _log('PBCoinData', 'Can not fetch CoinMarketCap metadata', level='ERROR')
                 self.metadata = None
         except (ConnectionError, Timeout, TooManyRedirects) as e:
             return e
@@ -728,7 +1717,7 @@ class CoinData:
                     self.data_ts = data_ts
                     return
             except Exception as e:
-                print(f'Error loading coindata: {e}.')
+                _log('PBCoinData', f'Error loading coindata: {e}', level='ERROR')
     
     def load_metadata(self):
         pbgdir = Path.cwd()
@@ -747,7 +1736,7 @@ class CoinData:
                     self.metadata_ts = metadata_ts
                     return
             except Exception as e:
-                print(f'Error loading metadata: {e}. Retrying in 5 seconds...')
+                _log('PBCoinData', f'Error loading metadata: {e}. Retrying in 5 seconds...', level='ERROR')
 
     def is_data_fresh(self):
         pbgdir = Path.cwd()
@@ -776,16 +1765,40 @@ class CoinData:
                 exc = Exchange(exchange)
                 try:
                     exc.fetch_symbols()
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update Symbols {exchange}')
+                    _log('PBCoinData', f'Update Symbols {exchange}', level='INFO')
                 except Exception as e:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Failed to fetch symbols for {exchange}')
+                    _log('PBCoinData', f'Failed to fetch symbols for {exchange}', level='ERROR')
             self.update_symbols_ts = now_ts
             self._symbols = []
             self._symbols_cpt = []
             self._symbols_all = []
 
+    def update_mappings(self):
+        """Fetch CCXT markets and build mappings for all V7-supported exchanges.
+        
+        Runs on its own interval (mapping_interval, in hours).
+        Includes HIP-3 stock perpetuals detection.
+        Only processes V7-supported exchanges (binance, bybit, bitget, gateio,
+        hyperliquid, okx). Legacy exchanges (bingx, kucoin) are excluded.
+        """
+        now_ts = datetime.now().timestamp()
+        if self.update_mappings_ts < now_ts - 3600 * self._mapping_interval:
+            _log('PBCoinData', 'Starting mapping update for all exchanges', level='INFO')
+            for exchange in V7.list():
+                try:
+                    self.fetch_ccxt_markets(exchange)
+                    markets = self.load_ccxt_markets(exchange)
+                    self.fetch_copy_trading_symbols(exchange, markets)
+                    self.build_mapping(exchange)
+                    self.update_prices(exchange)
+                except Exception as e:
+                    _log('PBCoinData', f'Failed to update mapping for {exchange}: {e}', level='ERROR')
+            self.update_mappings_ts = now_ts
+            _log('PBCoinData', 'Mapping update complete', level='INFO')
+
     def load_symbols(self):
         pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
         pb_config.read('pbgui.ini')
         exchange = "kucoinfutures" if self.exchange == "kucoin" else self.exchange
         if pb_config.has_option("exchanges", f'{exchange}.swap'):
@@ -803,6 +1816,7 @@ class CoinData:
     def load_symbols_all(self):
         self._symbols_all = []
         pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
         pb_config.read('pbgui.ini')
         all_symbols = []
         for exchange in self.exchanges:
@@ -932,32 +1946,22 @@ def main():
     dest = Path(f'{pbgdir}/data/logs')
     if not dest.exists():
         dest.mkdir(parents=True)
-    logfile = Path(f'{str(dest)}/PBCoinData.log')
-    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBCoinData')
+    _log('PBCoinData', 'Start: PBCoinData', level='INFO')
     pbcoindata = CoinData()
     if pbcoindata.is_running():
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBCoinData already started')
+        _log('PBCoinData', 'PBCoinData already started', level='ERROR')
         exit(1)
     pbcoindata.save_pid()
     while True:
         try:
-            if logfile.exists():
-                if logfile.stat().st_size >= 10485760:
-                    logfile.replace(f'{str(logfile)}.old')
-                    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-                    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             pbcoindata.update_symbols()
             pbcoindata.load_data()
             pbcoindata.load_metadata()
+            pbcoindata.update_mappings()
             sleep(60)
             pbcoindata.load_config()
         except Exception as e:
-            print(f'Something went wrong, but continue {e}')
-            traceback.print_exc()
+            _log('PBCoinData', f'Something went wrong, but continue: {e}', level='ERROR')
 
 if __name__ == '__main__':
     main()
