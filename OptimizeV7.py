@@ -1640,6 +1640,10 @@ class OptimizeV7Item(ConfigV7Editor):
 
     # filters
     def fragment_filter_coins(self):
+        if "pbcoindata" not in st.session_state:
+            st.session_state.pbcoindata = CoinData()
+        coindata = st.session_state.pbcoindata
+
         col1, col2, col3, col4, col5 = st.columns([1,1,1,0.5,0.5], vertical_alignment="bottom")
         with col1:
             self.fragment_market_cap()
@@ -1673,52 +1677,37 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
         # Apply filters
         if st.session_state.edit_opt_v7_apply_filters:
-            def _extend_coins(target, items):
-                # Items are already normalized SHORT names from PBCoinData
-                for item in items:
-                    if item:
-                        target.append(item)
+            approved = set()
+            for exchange in self.config.backtest.exchanges:
+                approved_coins, _ = coindata.filter_mapping(
+                    exchange=exchange,
+                    market_cap_min_m=self.config.pbgui.market_cap,
+                    vol_mcap_max=self.config.pbgui.vol_mcap,
+                    only_cpt=self.config.pbgui.only_cpt,
+                    notices_ignore=self.config.pbgui.notices_ignore,
+                    tags=self.config.pbgui.tags,
+                    quote_filter=None,
+                    use_cache=True,
+                )
+                approved.update(approved_coins)
+            approved_sorted = sorted(approved)
+            self.config.live.approved_coins.long = approved_sorted
+            self.config.live.approved_coins.short = approved_sorted
 
-            approved = []
-            if "bybit" in self.config.backtest.exchanges:
-                _extend_coins(approved, st.session_state.coindata_bybit.approved_coins)
-            if "binance" in self.config.backtest.exchanges:
-                _extend_coins(approved, st.session_state.coindata_binance.approved_coins)
-            if "gateio" in self.config.backtest.exchanges:
-                _extend_coins(approved, st.session_state.coindata_gateio.approved_coins)
-            if "bitget" in self.config.backtest.exchanges:
-                _extend_coins(approved, st.session_state.coindata_bitget.approved_coins)
-            if "hyperliquid" in self.config.backtest.exchanges and "coindata_hyperliquid" in st.session_state:
-                _extend_coins(approved, st.session_state.coindata_hyperliquid.approved_coins)
-            self.config.live.approved_coins.long = sorted(set(approved))
-            self.config.live.approved_coins.short = sorted(set(approved))
-        # Remove unavailable symbols
-        symbols_raw = []
-        if "bybit" in self.config.backtest.exchanges:
-            symbols_raw.extend(st.session_state.coindata_bybit.symbols)
-        if "binance" in self.config.backtest.exchanges:
-            symbols_raw.extend(st.session_state.coindata_binance.symbols)
-        if "gateio" in self.config.backtest.exchanges:
-            symbols_raw.extend(st.session_state.coindata_gateio.symbols)
-        if "bitget" in self.config.backtest.exchanges:
-            symbols_raw.extend(st.session_state.coindata_bitget.symbols)
-        if "hyperliquid" in self.config.backtest.exchanges and "coindata_hyperliquid" in st.session_state:
-            symbols_raw.extend(st.session_state.coindata_hyperliquid.symbols)
-        symbols_raw = list(set(symbols_raw))
-        base_to_full = {}
-        for sym in symbols_raw:
-            base = normalize_symbol(sym)
-            if base:
-                base_to_full.setdefault(base, set()).add(sym)
-        symbols = sorted({normalize_symbol(sym) for sym in symbols_raw if sym})
+        symbols = set()
+        for exchange in self.config.backtest.exchanges:
+            for record in coindata.load_mapping(exchange=exchange, use_cache=True):
+                coin = (record.get("coin") or "").upper()
+                if coin:
+                    symbols.add(coin)
+        symbols = sorted(symbols)
+        symbol_set = set(symbols)
 
         def is_available(coin: str) -> bool:
             if not coin:
                 return False
-            if coin in symbols_raw:
-                return True
             base = normalize_symbol(coin)
-            return base in base_to_full
+            return coin in symbol_set or base in symbol_set
 
         for symbol in self.config.live.approved_coins.long.copy():
             if not is_available(symbol):
@@ -1744,22 +1733,10 @@ class OptimizeV7Item(ConfigV7Editor):
         if "edit_opt_v7_market_cap" in st.session_state:
             if st.session_state.edit_opt_v7_market_cap != self.config.pbgui.market_cap:
                 self.config.pbgui.market_cap = st.session_state.edit_opt_v7_market_cap
-                st.session_state.coindata_binance.market_cap = self.config.pbgui.market_cap
-                st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
-                st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
-                st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
-                if "coindata_hyperliquid" in st.session_state:
-                    st.session_state.coindata_hyperliquid.market_cap = self.config.pbgui.market_cap
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_market_cap = self.config.pbgui.market_cap
-            st.session_state.coindata_binance.market_cap = self.config.pbgui.market_cap
-            st.session_state.coindata_bybit.market_cap = self.config.pbgui.market_cap
-            st.session_state.coindata_gateio.market_cap = self.config.pbgui.market_cap
-            st.session_state.coindata_bitget.market_cap = self.config.pbgui.market_cap
-            if "coindata_hyperliquid" in st.session_state:
-                st.session_state.coindata_hyperliquid.market_cap = self.config.pbgui.market_cap
         st.number_input("market_cap", min_value=0, step=50, format="%.d", key="edit_opt_v7_market_cap", help=pbgui_help.market_cap)
     
     @st.fragment
@@ -1768,51 +1745,30 @@ class OptimizeV7Item(ConfigV7Editor):
         if "edit_opt_v7_vol_mcap" in st.session_state:
             if st.session_state.edit_opt_v7_vol_mcap != self.config.pbgui.vol_mcap:
                 self.config.pbgui.vol_mcap = st.session_state.edit_opt_v7_vol_mcap
-                st.session_state.coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
-                st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
-                st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
-                st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
-                if "coindata_hyperliquid" in st.session_state:
-                    st.session_state.coindata_hyperliquid.vol_mcap = self.config.pbgui.vol_mcap
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_vol_mcap = round(float(self.config.pbgui.vol_mcap),2)
-            st.session_state.coindata_bybit.vol_mcap = self.config.pbgui.vol_mcap
-            st.session_state.coindata_binance.vol_mcap = self.config.pbgui.vol_mcap
-            st.session_state.coindata_gateio.vol_mcap = self.config.pbgui.vol_mcap
-            st.session_state.coindata_bitget.vol_mcap = self.config.pbgui.vol_mcap
-            if "coindata_hyperliquid" in st.session_state:
-                st.session_state.coindata_hyperliquid.vol_mcap = self.config.pbgui.vol_mcap
         st.number_input("vol/mcap", min_value=0.0, step=0.05, format="%.2f", key="edit_opt_v7_vol_mcap", help=pbgui_help.vol_mcap)
 
     @st.fragment
     # tags
     def fragment_tags(self):
+        if "pbcoindata" not in st.session_state:
+            st.session_state.pbcoindata = CoinData()
+        coindata = st.session_state.pbcoindata
+
         if "edit_opt_v7_tags" in st.session_state:
             if st.session_state.edit_opt_v7_tags != self.config.pbgui.tags:
                 self.config.pbgui.tags = st.session_state.edit_opt_v7_tags
-                st.session_state.coindata_bybit.tags = self.config.pbgui.tags
-                st.session_state.coindata_binance.tags = self.config.pbgui.tags
-                st.session_state.coindata_gateio.tags = self.config.pbgui.tags
-                st.session_state.coindata_bitget.tags = self.config.pbgui.tags
-                if "coindata_hyperliquid" in st.session_state:
-                    st.session_state.coindata_hyperliquid.tags = self.config.pbgui.tags
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_tags = self.config.pbgui.tags
-            st.session_state.coindata_bybit.tags = self.config.pbgui.tags
-            st.session_state.coindata_binance.tags = self.config.pbgui.tags
-            st.session_state.coindata_gateio.tags = self.config.pbgui.tags
-            st.session_state.coindata_bitget.tags = self.config.pbgui.tags
-            if "coindata_hyperliquid" in st.session_state:
-                st.session_state.coindata_hyperliquid.tags = self.config.pbgui.tags
-        # remove duplicates from tags and sort them
-        hyperliquid_tags = []
-        if "coindata_hyperliquid" in st.session_state:
-            hyperliquid_tags = st.session_state.coindata_hyperliquid.all_tags
-        tags = sorted(list(set(st.session_state.coindata_bybit.all_tags + st.session_state.coindata_binance.all_tags + st.session_state.coindata_gateio.all_tags + st.session_state.coindata_bitget.all_tags + hyperliquid_tags)))
+        tags = set()
+        for exchange in self.config.backtest.exchanges:
+            tags.update(coindata.get_mapping_tags(exchange=exchange, use_cache=True))
+        tags = sorted(tags)
         st.multiselect("tags", tags, key="edit_opt_v7_tags", help=pbgui_help.coindata_tags)
 
     # only_cpt
@@ -1821,20 +1777,10 @@ class OptimizeV7Item(ConfigV7Editor):
         if "edit_opt_v7_only_cpt" in st.session_state:
             if st.session_state.edit_opt_v7_only_cpt != self.config.pbgui.only_cpt:
                 self.config.pbgui.only_cpt = st.session_state.edit_opt_v7_only_cpt
-                st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
-                st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
-                st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
-                if "coindata_hyperliquid" in st.session_state:
-                    st.session_state.coindata_hyperliquid.only_cpt = self.config.pbgui.only_cpt
                 if st.session_state.edit_opt_v7_apply_filters:
                     st.rerun()
         else:
             st.session_state.edit_opt_v7_only_cpt = self.config.pbgui.only_cpt
-            st.session_state.coindata_bybit.only_cpt = self.config.pbgui.only_cpt
-            st.session_state.coindata_binance.only_cpt = self.config.pbgui.only_cpt
-            st.session_state.coindata_bitget.only_cpt = self.config.pbgui.only_cpt
-            if "coindata_hyperliquid" in st.session_state:
-                st.session_state.coindata_hyperliquid.only_cpt = self.config.pbgui.only_cpt
         st.checkbox("only_cpt", key="edit_opt_v7_only_cpt", help=pbgui_help.only_cpt)
 
     # long_close_grid_markup_end
@@ -5484,23 +5430,27 @@ class OptimizeV7Item(ConfigV7Editor):
                 st.error("\n\n".join(preflight_errors))
 
     def _get_available_symbols(self, exchanges=None):
-        """Get available symbols from coindata for specified exchanges.
-        Returns normalized coin names (without USDT/USDC suffixes).
+        """Get available normalized coin names from mapping for specified exchanges.
         
         Args:
             exchanges: List of exchange names. If None, uses config.backtest.exchanges
         """
         if exchanges is None:
             exchanges = self.config.backtest.exchanges
-        
-        symbols = []
-        for exchange in V7.list():
-            if exchange in exchanges and f"coindata_{exchange}" in st.session_state:
-                symbols.extend(st.session_state[f"coindata_{exchange}"].symbols)
-        
-        # Normalize and deduplicate (BTCUSDT + BTCUSDC -> BTC)
-        normalized = [normalize_symbol(s) for s in symbols]
-        return sorted(list(set(normalized)))
+
+        if "pbcoindata" not in st.session_state:
+            st.session_state.pbcoindata = CoinData()
+        coindata = st.session_state.pbcoindata
+
+        coins = set()
+        for exchange in exchanges or []:
+            for record in coindata.load_mapping(exchange=exchange, use_cache=True):
+                coin = (record.get("coin") or "").upper()
+                if not coin:
+                    coin = normalize_symbol(record.get("symbol") or "")
+                if coin:
+                    coins.add(coin)
+        return sorted(coins)
     
     def _get_exchanges_for_coin(self, coin: str, available_exchanges: list) -> list:
         """Get list of exchanges that have the specified coin.
@@ -5512,14 +5462,19 @@ class OptimizeV7Item(ConfigV7Editor):
         Returns:
             List of exchanges that have this coin
         """
+        if "pbcoindata" not in st.session_state:
+            st.session_state.pbcoindata = CoinData()
+        coindata = st.session_state.pbcoindata
+
         exchanges_with_coin = []
         for exchange in available_exchanges:
-            if f"coindata_{exchange}" in st.session_state:
-                symbols = st.session_state[f"coindata_{exchange}"].symbols
-                # Normalize and check if coin exists
-                normalized = [normalize_symbol(s) for s in symbols]
-                if coin in normalized:
-                    exchanges_with_coin.append(exchange)
+            mapping_coins = {
+                (record.get("coin") or "").upper()
+                for record in coindata.load_mapping(exchange=exchange, use_cache=True)
+                if record.get("coin")
+            }
+            if coin in mapping_coins:
+                exchanges_with_coin.append(exchange)
         return exchanges_with_coin
 
     def _edit_coin_sources_ui(self, coin_sources_dict: dict, available_exchanges: list, key_prefix: str = "", save_callback=None, current_exchanges: list = None, all_suite_coin_sources: dict = None):
@@ -6270,12 +6225,8 @@ class OptimizeV7Item(ConfigV7Editor):
                     error_popup("Label is required")
 
     def edit(self):
-        # Init coindata
-        for exchange in V7.list():
-            coindata_key = f"coindata_{exchange}"
-            if coindata_key not in st.session_state:
-                st.session_state[coindata_key] = CoinData()
-                st.session_state[coindata_key].exchange = exchange
+        if "pbcoindata" not in st.session_state:
+            st.session_state.pbcoindata = CoinData()
         # Display Editor
         col1, col2, col3, col4, col5, col6 = st.columns([1,1,0.5,0.5,0.5,0.5])
         with col1:
