@@ -2579,7 +2579,11 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    st.session_state.balance_calc = BalanceCalculator(f'{self.results_d[row]["index"].result_path}/config.json')
+                    config_file = f'{self.results_d[row]["index"].result_path}/config.json'
+                    cfg = ConfigV7(config_file)
+                    cfg.load_config()
+                    st.session_state.bc_context_exchanges = list(cfg.backtest.exchanges or [])
+                    st.session_state.balance_calc = BalanceCalculator(config_file)
                     st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
 
     def remove_selected_results(self):

@@ -7783,25 +7783,24 @@ class BalanceCalculator:
         if config_file:
             self.config.config_file = config_file
             self.config.load_config()
-            self._sync_exchange_from_config_user()
-            st.session_state.bc_exchange_id = self.exchange.id
             if "edit_bc_config" in st.session_state:
                 del st.session_state.edit_bc_config
         self.coin_infos = []
         self.balance_long = []
         self.balance_short = []
 
-    def _sync_exchange_from_config_user(self):
-        user = self.config.live.user
-        if not user:
-            return
-        try:
-            from User import Users
-            exchange_id = Users().find_exchange(user)
-            if exchange_id in V7.list() and exchange_id != self.exchange.id:
-                self.exchange = Exchange(exchange_id, None)
-        except Exception:
-            pass
+    @st.dialog("Select Exchange")
+    def _dialog_select_backtest_exchange(self, exchanges: list[str]):
+        st.write("This backtest config has multiple exchanges. Please choose one for Balance Calculator.")
+        current = st.session_state.get("bc_exchange_id")
+        default_index = exchanges.index(current) if current in exchanges else 0
+        selected = st.selectbox("Exchange", exchanges, index=default_index, key="bc_backtest_exchange_choice")
+        if st.button("Use exchange"):
+            st.session_state.bc_exchange_id = selected
+            self.exchange = Exchange(selected, None)
+            if "bc_require_exchange_choice" in st.session_state:
+                del st.session_state.bc_require_exchange_choice
+            st.rerun()
     
     @property
     def balance(self):
@@ -7826,6 +7825,42 @@ class BalanceCalculator:
             self.config.live.approved_coins = approved_coins
 
     def view(self):
+        context_exchanges = st.session_state.get("bc_context_exchanges")
+        if isinstance(context_exchanges, list):
+            exchanges = [e for e in context_exchanges if isinstance(e, str) and e in V7.list()]
+        else:
+            exchanges = []
+
+        if len(exchanges) == 1:
+            self.exchange = Exchange(exchanges[0], None)
+            st.session_state.bc_exchange_id = exchanges[0]
+            if "bc_missing_exchange_context" in st.session_state:
+                del st.session_state.bc_missing_exchange_context
+            if "bc_require_exchange_choice" in st.session_state:
+                del st.session_state.bc_require_exchange_choice
+        elif len(exchanges) > 1:
+            if "bc_missing_exchange_context" in st.session_state:
+                del st.session_state.bc_missing_exchange_context
+            current = st.session_state.get("bc_exchange_id")
+            if current in exchanges:
+                self.exchange = Exchange(current, None)
+                if "bc_require_exchange_choice" in st.session_state:
+                    del st.session_state.bc_require_exchange_choice
+            else:
+                st.session_state.bc_require_exchange_choice = exchanges
+        else:
+            st.session_state.bc_missing_exchange_context = True
+
+        if st.session_state.get("bc_missing_exchange_context"):
+            st.error("Missing exchange context. Please open Balance Calculator from RunV7 or BacktestV7 again.")
+            return
+
+        required_exchanges = st.session_state.get("bc_require_exchange_choice")
+        if isinstance(required_exchanges, list) and required_exchanges:
+            self._dialog_select_backtest_exchange(required_exchanges)
+            st.warning("Please choose an exchange to continue.")
+            return
+
         if "bc_exchange_id" in st.session_state:
             if st.session_state.bc_exchange_id != self.exchange.id:
                 self.exchange = Exchange(st.session_state.bc_exchange_id, None)
@@ -7839,7 +7874,6 @@ class BalanceCalculator:
             if st.session_state.edit_bc_config != json.dumps(self.config.config, indent=4):
                 try:
                     self.config.config = json.loads(st.session_state.edit_bc_config)
-                    self._sync_exchange_from_config_user()
                     self.init_coindata()
                 except:
                     error_popup("Invalid JSON")

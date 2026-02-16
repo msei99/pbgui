@@ -33,6 +33,7 @@ def bt_v7():
             st.session_state.bt_v7_queue = BacktestV7Queue()
             st.rerun()
         if st.button("Caclulate Balance"):
+            st.session_state.bc_context_exchanges = list(bt_v7.config.backtest.exchanges or [])
             st.session_state.balance_calc = BalanceCalculator(bt_v7.config.config_file)
             st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
         if st.button("Add to Backtest Queue"):
