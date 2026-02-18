@@ -15,15 +15,16 @@ from time import sleep, mktime
 import glob
 import json
 import hjson
-from io import TextIOWrapper
 from datetime import datetime, date, timedelta
 import platform
 from shutil import copy, copytree, rmtree, ignore_patterns
 import os
 import traceback
 import uuid
+import copy as copy_module
 from Status import InstanceStatus, InstancesStatus
 from PBCoinData import CoinData
+from logging_helpers import human_log as _log
 import re
 
 
@@ -31,6 +32,176 @@ _PB7_FILL_SUMMARY_RE = re.compile(
     r"\[fill\]\s+(?P<count>\d+)\s+fills,\s+pnl=(?P<pnl>[+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+"
 )
 _PB7_FILL_PNL_RE = re.compile(r"\bpnl=(?P<pnl>[+-]?(?:\d+\.?\d*|\d*\.\d+))\b")
+
+
+def _arg_matches_path(arg: str, expected_path: Path) -> bool:
+    if not arg:
+        return False
+    expected = str(expected_path)
+    expected_alt = expected.replace("/", "\\")
+    return str(arg).endswith(expected) or str(arg).endswith(expected_alt)
+
+
+def _atomic_write_json(path: Path, payload, indent: int = None):
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tmp_path.open("w", encoding="utf-8") as f:
+            if indent is None:
+                json.dump(payload, f)
+            else:
+                json.dump(payload, f, indent=indent)
+        tmp_path.replace(path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _atomic_write_text(path: Path, content: str):
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tmp_path.open("w", encoding="utf-8") as f:
+            f.write(content)
+        tmp_path.replace(path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _atomic_write_config(path: Path, parser: configparser.ConfigParser):
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tmp_path.open("w", encoding="utf-8") as f:
+            parser.write(f)
+        tmp_path.replace(path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _attach_process_stats(process: psutil.Process, monitor: "Monitor"):
+    monitor.start_time = process.create_time()
+    try:
+        monitor.memory = process.memory_full_info()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        monitor.memory = None
+    try:
+        monitor.cpu = process.cpu_percent()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        monitor.cpu = None
+
+
+def _memory_usage_bytes(memory_info) -> int:
+    if memory_info is None:
+        return 0
+    rss = getattr(memory_info, "rss", None)
+    uss = getattr(memory_info, "uss", None)
+    if isinstance(rss, (int, float)) and isinstance(uss, (int, float)):
+        return int(rss + uss)
+    if isinstance(rss, (int, float)):
+        return int(rss)
+    try:
+        return int(memory_info[0]) + int(memory_info[9])
+    except Exception:
+        return 0
+
+
+def _kill_process(process: psutil.Process, context: str):
+    try:
+        process.kill()
+        process.wait(timeout=3)
+    except psutil.NoSuchProcess:
+        pass
+    except psutil.TimeoutExpired:
+        _log("PBRun", f"Timed out waiting for process to stop ({context})", level="WARNING")
+    except psutil.AccessDenied as e:
+        _log("PBRun", f"Access denied while stopping process ({context}): {e}", level="ERROR")
+
+
+def _run_subprocess(
+    command,
+    *,
+    timeout: int = 20,
+    env: dict | None = None,
+    capture_stdout: bool = True,
+    suppress_stderr: bool = True,
+):
+    kwargs = {
+        "text": True,
+        "timeout": timeout,
+    }
+    kwargs["stdout"] = subprocess.PIPE if capture_stdout else subprocess.DEVNULL
+    kwargs["stderr"] = subprocess.DEVNULL if suppress_stderr else subprocess.PIPE
+    if env is not None:
+        kwargs["env"] = env
+    try:
+        return subprocess.run(command, **kwargs)
+    except subprocess.TimeoutExpired:
+        _log("PBRun", f"Command timeout after {timeout}s: {' '.join(map(str, command))}", level="WARNING")
+        return None
+    except FileNotFoundError as e:
+        _log("PBRun", f"Command not found: {' '.join(map(str, command))} ({e})", level="WARNING")
+        return None
+    except Exception as e:
+        _log("PBRun", f"Command failed: {' '.join(map(str, command))} ({e})", level="ERROR")
+        return None
+
+
+def _parse_git_log_output(raw_output: str, parse_context: str):
+    commits = []
+    latest_commit_timestamp = None
+    for commit_block in raw_output.split('\x00'):
+        commit_block = commit_block.strip()
+        if not commit_block:
+            continue
+        lines = commit_block.split('\n', 1)
+        if not lines:
+            continue
+        parts = lines[0].split('|', 5)
+        if len(parts) == 6:
+            full_message = parts[5]
+            if len(lines) > 1:
+                full_message = full_message + '\n' + lines[1]
+            commit_data = {
+                'short': parts[0],
+                'full': parts[1],
+                'author': parts[2],
+                'date': parts[3],
+                'timestamp': int(parts[4]),
+                'message': full_message.strip(),
+            }
+            commits.append(commit_data)
+            if latest_commit_timestamp is None:
+                latest_commit_timestamp = commit_data['timestamp']
+        else:
+            _log(
+                "PBRun",
+                f"Failed to parse commit block for {parse_context}: {len(parts)} parts, first 100 chars: {commit_block[:100]}",
+                level="WARNING",
+            )
+    return commits, latest_commit_timestamp
+
+
+def _ensure_dynamic_ignore_ready(dynamic_ignore: "DynamicIgnore") -> bool:
+    if dynamic_ignore is None:
+        return True
+    list_files_exist = getattr(dynamic_ignore, "list_files_exist", None)
+    if callable(list_files_exist) and list_files_exist():
+        return True
+    lists_ready = getattr(dynamic_ignore, "lists_ready", None)
+    if callable(lists_ready) and lists_ready():
+        return True
+    watch = getattr(dynamic_ignore, "watch", None)
+    if callable(watch):
+        watch()
+    if callable(lists_ready):
+        return lists_ready()
+    return False
 
 class Monitor():
     def __init__(self):
@@ -243,8 +414,7 @@ class Monitor():
             "ct": self.pnl_counter_today,
             "cy": self.pnl_counter_yesterday
             })
-        with open(monitor_file, "w", encoding='utf-8') as f:
-            json.dump(monitor, f)
+        _atomic_write_json(monitor_file, monitor)
 
 class DynamicIgnore():
     def __init__(self):
@@ -256,73 +426,164 @@ class DynamicIgnore():
         self.approved_coins = []
         self.approved_coins_long = []
         self.approved_coins_short = []
-    
+
+    @staticmethod
+    def _normalize_symbol_list(values):
+        out = []
+        for value in values:
+            symbol = str(value or "").strip().upper()
+            if symbol:
+                out.append(symbol)
+        return sorted(set(out))
+
+    @staticmethod
+    def _atomic_write_json(path: Path, payload):
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            tmp_path.replace(path)
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _is_json_list_file(path: Path) -> bool:
+        if not path.exists():
+            return False
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                payload = json.load(f)
+            return isinstance(payload, list)
+        except Exception:
+            return False
+
+    def lists_ready(self) -> bool:
+        if not self.path:
+            return False
+        ignored_path = Path(f'{self.path}/ignored_coins.json')
+        approved_path = Path(f'{self.path}/approved_coins.json')
+        return self._is_json_list_file(ignored_path) and self._is_json_list_file(approved_path)
+
+    def list_files_exist(self) -> bool:
+        if not self.path:
+            return False
+        ignored_path = Path(f'{self.path}/ignored_coins.json')
+        approved_path = Path(f'{self.path}/approved_coins.json')
+        return ignored_path.exists() and approved_path.exists()
+
     def watch(self):
-        if self.coindata.has_new_data():
-            self.coindata.list_symbols()
-        # create list of self.coindata.ignored_coins + self.ignored_coins_long + self.ignored_coins_short
-        ignored_coins = list(set(self.coindata.ignored_coins + self.ignored_coins_long + self.ignored_coins_short))
-        if not self.ignored_coins or sorted(self.ignored_coins) != sorted(ignored_coins):
-            removed_coins = set(self.ignored_coins) - set(self.coindata.ignored_coins)
-            removed_coins = [*removed_coins]
-            removed_coins.sort()
-            added_coins = set(self.coindata.ignored_coins) - set(self.ignored_coins)
-            added_coins = [*added_coins]
-            added_coins.sort()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {removed_coins} Added: {added_coins}')
-            self.ignored_coins = self.coindata.ignored_coins
-        # create list of self.coindata.approved_coins + self.approved_coins_long + self.approved_coins_short
-        approved_coins = list(set(self.coindata.approved_coins + self.approved_coins_long + self.approved_coins_short))
-        if not self.approved_coins or sorted(self.approved_coins) != sorted(approved_coins):
-            removed_coins = set(self.approved_coins) - set(self.coindata.approved_coins)
-            removed_coins = [*removed_coins]
-            removed_coins.sort()
-            added_coins = set(self.coindata.approved_coins) - set(self.approved_coins)
-            added_coins = [*added_coins]
-            added_coins.sort()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change approved_coins {self.path} Removed: {removed_coins} Added: {added_coins}')
-            self.approved_coins = self.coindata.approved_coins
-            self.save()
-            return True
-        return False
+        try:
+            exchange_id = self.coindata.exchange
+            available_symbols, _ = self.coindata.filter_mapping(
+                exchange=exchange_id,
+                market_cap_min_m=0,
+                vol_mcap_max=float("inf"),
+                only_cpt=False,
+                notices_ignore=False,
+                tags=[],
+                quote_filter=None,
+                use_cache=True,
+                active_only=True,
+            )
+            filtered_approved, filtered_ignored = self.coindata.filter_mapping(
+                exchange=exchange_id,
+                market_cap_min_m=self.coindata.market_cap,
+                vol_mcap_max=self.coindata.vol_mcap,
+                only_cpt=self.coindata.only_cpt,
+                notices_ignore=self.coindata.notices_ignore,
+                tags=self.coindata.tags,
+                quote_filter=None,
+                use_cache=True,
+                active_only=True,
+            )
+
+            symbol_set = set(self._normalize_symbol_list(available_symbols))
+
+            ignored_coins = sorted({
+                symbol
+                for symbol in self._normalize_symbol_list(
+                    list(filtered_ignored) + self.ignored_coins_long + self.ignored_coins_short
+                )
+                if symbol in symbol_set
+            })
+
+            approved_coins = sorted({
+                symbol
+                for symbol in self._normalize_symbol_list(
+                    list(filtered_approved) + self.approved_coins_long + self.approved_coins_short
+                )
+                if symbol in symbol_set
+            })
+
+            ignored_set = set(ignored_coins)
+            approved_coins = [symbol for symbol in approved_coins if symbol not in ignored_set]
+
+            covered = set(approved_coins) | ignored_set
+            uncovered = symbol_set - covered
+            if uncovered:
+                ignored_coins = sorted(ignored_set | uncovered)
+
+            ignored_changed = sorted(self.ignored_coins) != ignored_coins
+            approved_changed = sorted(self.approved_coins) != approved_coins
+
+            if ignored_changed:
+                removed_coins = sorted(set(self.ignored_coins) - set(ignored_coins))
+                added_coins = sorted(set(ignored_coins) - set(self.ignored_coins))
+                _log("PBRun", f"Change ignored_coins {self.path} Removed: {removed_coins} Added: {added_coins}")
+                self.ignored_coins = ignored_coins
+
+            if approved_changed:
+                removed_coins = sorted(set(self.approved_coins) - set(approved_coins))
+                added_coins = sorted(set(approved_coins) - set(self.approved_coins))
+                _log("PBRun", f"Change approved_coins {self.path} Removed: {removed_coins} Added: {added_coins}")
+                self.approved_coins = approved_coins
+
+            if ignored_changed or approved_changed:
+                self.save()
+                return True
+            return False
+        except Exception as e:
+            _log("PBRun", f"DynamicIgnore watch error for {self.path}: {e}", level="ERROR")
+            _log("PBRun", "DynamicIgnore watch traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
+            return False
     
     def save(self):
-        file = Path(f'{self.path}/ignored_coins.json')
-        ignored_coins = self.ignored_coins
-        if self.ignored_coins_long:
-            for symbol in self.ignored_coins_long:
-                if symbol not in ignored_coins:
-                    ignored_coins.append(symbol)
-                if symbol in self.approved_coins:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins_long')
-                    self.approved_coins.remove(symbol)
-        if self.ignored_coins_short:
-            for symbol in self.ignored_coins_short:
-                if symbol not in ignored_coins:
-                    ignored_coins.append(symbol)
-                if symbol in self.approved_coins:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins_short')
-                    self.approved_coins.remove(symbol)
-        with open(file, "w", encoding='utf-8') as f:
-            json.dump(ignored_coins, f)
-        file = Path(f'{self.path}/approved_coins.json')
-        approved_coins = self.approved_coins
-        if self.approved_coins_long:
-            for symbol in self.approved_coins_long:
-                if symbol not in approved_coins:
-                    approved_coins.append(symbol)
-                if symbol in self.ignored_coins:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {symbol} because it is in approved_coins_long')
-                    self.ignored_coins.remove(symbol)
-        if self.approved_coins_short:
-            for symbol in self.approved_coins_short:
-                if symbol not in approved_coins:
-                    approved_coins.append(symbol)
-                if symbol in self.ignored_coins:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Change ignored_coins {self.path} Removed: {symbol} because it is in approved_coins_short')
-                    self.ignored_coins.remove(symbol)
-        with open(file, "w", encoding='utf-8') as f:
-            json.dump(approved_coins, f)
+        if not self.path:
+            raise ValueError("DynamicIgnore.path is not set")
+
+        ignored_path = Path(f'{self.path}/ignored_coins.json')
+        approved_path = Path(f'{self.path}/approved_coins.json')
+
+        ignored_coins = self._normalize_symbol_list(self.ignored_coins)
+        approved_coins = self._normalize_symbol_list(self.approved_coins)
+
+        for symbol in self._normalize_symbol_list(self.ignored_coins_long + self.ignored_coins_short):
+            if symbol not in ignored_coins:
+                ignored_coins.append(symbol)
+            if symbol in approved_coins:
+                _log("PBRun", f"Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins")
+                approved_coins.remove(symbol)
+
+        ignored_set = set(ignored_coins)
+        for symbol in self._normalize_symbol_list(self.approved_coins_long + self.approved_coins_short):
+            if symbol in ignored_set:
+                if symbol in approved_coins:
+                    _log("PBRun", f"Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins")
+                    approved_coins.remove(symbol)
+                continue
+            if symbol not in approved_coins:
+                approved_coins.append(symbol)
+
+        ignored_coins = self._normalize_symbol_list(ignored_coins)
+        approved_coins = self._normalize_symbol_list([symbol for symbol in approved_coins if symbol not in set(ignored_coins)])
+
+        self.ignored_coins = ignored_coins
+        self.approved_coins = approved_coins
+
+        self._atomic_write_json(ignored_path, ignored_coins)
+        self._atomic_write_json(approved_path, approved_coins)
     
 class RunSingle():
     def __init__(self):
@@ -340,7 +601,7 @@ class RunSingle():
     
     def watch(self):
         if not self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Single from watch: {self.user} {self.symbol}')
+            _log("PBRun", f"Start Single from watch: {self.user} {self.symbol}")
             self.start()
 
     def is_running(self):
@@ -349,23 +610,26 @@ class RunSingle():
         return False
 
     def pid(self):
+        expected_config = Path(self.path) / "config.json"
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
             except psutil.NoSuchProcess:
-                pass
+                continue
             except psutil.AccessDenied:
-                pass
-            if self.user in cmdline and self.symbol in cmdline and any("passivbot.py" in sub for sub in cmdline):
-                self.monitor.start_time = process.create_time()
-                self.monitor.memory = process.memory_full_info()
-                self.monitor.cpu = process.cpu_percent()
+                continue
+            if (
+                any("passivbot.py" in sub for sub in cmdline)
+                and any(_arg_matches_path(sub, expected_config) for sub in cmdline)
+            ):
+                _attach_process_stats(process, self.monitor)
                 return process
 
     def stop(self):
-        if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: {self.user} {self.symbol}')
-            self.pid().kill()
+        process = self.pid()
+        if process:
+            _log("PBRun", f"Stop: {self.user} {self.symbol}")
+            _kill_process(process, f"single {self.user} {self.symbol}")
 
     def start(self):
         if not self.is_running():
@@ -376,14 +640,14 @@ class RunSingle():
             cmd.extend(shlex.split(cmd_end))
             cmd.extend([config])
             logfile = Path(f'{self.path}/passivbot.log')
-            log = open(logfile,"ab")
-            if platform.system() == "Windows":
-                creationflags = subprocess.DETACHED_PROCESS
-                creationflags |= subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
-            else:
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start Single: {cmd_end}')
+            with open(logfile, "ab") as log:
+                if platform.system() == "Windows":
+                    creationflags = subprocess.DETACHED_PROCESS
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+            _log("PBRun", f"Start Single: {cmd_end}")
         # wait until passivbot is running
         for i in range(10):
             if self.is_running():
@@ -420,8 +684,7 @@ class RunSingle():
         else:
             version = 0
         version_file = Path(f'{self.path}/running_version.txt')
-        with open(version_file, "w", encoding='utf-8') as f:
-            f.write(version)
+        _atomic_write_text(version_file, str(version))
         # Generate parameters
         self.parameters = ""
         if "_long_mode" in self._single_config:
@@ -499,8 +762,8 @@ class RunSingle():
                     self.name = "disabled"
                 return False
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
+                _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
+                _log("PBRun", "RunSingle.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class RunMulti():
     def __init__(self):
@@ -514,6 +777,7 @@ class RunMulti():
         self.pbvenv = None
         self.pbgdir = None
         self.dynamic_ignore = None
+        self._dynamic_wait_log_ts = 0
     
     def watch(self):
         if not self.is_running():
@@ -532,36 +796,50 @@ class RunMulti():
         return False
 
     def pid(self):
+        expected_config = Path(self.path) / "multi_run.hjson"
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
             except psutil.NoSuchProcess:
-                pass
+                continue
             except psutil.AccessDenied:
-                pass
-            if any(self.user in sub for sub in cmdline) and any("passivbot_multi.py" in sub for sub in cmdline):
-                self.monitor.start_time = process.create_time()
-                self.monitor.memory = process.memory_full_info()
-                self.monitor.cpu = process.cpu_percent()
+                continue
+            if (
+                any("passivbot_multi.py" in sub for sub in cmdline)
+                and any(_arg_matches_path(sub, expected_config) for sub in cmdline)
+            ):
+                _attach_process_stats(process, self.monitor)
                 return process
 
     def stop(self):
-        if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: passivbot_multi.py {self.path}/multi_run.hjson')
-            self.pid().kill()
+        process = self.pid()
+        if process:
+            _log("PBRun", f"Stop: passivbot_multi.py {self.path}/multi_run.hjson")
+            _kill_process(process, f"multi {self.path}")
 
     def start(self):
         if not self.is_running():
+            if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):
+                now_ts = int(datetime.now().timestamp())
+                if now_ts - self._dynamic_wait_log_ts >= 60:
+                    _log(
+                        "PBRun",
+                        f"Delay start: passivbot_multi.py {self.path}/multi_run.hjson waiting for dynamic ignore lists",
+                        level="WARNING",
+                    )
+                    self._dynamic_wait_log_ts = now_ts
+                return
+            self._dynamic_wait_log_ts = 0
             cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot_multi.py'), PurePath(f'{self.path}/multi_run.hjson')]
             logfile = Path(f'{self.path}/passivbot.log')
-            log = open(logfile,"ab")
-            if platform.system() == "Windows":
-                creationflags = subprocess.DETACHED_PROCESS
-                creationflags |= subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
-            else:
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_multi.py {self.path}/multi_run.hjson')
+            with open(logfile, "ab") as log:
+                if platform.system() == "Windows":
+                    creationflags = subprocess.DETACHED_PROCESS
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+            _log("PBRun", f"Start: passivbot_multi.py {self.path}/multi_run.hjson")
         # wait until passivbot is running
         for i in range(10):
             if self.is_running():
@@ -578,41 +856,52 @@ class RunMulti():
                     file.truncate()
 
     def create_multi_hjson(self):
+        run_config_data = copy_module.deepcopy(self._multi_config)
         # Write running Version to file
-        version = str(self._multi_config["version"])
+        version = str(run_config_data["version"])
         version_file = Path(f'{self.path}/running_version.txt')
-        with open(version_file, "w", encoding='utf-8') as f:
-            f.write(version)
+        _atomic_write_text(version_file, version)
         # Generate clean multi_run.hjson file
-        if "enabled_on" in self._multi_config:
-            del self._multi_config["enabled_on"]
-        if "version" in self._multi_config:
-            del self._multi_config["version"]
-        if "note" in self._multi_config:
-            del self._multi_config["note"]
-        if "market_cap" in self._multi_config:
-            del self._multi_config["market_cap"]
-        if "vol_mcap" in self._multi_config:
-            del self._multi_config["vol_mcap"]
-        if "dynamic_ignore" in self._multi_config:
-            del self._multi_config["dynamic_ignore"]
-        if "only_cpt" in self._multi_config:
-            del self._multi_config["only_cpt"]
-        if "notices_ignore" in self._multi_config:
-            del self._multi_config["notices_ignore"]
-        self._multi_config["live_configs_dir"] = self.path
-        if "default_config_path" in self._multi_config:
-            if self._multi_config["default_config_path"] != "":
-                self._multi_config["default_config_path"] = f'{self.path}/default.json'
+        if "enabled_on" in run_config_data:
+            del run_config_data["enabled_on"]
+        if "version" in run_config_data:
+            del run_config_data["version"]
+        if "note" in run_config_data:
+            del run_config_data["note"]
+        if "market_cap" in run_config_data:
+            del run_config_data["market_cap"]
+        if "vol_mcap" in run_config_data:
+            del run_config_data["vol_mcap"]
+        if "dynamic_ignore" in run_config_data:
+            del run_config_data["dynamic_ignore"]
+        if "only_cpt" in run_config_data:
+            del run_config_data["only_cpt"]
+        if "notices_ignore" in run_config_data:
+            del run_config_data["notices_ignore"]
+        run_config_data["live_configs_dir"] = self.path
+        if "default_config_path" in run_config_data:
+            if run_config_data["default_config_path"] != "":
+                run_config_data["default_config_path"] = f'{self.path}/default.json'
         if self.dynamic_ignore is not None:
-            self._multi_config["ignored_symbols"] = self.dynamic_ignore.coindata.ignored_coins
-            if self.dynamic_ignore.coindata.approved_coins:
-                for coin in self.dynamic_ignore.coindata.approved_coins:
-                    self._multi_config["approved_symbols"][coin] = ''
-        run_config = hjson.dumps(self._multi_config)
+            ignored_symbols = [str(symbol).strip().upper() for symbol in self.dynamic_ignore.ignored_coins if str(symbol).strip()]
+            run_config_data["ignored_symbols"] = sorted(set(ignored_symbols))
+            approved_symbols = run_config_data.get("approved_symbols")
+            if not isinstance(approved_symbols, dict):
+                approved_symbols = {}
+                run_config_data["approved_symbols"] = approved_symbols
+            if self.dynamic_ignore.approved_coins:
+                for coin in self.dynamic_ignore.approved_coins:
+                    coin_key = str(coin).strip().upper()
+                    if coin_key:
+                        approved_symbols[coin_key] = ''
+            ignored_set = set(run_config_data["ignored_symbols"])
+            if ignored_set and "approved_symbols" in run_config_data:
+                for coin in list(run_config_data["approved_symbols"].keys()):
+                    if coin in ignored_set:
+                        del run_config_data["approved_symbols"][coin]
+        run_config = hjson.dumps(run_config_data)
         config_file = Path(f'{self.path}/multi_run.hjson')
-        with open(config_file, "w", encoding='utf-8') as f:
-            f.write(run_config)
+        _atomic_write_text(config_file, run_config)
 
     def load(self):
         """Load config for PB multi."""
@@ -655,8 +944,8 @@ class RunMulti():
                     self.name = "disabled"
                 return False
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
+                _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
+                _log("PBRun", "RunMulti.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class RunV7():
     def __init__(self):
@@ -670,6 +959,7 @@ class RunV7():
         self.pbvenv = None
         self.pbgdir = None
         self.dynamic_ignore = None
+        self._dynamic_wait_log_ts = 0
 
     def watch(self):
         if not self.is_running():
@@ -685,41 +975,56 @@ class RunV7():
         return False
 
     def pid(self):
+        expected_config = Path(self.path) / "config_run.json"
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
             except psutil.NoSuchProcess:
-                pass
+                continue
             except psutil.AccessDenied:
-                pass
-            if any(self.user in sub for sub in cmdline) and any("main.py" in sub for sub in cmdline):
-                if cmdline[-1].endswith(f'/{self.user}/config_run.json') or cmdline[-1].endswith(f'\\{self.user}\\config_run.json'):
-                    self.monitor.start_time = process.create_time()
-                    self.monitor.memory = process.memory_full_info()
-                    self.monitor.cpu = process.cpu_percent()
-                    return process
+                continue
+            if (
+                any("main.py" in sub for sub in cmdline)
+                and any(_arg_matches_path(sub, expected_config) for sub in cmdline)
+            ):
+                _attach_process_stats(process, self.monitor)
+                return process
 
     def stop(self):
-        if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: passivbot v7 {self.path}/config_run.json')
-            self.pid().kill()
+        process = self.pid()
+        if process:
+            _log("PBRun", f"Stop: passivbot v7 {self.path}/config_run.json")
+            _kill_process(process, f"v7 {self.path}")
 
     def start(self):
         if not self.is_running():
+            if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):
+                now_ts = int(datetime.now().timestamp())
+                if now_ts - self._dynamic_wait_log_ts >= 60:
+                    _log(
+                        "PBRun",
+                        f"Delay start: passivbot_v7 {self.path}/config_run.json waiting for dynamic ignore lists",
+                        level="WARNING",
+                    )
+                    self._dynamic_wait_log_ts = now_ts
+                return
+            self._dynamic_wait_log_ts = 0
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(self.pbvenv) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
-            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/src/main.py'), PurePath(f'{self.path}/config_run.json')]
-            logfile = Path(f'{self.path}/passivbot.log')
-            log = open(logfile,"ab")
-            if platform.system() == "Windows":
-                creationflags = subprocess.DETACHED_PROCESS
-                creationflags |= subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
-            else:
-                subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
-            os.environ['PATH'] = old_os_path
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: passivbot_v7 {self.path}/config_run.json')
+            try:
+                cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/src/main.py'), PurePath(f'{self.path}/config_run.json')]
+                logfile = Path(f'{self.path}/passivbot.log')
+                with open(logfile, "ab") as log:
+                    if platform.system() == "Windows":
+                        creationflags = subprocess.DETACHED_PROCESS
+                        creationflags |= subprocess.CREATE_NO_WINDOW
+                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+                    else:
+                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+            finally:
+                os.environ['PATH'] = old_os_path
+            _log("PBRun", f"Start: passivbot_v7 {self.path}/config_run.json")
         # wait until passivbot is running
         for i in range(10):
             if self.is_running():
@@ -738,8 +1043,7 @@ class RunV7():
     def create_v7_running_version(self):
         # Write running Version to file
         version_file = Path(f'{self.path}/running_version.txt')
-        with open(version_file, "w", encoding='utf-8') as f:
-            f.write(str(self.version))
+        _atomic_write_text(version_file, str(self.version))
 
     def load(self):
         """Load version for PB v7."""
@@ -822,22 +1126,25 @@ class RunV7():
                                 if self.user in api_keys:
                                     self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
                                     self.dynamic_ignore.watch()
-                    with open(file_run, "w", encoding='utf-8') as f:
-                        json.dump(self._v7_config, f, indent=4)
+                    _atomic_write_json(file_run, self._v7_config, indent=4)
                     return True
                 else:                        
                     self.name = self._v7_config["pbgui"]["enabled_on"]
                     return False
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                print(f'Setting version of {self.user} to 0')
+                _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
+                _log("PBRun", f"Setting version of {self.user} to 0", level="WARNING")
                 self.version = 0
-                traceback.print_exc()
+                _log("PBRun", "RunV7.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class PBRun():
     """PBRun links together PBRemote, PBGui and Passivbot, while being independant and can maintain passivbot working by itself.
 
     It does so with update_status_*.cmd, and activate_*.cmd. These files are created while using PBGui, and when PBRun receives activate_*.cmd, it creates the single of multi instances for passivbot, when it receives update_status_*.cmd, it inform on the status of this instances, so the bot specified in the status can start instances of passivbot.
+
+    Robustness notes:
+    - Command files are written atomically and malformed files are quarantined after repeated failures.
+    - Runtime state files (pid/version/monitor) are written atomically to reduce partial-write corruption.
     """
     def __init__(self):
         # self.run_instances = []
@@ -905,18 +1212,16 @@ class PBRun():
             self.pb7dir = pb_config.get("main", "pb7dir")
         if not any([self.pbdir, self.pb7dir]):
             if __name__ == '__main__':
-                sys.stdout = sys.__stdout__
-                sys.stderr = sys.__stderr__
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+                _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
                 exit(1)
             else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
+                _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
                 return
         # Print Warning if only pbdir or pb7dir configured
         if not self.pbdir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+            _log("PBRun", "No passivbot directory configured in pbgui.ini", level="WARNING")
         if not self.pb7dir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
+            _log("PBRun", "No passivbot v7 directory configured in pbgui.ini", level="WARNING")
         # Init pbvenvs
         self.pbvenv = None
         self.pb7venv = None
@@ -926,18 +1231,16 @@ class PBRun():
             self.pb7venv = pb_config.get("main", "pb7venv")
         if not any([self.pbvenv, self.pb7venv]):
             if __name__ == '__main__':
-                sys.stdout = sys.__stdout__
-                sys.stderr = sys.__stderr__
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot venv python interpreter configured in pbgui.ini')
+                _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 exit(1)
             else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot venv python interpreter configured in pbgui.ini')
+                _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 return
         # Print Warning if only pbvenv or pb7venv configured
         if not self.pbvenv:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot venv python interpreter configured in pbgui.ini')
+            _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="WARNING")
         if not self.pb7venv:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 venv python interpreter configured in pbgui.ini')
+            _log("PBRun", "No passivbot v7 venv python interpreter configured in pbgui.ini", level="WARNING")
         # Init paths
         self.multi_path = f'{self.pbgdir}/data/multi'
         self.single_path = f'{self.pbgdir}/data/instances'
@@ -945,12 +1248,38 @@ class PBRun():
         self.cmd_path = f'{self.pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
             Path(self.cmd_path).mkdir(parents=True)            
+        self.failed_cmd_path = Path(f'{self.cmd_path}/failed')
+        self.failed_cmd_path.mkdir(parents=True, exist_ok=True)
+        self._bad_cmd_failures = {}
+        self._bad_cmd_quarantine_after = 3
         # Init pid
         self.piddir = Path(f'{self.pbgdir}/data/pid')
         if not self.piddir.exists():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbrun.pid')
         self.my_pid = None
+
+    def _handle_bad_cmd_file(self, cfile: Path, command_kind: str, error: Exception):
+        key = str(cfile)
+        failures = self._bad_cmd_failures.get(key, 0) + 1
+        self._bad_cmd_failures[key] = failures
+        _log(
+            "PBRun",
+            f"Invalid {command_kind} command file {cfile}: {error} (attempt {failures}/{self._bad_cmd_quarantine_after})",
+            level="WARNING",
+        )
+        if failures < self._bad_cmd_quarantine_after:
+            return
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        quarantine_name = f"{cfile.stem}.failed_{ts}{cfile.suffix}"
+        quarantine_path = self.failed_cmd_path / quarantine_name
+        try:
+            cfile.replace(quarantine_path)
+            _log("PBRun", f"Quarantined invalid command file {cfile} -> {quarantine_path}", level="WARNING")
+        except Exception as qerr:
+            _log("PBRun", f"Failed to quarantine invalid command file {cfile}: {qerr}", level="ERROR")
+        finally:
+            self._bad_cmd_failures.pop(key, None)
 
     def update_pb7_python_version(self, force: bool = False):
         """Cache PB7 venv Python major.minor (e.g. 3.12) for status display."""
@@ -987,9 +1316,8 @@ class PBRun():
         """Check if apt-get dist-upgrade -s finds upgrades available"""
         my_env = os.environ.copy()
         my_env["LANG"] = 'C'
-        try:
-            apt_upgrade = subprocess.run(["apt-get", "dist-upgrade", "-s"], stdout=subprocess.PIPE, text=True, env=my_env)
-        except Exception as e:
+        apt_upgrade = _run_subprocess(["apt-get", "dist-upgrade", "-s"], env=my_env, timeout=15)
+        if not apt_upgrade or apt_upgrade.returncode != 0:
             self.upgrades = "N/A"
             return
         match = re.search(r"(\d+) upgraded", apt_upgrade.stdout)
@@ -1006,23 +1334,26 @@ class PBRun():
         pbgui_git = Path(f'{self.pbgdir}/.git')
         if pbgui_git.exists():
             pbgui_git = Path(f'{self.pbgdir}/.git')
-            subprocess.run(["git", "--git-dir", f'{pbgui_git}', "fetch", "origin"])
-            pbgui_commit = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H", "origin/main"], stdout=subprocess.PIPE, text=True)
-            self.pbgui_commit_origin = pbgui_commit.stdout
+            _run_subprocess(["git", "--git-dir", f'{pbgui_git}', "fetch", "origin"], timeout=30)
+            pbgui_commit = _run_subprocess(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H", "origin/main"], timeout=15)
+            if pbgui_commit and pbgui_commit.returncode == 0:
+                self.pbgui_commit_origin = pbgui_commit.stdout
         if self.pbdir:
             pb6_git = Path(f'{self.pbdir}/.git')
             if pb6_git.exists():
                 pb6_git = Path(f'{self.pbdir}/.git')
-                subprocess.run(["git", "--git-dir", f'{pb6_git}', "fetch", "origin"])
-                pb6_commit = subprocess.run(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H", "origin/v6.1.4b_latest_v6"], stdout=subprocess.PIPE, text=True)
-                self.pb6_commit_origin = pb6_commit.stdout
+                _run_subprocess(["git", "--git-dir", f'{pb6_git}', "fetch", "origin"], timeout=30)
+                pb6_commit = _run_subprocess(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H", "origin/v6.1.4b_latest_v6"], timeout=15)
+                if pb6_commit and pb6_commit.returncode == 0:
+                    self.pb6_commit_origin = pb6_commit.stdout
         if self.pb7dir:
             pb7_git = Path(f'{self.pb7dir}/.git')
             if pb7_git.exists():
                 pb7_git = Path(f'{self.pb7dir}/.git')
-                subprocess.run(["git", "--git-dir", f'{pb7_git}', "fetch", "origin"])
-                pb7_commit = subprocess.run(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H", "origin/master"], stdout=subprocess.PIPE, text=True)
-                self.pb7_commit_origin = pb7_commit.stdout
+                _run_subprocess(["git", "--git-dir", f'{pb7_git}', "fetch", "origin"], timeout=30)
+                pb7_commit = _run_subprocess(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H", "origin/master"], timeout=15)
+                if pb7_commit and pb7_commit.returncode == 0:
+                    self.pb7_commit_origin = pb7_commit.stdout
 
     def load_git_commits(self):
         """Load the git commit hash of pbgui, pb6 and pb7 using git log -n 1"""
@@ -1030,44 +1361,54 @@ class PBRun():
         if pbgui_git.exists():
             pbgui_git = Path(f'{self.pbgdir}/.git')
             # Get full commit hash
-            pbgui_commit = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
-            self.pbgui_commit = pbgui_commit.stdout
+            pbgui_commit = _run_subprocess(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H"], timeout=15)
+            if pbgui_commit and pbgui_commit.returncode == 0:
+                self.pbgui_commit = pbgui_commit.stdout
             # Get current branch
-            pbgui_branch = subprocess.run(["git", "--git-dir", f'{pbgui_git}', "rev-parse", "--abbrev-ref", "HEAD"], stdout=subprocess.PIPE, text=True)
-            self.pbgui_branch = pbgui_branch.stdout.strip()
+            pbgui_branch = _run_subprocess(["git", "--git-dir", f'{pbgui_git}', "rev-parse", "--abbrev-ref", "HEAD"], timeout=15)
+            if pbgui_branch and pbgui_branch.returncode == 0:
+                self.pbgui_branch = pbgui_branch.stdout.strip()
         if self.pbdir:
             pb6_git = Path(f'{self.pbdir}/.git')
             if pb6_git.exists():
                 pb6_git = Path(f'{self.pbdir}/.git')
-                pb6_commit = subprocess.run(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
-                self.pb6_commit = pb6_commit.stdout
+                pb6_commit = _run_subprocess(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H"], timeout=15)
+                if pb6_commit and pb6_commit.returncode == 0:
+                    self.pb6_commit = pb6_commit.stdout
         if self.pb7dir:
             pb7_git = Path(f'{self.pb7dir}/.git')
             if pb7_git.exists():
                 pb7_git = Path(f'{self.pb7dir}/.git')
-                pb7_commit = subprocess.run(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H"], stdout=subprocess.PIPE, text=True)
-                self.pb7_commit = pb7_commit.stdout
+                pb7_commit = _run_subprocess(["git", "--git-dir", f'{pb7_git}', "log", "-n", "1", "--pretty=format:%H"], timeout=15)
+                if pb7_commit and pb7_commit.returncode == 0:
+                    self.pb7_commit = pb7_commit.stdout
                 # Get current branch
-                pb7_branch = subprocess.run(["git", "--git-dir", f'{pb7_git}', "rev-parse", "--abbrev-ref", "HEAD"], stdout=subprocess.PIPE, text=True)
-                self.pb7_branch = pb7_branch.stdout.strip()
+                pb7_branch = _run_subprocess(["git", "--git-dir", f'{pb7_git}', "rev-parse", "--abbrev-ref", "HEAD"], timeout=15)
+                if pb7_branch and pb7_branch.returncode == 0:
+                    self.pb7_branch = pb7_branch.stdout.strip()
 
     def load_git_branches_history(self):
-        """Load commit history for all branches (last 10 commits per branch)"""
+        """Load commit history for all branches (last 50 commits per branch)"""
         pbgui_git = Path(f'{self.pbgdir}/.git')
         if not pbgui_git.exists():
             return
         
         # Fetch latest changes from remote first
-        subprocess.run(
+        _run_subprocess(
             ["git", "--git-dir", f'{pbgui_git}', "fetch", "origin"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            timeout=30,
+            capture_stdout=False,
+            suppress_stderr=True,
         )
         
         # Get all branches (local and remote)
-        branches_result = subprocess.run(
+        branches_result = _run_subprocess(
             ["git", "--git-dir", f'{pbgui_git}', "branch", "-a"],
-            stdout=subprocess.PIPE, text=True
+            timeout=15,
+            suppress_stderr=True,
         )
+        if not branches_result or branches_result.returncode != 0:
+            return
         
         branches_data = {}
         # First pass: collect remote branch names to prioritize them
@@ -1102,50 +1443,26 @@ class PBRun():
                 continue
             
             # Get last 50 commits for this branch using proper reference
-            commits_result = subprocess.run(
+            commits_result = _run_subprocess(
                 ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", "50",
                  "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+                timeout=20,
+                suppress_stderr=True,
             )
+            if not commits_result:
+                continue
             
             # Skip if git log failed (branch doesn't exist locally)
             if commits_result.returncode != 0:
                 continue
             
-            commits = []
-            latest_commit_timestamp = None
-            # Split by null byte to handle multi-line commit messages
-            for commit_block in commits_result.stdout.split('\x00'):
-                # Strip whitespace before processing
-                commit_block = commit_block.strip()
-                if not commit_block:
-                    continue
-                lines = commit_block.split('\n', 1)
-                if not lines:
-                    continue
-                parts = lines[0].split('|', 5)
-                if len(parts) == 6:
-                    # parts[5] is first line of message, rest is in lines[1] if exists
-                    full_message = parts[5]
-                    if len(lines) > 1:
-                        full_message = full_message + '\n' + lines[1]
-                    commits.append({
-                        'short': parts[0],
-                        'full': parts[1],
-                        'author': parts[2],
-                        'date': parts[3],
-                        'timestamp': int(parts[4]),
-                        'message': full_message.strip()
-                    })
-                    # Track latest timestamp (first commit)
-                    if latest_commit_timestamp is None:
-                        latest_commit_timestamp = int(parts[4])
-                else:
-                    # Debug: log parsing failures
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Failed to parse commit block: {len(parts)} parts, first 100 chars: {commit_block[:100]}')
+            commits, latest_commit_timestamp = _parse_git_log_output(
+                commits_result.stdout,
+                f"branch {branch_name}",
+            )
             
             if commits:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for branch {branch_name}')
+                _log("PBRun", f"Loaded {len(commits)} commits for branch {branch_name}")
                 branches_data[branch_name] = {
                     'commits': commits,
                     'latest_timestamp': latest_commit_timestamp
@@ -1171,9 +1488,11 @@ class PBRun():
             return
         
         # Fetch latest changes from remote first
-        subprocess.run(
+        _run_subprocess(
             ["git", "--git-dir", f'{pbgui_git}', "fetch", "origin"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            timeout=30,
+            capture_stdout=False,
+            suppress_stderr=True,
         )
         
         # Determine branch reference
@@ -1186,38 +1505,21 @@ class PBRun():
         # Build git log command
         cmd = ["git", "--git-dir", f'{pbgui_git}', "log", branch_ref, "-n", str(limit), "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"]
         
-        commits_result = subprocess.run(
+        commits_result = _run_subprocess(
             cmd,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            timeout=20,
+            suppress_stderr=True,
         )
+        if not commits_result:
+            return
         
         if commits_result.returncode != 0:
             return
         
-        commits = []
-        for commit_block in commits_result.stdout.split('\x00'):
-            commit_block = commit_block.strip()
-            if not commit_block:
-                continue
-            lines = commit_block.split('\n', 1)
-            if not lines:
-                continue
-            parts = lines[0].split('|', 5)
-            if len(parts) == 6:
-                full_message = parts[5]
-                if len(lines) > 1:
-                    full_message = full_message + '\n' + lines[1]
-                commits.append({
-                    'short': parts[0],
-                    'full': parts[1],
-                    'author': parts[2],
-                    'date': parts[3],
-                    'timestamp': int(parts[4]),
-                    'message': full_message.strip()
-                })
+        commits, _ = _parse_git_log_output(commits_result.stdout, f"branch {branch_name}")
         
         if commits:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for branch {branch_name}')
+            _log("PBRun", f"Loaded {len(commits)} commits for branch {branch_name}")
             self.pbgui_branches_data[branch_name] = commits
 
     def get_current_pb7_status(self):
@@ -1230,18 +1532,20 @@ class PBRun():
             return None, None
         
         # Get current commit
-        commit_result = subprocess.run(
+        commit_result = _run_subprocess(
             ["git", "--git-dir", f'{pb7_git}', "rev-parse", "HEAD"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            timeout=15,
+            suppress_stderr=True,
         )
-        current_commit = commit_result.stdout.strip() if commit_result.returncode == 0 else ""
+        current_commit = commit_result.stdout.strip() if commit_result and commit_result.returncode == 0 else ""
         
         # Get current branch (works reliably since we use git reset --hard)
-        branch_result = subprocess.run(
+        branch_result = _run_subprocess(
             ["git", "--git-dir", f'{pb7_git}', "symbolic-ref", "--short", "HEAD"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            timeout=15,
+            suppress_stderr=True,
         )
-        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
+        current_branch = branch_result.stdout.strip() if branch_result and branch_result.returncode == 0 else "unknown"
         
         return current_branch, current_commit
 
@@ -1255,18 +1559,20 @@ class PBRun():
             return None, None
         
         # Get current commit
-        commit_result = subprocess.run(
+        commit_result = _run_subprocess(
             ["git", "--git-dir", f'{pbgui_git}', "rev-parse", "HEAD"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            timeout=15,
+            suppress_stderr=True,
         )
-        current_commit = commit_result.stdout.strip() if commit_result.returncode == 0 else ""
+        current_commit = commit_result.stdout.strip() if commit_result and commit_result.returncode == 0 else ""
         
         # Get current branch (works reliably since we use git reset --hard)
-        branch_result = subprocess.run(
+        branch_result = _run_subprocess(
             ["git", "--git-dir", f'{pbgui_git}', "symbolic-ref", "--short", "HEAD"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            timeout=15,
+            suppress_stderr=True,
         )
-        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
+        current_branch = branch_result.stdout.strip() if branch_result and branch_result.returncode == 0 else "unknown"
         
         return current_branch, current_commit
 
@@ -1280,16 +1586,21 @@ class PBRun():
             return
         
         # Fetch latest changes from remote first
-        subprocess.run(
+        _run_subprocess(
             ["git", "--git-dir", f'{pb7_git}', "fetch", "origin"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            timeout=30,
+            capture_stdout=False,
+            suppress_stderr=True,
         )
         
         # Get all branches (local and remote)
-        branches_result = subprocess.run(
+        branches_result = _run_subprocess(
             ["git", "--git-dir", f'{pb7_git}', "branch", "-a"],
-            stdout=subprocess.PIPE, text=True
+            timeout=15,
+            suppress_stderr=True,
         )
+        if not branches_result or branches_result.returncode != 0:
+            return
         
         branches_data = {}
         # First pass: collect remote branch names to prioritize them
@@ -1337,51 +1648,23 @@ class PBRun():
                             branch_name.startswith('v7-'))
             
             # Get last 50 commits for this branch using proper reference
-            commits_result = subprocess.run(
+            commits_result = _run_subprocess(
                 ["git", "--git-dir", f'{pb7_git}', "log", branch_ref, "-n", "50",
                  "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+                timeout=20,
+                suppress_stderr=True,
             )
+            if not commits_result:
+                continue
             
             # Skip if git log failed (branch doesn't exist locally)
             if commits_result.returncode != 0:
                 continue
             
-            commits = []
-            latest_commit_timestamp = None
-            
-            # Split by null byte to handle multi-line commit messages
-            for commit_block in commits_result.stdout.split('\x00'):
-                # Strip whitespace before processing
-                commit_block = commit_block.strip()
-                if not commit_block:
-                    continue
-                lines = commit_block.split('\n', 1)
-                if not lines:
-                    continue
-                parts = lines[0].split('|', 5)
-                if len(parts) == 6:
-                    # parts[0]=short, [1]=full, [2]=author, [3]=date, [4]=timestamp, [5]=message
-                    full_message = parts[5]
-                    if len(lines) > 1:
-                        full_message = full_message + '\n' + lines[1]
-                    
-                    commit_data = {
-                        'short': parts[0],
-                        'full': parts[1],
-                        'author': parts[2],
-                        'date': parts[3],
-                        'timestamp': int(parts[4]),
-                        'message': full_message.strip()
-                    }
-                    commits.append(commit_data)
-                    
-                    # Track latest commit timestamp (first commit is most recent)
-                    if latest_commit_timestamp is None:
-                        latest_commit_timestamp = commit_data['timestamp']
-                else:
-                    # Debug: log parsing failures
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Failed to parse PB7 commit block: {len(parts)} parts, first 100 chars: {commit_block[:100]}')
+            commits, latest_commit_timestamp = _parse_git_log_output(
+                commits_result.stdout,
+                f"PB7 branch {branch_name}",
+            )
             
             # Filter by date: v7.0.0 was released around June 2023 (timestamp ~1686000000)
             # Only include branches if: master/v7.x OR latest commit is after June 2023
@@ -1392,7 +1675,7 @@ class PBRun():
                     continue
             
             if commits:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for PB7 branch {branch_name}')
+                _log("PBRun", f"Loaded {len(commits)} commits for PB7 branch {branch_name}")
                 # Store commits with branch metadata (latest timestamp for sorting)
                 branches_data[branch_name] = {
                     'commits': commits,
@@ -1422,9 +1705,11 @@ class PBRun():
             return
         
         # Fetch latest changes from remote first
-        subprocess.run(
+        _run_subprocess(
             ["git", "--git-dir", f'{pb7_git}', "fetch", "origin"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            timeout=30,
+            capture_stdout=False,
+            suppress_stderr=True,
         )
         
         # Determine branch reference
@@ -1437,45 +1722,30 @@ class PBRun():
         # Build git log command (include timestamp for consistency)
         cmd = ["git", "--git-dir", f'{pb7_git}', "log", branch_ref, "-n", str(limit), "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"]
         
-        commits_result = subprocess.run(
+        commits_result = _run_subprocess(
             cmd,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            timeout=20,
+            suppress_stderr=True,
         )
+        if not commits_result:
+            return
         
         if commits_result.returncode != 0:
             return
         
-        commits = []
-        for commit_block in commits_result.stdout.split('\x00'):
-            commit_block = commit_block.strip()
-            if not commit_block:
-                continue
-            lines = commit_block.split('\n', 1)
-            if not lines:
-                continue
-            parts = lines[0].split('|', 5)
-            if len(parts) == 6:
-                full_message = parts[5]
-                if len(lines) > 1:
-                    full_message = full_message + '\n' + lines[1]
-                commits.append({
-                    'short': parts[0],
-                    'full': parts[1],
-                    'author': parts[2],
-                    'date': parts[3],
-                    'timestamp': int(parts[4]),
-                    'message': full_message.strip()
-                })
+        commits, _ = _parse_git_log_output(commits_result.stdout, f"PB7 branch {branch_name}")
         
         if commits:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Loaded {len(commits)} commits for PB7 branch {branch_name}')
+            _log("PBRun", f"Loaded {len(commits)} commits for PB7 branch {branch_name}")
             self.pb7_branches_data[branch_name] = commits
 
     def load_versions_origin(self):
         """git show origin:README.md and load the versions of pbgui, pb6 and pb7"""
         if Path(f'{self.pbgdir}/.git').exists():
-            pbgui_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbgdir}/.git', "show", "origin/main:README.md"], stdout=subprocess.PIPE, text=True)
-            lines = pbgui_readme_origin.stdout.splitlines()
+            pbgui_readme_origin = _run_subprocess(["git", "--git-dir", f'{self.pbgdir}/.git', "show", "origin/main:README.md"], timeout=20)
+            if not pbgui_readme_origin or pbgui_readme_origin.returncode != 0:
+                pbgui_readme_origin = None
+            lines = pbgui_readme_origin.stdout.splitlines() if pbgui_readme_origin else []
             for line in lines:
                 #find regex regex_search('^#? ?v[0-9.]+'
                 version = re.search('v[0-9.]+', line)
@@ -1483,8 +1753,8 @@ class PBRun():
                     self.pbgui_version_origin = version.group(0)
                     break
         if Path(f'{self.pbdir}/.git').exists():
-            pb6_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pbdir}/.git', "show", "origin/v6.1.4b_latest_v6:README.md"], stdout=subprocess.PIPE, text=True)
-            lines = pb6_readme_origin.stdout.splitlines()
+            pb6_readme_origin = _run_subprocess(["git", "--git-dir", f'{self.pbdir}/.git', "show", "origin/v6.1.4b_latest_v6:README.md"], timeout=20)
+            lines = pb6_readme_origin.stdout.splitlines() if pb6_readme_origin and pb6_readme_origin.returncode == 0 else []
             for line in lines:
                 #find regex regex_search('^#? ?v[0-9.]+'
                 version = re.search('v[0-9.]+', line)
@@ -1492,8 +1762,8 @@ class PBRun():
                     self.pb6_version_origin = version.group(0)
                     break
         if Path(f'{self.pb7dir}/.git').exists():
-            pb7_readme_origin = subprocess.run(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:README.md"], stdout=subprocess.PIPE, text=True)
-            lines = pb7_readme_origin.stdout.splitlines()
+            pb7_readme_origin = _run_subprocess(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:README.md"], timeout=20)
+            lines = pb7_readme_origin.stdout.splitlines() if pb7_readme_origin and pb7_readme_origin.returncode == 0 else []
             for line in lines:
                 #find regex regex_search('^#? ?v[0-9.]+'
                 version = re.search('v[0-9.]+', line)
@@ -1606,8 +1876,7 @@ class PBRun():
         cfg = ({
             "rserver": rserver,
             "status_file": str(status_file)})
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
+        _atomic_write_json(cfile, cfg)
 
     def has_update_status(self):
         """Checks for new status, and update the status files accordingly.
@@ -1619,8 +1888,9 @@ class PBRun():
         for cfile in status_files:
             cfile = Path(cfile)
             if cfile.exists():
-                with open(cfile, "r", encoding='utf-8') as f:
-                    cfg = json.load(f)
+                try:
+                    with open(cfile, "r", encoding='utf-8') as f:
+                        cfg = json.load(f)
                     rserver = cfg["rserver"]
                     status_file = cfg["status_file"]
                     if status_file.split('/')[-1] == 'status.json':
@@ -1629,7 +1899,10 @@ class PBRun():
                         self.update_from_status_single(status_file, rserver)
                     elif status_file.split('/')[-1] == 'status_v7.json':
                         self.update_from_status_v7(status_file, rserver)
-                cfile.unlink(missing_ok=True)
+                    cfile.unlink(missing_ok=True)
+                    self._bad_cmd_failures.pop(str(cfile), None)
+                except Exception as e:
+                    self._handle_bad_cmd_file(cfile, "update status", e)
 
     def update_from_status_v7(self, status_file : str, rserver : str):
         """Updates the v7 status based on the provided status file.
@@ -1646,7 +1919,7 @@ class PBRun():
         """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_v7_ts:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate v7: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            _log("PBRun", f"Activate v7: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=' ', timespec='seconds')}")
             for instance in new_status:
                 status = self.instances_status_v7.find_name(instance.name)
                 if status is not None:
@@ -1659,7 +1932,7 @@ class PBRun():
                                 destination.mkdir(parents=True)
                             copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         # Install new v7 version
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New V7 Version {instance.name} Old: {status.version} New: {instance.version}')
+                        _log("PBRun", f"Install: New V7 Version {instance.name} Old: {status.version} New: {instance.version}")
                         # Remove old *.json configs
                         dest = f'{self.v7_path}/{instance.name}'
                         p = str(Path(f'{dest}/*'))
@@ -1674,7 +1947,7 @@ class PBRun():
                             self.watch_v7([f'{self.v7_path}/{instance.name}'])
                 else:
                     # Install new v7 instance
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New V7 Instance {instance.name} from {rserver} Version: {instance.version}')
+                    _log("PBRun", f"Install: New V7 Instance {instance.name} from {rserver} Version: {instance.version}")
                     src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
                     dest = f'{self.v7_path}/{instance.name}'
                     if Path(src).exists():
@@ -1685,7 +1958,7 @@ class PBRun():
                 status = new_status.find_name(instance.name)
                 if status is None:
                     # Remove v7 instance
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: V7 Instance {instance.name}')
+                    _log("PBRun", f"Remove: V7 Instance {instance.name}")
                     if instance.running:
                         for v7 in self.run_v7:
                             name = v7.path.split('/')[-1]
@@ -1722,7 +1995,7 @@ class PBRun():
         """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_single_ts:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate single: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            _log("PBRun", f"Activate single: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=' ', timespec='seconds')}")
             for instance in new_status:
                 status = self.instances_status_single.find_name(instance.name)
                 if status is not None:
@@ -1735,7 +2008,7 @@ class PBRun():
                                 destination.mkdir(parents=True)
                             copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         # Install new single version
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Version {instance.name} Old: {status.version} New: {instance.version}')
+                        _log("PBRun", f"Install: New Single Version {instance.name} Old: {status.version} New: {instance.version}")
                         src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                         dest = f'{self.single_path}/{instance.name}'
                         if Path(src).exists():
@@ -1743,7 +2016,7 @@ class PBRun():
                             self.watch_single([f'{self.single_path}/{instance.name}'])
                 else:
                     # Install new single instance
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Single Instance {instance.name} from {rserver} Version: {instance.version}')
+                    _log("PBRun", f"Install: New Single Instance {instance.name} from {rserver} Version: {instance.version}")
                     src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
                     dest = f'{self.single_path}/{instance.name}'
                     if Path(src).exists():
@@ -1754,7 +2027,7 @@ class PBRun():
                 status = new_status.find_name(instance.name)
                 if status is None:
                     # Remove single instance
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: Single Instance {instance.name}')
+                    _log("PBRun", f"Remove: Single Instance {instance.name}")
                     if instance.running:
                         for single in self.run_single:
                             name = single.path.split('/')[-1]
@@ -1791,7 +2064,7 @@ class PBRun():
         """
         new_status = InstancesStatus(status_file)
         if new_status.activate_ts > self.activate_ts:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Activate multi: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=" ", timespec="seconds")}')
+            _log("PBRun", f"Activate multi: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=' ', timespec='seconds')}")
             for instance in new_status:
                 status = self.instances_status.find_name(instance.name)
                 if status is not None:
@@ -1804,7 +2077,7 @@ class PBRun():
                                 destination.mkdir(parents=True)
                             copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
                         # Install new multi version
-                        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}')
+                        _log("PBRun", f"Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}")
                         # Remove old *.json configs
                         dest = f'{self.multi_path}/{instance.name}'
                         p = str(Path(f'{dest}/*'))
@@ -1819,7 +2092,7 @@ class PBRun():
                             self.watch_multi([f'{self.multi_path}/{instance.name}'])
                 else:
                     # Install new multi instance
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}')
+                    _log("PBRun", f"Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}")
                     src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
                     dest = f'{self.multi_path}/{instance.name}'
                     if Path(src).exists():
@@ -1830,7 +2103,7 @@ class PBRun():
                 status = new_status.find_name(instance.name)
                 if status is None:
                     # Remove multi instance
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove: Multi Instance {instance.name}')
+                    _log("PBRun", f"Remove: Multi Instance {instance.name}")
                     if instance.running:
                         for multi in self.run_multi:
                             if multi.user == instance.name:
@@ -1858,8 +2131,7 @@ class PBRun():
             "instance": instance,
             "multi": multi,
             "version": version})
-        with open(cfile, "w", encoding='utf-8') as f:
-            json.dump(cfg, f)
+        _atomic_write_json(cfile, cfg)
 
     def has_activate(self):
         """Checks for activation file
@@ -1871,8 +2143,9 @@ class PBRun():
         for cfile in activates:
             cfile = Path(cfile)
             if cfile.exists():
-                with open(cfile, "r", encoding='utf-8') as f:
-                    cfg = json.load(f)
+                try:
+                    with open(cfile, "r", encoding='utf-8') as f:
+                        cfg = json.load(f)
                     instance = cfg["instance"]
                     multi = cfg["multi"]
                     if "version" in cfg:
@@ -1888,34 +2161,39 @@ class PBRun():
                     else:
                         self.update_activate_single()
                         self.watch_single([f'{self.single_path}/{instance}'])
-                cfile.unlink(missing_ok=True)
+                    cfile.unlink(missing_ok=True)
+                    self._bad_cmd_failures.pop(str(cfile), None)
+                except Exception as e:
+                    self._handle_bad_cmd_file(cfile, "activate", e)
     
     def update_activate_v7(self):
-        self.activate_v7_ts = int(datetime.now().timestamp())
-        self.instances_status_v7.activate_ts = self.activate_v7_ts
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        pb_config.set("main", "activate_v7_ts", str(self.activate_v7_ts))
-        with open('pbgui.ini', 'w') as pbgui_configfile:
-            pb_config.write(pbgui_configfile)
+        self._update_activate_timestamp("activate_v7_ts", "instances_status_v7")
 
     def update_activate(self):
-        self.activate_ts = int(datetime.now().timestamp())
-        self.instances_status.activate_ts = self.activate_ts
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        pb_config.set("main", "activate_ts", str(self.activate_ts))
-        with open('pbgui.ini', 'w') as pbgui_configfile:
-            pb_config.write(pbgui_configfile)
+        self._update_activate_timestamp("activate_ts", "instances_status")
 
     def update_activate_single(self):
-        self.activate_single_ts = int(datetime.now().timestamp())
-        self.instances_status_single.activate_ts = self.activate_single_ts
+        self._update_activate_timestamp("activate_single_ts", "instances_status_single")
+
+    def _update_activate_timestamp(self, key: str, status_attr: str):
+        now_ts = int(datetime.now().timestamp())
+        if key == "activate_ts":
+            self.activate_ts = now_ts
+        elif key == "activate_single_ts":
+            self.activate_single_ts = now_ts
+        elif key == "activate_v7_ts":
+            self.activate_v7_ts = now_ts
+
+        status = getattr(self, status_attr, None)
+        if status is not None:
+            status.activate_ts = now_ts
+
         pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        pb_config.set("main", "activate_single_ts", str(self.activate_single_ts))
-        with open('pbgui.ini', 'w') as pbgui_configfile:
-            pb_config.write(pbgui_configfile)
+        pb_config.read("pbgui.ini")
+        if not pb_config.has_section("main"):
+            pb_config.add_section("main")
+        pb_config.set("main", key, str(now_ts))
+        _atomic_write_config(Path("pbgui.ini"), pb_config)
 
     def watch_v7(self, v7_instances : list = None):
         """Create or delete v7 instances and activate them or not depending on their status.
@@ -2068,17 +2346,17 @@ class PBRun():
         high_mem = 0
         high_bot = None
         for v7 in self.run_v7:
-            mem = v7.monitor.memory[0] + v7.monitor.memory[9]
+            mem = _memory_usage_bytes(v7.monitor.memory)
             if mem > high_mem:
                 high_mem = mem
                 high_bot = v7
         for multi in self.run_multi:
-            mem = multi.monitor.memory[0] + multi.monitor.memory[9]
+            mem = _memory_usage_bytes(multi.monitor.memory)
             if mem > high_mem:
                 high_mem = mem
                 high_bot = multi
         for single in self.run_single:
-            mem = single.monitor.memory[0] + single.monitor.memory[9]
+            mem = _memory_usage_bytes(single.monitor.memory)
             if mem > high_mem:
                 high_mem = mem
                 high_bot = single
@@ -2092,7 +2370,7 @@ class PBRun():
         if free < 250:
             high_bot = self.find_high_memory_bot()
             if high_bot:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: Low System memory {free:.2f}MB, restarting bot {high_bot.user}')
+                _log("PBRun", f"Low System memory {free:.2f}MB, restarting bot {high_bot.user}", level="WARNING")
                 high_bot.stop()
                 high_bot.start()
 
@@ -2109,7 +2387,7 @@ class PBRun():
             count = 0
             while True:
                 if count > 5:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRun')
+                    _log("PBRun", "Can not start PBRun", level="ERROR")
                     break
                 sleep(1)
                 if self.is_running():
@@ -2118,8 +2396,11 @@ class PBRun():
 
     def stop(self):
         if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBRun')
-            psutil.Process(self.my_pid).kill()
+            _log("PBRun", "Stop: PBRun")
+            try:
+                _kill_process(psutil.Process(self.my_pid), "PBRun")
+            except psutil.NoSuchProcess:
+                pass
 
     def restart_pbrun(self):
         if self.is_running():
@@ -2138,14 +2419,16 @@ class PBRun():
     def load_pid(self):
         if self.pidfile.exists():
             with open(self.pidfile) as f:
-                pid = f.read()
-                self.my_pid = int(pid) if pid.isnumeric() else None
+                pid = f.read().strip()
+                try:
+                    self.my_pid = int(pid) if pid.isnumeric() else None
+                except ValueError:
+                    self.my_pid = None
 
     def save_pid(self):
         """Saves the process ID into /data/pid/pbrun.pid."""
         self.my_pid = os.getpid()
-        with open(self.pidfile, 'w') as f:
-            f.write(str(self.my_pid))
+        _atomic_write_text(self.pidfile, str(self.my_pid))
 
 
 def main():
@@ -2162,14 +2445,10 @@ def main():
     if not dest.exists():
         dest.mkdir(parents=True)
     logfile = Path(f'{str(dest)}/PBRun.log')
-    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRun')
+    _log("PBRun", "Start: PBRun")
     run = PBRun()
     if run.is_running():
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRun already started')
+        _log("PBRun", "PBRun already started", level="ERROR")
         exit(1)
     run.save_pid()
     if run.pb7dir:
@@ -2180,11 +2459,6 @@ def main():
     count = 0
     while True:
         try:
-            if logfile.exists():
-                if logfile.stat().st_size >= 1048576:
-                    logfile.replace(f'{str(logfile)}.old')
-                    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-                    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             run.watch_memory()
             run.has_activate()
             run.has_update_status()
@@ -2213,8 +2487,8 @@ def main():
             sleep(5)
             count += 1
         except Exception as e:
-            print(f'Something went wrong, but continue {e}')
-            traceback.print_exc()
+            _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
+            _log("PBRun", "PBRun.main loop traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 if __name__ == '__main__':
     main()
