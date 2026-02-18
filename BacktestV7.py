@@ -1040,33 +1040,37 @@ class BacktestV7Item(ConfigV7Editor):
             st.session_state.pbcoindata = CoinData()
         coindata = st.session_state.pbcoindata
         for exchange in self.config.backtest.exchanges:
+            exchange_symbols, _ = coindata.filter_mapping(
+                exchange=exchange,
+                market_cap_min_m=0,
+                vol_mcap_max=float("inf"),
+                only_cpt=False,
+                notices_ignore=False,
+                tags=[],
+                quote_filter=None,
+                use_cache=True,
+                active_only=True,
+            )
+            mapping_coins.update(exchange_symbols)
             for record in coindata.load_mapping(exchange=exchange, use_cache=True):
                 coin = (record.get("coin") or "").upper()
-                if coin:
-                    mapping_coins.add(coin)
-                    notice = str(record.get("notice") or "").strip()
-                    if notice and coin not in notices_by_coin:
-                        notices_by_coin[coin] = notice
+                notice = str(record.get("notice") or "").strip()
+                if coin and coin in mapping_coins and notice and coin not in notices_by_coin:
+                    notices_by_coin[coin] = notice
         symbols = sorted(mapping_coins)
 
-        def is_available(coin: str) -> bool:
-            if not coin:
-                return False
-            base = normalize_symbol(coin)
-            return coin in mapping_coins or base in mapping_coins
-
-        for symbol in self.config.live.approved_coins.long.copy():
-            if not is_available(symbol):
-                self.config.live.approved_coins.long.remove(symbol)
-        for symbol in self.config.live.approved_coins.short.copy():
-            if not is_available(symbol):
-                self.config.live.approved_coins.short.remove(symbol)
-        for symbol in self.config.live.ignored_coins.long.copy():
-            if not is_available(symbol):
-                self.config.live.ignored_coins.long.remove(symbol)
-        for symbol in self.config.live.ignored_coins.short.copy():
-            if not is_available(symbol):
-                self.config.live.ignored_coins.short.remove(symbol)
+        self.config.live.approved_coins.long = [
+            coin for coin in self.config.live.approved_coins.long if coin in mapping_coins
+        ]
+        self.config.live.approved_coins.short = [
+            coin for coin in self.config.live.approved_coins.short if coin in mapping_coins
+        ]
+        self.config.live.ignored_coins.long = [
+            coin for coin in self.config.live.ignored_coins.long if coin in mapping_coins
+        ]
+        self.config.live.ignored_coins.short = [
+            coin for coin in self.config.live.ignored_coins.short if coin in mapping_coins
+        ]
         # Remove from approved_coins when in ignored coins
         for symbol in self.config.live.ignored_coins.long:
             if symbol in self.config.live.approved_coins.long:

@@ -343,17 +343,18 @@ def view_coindata():
         quote_filter=quote_filter,
     )
 
-    hip3_rows = [r for r in filtered_rows_all if r.get("is_hip3", False)]
+    # HIP-3 rows are displayed without CMC-dependent filters (market cap/tags/notices/etc.),
+    # but still respect market availability flags.
+    hip3_rows = [
+        r for r in mapping_rows
+        if r.get("is_hip3", False)
+        and bool(r.get("active", True))
+        and bool(r.get("linear", True))
+    ]
     filtered_rows = [r for r in filtered_rows_all if not r.get("is_hip3", False)]
 
     if coindata.exchange == "hyperliquid":
-        hip3_total = sum(1 for r in mapping_rows if r.get("is_hip3", False))
-        hip3_visible = len(hip3_rows)
-        if hip3_total > 0 and hip3_visible == 0:
-            st.info(
-                "HIP-3 symbols are currently filtered out. "
-                "Set market_cap to 0 and clear tags/notice filters to show them."
-            )
+        hip3_rows.sort(key=lambda x: ((x.get("coin") or ""), (x.get("symbol") or "")))
 
     column_config = {
         "price": st.column_config.NumberColumn("price", format="$%.8g"),
