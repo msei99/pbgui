@@ -1,4 +1,5 @@
 import json
+import configparser
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -16,6 +17,105 @@ _LEVEL_MAP = {
 }
 _service_min_levels = {}
 _global_min_level = 0
+
+
+DEFAULT_ROTATE_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_ROTATE_BACKUP_COUNT = 1
+
+
+def _normalize_rotate_key(value: str) -> str:
+    try:
+        key = re.sub(r"[^a-zA-Z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+        return key or "default"
+    except Exception:
+        return "default"
+
+
+def _read_rotate_ini():
+    cfg = configparser.ConfigParser()
+    cfg.read('pbgui.ini')
+    if not cfg.has_section('logging'):
+        cfg.add_section('logging')
+    return cfg
+
+
+def _parse_positive_int(value, default_value: int) -> int:
+    try:
+        parsed = int(value)
+        if parsed > 0:
+            return parsed
+    except Exception:
+        pass
+    return int(default_value)
+
+
+def get_rotate_defaults() -> tuple[int, int]:
+    """Return default rotation settings (max_bytes, backup_count)."""
+    try:
+        cfg = _read_rotate_ini()
+        max_bytes = _parse_positive_int(
+            cfg.get('logging', 'rotate_default_max_bytes', fallback=str(DEFAULT_ROTATE_MAX_BYTES)),
+            DEFAULT_ROTATE_MAX_BYTES,
+        )
+        backup_count = _parse_positive_int(
+            cfg.get('logging', 'rotate_default_backup_count', fallback=str(DEFAULT_ROTATE_BACKUP_COUNT)),
+            DEFAULT_ROTATE_BACKUP_COUNT,
+        )
+        return max_bytes, backup_count
+    except Exception:
+        return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
+
+
+def set_rotate_defaults(max_bytes: int, backup_count: int):
+    """Persist default rotation settings in pbgui.ini under [logging]."""
+    cfg = _read_rotate_ini()
+    cfg.set('logging', 'rotate_default_max_bytes', str(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)))
+    cfg.set('logging', 'rotate_default_backup_count', str(_parse_positive_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)))
+    with open('pbgui.ini', 'w', encoding='utf-8') as f:
+        cfg.write(f)
+
+
+def get_rotate_settings(service: str = None, logfile: str = None) -> tuple[int, int]:
+    """Return effective rotation settings for a specific service/logfile.
+
+    Lookup order:
+    1) [logging] rotate_<service_key>_max_bytes / rotate_<service_key>_backup_count
+    2) [logging] rotate_default_max_bytes / rotate_default_backup_count
+    """
+    default_max_bytes, default_backup_count = get_rotate_defaults()
+    key_src = service
+    if (not key_src) and logfile:
+        try:
+            key_src = Path(str(logfile)).stem
+        except Exception:
+            key_src = None
+    if not key_src:
+        return default_max_bytes, default_backup_count
+
+    try:
+        cfg = _read_rotate_ini()
+        key = _normalize_rotate_key(key_src)
+        max_bytes = _parse_positive_int(
+            cfg.get('logging', f'rotate_{key}_max_bytes', fallback=str(default_max_bytes)),
+            default_max_bytes,
+        )
+        backup_count = _parse_positive_int(
+            cfg.get('logging', f'rotate_{key}_backup_count', fallback=str(default_backup_count)),
+            default_backup_count,
+        )
+        return max_bytes, backup_count
+    except Exception:
+        return default_max_bytes, default_backup_count
+
+
+def set_rotate_settings(service: str, max_bytes: int, backup_count: int):
+    """Persist per-service rotation settings in pbgui.ini under [logging]."""
+    key = _normalize_rotate_key(service)
+    cfg = _read_rotate_ini()
+    cfg.set('logging', f'rotate_{key}_max_bytes', str(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)))
+    cfg.set('logging', f'rotate_{key}_backup_count', str(_parse_positive_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)))
+    with open('pbgui.ini', 'w', encoding='utf-8') as f:
+        cfg.write(f)
 
 
 def set_service_min_level(service: str, level: Optional[str]):
@@ -102,11 +202,11 @@ def _sanitize_tag(t: str) -> str:
     return t2
 
 
-def rotate_logfile_if_oversize(path: str, max_bytes: int = 10 * 1024 * 1024):
+def rotate_logfile_if_oversize(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BYTES, backup_count: int = DEFAULT_ROTATE_BACKUP_COUNT):
     """Rotate `path` when it exceeds `max_bytes`.
 
-    Keep only two generations: the current file and a single rotated
-    backup named `<path>.1`. If `<path>.1` exists it will be overwritten.
+    Keep current plus `backup_count` rotated generations named
+    `<path>.1`, `<path>.2`, ... `<path>.<backup_count>`.
     This function is intentionally simple and safe to call before writes.
     """
     try:
@@ -119,21 +219,35 @@ def rotate_logfile_if_oversize(path: str, max_bytes: int = 10 * 1024 * 1024):
             return
         if size <= int(max_bytes):
             return
-        # Remove existing .1 if present
-        backup = Path(str(path) + '.1')
+        backup_count = _parse_positive_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+
+        # Drop oldest generation first if present
+        oldest = Path(str(path) + f'.{backup_count}')
         try:
-            if backup.exists():
-                backup.unlink()
+            if oldest.exists():
+                oldest.unlink()
         except Exception:
             pass
+
+        # Shift existing generations upwards (N-1 -> N, ..., 1 -> 2)
+        for idx in range(backup_count - 1, 0, -1):
+            src = Path(str(path) + f'.{idx}')
+            dst = Path(str(path) + f'.{idx + 1}')
+            try:
+                if src.exists():
+                    src.rename(dst)
+            except Exception:
+                pass
+
+        backup_1 = Path(str(path) + '.1')
         # Rename current to .1 (atomic on same filesystem)
         try:
-            p.rename(backup)
+            p.rename(backup_1)
         except Exception:
             # Best-effort: try copy-then-truncate
             try:
                 data = p.read_bytes()
-                backup.write_bytes(data)
+                backup_1.write_bytes(data)
                 p.unlink()
             except Exception:
                 pass
@@ -327,7 +441,8 @@ def human_log(service: str, msg: str, user: str = None, tags=None, level: str = 
 
         # Rotate if oversize (keep only current + one rotated generation)
         try:
-            rotate_logfile_if_oversize(logfile, 10 * 1024 * 1024)
+            rotate_max_bytes, rotate_backup_count = get_rotate_settings(service=service, logfile=logfile)
+            rotate_logfile_if_oversize(logfile, rotate_max_bytes, rotate_backup_count)
         except Exception:
             pass
 

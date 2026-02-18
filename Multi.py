@@ -765,18 +765,43 @@ class MultiInstance():
             if st.session_state.edit_multi_vol_mcap != self.vol_mcap:
                 self.vol_mcap = st.session_state.edit_multi_vol_mcap
                 coindata.vol_mcap = self.vol_mcap
+        available_symbols, _ = coindata.filter_mapping(
+            exchange=self._users.find_exchange(self.user),
+            market_cap_min_m=0,
+            vol_mcap_max=float("inf"),
+            only_cpt=False,
+            notices_ignore=False,
+            tags=[],
+            quote_filter=None,
+            use_cache=True,
+            active_only=True,
+        )
+        filtered_approved, filtered_ignored = coindata.filter_mapping(
+            exchange=self._users.find_exchange(self.user),
+            market_cap_min_m=self.market_cap,
+            vol_mcap_max=self.vol_mcap,
+            only_cpt=self.only_cpt,
+            notices_ignore=self.notices_ignore,
+            tags=[],
+            quote_filter=None,
+            use_cache=True,
+            active_only=True,
+        )
+        symbol_set = set(available_symbols)
+        notices_by_coin = {}
+        for record in coindata.load_mapping(exchange=self._users.find_exchange(self.user), use_cache=True):
+            coin = (record.get("coin") or "").upper()
+            notice = str(record.get("notice") or "").strip()
+            if coin and coin in symbol_set and notice and coin not in notices_by_coin:
+                notices_by_coin[coin] = notice
         # Apply filters
         if "edit_multi_apply_filters" in st.session_state:
             if st.session_state.edit_multi_apply_filters:
-                self._symbols = coindata.approved_coins
-                self._ignored_symbols = coindata.ignored_coins
+                self._symbols = filtered_approved.copy()
+                self._ignored_symbols = filtered_ignored.copy()
         # Remove unavailable symbols
-        for symbol in self._symbols.copy():
-            if symbol not in coindata.symbols:
-                self._symbols.remove(symbol)
-        for symbol in self._ignored_symbols.copy():
-            if symbol not in coindata.symbols:
-                self._ignored_symbols.remove(symbol)
+        self._symbols = [symbol for symbol in self._symbols if symbol in symbol_set]
+        self._ignored_symbols = [symbol for symbol in self._ignored_symbols if symbol in symbol_set]
         # Remove from approved_coins when in ignored coins
         for symbol in self._ignored_symbols:
             if symbol in self._symbols:
@@ -1121,17 +1146,17 @@ class MultiInstance():
             st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_multi_apply_filters")
         # Find coins with notices
         for coin in self._symbols:
-            if coin in coindata.symbols_notice:
-                st.warning(f'{coin}: {coindata.symbols_notices[coin]}')
+            if coin in notices_by_coin:
+                st.warning(f'{coin}: {notices_by_coin[coin]}')
         # Display Symbols
         with st.expander("Symbols Config", expanded=True):
             st.data_editor(data=slist, height=36+(len(slist))*35, key=f'select_symbol_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['symbol','long','long_mode','long_we','short','short_mode','short_we'])
-        st.multiselect('approved_symbols', coindata.symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
-        st.multiselect('ignored_symbols', coindata.symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
+        st.multiselect('approved_symbols', available_symbols, default=self._symbols, key="edit_multi_approved_symbols", help=pbgui_help.multi_approved_symbols)
+        st.multiselect('ignored_symbols', available_symbols, default=self._ignored_symbols, key="edit_multi_ignored_symbols", help=pbgui_help.multi_ignored_symbols)
         # Display dynamic ignored coins
         if self.dynamic_ignore:
-            st.code(f'approved_symbols: {coindata.approved_coins}', wrap_lines=True)
-            st.code(f'dynamic_ignored symbols: {coindata.ignored_coins}', wrap_lines=True)
+            st.code(f'approved_symbols: {filtered_approved}', wrap_lines=True)
+            st.code(f'dynamic_ignored symbols: {filtered_ignored}', wrap_lines=True)
         # Import configs
         import_path = os.path.abspath(st_file_selector(st, path=pbdir(), key = 'multi_import_config', label = 'Import from directory'))
         if st.button("Import Configs"):

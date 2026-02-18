@@ -171,6 +171,10 @@ def normalize_symbol(symbol, symbol_mappings=None):
             remaining = base[:-len(quote)]
             if not remaining:
                 continue  # Don't strip if nothing remains
+            # Avoid over-stripping when quote appears as a hyphenated/base suffix,
+            # e.g. "XYZ-EUR" -> keep as-is instead of producing "XYZ-".
+            if remaining.endswith(("-", "_", ":", "/")):
+                continue
             # After stripping, check if result looks like a quote-based coin (USDe, USD1, EURo)
             # Pattern: starts with quote prefix + has only 1-2 additional chars
             if remaining.startswith(("USD", "EUR", "GBP")) and len(remaining) <= 5:
@@ -431,7 +435,7 @@ class CoinData:
         # HIP-3: Exchange-specific data caches
         self._ccxt_markets = {}  # {exchange: markets_dict}
         self._exchange_mappings = {}  # {exchange: [mapping_records]}
-        self._exchange_mapping_ts = {}  # {exchange: mtime}
+        self._exchange_mapping_ts = {}  # {exchange: (mtime_ns, size)}
         self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
         self._mapping_self_heal_state = {}  # {exchange: {fails:int, next_retry_ts:float}}
     
@@ -496,15 +500,16 @@ class CoinData:
             self._exchange_mappings.pop(exchange, None)
             return []
 
-        file_mtime = mapping_file.stat().st_mtime
-        if use_cache and exchange in self._exchange_mappings and self._exchange_mapping_ts.get(exchange) == file_mtime:
+        stat = mapping_file.stat()
+        file_sig = (stat.st_mtime_ns, stat.st_size)
+        if use_cache and exchange in self._exchange_mappings and self._exchange_mapping_ts.get(exchange) == file_sig:
             return self._exchange_mappings[exchange]
 
         try:
             with mapping_file.open('r') as f:
                 mapping = json.load(f)
             self._exchange_mappings[exchange] = mapping
-            self._exchange_mapping_ts[exchange] = file_mtime
+            self._exchange_mapping_ts[exchange] = file_sig
             return mapping
         except Exception as e:
             _log('PBCoinData', f'Error loading mapping for {exchange}: {e}', level='ERROR')
@@ -530,7 +535,8 @@ class CoinData:
                 json.dump(mapping, f, indent=4)
             temp_file.replace(mapping_file)
             self._exchange_mappings[exchange] = mapping
-            self._exchange_mapping_ts[exchange] = mapping_file.stat().st_mtime
+            stat = mapping_file.stat()
+            self._exchange_mapping_ts[exchange] = (stat.st_mtime_ns, stat.st_size)
             _log('PBCoinData', f'Saved mapping for {exchange}', level='DEBUG')
         except Exception as e:
             _log('PBCoinData', f'Error saving mapping for {exchange}: {e}', level='ERROR')
@@ -584,6 +590,33 @@ class CoinData:
                 coins.append(coin.upper())
         return sorted(set(coins))
 
+    def _to_float(self, value):
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _passes_active_filter(self, exchange: str, record: dict) -> bool:
+        if not bool(record.get("active", True)):
+            return False
+        if not bool(record.get("swap", False)):
+            return False
+        if not bool(record.get("linear", True)):
+            return False
+
+        if exchange == "hyperliquid":
+            if bool(record.get("is_hip3", False)):
+                dex = str(record.get("dex") or "").strip().lower()
+                if dex != "xyz":
+                    return False
+            open_interest = self._to_float(record.get("open_interest"))
+            if open_interest is not None and open_interest <= 0.0:
+                return False
+
+        return True
+
     def filter_mapping(
         self,
         exchange: str,
@@ -593,7 +626,6 @@ class CoinData:
         notices_ignore: bool | None = None,
         tags: list[str] | None = None,
         active_only: bool | None = None,
-        linear_only: bool | None = None,
         quote_filter: list[str] | None = None,
         use_cache: bool = True,
     ) -> tuple[list[str], list[str]]:
@@ -605,8 +637,8 @@ class CoinData:
         - only_cpt: include only copy-trading symbols (defaults to self.only_cpt)
         - notices_ignore: exclude records with a notice (defaults to self.notices_ignore)
         - tags: any-tag match; empty means no tag filter (defaults to self.tags)
-        - active_only: include only active markets (defaults to True; legacy-compatible)
-        - linear_only: include only linear markets (defaults to True; legacy-compatible)
+        - active_only: apply passivbot market eligibility (active/swap/linear and
+            exchange-specific checks; defaults to False)
         - quote_filter: optional quote whitelist (e.g. ["USDT"])
         """
         mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
@@ -615,8 +647,7 @@ class CoinData:
         only_cpt = self.only_cpt if only_cpt is None else only_cpt
         notices_ignore = self.notices_ignore if notices_ignore is None else notices_ignore
         tags = self.tags if tags is None else tags
-        active_only = True if active_only is None else active_only
-        linear_only = True if linear_only is None else linear_only
+        active_only = False if active_only is None else active_only
         quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
 
         approved = set()
@@ -641,12 +672,10 @@ class CoinData:
             has_notice = bool(record.get("notice"))
             is_cpt = bool(record.get("copy_trading", False))
             record_tags = record.get("tags") or []
-            is_active = bool(record.get("active", True))
-            is_linear = bool(record.get("linear", True))
+            is_eligible = self._passes_active_filter(exchange, record)
 
             passes = (
-                (not active_only or is_active)
-                and (not linear_only or is_linear)
+                (not active_only or is_eligible)
                 and market_cap >= float(market_cap_min_m) * 1_000_000
                 and vol_mcap < float(vol_mcap_max)
                 and (not only_cpt or is_cpt)
@@ -691,7 +720,6 @@ class CoinData:
         notices_ignore: bool | None = None,
         tags: list[str] | None = None,
         active_only: bool | None = None,
-        linear_only: bool | None = None,
         quote_filter: list[str] | None = None,
         use_cache: bool = True,
     ) -> list[dict]:
@@ -706,8 +734,7 @@ class CoinData:
         only_cpt = self.only_cpt if only_cpt is None else only_cpt
         notices_ignore = self.notices_ignore if notices_ignore is None else notices_ignore
         tags = self.tags if tags is None else tags
-        active_only = True if active_only is None else active_only
-        linear_only = True if linear_only is None else linear_only
+        active_only = False if active_only is None else active_only
         quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
 
         filtered_rows = []
@@ -729,12 +756,10 @@ class CoinData:
             has_notice = bool(record.get("notice"))
             is_cpt = bool(record.get("copy_trading", False))
             record_tags = record.get("tags") or []
-            is_active = bool(record.get("active", True))
-            is_linear = bool(record.get("linear", True))
+            is_eligible = self._passes_active_filter(exchange, record)
 
             passes = (
-                (not active_only or is_active)
-                and (not linear_only or is_linear)
+                (not active_only or is_eligible)
                 and market_cap >= float(market_cap_min_m) * 1_000_000
                 and vol_mcap < float(vol_mcap_max)
                 and (not only_cpt or is_cpt)
@@ -759,14 +784,12 @@ class CoinData:
         exchange: str,
         mc: int,
         active_only: bool | None = None,
-        linear_only: bool | None = None,
         quote_filter: list[str] | None = None,
         use_cache: bool = True,
     ) -> tuple[list[str], list[str]]:
         """Return (approved, ignored) using only an absolute market-cap threshold in USD."""
         mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
-        active_only = True if active_only is None else active_only
-        linear_only = True if linear_only is None else linear_only
+        active_only = False if active_only is None else active_only
         quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
 
         approved = set()
@@ -775,11 +798,7 @@ class CoinData:
             quote = (record.get("quote") or "").upper()
             if quote_whitelist and quote not in quote_whitelist:
                 continue
-            is_active = bool(record.get("active", True))
-            is_linear = bool(record.get("linear", True))
-            if active_only and not is_active:
-                continue
-            if linear_only and not is_linear:
+            if active_only and not self._passes_active_filter(exchange, record):
                 continue
             coin = (record.get("coin") or "").upper()
             if not coin:
@@ -1511,6 +1530,7 @@ class CoinData:
                     # HIP-3 flag
                     "is_hip3": is_hip3,
                     "dex": market.get("info", {}).get("dex") if is_hip3 else None,
+                    "open_interest": self._to_float(market.get("info", {}).get("openInterest")),
                     
                     # Active flag
                     "active": market.get("active", True),
@@ -1808,8 +1828,8 @@ class CoinData:
             return e
     
     def fetch_metadata(self):
-        # make sure we have the latest coindata
-        if self.has_new_data():
+        # Make sure we have coindata, but never overwrite already loaded data.
+        if not self.data and self.has_new_data():
             self.load_data()
             self.load_symbols()
         if not self.data:

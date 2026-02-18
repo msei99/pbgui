@@ -1696,25 +1696,27 @@ class OptimizeV7Item(ConfigV7Editor):
 
         symbols = set()
         for exchange in self.config.backtest.exchanges:
-            for record in coindata.load_mapping(exchange=exchange, use_cache=True):
-                coin = (record.get("coin") or "").upper()
-                if coin:
-                    symbols.add(coin)
+            exchange_symbols, _ = coindata.filter_mapping(
+                exchange=exchange,
+                market_cap_min_m=0,
+                vol_mcap_max=float("inf"),
+                only_cpt=False,
+                notices_ignore=False,
+                tags=[],
+                quote_filter=None,
+                use_cache=True,
+                active_only=True,
+            )
+            symbols.update(exchange_symbols)
         symbols = sorted(symbols)
         symbol_set = set(symbols)
 
-        def is_available(coin: str) -> bool:
-            if not coin:
-                return False
-            base = normalize_symbol(coin)
-            return coin in symbol_set or base in symbol_set
-
-        for symbol in self.config.live.approved_coins.long.copy():
-            if not is_available(symbol):
-                self.config.live.approved_coins.long.remove(symbol)
-        for symbol in self.config.live.approved_coins.short.copy():
-            if not is_available(symbol):
-                self.config.live.approved_coins.short.remove(symbol)
+        self.config.live.approved_coins.long = [
+            coin for coin in self.config.live.approved_coins.long if coin in symbol_set
+        ]
+        self.config.live.approved_coins.short = [
+            coin for coin in self.config.live.approved_coins.short if coin in symbol_set
+        ]
         # Correct Display of Symbols
         if "edit_opt_v7_approved_coins_long" in st.session_state:
             st.session_state.edit_opt_v7_approved_coins_long = self.config.live.approved_coins.long
