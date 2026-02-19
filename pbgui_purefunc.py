@@ -424,12 +424,34 @@ def config_pretty_str(config: dict):
         return pretty_str
 
 def load_symbols_from_ini(exchange: str, market_type: str):
-    pb_config = configparser.ConfigParser()
-    pb_config.read('pbgui.ini')
-    if pb_config.has_option("exchanges", f'{exchange}.{market_type}'):
-        return eval(pb_config.get("exchanges", f'{exchange}.{market_type}'))
-    else:
+    exchange = str(exchange or "").strip().lower()
+    market_type = str(market_type or "").strip().lower()
+
+    mapping_path = Path.cwd() / "data" / "coindata" / exchange / "mapping.json"
+    if not mapping_path.exists():
         return []
+
+    try:
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    symbols = []
+    for row in mapping if isinstance(mapping, list) else []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        if market_type == "swap":
+            if bool(row.get("swap", False)) and bool(row.get("active", True)) and bool(row.get("linear", True)):
+                symbols.append(symbol)
+        elif market_type == "spot":
+            if bool(row.get("spot", False)) and bool(row.get("active", True)):
+                symbols.append(symbol)
+        elif market_type == "cpt":
+            if bool(row.get("swap", False)) and bool(row.get("copy_trading", False)) and bool(row.get("active", True)):
+                symbols.append(symbol)
+
+    return sorted(set(symbols))
 
 
 def list_remote_git_branches(remote_url: str, timeout_sec: int = 20) -> list[str]:

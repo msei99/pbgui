@@ -4,11 +4,10 @@ import hjson
 import pprint
 import uuid
 import requests
-import configparser
 import os
 from time import sleep
 from pathlib import Path
-from pbgui_purefunc import load_ini, save_ini
+from pbgui_purefunc import load_ini, save_ini, load_symbols_from_ini as _load_symbols_from_mapping
 # LogHandler removed: centralized debuglog removed per user request
 from PBRemote import PBRemote
 from MonitorConfig import MonitorConfig
@@ -322,12 +321,7 @@ def upload_pbconfigdb(config: str, symbol: str, source_name : str):
         st.error("Invalid config", icon="🚨")
 
 def load_symbols_from_ini(exchange: str, market_type: str):
-    pb_config = configparser.ConfigParser()
-    pb_config.read('pbgui.ini')
-    if pb_config.has_option("exchanges", f'{exchange}.{market_type}'):
-        return eval(pb_config.get("exchanges", f'{exchange}.{market_type}'))
-    else:
-        return []
+    return _load_symbols_from_mapping(exchange, market_type)
 
 def update_dir(key):
     choice = st.session_state[key]
