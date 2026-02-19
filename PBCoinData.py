@@ -2305,10 +2305,25 @@ class CoinData:
             started_ts = datetime.now().timestamp()
 
             markets_ok = bool(self.fetch_ccxt_markets(exchange))
+            if not markets_ok:
+                elapsed = datetime.now().timestamp() - started_ts
+                return {
+                    "exchange": exchange,
+                    "markets_ok": False,
+                    "mapping_ok": False,
+                    "prices_ok": False,
+                    "active": 0,
+                    "priced": 0,
+                    "unmatched_relevant": 0,
+                    "unmatched_relevant_unique": 0,
+                    "elapsed": elapsed,
+                    "ok": False,
+                }
+
             markets = self.load_ccxt_markets(exchange)
             self.fetch_copy_trading_symbols(exchange, markets)
             mapping_ok = bool(self.build_mapping(exchange))
-            prices_ok = bool(self.update_prices(exchange))
+            prices_ok = bool(self.update_prices(exchange)) if mapping_ok else False
 
             rows = self.load_exchange_mapping(exchange)
             active = sum(1 for r in rows if r.get("active", True))
@@ -2364,7 +2379,14 @@ class CoinData:
 
             _log('PBCoinData', f'Self-heal mapping trigger for {exchange}: {reason}', level='WARNING')
             try:
-                _refresh_exchange_mapping(exchange)
+                result = _refresh_exchange_mapping(exchange)
+                if not bool(result.get("ok")):
+                    raise RuntimeError(
+                        f'refresh result not ok '
+                        f'(markets_ok={result.get("markets_ok")}, '
+                        f'mapping_ok={result.get("mapping_ok")}, '
+                        f'prices_ok={result.get("prices_ok")})'
+                    )
                 refreshed_in_self_heal.add(exchange)
                 if exchange in self._mapping_self_heal_state:
                     del self._mapping_self_heal_state[exchange]
