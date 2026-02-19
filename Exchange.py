@@ -1,6 +1,5 @@
 import ccxt
 import ccxt.pro as ccxt_pro
-import configparser
 from User import User, Users
 from enum import Enum
 import json
@@ -2913,30 +2912,35 @@ class Exchange:
         # print(self.spot)
         # print(self.swap)
         # print(self.cpt)
-        self.save_symbols()
-
-    def save_symbols(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read('pbgui.ini')
-        if not pb_config.has_section("exchanges"):
-            pb_config.add_section("exchanges")
-        pb_config.set("exchanges", f'{self.id}.swap', f'{self.swap}')
-        if self.spot:
-            pb_config.set("exchanges", f'{self.id}.spot', f'{self.spot}')
-        if self.cpt:
-            pb_config.set("exchanges", f'{self.id}.cpt', f'{self.cpt}')
-        with open('pbgui.ini', 'w') as f:
-            pb_config.write(f)
 
     def load_symbols(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read('pbgui.ini')
-        if pb_config.has_option("exchanges", f'{self.id}.spot'):
-            self.spot = eval(pb_config.get("exchanges", f'{self.id}.spot'))
-        if pb_config.has_option("exchanges", f'{self.id}.swap'):
-            self.swap = eval(pb_config.get("exchanges", f'{self.id}.swap'))
+        self.spot = []
+        self.swap = []
+        self.cpt = []
+
+        mapping_path = Path.cwd() / "data" / "coindata" / str(self.id).lower() / "mapping.json"
+        if mapping_path.exists():
+            try:
+                mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+                for row in mapping if isinstance(mapping, list) else []:
+                    symbol = str(row.get("symbol") or "").strip().upper()
+                    if not symbol:
+                        continue
+                    if bool(row.get("swap", False)) and bool(row.get("active", True)) and bool(row.get("linear", True)):
+                        self.swap.append(symbol)
+                        if bool(row.get("copy_trading", False)):
+                            self.cpt.append(symbol)
+                    if bool(row.get("spot", False)) and bool(row.get("active", True)) and self.id in ["bybit", "binance"]:
+                        self.spot.append(symbol)
+            except Exception:
+                self.spot = []
+                self.swap = []
+                self.cpt = []
+
+        self.spot = sorted(set(self.spot))
+        self.swap = sorted(set(self.swap))
+        self.cpt = sorted(set(self.cpt))
+
         if not self.spot and not self.swap:
             self.fetch_symbols()
     
