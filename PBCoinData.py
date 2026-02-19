@@ -389,6 +389,7 @@ class CoinData:
         self._exchange_mapping_ts = {}  # {exchange: (mtime_ns, size)}
         self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
         self._mapping_self_heal_state = {}  # {exchange: {fails:int, next_retry_ts:float}}
+        self._last_build_mapping_stats = {}  # {exchange: {unmatched_* counters}}
         self._cmc_metrics = {
             "listings_ok": 0,
             "listings_fail": 0,
@@ -1458,7 +1459,8 @@ class CoinData:
             # Build mapping records
             mapping = []
             price_disambiguated = 0
-            unmatched_cmc = []
+            unmatched_cmc_all = []
+            unmatched_cmc_relevant = []
             for symbol, market in markets.items():
                 # Only process swap/perpetual markets (NOT spot!)
                 if not market.get("swap", False):
@@ -1500,7 +1502,19 @@ class CoinData:
                     if match_method and "price" in match_method:
                         price_disambiguated += 1
                     if not cmc_record:
-                        unmatched_cmc.append((str(market_id).upper(), str(coin_name).upper()))
+                        unmatched_entry = (str(market_id).upper(), str(coin_name).upper())
+                        unmatched_cmc_all.append(unmatched_entry)
+
+                        eligibility_record = {
+                            "active": market.get("active", True),
+                            "swap": market.get("swap", False),
+                            "linear": market.get("linear", True),
+                            "is_hip3": is_hip3,
+                            "dex": market.get("info", {}).get("dex") if is_hip3 else None,
+                            "open_interest": self._to_float(market.get("info", {}).get("openInterest")),
+                        }
+                        if self._passes_active_filter(exchange_id, eligibility_record):
+                            unmatched_cmc_relevant.append(unmatched_entry)
                 
                 # Build mapping record
                 cmc_id = cmc_record.get("id") if cmc_record else None
@@ -1558,14 +1572,29 @@ class CoinData:
             # Save mapping
             self.save_exchange_mapping(exchange_id, mapping)
 
-            if unmatched_cmc:
-                unique_coins = sorted({coin for _, coin in unmatched_cmc if coin})
-                sample = ", ".join(f"{coin}({symbol})" for symbol, coin in unmatched_cmc[:20])
+            all_unique = sorted({coin for _, coin in unmatched_cmc_all if coin})
+            relevant_unique = sorted({coin for _, coin in unmatched_cmc_relevant if coin})
+            self._last_build_mapping_stats[exchange_id] = {
+                "unmatched_all": len(unmatched_cmc_all),
+                "unmatched_all_unique": len(all_unique),
+                "unmatched_relevant": len(unmatched_cmc_relevant),
+                "unmatched_relevant_unique": len(relevant_unique),
+            }
+
+            if unmatched_cmc_relevant:
+                sample = ", ".join(f"{coin}({symbol})" for symbol, coin in unmatched_cmc_relevant[:20])
                 _log(
                     'PBCoinData',
-                    f'CMC match missing for {len(unmatched_cmc)} market(s) on {exchange_id} '
-                    f'({len(unique_coins)} unique coin(s)). Sample: {sample}',
+                    f'CMC match missing for {len(unmatched_cmc_relevant)} relevant market(s) on {exchange_id} '
+                    f'({len(relevant_unique)} unique coin(s)). Sample: {sample}',
                     level='WARNING'
+                )
+            elif unmatched_cmc_all:
+                _log(
+                    'PBCoinData',
+                    f'CMC match missing only on non-relevant markets for {exchange_id}: '
+                    f'{len(unmatched_cmc_all)} market(s), {len(all_unique)} unique coin(s)',
+                    level='DEBUG'
                 )
             
             if price_disambiguated:
@@ -1575,6 +1604,12 @@ class CoinData:
             return True
             
         except Exception as e:
+            self._last_build_mapping_stats[exchange_id] = {
+                "unmatched_all": 0,
+                "unmatched_all_unique": 0,
+                "unmatched_relevant": 0,
+                "unmatched_relevant_unique": 0,
+            }
             _log('PBCoinData', f'Error building mapping for {exchange_id}: {e}', level='ERROR')
             return False
     
@@ -2278,6 +2313,7 @@ class CoinData:
             rows = self.load_exchange_mapping(exchange)
             active = sum(1 for r in rows if r.get("active", True))
             priced = sum(1 for r in rows if r.get("active", True) and float(r.get("price_last") or 0) > 0)
+            build_stats = self._last_build_mapping_stats.get(exchange, {})
 
             elapsed = datetime.now().timestamp() - started_ts
             return {
@@ -2287,6 +2323,8 @@ class CoinData:
                 "prices_ok": prices_ok,
                 "active": active,
                 "priced": priced,
+                "unmatched_relevant": int(build_stats.get("unmatched_relevant", 0) or 0),
+                "unmatched_relevant_unique": int(build_stats.get("unmatched_relevant_unique", 0) or 0),
                 "elapsed": elapsed,
                 "ok": markets_ok and mapping_ok and prices_ok,
             }
@@ -2363,6 +2401,8 @@ class CoinData:
                         "prices_ok": False,
                         "active": 0,
                         "priced": 0,
+                        "unmatched_relevant": 0,
+                        "unmatched_relevant_unique": 0,
                         "elapsed": 0.0,
                         "ok": False,
                     })
@@ -2380,6 +2420,19 @@ class CoinData:
             _log(
                 'PBCoinData',
                 f'Mapping update summary: {ok_count}/{total_count} exchanges ok in {total_elapsed:.1f}s | {per_exchange}',
+                level='INFO'
+            )
+            unmatched_total = sum(int(r.get("unmatched_relevant", 0) or 0) for r in cycle_results)
+            unmatched_unique_total = sum(int(r.get("unmatched_relevant_unique", 0) or 0) for r in cycle_results)
+            unmatched_per_exchange = ", ".join(
+                f'{r.get("exchange")}: {int(r.get("unmatched_relevant", 0) or 0)} '
+                f'({int(r.get("unmatched_relevant_unique", 0) or 0)} unique)'
+                for r in cycle_results
+            )
+            _log(
+                'PBCoinData',
+                f'CMC unmatched summary (relevant markets): {unmatched_total} market(s), '
+                f'{unmatched_unique_total} unique coin(s) total | {unmatched_per_exchange}',
                 level='INFO'
             )
             _log('PBCoinData', 'Mapping update complete', level='INFO')
