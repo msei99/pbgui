@@ -1,7 +1,7 @@
 import psutil
 import subprocess
 from time import sleep
-from requests import Request, Session
+from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
 import configparser
@@ -10,7 +10,6 @@ from datetime import datetime
 import platform
 import sys
 import os
-import traceback
 import re
 from Exchange import Exchange, Exchanges, V7
 from logging_helpers import human_log as _log
@@ -237,6 +236,25 @@ def get_normalized_coins(symbols, symbol_mappings=None):
 
 # Cache for coin_to_symbol mappings
 _COIN_TO_SYMBOL_CACHE = {}
+_COIN_TO_SYMBOL_CACHE_SIG = {}
+
+
+def _read_json_with_retry(path: Path, retries: int = 1, delay_s: float = 0.2):
+    """Read JSON file with a short retry window for transient partial writes."""
+    attempts = max(0, int(retries)) + 1
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            last_error = e
+            if attempt < attempts:
+                _log('PBCoinData', f'Retrying JSON read for {path} ({attempt}/{attempts - 1}) after error: {e}', level='WARNING')
+                sleep(delay_s)
+                continue
+            break
+    _log('PBCoinData', f'Failed to read JSON file {path}: {last_error}', level='WARNING')
+    return None
 
 
 def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
@@ -270,20 +288,28 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
     if not exchange_id:
         exchange_id = exchange_key
     market_type = market_type or "swap"
-
-    # Check cache first
-    if use_cache and exchange_key in _COIN_TO_SYMBOL_CACHE:
-        coin_map = _COIN_TO_SYMBOL_CACHE[exchange_key]
-        if coin in coin_map:
-            return coin_map[coin]
+    coin_key = str(coin or "").upper()
 
     mapping_path = Path.cwd() / "data" / "coindata" / exchange_id / "mapping.json"
+    mapping_sig = None
+    if mapping_path.exists():
+        stat = mapping_path.stat()
+        mapping_sig = (stat.st_mtime_ns, stat.st_size)
+
+    # Check cache first
+    if (
+        use_cache
+        and exchange_key in _COIN_TO_SYMBOL_CACHE
+        and _COIN_TO_SYMBOL_CACHE_SIG.get(exchange_key) == mapping_sig
+    ):
+        coin_map = _COIN_TO_SYMBOL_CACHE[exchange_key]
+        if coin_key in coin_map:
+            return coin_map[coin_key]
 
     coin_map = {}
     if mapping_path.exists():
-        try:
-            mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
-        except Exception:
+        mapping = _read_json_with_retry(mapping_path, retries=1, delay_s=0.1)
+        if not isinstance(mapping, list):
             mapping = []
 
         for record in mapping if isinstance(mapping, list) else []:
@@ -306,17 +332,18 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
     # Cache the mapping
     if use_cache:
         _COIN_TO_SYMBOL_CACHE[exchange_key] = coin_map
+        _COIN_TO_SYMBOL_CACHE_SIG[exchange_key] = mapping_sig
     
     # Return symbol or fallback
-    if coin in coin_map:
-        return coin_map[coin]
+    if coin_key in coin_map:
+        return coin_map[coin_key]
     else:
         # Fallback: guess quote currency
         quote = "USDC" if "hyperliquid" in exchange_key else "USDT"
         # Special handling for Hyperliquid k-prefix coins
-        if "hyperliquid" in exchange_key and coin.upper() in _HYPERLIQUID_K_PREFIX_COINS:
-            return f"K{coin.upper()}{quote}"
-        return f"{coin}{quote}"
+        if "hyperliquid" in exchange_key and coin_key in _HYPERLIQUID_K_PREFIX_COINS:
+            return f"K{coin_key}{quote}"
+        return f"{coin_key}{quote}"
 
 
 class CoinData:
@@ -362,11 +389,30 @@ class CoinData:
         self._exchange_mapping_ts = {}  # {exchange: (mtime_ns, size)}
         self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
         self._mapping_self_heal_state = {}  # {exchange: {fails:int, next_retry_ts:float}}
+        self._cmc_metrics = {
+            "listings_ok": 0,
+            "listings_fail": 0,
+            "metadata_ok": 0,
+            "metadata_fail": 0,
+            "status_ok": 0,
+            "status_fail": 0,
+        }
+        self._cmc_metrics_last_log_ts = 0.0
+        self._cmc_metrics_log_interval_s = 0
+        self._sync_cmc_metrics_log_interval()
         self.load_symbols()
         self._market_cap = 0
         self._vol_mcap = 10.0
         self._only_cpt = False
         self._notices_ignore = False
+
+    def _sync_cmc_metrics_log_interval(self):
+        """Align metrics health-log cadence with data-fetch cadence."""
+        try:
+            fetch_hours = max(1, int(self._fetch_interval))
+        except Exception:
+            fetch_hours = 24
+        self._cmc_metrics_log_interval_s = fetch_hours * 3600
     
     def _get_exchange_dir(self, exchange: str) -> Path:
         """Get coindata directory for a specific exchange."""
@@ -391,13 +437,15 @@ class CoinData:
             return {}
         
         try:
-            with markets_file.open('r') as f:
-                markets = json.load(f)
+            markets = _read_json_with_retry(markets_file, retries=1, delay_s=0.2)
+            if isinstance(markets, dict):
                 self._ccxt_markets[exchange] = markets
                 return markets
+            _log('PBCoinData', f'CCXT markets for {exchange} are not a dict, ignoring cache', level='WARNING')
         except Exception as e:
             _log('PBCoinData', f'Error loading CCXT markets for {exchange}: {e}', level='ERROR')
             return {}
+        return {}
     
     def save_ccxt_markets(self, exchange: str, markets: dict):
         """Save CCXT markets to cache. Only writes on success."""
@@ -435,11 +483,13 @@ class CoinData:
             return self._exchange_mappings[exchange]
 
         try:
-            with mapping_file.open('r') as f:
-                mapping = json.load(f)
-            self._exchange_mappings[exchange] = mapping
-            self._exchange_mapping_ts[exchange] = file_sig
-            return mapping
+            mapping = _read_json_with_retry(mapping_file, retries=1, delay_s=0.2)
+            if isinstance(mapping, list):
+                self._exchange_mappings[exchange] = mapping
+                self._exchange_mapping_ts[exchange] = file_sig
+                return mapping
+            _log('PBCoinData', f'Mapping for {exchange} is not a list, ignoring cache file', level='WARNING')
+            return []
         except Exception as e:
             _log('PBCoinData', f'Error loading mapping for {exchange}: {e}', level='ERROR')
             return []
@@ -755,10 +805,12 @@ class CoinData:
             return []
         
         try:
-            with cpt_file.open('r') as f:
-                symbols = json.load(f)
+            symbols = _read_json_with_retry(cpt_file, retries=1, delay_s=0.2)
+            if isinstance(symbols, list):
                 self._copy_trading_cache[exchange] = symbols
                 return symbols
+            _log('PBCoinData', f'Copy trading cache for {exchange} is not a list, ignoring cache file', level='WARNING')
+            return []
         except Exception as e:
             _log('PBCoinData', f'Error loading copy trading symbols for {exchange}: {e}', level='ERROR')
             return []
@@ -951,8 +1003,11 @@ class CoinData:
         if not pb_config.has_section("coinmarketcap"):
             pb_config.add_section("coinmarketcap")
         pb_config.set("coinmarketcap", f'cpt_user.{exchange_id}', user_name)
-        with open('pbgui.ini', 'w') as f:
+        ini_path = Path('pbgui.ini')
+        tmp_path = ini_path.with_suffix(ini_path.suffix + '.tmp')
+        with tmp_path.open('w', encoding='utf-8') as f:
             pb_config.write(f)
+        tmp_path.replace(ini_path)
     
     @property
     def api_key(self):
@@ -974,6 +1029,7 @@ class CoinData:
     @fetch_interval.setter
     def fetch_interval(self, new_fetch_interval):
         self._fetch_interval = new_fetch_interval
+        self._sync_cmc_metrics_log_interval()
 
     @property
     def metadata_interval(self):
@@ -1132,8 +1188,10 @@ class CoinData:
 
     def save_pid(self):
         self.my_pid = os.getpid()
-        with open(self.pidfile, 'w') as f:
+        tmp_path = self.pidfile.with_suffix(self.pidfile.suffix + '.tmp')
+        with tmp_path.open('w', encoding='utf-8') as f:
             f.write(str(self.my_pid))
+        tmp_path.replace(self.pidfile)
 
     def has_new_config(self):
         if Path('pbgui.ini').exists():
@@ -1214,6 +1272,7 @@ class CoinData:
                 self._metadata_interval = int(pb_config.get("coinmarketcap", "metadata_interval"))
             if pb_config.has_option("coinmarketcap", "mapping_interval"):
                 self._mapping_interval = int(pb_config.get("coinmarketcap", "mapping_interval"))
+            self._sync_cmc_metrics_log_interval()
     
     def save_config(self):
         pb_config = configparser.ConfigParser()
@@ -1226,8 +1285,11 @@ class CoinData:
         pb_config.set("coinmarketcap", "fetch_interval", str(self.fetch_interval))
         pb_config.set("coinmarketcap", "metadata_interval", str(self.metadata_interval))
         pb_config.set("coinmarketcap", "mapping_interval", str(self.mapping_interval))
-        with open('pbgui.ini', 'w') as pbgui_configfile:
+        ini_path = Path('pbgui.ini')
+        tmp_path = ini_path.with_suffix(ini_path.suffix + '.tmp')
+        with tmp_path.open('w', encoding='utf-8') as pbgui_configfile:
             pb_config.write(pbgui_configfile)
+        tmp_path.replace(ini_path)
     
     def fetch_ccxt_markets(self, exchange_id: str):
         """Fetch CCXT markets for a specific exchange and save to coindata/{exchange}/ccxt_markets.json"""
@@ -1390,27 +1452,8 @@ class CoinData:
                         level='WARNING'
                     )
 
-            # Cold-start fallback for authenticated CPT sources:
-            # if there is no CPT cache and no previous mapping, use legacy
-            # ini CPT list so mapping does not start with all-False flags.
-            legacy_cpt_symbols = set()
-            if exchange_id in ("binance", "bitget") and not cpt_symbols_set and not previous_cpt_symbols:
-                pb_config = configparser.ConfigParser()
-                pb_config.optionxform = str
-                pb_config.read('pbgui.ini')
-                exchange_cfg = "kucoinfutures" if exchange_id == "kucoin" else exchange_id
-                cpt_key = f'{exchange_cfg}.cpt'
-                if pb_config.has_option("exchanges", cpt_key):
-                    try:
-                        legacy_cpt_symbols = set(eval(pb_config.get("exchanges", cpt_key)))
-                    except Exception as e:
-                        _log('PBCoinData', f'Failed to parse legacy CPT list {cpt_key}: {e}', level='ERROR')
-                if legacy_cpt_symbols:
-                    _log(
-                        'PBCoinData',
-                        f'Using {len(legacy_cpt_symbols)} legacy ini copy trading symbols for {exchange_id} (cold start without fresh CPT data)',
-                        level='WARNING'
-                    )
+            # Legacy ini CPT fallback removed:
+            # [exchanges] migration is handled at startup and mapping/cache paths are now authoritative.
             
             # Build mapping records
             mapping = []
@@ -1479,7 +1522,7 @@ class CoinData:
                     "linear": market.get("linear", True),
                     
                     # Copy trading
-                    "copy_trading": market_id in cpt_symbols_set or market_id in previous_cpt_symbols or market_id in legacy_cpt_symbols,
+                    "copy_trading": market_id in cpt_symbols_set or market_id in previous_cpt_symbols,
                     
                     # CMC data (0/null/[] defaults for HIP-3)
                     "cmc_id": cmc_id,
@@ -1870,33 +1913,39 @@ class CoinData:
             return False
 
     def fetch_api_status(self):
+        endpoint = "status"
         url = 'https://pro-api.coinmarketcap.com/v1/key/info'
         headers = {
             'Accepts': 'application/json',
             'X-CMC_PRO_API_KEY': self.api_key,
         }
-        session = Session()
-        session.headers.update(headers)
-        try:
-            response = session.get(url)
-            if response.status_code == 200:
-                r = json.loads(response.text)
-                self.credit_limit_monthly = r["data"]["plan"]["credit_limit_monthly"]
-                self.credit_limit_monthly_reset = r["data"]["plan"]["credit_limit_monthly_reset"]
-                self.credit_limit_monthly_reset_timestamp = r["data"]["plan"]["credit_limit_monthly_reset_timestamp"]
-                self.credits_used_day = r["data"]["usage"]["current_day"]["credits_used"]
-                self.credits_used_month = r["data"]["usage"]["current_month"]["credits_used"]
-                self.credits_left = r["data"]["usage"]["current_month"]["credits_left"]
-                self.api_error = None
-                return True
-            else:
-                r = json.loads(response.text)
-                self.api_error = r["status"]["error_message"]
-                return False
-        except (ConnectionError, Timeout, TooManyRedirects) as e:
-            return
+        data, status_code, attempts, error = self._cmc_get_json(
+            endpoint=endpoint,
+            url=url,
+            headers=headers,
+            params=None,
+            max_retries=3,
+            timeout=30,
+        )
+        if data:
+            self.credit_limit_monthly = data["data"]["plan"]["credit_limit_monthly"]
+            self.credit_limit_monthly_reset = data["data"]["plan"]["credit_limit_monthly_reset"]
+            self.credit_limit_monthly_reset_timestamp = data["data"]["plan"]["credit_limit_monthly_reset_timestamp"]
+            self.credits_used_day = data["data"]["usage"]["current_day"]["credits_used"]
+            self.credits_used_month = data["data"]["usage"]["current_month"]["credits_used"]
+            self.credits_left = data["data"]["usage"]["current_month"]["credits_left"]
+            self.api_error = None
+            self._cmc_metrics["status_ok"] += 1
+            self._log_cmc_metrics(endpoint, True, attempts, status_code)
+            return True
+
+        self.api_error = error or f"HTTP {status_code}" if status_code else (error or "unknown error")
+        self._cmc_metrics["status_fail"] += 1
+        self._log_cmc_metrics(endpoint, False, attempts, status_code, error=error)
+        return False
 
     def fetch_data(self):
+        endpoint = "listings"
         url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
         parameters = {
             'start':'1',
@@ -1906,29 +1955,37 @@ class CoinData:
             'Accepts': 'application/json',
             'X-CMC_PRO_API_KEY': self.api_key,
         }
-        session = Session()
-        session.headers.update(headers)
-        try:
-            response = session.get(url, params=parameters)
-            if response.status_code == 200:
-                self.data = json.loads(response.text)
-                self.fetch_api_status()
-                _log('PBCoinData', f'Fetched CoinMarketCap data. Credits left: {self.credits_left}', level='INFO')
-            else:
-                _log('PBCoinData', 'Can not fetch CoinMarketCap data', level='ERROR')
-                self.data = None
-        except (ConnectionError, Timeout, TooManyRedirects) as e:
-            return e
+        data, status_code, attempts, error = self._cmc_get_json(
+            endpoint=endpoint,
+            url=url,
+            headers=headers,
+            params=parameters,
+            max_retries=3,
+            timeout=30,
+        )
+        if data:
+            self.data = data
+            self.fetch_api_status()
+            self._cmc_metrics["listings_ok"] += 1
+            self._log_cmc_metrics(endpoint, True, attempts, status_code)
+            _log('PBCoinData', f'Fetched CoinMarketCap data. Credits left: {self.credits_left}', level='INFO')
+            return True
+
+        self.data = None
+        self._cmc_metrics["listings_fail"] += 1
+        self._log_cmc_metrics(endpoint, False, attempts, status_code, error=error)
+        return False
     
     def fetch_metadata(self):
+        endpoint = "metadata"
         # Make sure we have coindata, but never overwrite already loaded data.
         if not self.data and self.has_new_data():
             self.load_data()
             self.load_symbols()
         if not self.data:
-            return
+            return False
         if "data" not in self.data:
-            return
+            return False
         # Create symbols_ids list
         symbols_ids = []
         for symbol in self.symbols_all:
@@ -1947,46 +2004,206 @@ class CoinData:
             'Accepts': 'application/json',
             'X-CMC_PRO_API_KEY': self.api_key,
         }
+        data, status_code, attempts, error = self._cmc_get_json(
+            endpoint=endpoint,
+            url=url,
+            headers=headers,
+            params=parameters,
+            max_retries=3,
+            timeout=30,
+        )
+        if data:
+            self.metadata = data
+            self.fetch_api_status()
+            self._cmc_metrics["metadata_ok"] += 1
+            self._log_cmc_metrics(endpoint, True, attempts, status_code)
+            _log('PBCoinData', f'Fetched CoinMarketCap metadata. Credits left: {self.credits_left}', level='INFO')
+            return True
+
+        self.metadata = None
+        self._cmc_metrics["metadata_fail"] += 1
+        self._log_cmc_metrics(endpoint, False, attempts, status_code, error=error)
+        return False
+
+    def _cmc_get_json(
+        self,
+        endpoint: str,
+        url: str,
+        headers: dict,
+        params: dict | None,
+        max_retries: int = 3,
+        timeout: int = 30,
+    ) -> tuple[dict | None, int | None, int, str | None]:
+        retryable_statuses = {429, 500, 502, 503, 504}
+        attempts = 0
+        last_status = None
+        last_error = None
+
         session = Session()
         session.headers.update(headers)
-        try:
-            response = session.get(url, params=parameters)
-            if response.status_code == 200:
-                self.metadata = json.loads(response.text)
-                self.fetch_api_status()
-                _log('PBCoinData', f'Fetched CoinMarketCap metadata. Credits left: {self.credits_left}', level='INFO')
-            else:
-                _log('PBCoinData', 'Can not fetch CoinMarketCap metadata', level='ERROR')
-                self.metadata = None
-        except (ConnectionError, Timeout, TooManyRedirects) as e:
-            return e
+
+        for attempt in range(1, max_retries + 1):
+            attempts = attempt
+            try:
+                response = session.get(url, params=params, timeout=timeout)
+                last_status = response.status_code
+
+                if response.status_code == 200:
+                    try:
+                        payload = json.loads(response.text)
+                    except Exception as e:
+                        last_error = f'invalid json payload: {e}'
+                        if attempt < max_retries:
+                            wait_s = min(8, 2 ** (attempt - 1))
+                            _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after malformed JSON, waiting {wait_s}s', level='WARNING')
+                            sleep(wait_s)
+                            continue
+                        break
+
+                    is_valid, validation_error = self._validate_cmc_payload(endpoint, payload)
+                    if is_valid:
+                        return payload, response.status_code, attempts, None
+
+                    last_error = validation_error or 'invalid payload schema'
+                    if attempt < max_retries:
+                        wait_s = min(8, 2 ** (attempt - 1))
+                        _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after invalid payload, waiting {wait_s}s', level='WARNING')
+                        sleep(wait_s)
+                        continue
+                    break
+
+                if response.status_code in retryable_statuses and attempt < max_retries:
+                    wait_s = min(8, 2 ** (attempt - 1))
+                    _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after HTTP {response.status_code}, waiting {wait_s}s', level='WARNING')
+                    sleep(wait_s)
+                    continue
+
+                try:
+                    body = json.loads(response.text)
+                    last_error = body.get("status", {}).get("error_message")
+                except Exception:
+                    last_error = (response.text or "")[:200]
+                break
+
+            except (ConnectionError, Timeout, TooManyRedirects) as e:
+                last_error = str(e)
+                if attempt < max_retries:
+                    wait_s = min(8, 2 ** (attempt - 1))
+                    _log('PBCoinData', f'CMC {endpoint} network retry {attempt}/{max_retries} after {e.__class__.__name__}, waiting {wait_s}s', level='WARNING')
+                    sleep(wait_s)
+                    continue
+                break
+
+        return None, last_status, attempts, last_error
+
+    def _validate_cmc_payload(self, endpoint: str, payload: dict | None) -> tuple[bool, str | None]:
+        if not isinstance(payload, dict):
+            return False, "payload is not an object"
+
+        data = payload.get("data")
+        if endpoint == "listings":
+            if not isinstance(data, list):
+                return False, "listings payload missing data[]"
+            return True, None
+
+        if endpoint == "metadata":
+            if not isinstance(data, dict):
+                return False, "metadata payload missing data{}"
+            return True, None
+
+        if endpoint == "status":
+            if not isinstance(data, dict):
+                return False, "status payload missing data{}"
+            plan = data.get("plan")
+            usage = data.get("usage")
+            if not isinstance(plan, dict):
+                return False, "status payload missing data.plan"
+            if not isinstance(usage, dict):
+                return False, "status payload missing data.usage"
+            return True, None
+
+        return True, None
+
+    def _log_cmc_metrics(
+        self,
+        endpoint: str,
+        success: bool,
+        attempts: int,
+        status_code: int | None,
+        error: str | None = None,
+    ):
+        summary = (
+            f'CMC[{endpoint}] success={success} attempts={attempts} status={status_code} '
+            f'listings(ok/fail)={self._cmc_metrics["listings_ok"]}/{self._cmc_metrics["listings_fail"]} '
+            f'metadata(ok/fail)={self._cmc_metrics["metadata_ok"]}/{self._cmc_metrics["metadata_fail"]} '
+            f'status(ok/fail)={self._cmc_metrics["status_ok"]}/{self._cmc_metrics["status_fail"]}'
+        )
+        if success:
+            _log('PBCoinData', summary, level='INFO')
+        else:
+            _log('PBCoinData', f'{summary} error={error}', level='WARNING')
+            self._maybe_log_cmc_health(force=True)
+
+    def _maybe_log_cmc_health(self, force: bool = False):
+        now_ts = datetime.now().timestamp()
+        if not force and now_ts - self._cmc_metrics_last_log_ts < self._cmc_metrics_log_interval_s:
+            return
+
+        self._cmc_metrics_last_log_ts = now_ts
+        _log(
+            'PBCoinData',
+            (
+                'CMC health summary '
+                f'listings(ok/fail)={self._cmc_metrics["listings_ok"]}/{self._cmc_metrics["listings_fail"]} '
+                f'metadata(ok/fail)={self._cmc_metrics["metadata_ok"]}/{self._cmc_metrics["metadata_fail"]} '
+                f'status(ok/fail)={self._cmc_metrics["status_ok"]}/{self._cmc_metrics["status_fail"]}'
+            ),
+            level='INFO' if force else 'DEBUG'
+        )
 
     def save_metadata(self):
         if not self.metadata:
             return
         pbgdir = Path.cwd()
-        coin_path = f'{pbgdir}/data/coindata'
-        if not Path(coin_path).exists():
-            Path(coin_path).mkdir(parents=True)
-        with Path(f'{coin_path}/metadata.json').open('w') as f:
-            json.dump(self.metadata, f)
+        coin_path = Path(f'{pbgdir}/data/coindata')
+        coin_path.mkdir(parents=True, exist_ok=True)
+
+        metadata_path = coin_path / 'metadata.json'
+        temp_path = metadata_path.with_suffix('.json.tmp')
+        try:
+            with temp_path.open('w', encoding='utf-8') as f:
+                json.dump(self.metadata, f)
+            temp_path.replace(metadata_path)
+        except Exception as e:
+            _log('PBCoinData', f'Error saving metadata: {e}', level='ERROR')
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
     def save_data(self):
         if not self.data:
             return
         pbgdir = Path.cwd()
-        coin_path = f'{pbgdir}/data/coindata'
-        if not Path(coin_path).exists():
-            Path(coin_path).mkdir(parents=True)
-        with Path(f'{coin_path}/coindata.json').open('w') as f:
-            json.dump(self.data, f)
+        coin_path = Path(f'{pbgdir}/data/coindata')
+        coin_path.mkdir(parents=True, exist_ok=True)
+
+        data_path = coin_path / 'coindata.json'
+        temp_path = data_path.with_suffix('.json.tmp')
+        try:
+            with temp_path.open('w', encoding='utf-8') as f:
+                json.dump(self.data, f)
+            temp_path.replace(data_path)
+        except Exception as e:
+            _log('PBCoinData', f'Error saving coindata: {e}', level='ERROR')
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
     
     def load_data(self):
         pbgdir = Path.cwd()
-        coin_path = f'{pbgdir}/data/coindata'
+        coin_path = Path(f'{pbgdir}/data/coindata')
         data_ts = 0
-        if Path(f'{coin_path}/coindata.json').exists():
-            data_ts = Path(f'{coin_path}/coindata.json').stat().st_mtime
+        data_file = coin_path / 'coindata.json'
+        if data_file.exists():
+            data_ts = data_file.stat().st_mtime
         now_ts = datetime.now().timestamp()
         if data_ts < now_ts - 3600*self.fetch_interval:
             self.fetch_data()
@@ -1994,33 +2211,30 @@ class CoinData:
             loadfromfile = False
         else:
             loadfromfile = True
-        if not self.data or loadfromfile:
-            try:
-                with Path(f'{coin_path}/coindata.json').open() as f:
-                    self.data = json.load(f)
-                    self.data_ts = data_ts
-                    return
-            except Exception as e:
-                _log('PBCoinData', f'Error loading coindata: {e}', level='ERROR')
+        if (not self.data or loadfromfile) and data_file.exists():
+            data = _read_json_with_retry(data_file, retries=1, delay_s=0.2)
+            if isinstance(data, dict):
+                self.data = data
+                self.data_ts = data_ts
+                return
     
     def load_metadata(self):
         pbgdir = Path.cwd()
-        coin_path = f'{pbgdir}/data/coindata'
+        coin_path = Path(f'{pbgdir}/data/coindata')
         metadata_ts = 0
-        if Path(f'{coin_path}/metadata.json').exists():
-            metadata_ts = Path(f'{coin_path}/metadata.json').stat().st_mtime
+        metadata_file = coin_path / 'metadata.json'
+        if metadata_file.exists():
+            metadata_ts = metadata_file.stat().st_mtime
         now_ts = datetime.now().timestamp()
         if metadata_ts < now_ts - 3600*24*self.metadata_interval:
             self.fetch_metadata()
             self.save_metadata()
-        if not self.metadata and Path(f'{coin_path}/metadata.json').exists():
-            try:
-                with Path(f'{coin_path}/metadata.json').open() as f:
-                    self.metadata = json.load(f)
-                    self.metadata_ts = metadata_ts
-                    return
-            except Exception as e:
-                _log('PBCoinData', f'Error loading metadata: {e}. Retrying in 5 seconds...', level='ERROR')
+        if not self.metadata and metadata_file.exists():
+            metadata = _read_json_with_retry(metadata_file, retries=1, delay_s=0.2)
+            if isinstance(metadata, dict):
+                self.metadata = metadata
+                self.metadata_ts = metadata_ts
+                return
 
     def is_data_fresh(self):
         pbgdir = Path.cwd()
