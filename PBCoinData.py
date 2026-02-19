@@ -4,7 +4,6 @@ from time import sleep
 from requests import Request, Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
-import ast
 import configparser
 from pathlib import Path, PurePath
 from datetime import datetime
@@ -192,9 +191,8 @@ def normalize_symbol(symbol, symbol_mappings=None):
     if symbol_mappings and base in symbol_mappings:
         return symbol_mappings[base]
     
-    # NOTE: SYMBOLMAP is intentionally NOT used here!
-    # It maps exchange symbols to CoinMarketCap API names (different purpose).
-    # SYMBOLMAP is used in list_symbols()/filter_by_market_cap() for CMC matching only.
+    # NOTE: CMC symbol matching is handled in CoinData.build_mapping() using
+    # data-driven matching heuristics (no static SYMBOLMAP).
     
     # Dynamic pattern matching for multiplier prefixes (e.g., 1000X, 10000X, 1000000X)
     # This handles cases like 10000ELON -> ELON, 1000PEPE -> PEPE, etc.
@@ -267,128 +265,59 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
         >>> get_symbol_for_coin("PEPE", "hyperliquid.swap")
         "kPEPEUSDC"
     """
+    exchange_key = str(exchange or "").strip().lower()
+    exchange_id, _, market_type = exchange_key.partition(".")
+    if not exchange_id:
+        exchange_id = exchange_key
+    market_type = market_type or "swap"
+
     # Check cache first
-    if use_cache and exchange in _COIN_TO_SYMBOL_CACHE:
-        coin_map = _COIN_TO_SYMBOL_CACHE[exchange]
+    if use_cache and exchange_key in _COIN_TO_SYMBOL_CACHE:
+        coin_map = _COIN_TO_SYMBOL_CACHE[exchange_key]
         if coin in coin_map:
             return coin_map[coin]
-    
-    # Load from pbgui.ini
-    config = configparser.ConfigParser()
-    config.optionxform = str
-    pbgui_dir = Path(__file__).parent
-    ini_path = pbgui_dir / "pbgui.ini"
-    
-    if not ini_path.exists():
-        # Fallback if pbgui.ini not found
-        quote = "USDC" if "hyperliquid" in exchange else "USDT"
-        return f"{coin}{quote}"
-    
-    config.read(ini_path)
-    
-    if exchange not in config['exchanges']:
-        # Fallback if exchange not in config
-        quote = "USDC" if "hyperliquid" in exchange else "USDT"
-        return f"{coin}{quote}"
-    
-    # Build mapping for this exchange
-    symbols_str = config['exchanges'][exchange]
-    try:
-        symbols = ast.literal_eval(symbols_str)
-    except:
-        # Fallback if parsing fails
-        quote = "USDC" if "hyperliquid" in exchange else "USDT"
-        return f"{coin}{quote}"
-    
+
+    mapping_path = Path.cwd() / "data" / "coindata" / exchange_id / "mapping.json"
+
     coin_map = {}
-    for symbol in symbols:
-        normalized = normalize_symbol(symbol)
-        # Store only first occurrence (usually USDT variant)
-        if normalized not in coin_map:
-            coin_map[normalized] = symbol
+    if mapping_path.exists():
+        try:
+            mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        except Exception:
+            mapping = []
+
+        for record in mapping if isinstance(mapping, list) else []:
+            symbol = str(record.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+
+            if market_type == "swap" and not bool(record.get("swap", False)):
+                continue
+            if market_type == "spot" and not bool(record.get("spot", False)):
+                continue
+
+            quote = str(record.get("quote") or "").strip().upper()
+            normalized = str(record.get("coin") or "").strip().upper()
+            if not normalized:
+                normalized = compute_coin_name(symbol, quote)
+            if normalized and normalized not in coin_map:
+                coin_map[normalized] = symbol
     
     # Cache the mapping
     if use_cache:
-        _COIN_TO_SYMBOL_CACHE[exchange] = coin_map
+        _COIN_TO_SYMBOL_CACHE[exchange_key] = coin_map
     
     # Return symbol or fallback
     if coin in coin_map:
         return coin_map[coin]
     else:
         # Fallback: guess quote currency
-        quote = "USDC" if "hyperliquid" in exchange else "USDT"
+        quote = "USDC" if "hyperliquid" in exchange_key else "USDT"
         # Special handling for Hyperliquid k-prefix coins
-        if "hyperliquid" in exchange.lower() and coin.upper() in _HYPERLIQUID_K_PREFIX_COINS:
+        if "hyperliquid" in exchange_key and coin.upper() in _HYPERLIQUID_K_PREFIX_COINS:
             return f"K{coin.upper()}{quote}"
         return f"{coin}{quote}"
 
-
-# SYMBOLMAP: Maps exchange symbols to CoinMarketCap API symbol names
-# WARNING: Used ONLY for CMC matching, NOT for coin normalization!
-# Example: Exchange has "RONIN" but CMC API returns "RON"
-SYMBOLMAP = {
-    #Binance
-    "RONIN": "RON",
-    "1000BONK": "BONK",
-    "1000FLOKI": "FLOKI",
-    "1000LUNC": "LUNC",
-    "1000PEPE": "PEPE",
-    "1000RATS": "rats",
-    "1000SHIB": "SHIB",
-    "1000SATS": "SATS",
-    "1000CHEEMS": "CHEEMS",
-    "1000WHY": "WHY",
-    "1000X": "X",
-    "SHIB1000": "SHIB",
-    "1000XEC": "XEC",
-    "BEAMX": "BEAM",
-    "DODOX": "DODO",
-    "LUNA2": "LUNA",
-    # "NEIROETH": "NEIRO",
-    "1MBABYDOGE": "BabyDoge",
-    #Bybit
-    "1000000BABYDOGE": "BabyDoge",
-    "10000000AIDOGE": "AIDOGE",
-    "1000000CHEEMS": "CHEEMS",
-    "1000000MOG": "MOG",
-    "1000000PEIPEI": "PEIPEI",
-    "10000COQ": "COQ",
-    "10000LADYS": "LADYS",
-    "10000SATS": "SATS",
-    "10000WEN": "WEN",
-    "10000WHY": "WHY",
-    "1000APU": "APU",
-    "1000BEER": "BEER",
-    "1000BTT": "BTT",
-    "1000CATS": "CATS",
-    "1000CAT": "CAT",
-    "1000MUMU": "MUMU",
-    "1000NEIROCTO": "NEIRO",
-    "1000TURBO": "TURBO",
-    "1000TOSHI": "TOSHI",
-    "DOP1": "DOP",
-    "RAYDIUM": "RAY",
-    "USDE": "USDe",
-    #Bitget
-    "OMNI1": "OMNI",
-    "VELO1": "VELO",
-    "1MCHEEMS": "CHEEMS",
-    #OKX
-    #
-    #Hyperliquid
-    "kBONK": "BONK",
-    "kFLOKI": "FLOKI",
-    "kLUNC": "LUNC",
-    "kPEPE": "PEPE",
-    "kSHIB": "SHIB",
-    "kDOGS": "DOGS",
-    "kNEIRO": "NEIRO",
-    #Kucoin
-    "10000CAT": "CAT",
-    "1000PEPE2": "PEPE2.0",
-    "NEIROCTO": "NEIRO",
-    "XBT": "BTC",
-   }
 
 class CoinData:
     def __init__(self):
@@ -405,6 +334,7 @@ class CoinData:
         self._metadata_interval = 1
         self._mapping_interval = 24
         self.ini_ts = 0
+        self._cleanup_legacy_exchange_ini_entries()
         self.load_config()
         self.data = None
         self.metadata = None
@@ -426,18 +356,17 @@ class CoinData:
         self._all_tags = []
         self._tags = []
         self._symbol_mappings = {}
-        self.load_symbols()
-        self._market_cap = 0
-        self._vol_mcap = 10.0
-        self._only_cpt = False
-        self._notices_ignore = False
-        
         # HIP-3: Exchange-specific data caches
         self._ccxt_markets = {}  # {exchange: markets_dict}
         self._exchange_mappings = {}  # {exchange: [mapping_records]}
         self._exchange_mapping_ts = {}  # {exchange: (mtime_ns, size)}
         self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
         self._mapping_self_heal_state = {}  # {exchange: {fails:int, next_retry_ts:float}}
+        self.load_symbols()
+        self._market_cap = 0
+        self._vol_mcap = 10.0
+        self._only_cpt = False
+        self._notices_ignore = False
     
     def _get_exchange_dir(self, exchange: str) -> Path:
         """Get coindata directory for a specific exchange."""
@@ -1213,6 +1142,40 @@ class CoinData:
                 self.ini_ts = ini_ts
                 return True
         return False
+
+    def _cleanup_legacy_exchange_ini_entries(self):
+        """TEMP migration cleanup: remove legacy [exchanges] entries from pbgui.ini.
+
+        REMOVE AFTER mapping migration is fully rolled out on all environments.
+        """
+        ini_path = Path('pbgui.ini')
+        if not ini_path.exists():
+            return
+
+        pb_config = configparser.ConfigParser()
+        pb_config.optionxform = str
+        pb_config.read(str(ini_path))
+
+        if not pb_config.has_section("exchanges"):
+            return
+
+        try:
+            removed_count = len(pb_config.options("exchanges"))
+        except Exception:
+            removed_count = 0
+
+        pb_config.remove_section("exchanges")
+
+        tmp_path = ini_path.with_suffix(ini_path.suffix + ".tmp")
+        try:
+            with tmp_path.open('w', encoding='utf-8') as f:
+                pb_config.write(f)
+            tmp_path.replace(ini_path)
+            _log('PBCoinData', f'Removed legacy [exchanges] section from pbgui.ini ({removed_count} entries)', level='INFO')
+        except Exception as e:
+            _log('PBCoinData', f'Failed to remove legacy [exchanges] section from pbgui.ini: {e}', level='ERROR')
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
     
     def has_new_data(self):
         pbgdir = Path.cwd()
@@ -1325,6 +1288,8 @@ class CoinData:
             # cmc_all: ALL entries per symbol (for price-based disambiguation)
             cmc_best = {}
             cmc_all = {}
+            cmc_name_index = {}
+            cmc_slug_index = {}
             metadata_by_id = {}
             if self.data and "data" in self.data:
                 for coin in self.data["data"]:
@@ -1341,10 +1306,20 @@ class CoinData:
                             cmc_best[sym] = coin
                     else:
                         cmc_best[sym] = coin
+
+                    name_key = self._normalize_cmc_lookup_text(coin.get("name", ""))
+                    if name_key:
+                        cmc_name_index.setdefault(name_key, []).append(coin)
+
+                    slug_key = self._normalize_cmc_lookup_text(coin.get("slug", ""))
+                    if slug_key:
+                        cmc_slug_index.setdefault(slug_key, []).append(coin)
                 dupes = sum(1 for v in cmc_all.values() if len(v) > 1)
                 _log('PBCoinData', f'CMC data available: {len(cmc_best)} coins ({dupes} with duplicates)', level='DEBUG')
             else:
                 _log('PBCoinData', 'No CMC data loaded, using defaults', level='WARNING')
+
+            cmc_best_values = list(cmc_best.values())
 
             if self.metadata and isinstance(self.metadata, dict):
                 raw_md = self.metadata.get("data", {})
@@ -1466,24 +1441,19 @@ class CoinData:
                 else:
                     coin_name = normalize_symbol(base, self._symbol_mappings)
                 if not is_hip3 and cmc_best:
-                    cmc_sym = SYMBOLMAP.get(coin_name.upper(), coin_name).upper()
-                    candidates = cmc_all.get(cmc_sym, [])
-                    
-                    if len(candidates) == 1:
-                        # Single match — use it directly
-                        cmc_record = candidates[0]
-                    elif len(candidates) > 1:
-                        # Multiple CMC entries for same symbol — disambiguate
-                        exchange_price = prev_prices.get(market_id)
-                        if exchange_price and exchange_price > 0:
-                            # Price-based: pick CMC entry whose price is closest
-                            cmc_record = self._pick_cmc_by_price(
-                                candidates, exchange_price, cmc_sym
-                            )
-                            price_disambiguated += 1
-                        else:
-                            # No price available — fall back to best rank
-                            cmc_record = cmc_best.get(cmc_sym, {})
+                    exchange_price = prev_prices.get(market_id)
+                    cmc_record, match_method, _ = self._resolve_cmc_record_no_symbolmap(
+                        coin_name=coin_name,
+                        base_coin=base,
+                        exchange_price=exchange_price,
+                        cmc_all=cmc_all,
+                        cmc_best=cmc_best,
+                        cmc_name_index=cmc_name_index,
+                        cmc_slug_index=cmc_slug_index,
+                        cmc_best_values=cmc_best_values,
+                    )
+                    if match_method and "price" in match_method:
+                        price_disambiguated += 1
                 
                 # Build mapping record
                 cmc_id = cmc_record.get("id") if cmc_record else None
@@ -1574,6 +1544,115 @@ class CoinData:
             return False
         info = market.get('info', {})
         return info.get('hip3', False) is True
+
+    @staticmethod
+    def _normalize_cmc_lookup_text(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+    @staticmethod
+    def _best_rank_candidate(candidates: list) -> dict:
+        if not candidates:
+            return {}
+        return min(candidates, key=lambda coin: coin.get("cmc_rank", 99999) or 99999)
+
+    def _resolve_cmc_record_no_symbolmap(
+        self,
+        coin_name: str,
+        base_coin: str,
+        exchange_price: float | None,
+        cmc_all: dict,
+        cmc_best: dict,
+        cmc_name_index: dict,
+        cmc_slug_index: dict,
+        cmc_best_values: list,
+    ) -> tuple[dict, str, str]:
+        def _pick_symbol(symbol: str) -> tuple[dict, str, str]:
+            sym = str(symbol or "").upper().strip()
+            if not sym:
+                return {}, "", ""
+            candidates = cmc_all.get(sym, [])
+            if not candidates:
+                return {}, "", ""
+            if len(candidates) == 1:
+                return candidates[0], "symbol_exact", sym
+            if exchange_price and exchange_price > 0:
+                return self._pick_cmc_by_price(candidates, exchange_price, sym), "symbol_price", sym
+            return self._best_rank_candidate(candidates), "symbol_best_rank", sym
+
+        variants = []
+        for raw in [coin_name, base_coin]:
+            value = str(raw or "").upper().strip()
+            if not value:
+                continue
+
+            for candidate in [
+                value,
+                re.sub(r"^(?:1(?:0+))", "", value),
+                re.sub(r"^1M", "", re.sub(r"^(?:1(?:0+))", "", value)),
+                remove_powers_of_ten(re.sub(r"^1M", "", re.sub(r"^(?:1(?:0+))", "", value))),
+                re.sub(r"\d+$", "", remove_powers_of_ten(re.sub(r"^1M", "", re.sub(r"^(?:1(?:0+))", "", value)))),
+            ]:
+                candidate = str(candidate or "").upper().strip()
+                if candidate and candidate not in variants:
+                    variants.append(candidate)
+                if candidate.startswith("K") and len(candidate) > 1:
+                    no_k = candidate[1:]
+                    if no_k and no_k not in variants:
+                        variants.append(no_k)
+
+        for variant in variants:
+            record, method, symbol = _pick_symbol(variant)
+            if record:
+                return record, method, symbol
+
+        for variant in variants:
+            key = self._normalize_cmc_lookup_text(variant)
+            if not key:
+                continue
+
+            name_candidates = cmc_name_index.get(key, [])
+            if name_candidates:
+                if len(name_candidates) > 1 and exchange_price and exchange_price > 0:
+                    chosen = self._pick_cmc_by_price(name_candidates, exchange_price, key.upper())
+                else:
+                    chosen = self._best_rank_candidate(name_candidates)
+                return chosen, "name_or_slug_exact", str(chosen.get("symbol") or "").upper()
+
+            slug_candidates = cmc_slug_index.get(key, [])
+            if slug_candidates:
+                if len(slug_candidates) > 1 and exchange_price and exchange_price > 0:
+                    chosen = self._pick_cmc_by_price(slug_candidates, exchange_price, key.upper())
+                else:
+                    chosen = self._best_rank_candidate(slug_candidates)
+                return chosen, "name_or_slug_exact", str(chosen.get("symbol") or "").upper()
+
+        for variant in variants:
+            key = self._normalize_cmc_lookup_text(variant)
+            if len(key) < 4:
+                continue
+
+            max_cuts = min(6, max(0, len(key) - 4))
+            for cut in range(0, max_cuts + 1):
+                prefix = key[:-cut] if cut else key
+                if len(prefix) < 4:
+                    continue
+
+                candidates = []
+                for coin in cmc_best_values:
+                    slug = self._normalize_cmc_lookup_text(coin.get("slug", ""))
+                    name = self._normalize_cmc_lookup_text(coin.get("name", ""))
+                    symbol = self._normalize_cmc_lookup_text(coin.get("symbol", ""))
+                    if slug.startswith(prefix) or name.startswith(prefix) or symbol.startswith(prefix):
+                        candidates.append(coin)
+
+                if candidates:
+                    if len(candidates) > 1 and exchange_price and exchange_price > 0:
+                        chosen = self._pick_cmc_by_price(candidates, exchange_price, prefix.upper())
+                    else:
+                        chosen = self._best_rank_candidate(candidates)
+                    return chosen, f"prefix_ranked_{prefix}", str(chosen.get("symbol") or "").upper()
+
+        return {}, "", ""
     
     @staticmethod
     def _pick_cmc_by_price(candidates: list, exchange_price: float, symbol: str) -> dict:
@@ -1949,21 +2028,6 @@ class CoinData:
                 return True
         return
 
-    def update_symbols(self):
-        now_ts = datetime.now().timestamp()
-        if self.update_symbols_ts < now_ts - 3600*24:
-            for exchange in self.exchanges:
-                exc = Exchange(exchange)
-                try:
-                    exc.fetch_symbols()
-                    _log('PBCoinData', f'Update Symbols {exchange}', level='INFO')
-                except Exception as e:
-                    _log('PBCoinData', f'Failed to fetch symbols for {exchange}', level='ERROR')
-            self.update_symbols_ts = now_ts
-            self._symbols = []
-            self._symbols_cpt = []
-            self._symbols_all = []
-
     def update_mappings(self):
         """Fetch CCXT markets and build mappings for all V7-supported exchanges.
         
@@ -2093,150 +2157,148 @@ class CoinData:
             _log('PBCoinData', 'Mapping update complete', level='INFO')
 
     def load_symbols(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read('pbgui.ini')
-        exchange = "kucoinfutures" if self.exchange == "kucoin" else self.exchange
-        if pb_config.has_option("exchanges", f'{exchange}.swap'):
-            self._symbols = eval(pb_config.get("exchanges", f'{exchange}.swap'))
-        if self.exchange in ["binance", "bybit", "bitget"]:
-            if pb_config.has_option("exchanges", f'{exchange}.cpt'):
-                self._symbols_cpt = eval(pb_config.get("exchanges", f'{exchange}.cpt'))
-            else:
-                self._symbols_cpt = self._symbols
-        else:
-            self._symbols_cpt = self._symbols
+        exchange = str(self.exchange or "").lower()
+        mapping = self.load_mapping(exchange=exchange, use_cache=True)
+
+        swap_symbols = []
+        cpt_symbols = []
+        for record in mapping:
+            if not self._passes_active_filter(exchange, record):
+                continue
+            symbol = str(record.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            swap_symbols.append(symbol)
+            if bool(record.get("copy_trading", False)):
+                cpt_symbols.append(symbol)
+
+        self._symbols = sorted(set(swap_symbols))
+        self._symbols_cpt = sorted(set(cpt_symbols)) if cpt_symbols else self._symbols
         self._symbol_mappings = build_symbol_mappings(self._symbols)
-        
-        # Don't build mappings here - will be built from all exchanges in load_symbols_all()
     
     def load_symbols_all(self):
-        self._symbols_all = []
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read('pbgui.ini')
         all_symbols = []
         for exchange in self.exchanges:
-            if pb_config.has_option("exchanges", f'{exchange}.swap'):
-                # add symbol from symbols to symbols_all if not already in symbols_all
-                all_symbols += eval(pb_config.get("exchanges", f'{exchange}.swap'))
-        self._symbols_all = sorted(list(set(all_symbols)))
-        
-        # Build comprehensive mappings from all exchanges
-        self._symbol_mappings = build_symbol_mappings(all_symbols)
+            mapping = self.load_mapping(exchange=str(exchange).lower(), use_cache=True)
+            for record in mapping:
+                if not self._passes_active_filter(str(exchange).lower(), record):
+                    continue
+                symbol = str(record.get("symbol") or "").strip().upper()
+                if symbol:
+                    all_symbols.append(symbol)
+        self._symbols_all = sorted(set(all_symbols))
+        self._symbol_mappings = build_symbol_mappings(self._symbols_all)
 
     def list_symbols(self):
-        if self.has_new_data():
-            self.load_data()
-            self.load_symbols()
-        if not self.data:
-            return
-        if "data" not in self.data:
-            return
-        if self.has_new_metadata():
-            self.load_metadata()
-        if not self.metadata:
-            return
-        if "data" not in self.metadata:
-            return
+        self.load_symbols()
+
+        exchange = str(self.exchange or "").lower()
+        mapping = self.load_mapping(exchange=exchange, use_cache=True)
+
         self._symbols_data = []
         self._symbols_notice = []
         self._symbols_notices = {}
-        self.approved_coins = []
-        self.ignored_coins = []
-        coin_data = []
-        for symbol in self.symbols:
-            market_cap = 0
-            sym = normalize_symbol(symbol, self._symbol_mappings)
-            # Map to CMC symbol name (different from exchange symbol!)
-            cmc_sym = SYMBOLMAP.get(sym.upper(), sym)
-            for id, coin in enumerate(self.data["data"]):
-                # Case-insensitive match (CMC sometimes uses mixed case like "USDe")
-                if coin["symbol"].upper() == cmc_sym.upper() or (sym == "NEIROETH" and coin["id"] == 32461):
-                    if coin["quote"]["USD"]["market_cap"]:
-                        coin_data = coin
-                        market_cap = coin["quote"]["USD"]["market_cap"]
-                        break
-                    elif coin["self_reported_market_cap"]:
-                        coin_data = coin
-                        market_cap = coin["self_reported_market_cap"]
-                        break
-            if symbol not in self._symbols_data:
-                if market_cap > 0:
-                    notice = None
-                    # Find metadata for coin
-                    symbol_id = str(coin_data["id"])
-                    if symbol_id in self.metadata["data"]:
-                        notice = self.metadata["data"][symbol_id]["notice"]
-                        if notice:
-                            self._symbols_notice.append(sym.upper())  # Force uppercase
-                            self._symbols_notices[sym.upper()] = notice
-                    symbol_data = {
-                        "id": id,
-                        "symbol": symbol,
-                        "name": coin_data["name"],
-                        "tags": coin_data["tags"],
-                        "price": coin_data["quote"]["USD"]["price"],
-                        "volume_24h": int(coin_data["quote"]["USD"]["volume_24h"]),
-                        "market_cap": int(market_cap),
-                        "vol/mcap": coin_data["quote"]["USD"]["volume_24h"]/market_cap,
-                        "copy_trading": symbol in self.symbols_cpt,
-                        "notice": notice,
-                        "link": f'https://coinmarketcap.com/currencies/{coin_data["slug"]}',
-                    }
-                else:
-                    symbol_data = {
-                        "id": 999999,
-                        "symbol": symbol,
-                        "name": "not found on CoinMarketCap",
-                        "tags": [],
-                        "price": 0,
-                        "volume_24h": 0,
-                        "market_cap": 0,
-                        "vol/mcap": 0,
-                        "copy_trading": symbol in self.symbols_cpt,
-                        "notice": None,
-                        "link": None,
-                    }
-                for tag in symbol_data["tags"]:
-                    if tag not in self._all_tags:
-                        self._all_tags.append(tag)
-                cpt = True
-                if self.only_cpt and not symbol_data["copy_trading"]:
-                    cpt = False
-                no_notice = True
-                if self.notices_ignore and sym.upper() in self._symbols_notice:
-                    no_notice = False
-                # if self.market_cap != 0 or self.vol_mcap != 10.0:
-                if no_notice and cpt and market_cap >= self.market_cap*1000000 and symbol_data["vol/mcap"] < self.vol_mcap and (not self.tags or any(tag in symbol_data["tags"] for tag in self.tags)):
-                    self._symbols_data.append(symbol_data)
-                    self.approved_coins.append(sym.upper())  # Force uppercase for Passivbot
-                else:
-                    self.ignored_coins.append(sym.upper())  # Force uppercase for Passivbot
-        #Sort approved and ignored coins and symbols_Data
-        self.approved_coins.sort()
-        self.ignored_coins.sort()
+        self._all_tags = []
+
+        approved, ignored = self.filter_mapping(
+            exchange=exchange,
+            market_cap_min_m=self.market_cap,
+            vol_mcap_max=self.vol_mcap,
+            only_cpt=self.only_cpt,
+            notices_ignore=self.notices_ignore,
+            tags=self.tags,
+            active_only=True,
+            quote_filter=None,
+            use_cache=True,
+        )
+        self.approved_coins = approved
+        self.ignored_coins = ignored
+
+        approved_set = set(self.approved_coins)
+        row_id = 0
+        for record in mapping:
+            if not self._passes_active_filter(exchange, record):
+                continue
+
+            symbol = str(record.get("symbol") or "").strip().upper()
+            quote = str(record.get("quote") or "").strip().upper()
+            if not symbol:
+                continue
+
+            coin = str(record.get("coin") or "").strip().upper()
+            if not coin:
+                coin = compute_coin_name(symbol, quote)
+            coin = str(coin or "").strip().upper()
+            if not coin:
+                continue
+
+            tags = list(record.get("tags") or [])
+            for tag in tags:
+                if tag and tag not in self._all_tags:
+                    self._all_tags.append(tag)
+
+            notice = record.get("notice")
+            if notice:
+                self._symbols_notice.append(coin)
+                self._symbols_notices[coin] = notice
+
+            if coin not in approved_set:
+                continue
+
+            market_cap = float(record.get("market_cap") or 0)
+            volume_24h = float(record.get("volume_24h") or 0)
+            vol_mcap = volume_24h / market_cap if market_cap > 0 else 0.0
+            slug = str(record.get("slug") or "").strip()
+
+            symbol_data = {
+                "id": int(record.get("cmc_id") or 999999),
+                "symbol": symbol,
+                "name": str(record.get("name") or "not found on CoinMarketCap"),
+                "tags": tags,
+                "price": float(record.get("price_last") or 0),
+                "volume_24h": int(volume_24h),
+                "market_cap": int(market_cap),
+                "vol/mcap": vol_mcap,
+                "copy_trading": bool(record.get("copy_trading", False)),
+                "notice": notice,
+                "link": f'https://coinmarketcap.com/currencies/{slug}' if slug else None,
+            }
+            self._symbols_data.append(symbol_data)
+            row_id += 1
+
+        self._symbols_notice = sorted(set(self._symbols_notice))
+        self._all_tags = sorted(self._all_tags)
         self._symbols_data = sorted(self._symbols_data, key=lambda x: x["market_cap"], reverse=True)
 
     def filter_by_market_cap(self, symbols: list, mc: int):
-        ignored_coins = []
-        approved_coins = []
-        self.load_data()
-        for symbol in symbols:
-            sym = normalize_symbol(symbol, self._symbol_mappings)
-            # Map to CMC symbol name (different from exchange symbol!)
-            cmc_sym = SYMBOLMAP.get(sym.upper(), sym)
-            for coin in self.data["data"]:
-                if coin["symbol"].upper() == cmc_sym.upper():
-                    if coin["quote"]["USD"]["market_cap"] and coin["quote"]["USD"]["market_cap"] > mc:
-                        approved_coins.append(sym.upper())  # Force uppercase
-                        break
-                    elif coin["self_reported_market_cap"] and coin["self_reported_market_cap"] > mc:
-                        approved_coins.append(sym.upper())  # Force uppercase
-                        break
-            if sym.upper() not in approved_coins:
-                ignored_coins.append(sym.upper())  # Force uppercase
-        return approved_coins, ignored_coins
+        symbol_set = {str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()}
+        approved_coins = set()
+        ignored_coins = set()
+
+        mapping = self.load_mapping(exchange=str(self.exchange).lower(), use_cache=True)
+        for record in mapping:
+            if not self._passes_active_filter(str(self.exchange).lower(), record):
+                continue
+            symbol = str(record.get("symbol") or "").strip().upper()
+            if symbol not in symbol_set:
+                continue
+
+            quote = str(record.get("quote") or "").strip().upper()
+            coin = str(record.get("coin") or "").strip().upper()
+            if not coin:
+                coin = compute_coin_name(symbol, quote)
+            coin = str(coin or "").strip().upper()
+            if not coin:
+                continue
+
+            market_cap = float(record.get("market_cap") or 0)
+            if market_cap > float(mc):
+                approved_coins.add(coin)
+            else:
+                ignored_coins.add(coin)
+
+        ignored_coins -= approved_coins
+        return sorted(approved_coins), sorted(ignored_coins)
 
 def main():
     pbgdir = Path.cwd()
@@ -2251,7 +2313,6 @@ def main():
     pbcoindata.save_pid()
     while True:
         try:
-            pbcoindata.update_symbols()
             pbcoindata.load_data()
             pbcoindata.load_metadata()
             pbcoindata.update_mappings()
