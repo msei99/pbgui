@@ -2431,6 +2431,16 @@ class CoinData:
                     _log('PBCoinData', f'Failed to update mapping for {exchange}: {e}', level='ERROR')
             self.update_mappings_ts = now_ts
 
+            if not cycle_results:
+                total_elapsed = datetime.now().timestamp() - cycle_started_ts
+                _log(
+                    'PBCoinData',
+                    f'Mapping update skipped: all exchanges were already refreshed by self-heal in {total_elapsed:.1f}s',
+                    level='INFO'
+                )
+                _log('PBCoinData', 'Mapping update complete', level='INFO')
+                return
+
             total_elapsed = datetime.now().timestamp() - cycle_started_ts
             ok_count = sum(1 for r in cycle_results if r.get("ok"))
             total_count = len(cycle_results)
