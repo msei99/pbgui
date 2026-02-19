@@ -1415,6 +1415,7 @@ class CoinData:
             # Build mapping records
             mapping = []
             price_disambiguated = 0
+            unmatched_cmc = []
             for symbol, market in markets.items():
                 # Only process swap/perpetual markets (NOT spot!)
                 if not market.get("swap", False):
@@ -1435,6 +1436,7 @@ class CoinData:
                 # Use market_id-derived coin when possible; for exchanges like
                 # Hyperliquid where market_id may be numeric, fall back to base.
                 cmc_record = {}
+                match_method = ""
                 coin_from_market_id = compute_coin_name(market_id, market.get("quote", ""))
                 if re.search(r"[A-Z]", coin_from_market_id):
                     coin_name = coin_from_market_id
@@ -1454,6 +1456,8 @@ class CoinData:
                     )
                     if match_method and "price" in match_method:
                         price_disambiguated += 1
+                    if not cmc_record:
+                        unmatched_cmc.append((str(market_id).upper(), str(coin_name).upper()))
                 
                 # Build mapping record
                 cmc_id = cmc_record.get("id") if cmc_record else None
@@ -1510,6 +1514,16 @@ class CoinData:
             
             # Save mapping
             self.save_exchange_mapping(exchange_id, mapping)
+
+            if unmatched_cmc:
+                unique_coins = sorted({coin for _, coin in unmatched_cmc if coin})
+                sample = ", ".join(f"{coin}({symbol})" for symbol, coin in unmatched_cmc[:20])
+                _log(
+                    'PBCoinData',
+                    f'CMC match missing for {len(unmatched_cmc)} market(s) on {exchange_id} '
+                    f'({len(unique_coins)} unique coin(s)). Sample: {sample}',
+                    level='WARNING'
+                )
             
             if price_disambiguated:
                 _log('PBCoinData', f'Successfully built mapping with {len(mapping)} records for {exchange_id} ({price_disambiguated} CMC matches resolved by price)', level='INFO')
