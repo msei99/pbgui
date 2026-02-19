@@ -17,6 +17,15 @@
 - Use `:material/...:` icon buttons for compact inline navigation (e.g. `:material/arrow_left:` / `:material/arrow_right:` for month navigation). Prefer material icons for concise controls consistent with existing UI.
 - When showing/exporting configs as JSON, use real JSON serialization (`json.dumps`) so `null/true/false` are preserved (avoid Python `None/True/False` formatting).
 
+## Chat trigger phrases
+
+- If the user writes `Bitte in Todo festhalten:`, store the content in `docs/roadmap/TODO.md` (do not store it in repository root files).
+- If the user writes `Merke Dir:`, store the content as a persistent instruction in this file (`.github/copilot-instructions.md`) under `## Merkliste aus Chat`.
+
+## Merkliste aus Chat
+
+- Future `Merke Dir:` entries must be appended here as short bullet points.
+
 ## Repo boundaries (important)
 
 - Do not modify PB7/passivbot code (e.g. workspace folder `pb7/` or the upstream `passivbot` repo) unless the user explicitly asks/approves first.
