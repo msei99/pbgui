@@ -15,7 +15,7 @@ Die Seite zeigt sechs Service-Spalten, jede mit:
 | **PBRun** | Startet/stoppt lokale Passivbot-Prozesse und verwaltet dynamische Coin-Filter |
 | **PBRemote** | Synchronisiert Instanzen und Befehle zwischen lokalem Rechner und Remote-VPS über einen Cloud-Bucket |
 | **PBMon** | Überwacht laufende Bots und sendet Telegram-Alarme bei ungewöhnlichem Verhalten |
-| **PBStat** | Sammelt Live-Handelsstatistiken (PnL, Fills) aller aktiven Instanzen |
+| **PBStat** | Sammelt Spot-Handelsstatistiken – nur für den alten v6 Single Bot |
 | **PBData** | Ruft Echtzeit-Marktdaten (OHLCV, Orders, Positionen) von Exchanges ab |
 | **PBCoinData** | Ruft CoinMarketCap-Daten ab und erstellt Exchange-Symbol-Mappings für dynamische Filter |
 
@@ -40,7 +40,7 @@ Ein stabiles Setup startet die Dienste üblicherweise in dieser Reihenfolge:
 1. **PBCoinData** — erstellt Symbol-Mappings (erforderlich für dynamische Ignore/Approve-Listen)
 2. **PBRun** — startet Bot-Prozesse (nutzt Mappings von PBCoinData)
 3. **PBData** — liefert Live-Marktdaten
-4. **PBStat** — sammelt Handelsstatistiken
+4. **PBStat** — sammelt Spot-Handelsstatistiken (nur v6 Single Bot)
 5. **PBRemote** — verbindet mit Remote-VPS (wenn genutzt)
 6. **PBMon** — aktiviert Monitoring und Alarme (wenn genutzt)
 

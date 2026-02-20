@@ -1015,8 +1015,44 @@ def pbcoindata_details():
         if st.button(":back:", key="button_pbcoindata_back"):
             del st.session_state.pbcoindata_details
             st.rerun()
+        if st.button(":material/save:", key="button_pbcoindata_save"):
+            pbcoindata.save_config()
+            info_popup("Config saved")
     st.subheader("PBCoinData Details")
     pbcoindata_overview()
+    # Sync session state → model
+    if "edit_coindata_api_key" in st.session_state:
+        if st.session_state.edit_coindata_api_key != pbcoindata.api_key:
+            pbcoindata.api_key = st.session_state.edit_coindata_api_key
+    if "edit_coindata_fetch_limit" in st.session_state:
+        if st.session_state.edit_coindata_fetch_limit != pbcoindata.fetch_limit:
+            pbcoindata.fetch_limit = st.session_state.edit_coindata_fetch_limit
+    if "edit_coindata_fetch_interval" in st.session_state:
+        if st.session_state.edit_coindata_fetch_interval != pbcoindata.fetch_interval:
+            pbcoindata.fetch_interval = st.session_state.edit_coindata_fetch_interval
+    if "edit_coindata_metadata_interval" in st.session_state:
+        if st.session_state.edit_coindata_metadata_interval != pbcoindata.metadata_interval:
+            pbcoindata.metadata_interval = st.session_state.edit_coindata_metadata_interval
+    if "edit_coindata_mapping_interval" in st.session_state:
+        if st.session_state.edit_coindata_mapping_interval != pbcoindata.mapping_interval:
+            pbcoindata.mapping_interval = st.session_state.edit_coindata_mapping_interval
+    # Configuration
+    st.text_input("CoinMarketCap API_Key", value=pbcoindata.api_key, type="password", key="edit_coindata_api_key", help=pbgui_help.coindata_api_key)
+    st.number_input("Fetch Limit", min_value=200, max_value=5000, value=pbcoindata.fetch_limit, step=200, format="%.d", key="edit_coindata_fetch_limit", help=pbgui_help.coindata_fetch_limit)
+    st.number_input("Fetch Interval", min_value=1, max_value=24, value=pbcoindata.fetch_interval, step=1, format="%.d", key="edit_coindata_fetch_interval", help=pbgui_help.coindata_fetch_interval)
+    st.number_input("Metadata Interval", min_value=1, max_value=7, value=pbcoindata.metadata_interval, step=1, format="%.d", key="edit_coindata_metadata_interval", help=pbgui_help.coindata_metadata_interval)
+    st.number_input("Mapping Interval", min_value=1, max_value=168, value=pbcoindata.mapping_interval, step=1, format="%.d", key="edit_coindata_mapping_interval", help=pbgui_help.coindata_mapping_interval)
+    # API status
+    if pbcoindata.api_key:
+        if pbcoindata.fetch_api_status():
+            st.success("API Key is valid", icon="✅")
+            st.write(f"API limit monthly: {pbcoindata.credit_limit_monthly}")
+            st.write(f"Next API credits reset in: {pbcoindata.credit_limit_monthly_reset} at: {pbcoindata.credit_limit_monthly_reset_timestamp}")
+            st.write(f"API credits used today: {pbcoindata.credits_used_day}")
+            st.write(f"API credits used monthly: {pbcoindata.credits_used_month}")
+            st.write(f"API credits left: {pbcoindata.credits_left}")
+        else:
+            st.error(pbcoindata.api_error, icon="🚨")
     view_log_filtered("PBCoinData")
 
 # Redirect to Login if not authenticated or session state not initialized

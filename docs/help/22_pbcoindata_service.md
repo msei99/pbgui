@@ -10,19 +10,21 @@ PBCoinData is a background service that fetches CoinMarketCap (CMC) listings and
 - Runs a self-heal cycle that automatically retries exchanges with failed mappings
 - Writes service logs to `data/logs/PBCoinData.log`
 
-## Configuration (`pbgui.ini`)
+## Configuration
 
-PBCoinData reads from the `[coinmarketcap]` section in `pbgui.ini`:
+All PBCoinData settings are configured directly on the **PBCoinData Details page** (`System → Services → PBCoinData → Show Details`).
+Save changes with the `:material/save:` button in the sidebar.
 
 | Setting | Default | Description |
 |---|---|---|
-| `api_key` | *(empty)* | CoinMarketCap API key (required for CMC fetches) |
-| `fetch_interval` | `24` | How often CMC listings are re-fetched (hours) |
-| `fetch_limit` | `5000` | Max symbols fetched per CMC call |
-| `metadata_interval` | `1` | CMC metadata refresh (days) |
-| `mapping_interval` | `24` | Exchange mapping rebuild interval (hours) |
+| `CoinMarketCap API_Key` | *(empty)* | CoinMarketCap API key (required for CMC fetches) |
+| `Fetch Interval` | `24` | How often CMC listings are re-fetched (hours) |
+| `Fetch Limit` | `5000` | Max symbols fetched per CMC call |
+| `Metadata Interval` | `1` | CMC metadata refresh (days) |
+| `Mapping Interval` | `24` | Exchange mapping rebuild interval (hours) |
 
 A CMC API key is required. Free Basic plans are sufficient for most setups.
+After entering a valid API key the page immediately shows your API credit status (monthly limit, usage, remaining credits).
 
 ## PBCoinData Details page
 
@@ -48,7 +50,7 @@ If a mapping build fails for an exchange (e.g. due to a temporary network error)
 
 ## Troubleshooting
 
-- **No mapping built yet**: Confirm PBCoinData is running and a valid CMC API key is set in `pbgui.ini`
+- **No mapping built yet**: Confirm PBCoinData is running and a valid CMC API key is set in the PBCoinData Details page
 - **Mapping stale**: Check `data/logs/PBCoinData.log` for repeated `ERROR` or `self-heal` entries
 - **CMC rate-limit errors (429)**: PBCoinData retries automatically; increase `fetch_interval` if persistent
 - **Ignored/approved lists not updating in PBRun**: Verify mapping files exist under `data/coindata/{exchange}/` and restart PBCoinData once

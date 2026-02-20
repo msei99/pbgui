@@ -15,7 +15,7 @@ The page displays six service columns, each with:
 | **PBRun** | Starts/stops local Passivbot bot processes and manages dynamic coin filters |
 | **PBRemote** | Syncs instances and commands between local and remote VPS servers via a cloud bucket |
 | **PBMon** | Monitors running bots and sends Telegram alerts for unusual behavior |
-| **PBStat** | Collects live trade statistics (PnL, fills) for all active instances |
+| **PBStat** | Collects spot trade statistics for the legacy v6 single bot only |
 | **PBData** | Fetches real-time market data (OHLCV, orders, positions) from exchanges |
 | **PBCoinData** | Fetches CoinMarketCap data and builds exchange symbol mappings for dynamic filters |
 
@@ -40,7 +40,7 @@ A healthy setup usually starts services in this order:
 1. **PBCoinData** — builds symbol mappings (required for dynamic ignore/approve lists)
 2. **PBRun** — starts bot processes (uses mappings from PBCoinData)
 3. **PBData** — provides live market data
-4. **PBStat** — collects trade statistics
+4. **PBStat** — collects spot trade statistics (v6 single bot only)
 5. **PBRemote** — connects to remote VPS (if used)
 6. **PBMon** — enables monitoring and alerts (if used)
 
