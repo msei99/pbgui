@@ -15,6 +15,12 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
     `log_filename` (single name) which will be preselected.
     """
     pbgdir = Path.cwd()
+    key_pfx = log_filename.lower().replace(' ', '_')
+    _k_sel_users  = f'lv_{key_pfx}_sel_users'
+    _k_sel_tags   = f'lv_{key_pfx}_sel_tags'
+    _k_sel_levels = f'lv_{key_pfx}_sel_levels'
+    _k_free_text  = f'lv_{key_pfx}_free_text'
+    _k_show_raw   = f'lv_{key_pfx}_show_raw'
     logs_dir = Path(f'{pbgdir}/data/logs')
     # discover available .log files (names without suffix)
     candidates = []
@@ -26,8 +32,8 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
     except Exception:
         candidates = []
 
-    # default selection: the provided filename if present, otherwise first
-    default_sel = [log_filename] if log_filename in candidates else ([candidates[0]] if candidates else [])
+    # default selection: the provided filename if present, otherwise empty
+    default_sel = [log_filename] if log_filename in candidates else []
 
     col_logs, col_header_right = st.columns([3, 1])
     with col_logs:
@@ -266,11 +272,11 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
 
         def _clear_filters():
             # callback used by the button to safely update widget-backed session keys
-            st.session_state['lv_sel_users'] = []
-            st.session_state['lv_sel_tags'] = []
-            st.session_state['lv_sel_levels'] = []
-            st.session_state['lv_free_text'] = ''
-            st.session_state['lv_show_raw'] = False
+            st.session_state[_k_sel_users] = []
+            st.session_state[_k_sel_tags] = []
+            st.session_state[_k_sel_levels] = []
+            st.session_state[_k_free_text] = ''
+            st.session_state[_k_show_raw] = False
             # bump refresh counter so the reader reloads and the view updates
             st.session_state[refresh_key] = st.session_state.get(refresh_key, 0) + 1
 
@@ -310,10 +316,10 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
         # Left: Users + Tags + RAW + buttons. Right: Levels + Free-text.
         col_left, col_right = st.columns([1, 1])
         with col_left:
-            sel_users = st.multiselect('Users (filter)', user_list, key='lv_sel_users', help='Filter log lines by user name.')
-            sel_tags = st.multiselect('Tags (from [tag])', tags, key='lv_sel_tags', help='Filter by [tag] prefix in log lines.')
+            sel_users = st.multiselect('Users (filter)', user_list, key=_k_sel_users, help='Filter log lines by user name.')
+            sel_tags = st.multiselect('Tags (from [tag])', tags, key=_k_sel_tags, help='Filter by [tag] prefix in log lines.')
             # Move RAW checkbox to the left under the filters
-            st.checkbox('RAW', key='lv_show_raw', help=pbgui_help.show_raw_log)
+            st.checkbox('RAW', key=_k_show_raw, help=pbgui_help.show_raw_log)
 
             # Buttons row under the filters (left column)
             b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
@@ -328,8 +334,8 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
 
         with col_right:
             levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-            sel_levels = st.multiselect('Levels (filter)', levels, key='lv_sel_levels', help='Filter by log level.')
-            free_text = st.text_input('Free-text', key='lv_free_text', placeholder='search...', help='Case-insensitive substring search.')
+            sel_levels = st.multiselect('Levels (filter)', levels, key=_k_sel_levels, help='Filter by log level.')
+            free_text = st.text_input('Free-text', key=_k_free_text, placeholder='search...', help='Case-insensitive substring search.')
 
         # session keys for refresh/truncate actions
         refresh_key = f'lv_{sel_key}_refresh'
@@ -342,11 +348,11 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
 
         def _clear_filters():
             # callback used by the button to safely update widget-backed session keys
-            st.session_state['lv_sel_users'] = []
-            st.session_state['lv_sel_tags'] = []
-            st.session_state['lv_sel_levels'] = []
-            st.session_state['lv_free_text'] = ''
-            st.session_state['lv_show_raw'] = False
+            st.session_state[_k_sel_users] = []
+            st.session_state[_k_sel_tags] = []
+            st.session_state[_k_sel_levels] = []
+            st.session_state[_k_free_text] = ''
+            st.session_state[_k_show_raw] = False
             # bump refresh counter so the reader reloads and the view updates
             st.session_state[refresh_key] = st.session_state.get(refresh_key, 0) + 1
 
@@ -386,14 +392,14 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
 
         # Determine whether any filters active
         has_filters = False
-        if st.session_state.get('lv_sel_users'):
+        if st.session_state.get(_k_sel_users):
             has_filters = True
         # services filter removed (logs are split per-service)
-        if st.session_state.get('lv_sel_tags'):
+        if st.session_state.get(_k_sel_tags):
             has_filters = True
-        if st.session_state.get('lv_sel_levels'):
+        if st.session_state.get(_k_sel_levels):
             has_filters = True
-        if st.session_state.get('lv_free_text'):
+        if st.session_state.get(_k_free_text):
             has_filters = True
 
         # Handle refresh / truncate actions triggered by callbacks in the filters area.
@@ -452,7 +458,7 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
         # If the user requests the raw view, ignore filters and show the
         # cached raw lines (newest-first). The `RAW` checkbox is persistent
         # via session_state key `lv_<logfile>_show_raw`.
-        show_raw = st.session_state.get('lv_show_raw', False)
+        show_raw = st.session_state.get(_k_show_raw, False)
         if show_raw:
             # RAW mode: show unadorned lines, but if any filters are active
             # respect them — users expect RAW to disable formatting/icons,
@@ -471,10 +477,10 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
                             all_lines.extend(list(reversed(f.readlines())))
                     except Exception:
                         pass
-                sel_users = st.session_state.get('lv_sel_users', [])
-                sel_tags = st.session_state.get('lv_sel_tags', [])
-                free_text = st.session_state.get('lv_free_text', '')
-                sel_levels = st.session_state.get('lv_sel_levels', [])
+                sel_users = st.session_state.get(_k_sel_users, [])
+                sel_tags = st.session_state.get(_k_sel_tags, [])
+                free_text = st.session_state.get(_k_free_text, '')
+                sel_levels = st.session_state.get(_k_sel_levels, [])
 
                 def line_has_any_tag(line, taglist):
                     for t in taglist:
@@ -531,10 +537,10 @@ def view_log_filtered(log_filename: str, header_right_fn=None):
                         pass
             except Exception:
                 all_lines = lines
-            sel_users = st.session_state.get('lv_sel_users', [])
-            sel_tags = st.session_state.get('lv_sel_tags', [])
-            free_text = st.session_state.get('lv_free_text', '')
-            sel_levels = st.session_state.get('lv_sel_levels', [])
+            sel_users = st.session_state.get(_k_sel_users, [])
+            sel_tags = st.session_state.get(_k_sel_tags, [])
+            free_text = st.session_state.get(_k_free_text, '')
+            sel_levels = st.session_state.get(_k_sel_levels, [])
 
             def line_has_any_tag(line, taglist):
                 for t in taglist:
