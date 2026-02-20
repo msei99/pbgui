@@ -10,19 +10,21 @@ PBCoinData ist ein Hintergrunddienst, der CoinMarketCap-Listings (CMC) und Metad
 - Führt einen Self-Heal-Zyklus durch, der Exchanges mit fehlgeschlagenem Mapping automatisch erneut versucht
 - Schreibt Service-Logs nach `data/logs/PBCoinData.log`
 
-## Konfiguration (`pbgui.ini`)
+## Konfiguration
 
-PBCoinData liest aus dem Abschnitt `[coinmarketcap]` in `pbgui.ini`:
+Alle PBCoinData-Einstellungen werden direkt auf der **PBCoinData-Detailseite** konfiguriert (`System → Services → PBCoinData → Show Details`).
+Änderungen mit dem `:material/save:`-Button in der Sidebar speichern.
 
 | Einstellung | Standard | Beschreibung |
 |---|---|---|
-| `api_key` | *(leer)* | CoinMarketCap API-Key (erforderlich für CMC-Abrufe) |
-| `fetch_interval` | `24` | Wie oft CMC-Listings neu abgerufen werden (Stunden) |
-| `fetch_limit` | `5000` | Max. Symbole pro CMC-Abruf |
-| `metadata_interval` | `1` | CMC-Metadaten-Aktualisierung (Tage) |
-| `mapping_interval` | `24` | Exchange-Mapping-Rebuild-Intervall (Stunden) |
+| `CoinMarketCap API_Key` | *(leer)* | CoinMarketCap API-Key (erforderlich für CMC-Abrufe) |
+| `Fetch Interval` | `24` | Wie oft CMC-Listings neu abgerufen werden (Stunden) |
+| `Fetch Limit` | `5000` | Max. Symbole pro CMC-Abruf |
+| `Metadata Interval` | `1` | CMC-Metadaten-Aktualisierung (Tage) |
+| `Mapping Interval` | `24` | Exchange-Mapping-Rebuild-Intervall (Stunden) |
 
 Ein CMC-API-Key ist erforderlich. Für die meisten Setups reicht ein kostenloser Basic-Plan.
+Nach Eingabe eines gültigen API-Keys zeigt die Seite sofort den API-Credit-Status (Monatslimit, Verbrauch, verbleibende Credits).
 
 ## PBCoinData-Detailseite
 
@@ -48,7 +50,7 @@ Schlägt ein Mapping-Build für eine Exchange fehl (z. B. durch einen temporäre
 
 ## Schnelle Fehlersuche
 
-- **Noch kein Mapping erstellt**: Prüfen ob PBCoinData läuft und ein gültiger CMC-API-Key in `pbgui.ini` eingetragen ist
+- **Noch kein Mapping erstellt**: Prüfen ob PBCoinData läuft und ein gültiger CMC-API-Key auf der PBCoinData-Detailseite eingetragen ist
 - **Mapping veraltet**: `data/logs/PBCoinData.log` auf wiederholte `ERROR`- oder `self-heal`-Einträge prüfen
 - **CMC-Rate-Limit-Fehler (429)**: PBCoinData wiederholt automatisch; bei anhaltenden Fehlern `fetch_interval` erhöhen
 - **Ignored/Approved-Listen in PBRun werden nicht aktualisiert**: Mapping-Dateien unter `data/coindata/{exchange}/` prüfen und PBCoinData einmal neu starten

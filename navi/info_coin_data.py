@@ -1,6 +1,6 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, render_header_with_guide
+from pbgui_func import set_page_config, is_session_state_not_initialized, is_authenticted, get_navi_paths, render_header_with_guide
 from PBCoinData import CoinData, compute_coin_name
 from Exchange import V7
 from datetime import datetime
@@ -147,9 +147,6 @@ def _max_price_ts(mapping_rows: list[dict]) -> float | None:
 def view_coindata():
     # Navigation
     with st.sidebar:
-        if st.button(":material/settings:"):
-            st.session_state.setup_coindata = True
-            st.rerun()
         if st.button(":material/sync:", help="Refresh selected exchange"):
             with st.spinner(f"Refreshing {coindata.exchange}..."):
                 try:
@@ -440,51 +437,6 @@ def view_coindata():
             if notice_text:
                 st.info(f"Notice: {notice_text}")
 
-def setup_coindata():
-    # Navigation
-    with st.sidebar:
-        if st.button(":material/refresh:"):
-            st.session_state.coindata = CoinData()
-            st.rerun()
-        if st.button(":material/home:"):
-            del st.session_state.setup_coindata
-            st.rerun()
-        if st.button(":material/save:"):
-            coindata.save_config()
-            info_popup("Config saved")
-    # Init session states for keys
-    if "edit_coindata_api_key" in st.session_state:
-        if st.session_state.edit_coindata_api_key != coindata.api_key:
-            coindata.api_key = st.session_state.edit_coindata_api_key
-    if "edit_coindata_fetch_limit" in st.session_state:
-        if st.session_state.edit_coindata_fetch_limit != coindata.fetch_limit:
-            coindata.fetch_limit = st.session_state.edit_coindata_fetch_limit
-    if "edit_coindata_fetch_interval" in st.session_state:
-        if st.session_state.edit_coindata_fetch_interval != coindata.fetch_interval:
-            coindata.fetch_interval = st.session_state.edit_coindata_fetch_interval
-    if "edit_coindata_metadata_interval" in st.session_state:
-        if st.session_state.edit_coindata_metadata_interval != coindata.metadata_interval:
-            coindata.metadata_interval = st.session_state.edit_coindata_metadata_interval
-    if "edit_coindata_mapping_interval" in st.session_state:
-        if st.session_state.edit_coindata_mapping_interval != coindata.mapping_interval:
-            coindata.mapping_interval = st.session_state.edit_coindata_mapping_interval
-    # Edit
-    st.text_input("CoinMarketCap API_Key", value=coindata.api_key, type="password", key="edit_coindata_api_key", help=pbgui_help.coindata_api_key)
-    st.number_input("Fetch Limit", min_value=200, max_value=5000, value=coindata.fetch_limit, step=200, format="%.d", key="edit_coindata_fetch_limit", help=pbgui_help.coindata_fetch_limit)
-    st.number_input("Fetch Interval", min_value=1, max_value=24, value=coindata.fetch_interval, step=1, format="%.d", key="edit_coindata_fetch_interval", help=pbgui_help.coindata_fetch_interval)
-    st.number_input("Metadata Interval", min_value=1, max_value=7, value=coindata.metadata_interval, step=1, format="%.d", help=pbgui_help.coindata_metadata_interval)
-    st.number_input("Mapping Interval", min_value=1, max_value=168, value=coindata.mapping_interval, step=1, format="%.d", key="edit_coindata_mapping_interval", help=pbgui_help.coindata_mapping_interval)
-    if coindata.api_key:
-        if coindata.fetch_api_status():
-            st.success("API Key is valid", icon="✅")
-            st.write(f"API limit monthly: {coindata.credit_limit_monthly}")
-            st.write(f"Next API credits reset in: {coindata.credit_limit_monthly_reset} at: {coindata.credit_limit_monthly_reset_timestamp}")
-            st.write(f"API credits used today: {coindata.credits_used_day}")
-            st.write(f"API credits used monthly: {coindata.credits_used_month}")
-            st.write(f"API credits left: {coindata.credits_left}")
-        else:
-            st.error(coindata.api_error, icon="🚨")
-
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
     st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
@@ -502,10 +454,5 @@ render_header_with_guide(
 if not "pbcoindata" in st.session_state:
     st.session_state.pbcoindata = CoinData()
 coindata  = st.session_state.pbcoindata
-if coindata.api_error:
-    st.session_state.setup_coindata = True
 
-if 'setup_coindata' in st.session_state:
-    setup_coindata()
-else:
-    view_coindata()
+view_coindata()
