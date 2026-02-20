@@ -275,57 +275,196 @@ def edit_user():
             elif balance_spot:
                 st.error(balance_spot, icon="🚨")    
 
+def _run_tradfi_test(py: str, dir: str, provider: str, api_key: str = "", api_secret: str = "") -> tuple[bool, str]:
+    """Run tradfi connection test in pb7 venv. Returns (success, message)."""
+    import subprocess, tempfile, os
+    _kwargs = {}
+    if api_key:
+        _kwargs["api_key"] = repr(api_key)
+    if api_secret:
+        _kwargs["api_secret"] = repr(api_secret)
+    _kw = (", " + ", ".join(f"{k}={v}" for k, v in _kwargs.items())) if _kwargs else ""
+    _script = f"""\
+import sys, asyncio
+sys.path.insert(0, {repr(str(dir) + '/src')})
+from tradfi_data import get_provider
+from datetime import datetime, timedelta, timezone
+
+async def _test():
+    p = get_provider({repr(provider)}{_kw})
+    async with p:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=7)
+        c = await p.fetch_1m_candles(
+            'AAPL',
+            int(start.timestamp() * 1000),
+            int(end.timestamp() * 1000),
+        )
+        print(f'OK:{{len(c)}}')
+
+asyncio.run(_test())
+"""
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
+            tf.write(_script)
+            _tmp = tf.name
+        result = subprocess.run([py, _tmp], capture_output=True, text=True, timeout=30)
+        os.unlink(_tmp)
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
+        if result.returncode == 0 and "OK:" in out:
+            n = int(out.split("OK:")[-1].strip())
+            if n > 0:
+                return True, f"Connection OK — {n} candles received (AAPL, last 7 days)."
+            else:
+                if provider == "finnhub":
+                    return False, "0 candles — Finnhub free tier does NOT support 1-minute intraday data. Unusable for backtesting."
+                return True, "0 candles returned (AAPL, last 7 days) — likely weekend/holiday. Provider is reachable."
+        else:
+            msg = err.splitlines()[-1] if err else out or "Unknown error"
+            return False, f"Test failed: {msg}"
+    except subprocess.TimeoutExpired:
+        return False, "Test timed out (30s)."
+    except Exception as e:
+        return False, f"Test error: {e}"
+
+
 def edit_tradfi():
     """TradFi data provider config section for stock perps backtesting."""
-    PROVIDERS = ["alpaca", "polygon", "yfinance", "finnhub", "alphavantage"]
+    import subprocess
+    from pbgui_func import pb7venv, pb7dir
+
+    PROVIDERS = ["alpaca", "polygon", "finnhub", "alphavantage"]
     PROVIDER_NOTES = {
         "alpaca": "Free, 5+ years of 1-minute data. Recommended.",
         "polygon": "Free tier: ~2 years of data.",
-        "yfinance": "No API key required. Limited to last 7 days.",
-        "finnhub": "Free tier available.",
-        "alphavantage": "Free tier available.",
+        "finnhub": "⚠️ Free tier does NOT support 1-minute intraday data — unusable for backtesting.",
+        "alphavantage": "Free tier: 25 calls/day, very limited for backtesting.",
+    }
+    PROVIDER_LINKS = {
+        "alpaca": ("Get free Alpaca API key", "https://app.alpaca.markets/signup"),
+        "polygon": ("Get free Polygon API key", "https://polygon.io/dashboard/signup"),
+        "finnhub": ("Get free Finnhub API key", "https://finnhub.io/register"),
+        "alphavantage": ("Get free Alpha Vantage API key", "https://www.alphavantage.co/support/#api-key"),
     }
     NEEDS_SECRET = {"alpaca"}
 
     users = st.session_state.users
     tradfi = getattr(users, "tradfi", {}) or {}
-    provider = tradfi.get("provider", "yfinance")
+    provider = tradfi.get("provider", "alpaca")
     api_key = tradfi.get("api_key", "")
     api_secret = tradfi.get("api_secret", "")
 
-    has_config = bool(provider and provider != "yfinance" and api_key)
+    has_config = bool(api_key)
+
+    _py = pb7venv()
+    _dir = pb7dir()
 
     with st.expander("TradFi Data Provider  (Stock Perps Backtesting)", expanded=has_config):
         st.info(
-            "Required for backtesting stock perpetuals (TSLA, NVDA, etc.) "
-            "beyond the last 7 days. **yfinance** works without a key but only covers "
-            "the most recent 7 days of data. **Alpaca** is recommended for free 5+ year history."
+            "Stock perp backtests use **yfinance** automatically for the last 7 days (free, no key). "
+            "For older data (months/years), configure an extended provider like **Alpaca** (free, 5+ years)."
         )
-        col1, col2 = st.columns([1, 2], vertical_alignment="top")
+
+        # ── Section 1: yfinance ────────────────────────────────────────────
+        st.markdown("**yfinance** — automatic default, last 7 days, no API key")
+        col_yf_status, col_yf_install, col_yf_test = st.columns([2, 1, 1])
+        _yf_installed = False
+        _yf_version = ""
+        if _py:
+            r = subprocess.run([_py, "-c", "import yfinance; print(yfinance.__version__)"],
+                               capture_output=True, text=True)
+            _yf_installed = r.returncode == 0
+            _yf_version = r.stdout.strip() if _yf_installed else ""
+        with col_yf_status:
+            if not _py:
+                st.warning("pb7 venv not configured")
+            elif _yf_installed:
+                st.success(f"yfinance {_yf_version} installed ✓", icon=":material/check_circle:")
+            else:
+                st.warning("yfinance not installed", icon=":material/warning:")
+        with col_yf_install:
+            if _yf_installed:
+                if st.button("Uninstall yfinance", key="tradfi_yf_install"):
+                    with st.spinner("Uninstalling yfinance..."):
+                        r = subprocess.run([_py, "-m", "pip", "uninstall", "yfinance", "-y"],
+                                           capture_output=True, text=True, timeout=60)
+                    if r.returncode == 0:
+                        st.success("yfinance uninstalled.")
+                        st.rerun()
+                    else:
+                        st.error(f"Uninstall failed: {r.stderr.splitlines()[-1] if r.stderr else r.stdout}", icon="🚨")
+            else:
+                if st.button("Install yfinance", key="tradfi_yf_install"):
+                    if not _py:
+                        st.error("pb7 venv not configured.", icon="🚨")
+                    else:
+                        with st.spinner("Installing yfinance..."):
+                            r = subprocess.run([_py, "-m", "pip", "install", "yfinance"],
+                                               capture_output=True, text=True, timeout=120)
+                        if r.returncode == 0:
+                            st.success("yfinance installed successfully.")
+                            st.rerun()
+                        else:
+                            st.error(f"Install failed: {r.stderr.splitlines()[-1] if r.stderr else r.stdout}", icon="🚨")
+        with col_yf_test:
+            if _yf_installed:
+                if st.button("Test yfinance", key="tradfi_yf_test"):
+                    if not _py or not _dir:
+                        st.error("pb7 venv/dir not configured.", icon="🚨")
+                    else:
+                        with st.spinner("Testing yfinance..."):
+                            ok, msg = _run_tradfi_test(_py, _dir, "yfinance")
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg, icon="🚨")
+
+        st.divider()
+
+        # ── Section 2: Extended provider (optional) ────────────────────────
+        st.markdown("**Extended provider** — optional, for backtests older than 7 days")
+        col1, col2, col3 = st.columns([1, 1, 1], vertical_alignment="bottom")
         with col1:
-            idx = PROVIDERS.index(provider) if provider in PROVIDERS else PROVIDERS.index("yfinance")
+            idx = PROVIDERS.index(provider) if provider in PROVIDERS else 0
+            _current_provider = st.session_state.get("tradfi_provider", provider or PROVIDERS[0])
+            if _current_provider not in PROVIDERS:
+                _current_provider = PROVIDERS[0]
             sel_provider = st.selectbox(
                 "Provider",
                 PROVIDERS,
                 index=idx,
                 key="tradfi_provider",
+                help=PROVIDER_NOTES.get(_current_provider, ""),
             )
-            st.caption(PROVIDER_NOTES.get(sel_provider, ""))
         with col2:
-            if sel_provider == "yfinance":
-                st.info("No API key required for yfinance.")
-                sel_key = ""
-                sel_secret = ""
+            sel_key = st.text_input("API Key", value=api_key, key="tradfi_api_key", type="password")
+        with col3:
+            if sel_provider in NEEDS_SECRET:
+                sel_secret = st.text_input(
+                    "API Secret", value=api_secret, key="tradfi_api_secret", type="password"
+                )
             else:
-                sel_key = st.text_input("API Key", value=api_key, key="tradfi_api_key")
-                if sel_provider in NEEDS_SECRET:
-                    sel_secret = st.text_input(
-                        "API Secret", value=api_secret, key="tradfi_api_secret", type="password"
-                    )
-                else:
-                    sel_secret = ""
+                st.text_input("API Secret", value="", disabled=True, placeholder="not required", key="tradfi_secret_na")
+                sel_secret = ""
+        _link = PROVIDER_LINKS.get(sel_provider)
+        if _link:
+            st.caption(f"🔗 [{_link[0]}]({_link[1]})")
 
-        col_save, col_clear = st.columns([1, 1])
+        col_test, col_save, col_clear = st.columns([1, 1, 1])
+        with col_test:
+            if st.button("Test Connection", key="tradfi_test"):
+                if not _py or not _dir:
+                    st.error("pb7 venv/dir not configured.", icon="🚨")
+                elif not sel_key:
+                    st.warning("Enter an API key first.", icon=":material/warning:")
+                else:
+                    with st.spinner(f"Testing {sel_provider}..."):
+                        ok, msg = _run_tradfi_test(_py, _dir, sel_provider, sel_key, sel_secret)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg, icon="🚨")
         with col_save:
             if st.button("Save TradFi Config", key="tradfi_save"):
                 new_tradfi: dict = {"provider": sel_provider}
