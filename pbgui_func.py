@@ -45,7 +45,7 @@ def render_header_with_guide(
                 st.header(t)
         return
 
-    c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
+    c_title, c_help = st.columns([0.94, 0.06], vertical_alignment="center")
     with c_title:
         if level == "subheader":
             st.subheader(t)
@@ -172,7 +172,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.55 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': "Passivbot GUI v1.56 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Check VPS Errors
