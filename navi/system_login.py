@@ -256,6 +256,16 @@ def do_init():
     # Check if CoinData configured
     if not st.session_state.pbcoindata.fetch_api_status():
         st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
+    elif not st.session_state.pbcoindata.is_running():
+        st.warning('PBCoinData is not running — No exchange symbol data available. Please start PBCoinData on the Services page.', icon="⚠️")
+    else:
+        from pathlib import Path
+        mappings_exist = any(
+            (Path.cwd() / "data" / "coindata" / ex / "mapping.json").exists()
+            for ex in ["binance", "bybit", "bitget", "hyperliquid", "okx", "gateio", "bingx", "kucoinfutures"]
+        )
+        if not mappings_exist:
+            st.info('PBCoinData is running but no exchange mapping files have been generated yet. Please wait for the first update cycle.', icon="ℹ️")
     
     # Add a horizontal divider
     st.markdown("---")
