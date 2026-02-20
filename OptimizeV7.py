@@ -1722,6 +1722,25 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.edit_opt_v7_approved_coins_long = self.config.live.approved_coins.long
         if "edit_opt_v7_approved_coins_short" in st.session_state:
             st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
+        # Warn if stock perps selected without TradFi configured
+        _all_approved = self.config.live.approved_coins.long + self.config.live.approved_coins.short
+        _stock_perps = [c for c in _all_approved if str(c).lower().startswith("xyz:")]
+        if _stock_perps:
+            try:
+                _start = datetime.date.fromisoformat(self.config.backtest.start_date)
+                _needs_tradfi = (datetime.date.today() - _start).days > 7
+            except Exception:
+                _needs_tradfi = True
+            if _needs_tradfi:
+                _tradfi = st.session_state.users.tradfi if "users" in st.session_state else {}
+                if not _tradfi:
+                    _names = ', '.join(_stock_perps[:3]) + ('...' if len(_stock_perps) > 3 else '')
+                    st.warning(
+                        f"Stock perp symbols detected ({_names}). "
+                        "Optimizations older than 7 days require a **TradFi data provider**. "
+                        "Please configure it on the **API-Keys** page (TradFi section at the bottom).",
+                        icon=":material/warning:",
+                    )
         # Select approved coins
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
