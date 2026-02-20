@@ -1036,12 +1036,18 @@ def pbcoindata_details():
     if "edit_coindata_mapping_interval" in st.session_state:
         if st.session_state.edit_coindata_mapping_interval != pbcoindata.mapping_interval:
             pbcoindata.mapping_interval = st.session_state.edit_coindata_mapping_interval
-    # Configuration
-    st.text_input("CoinMarketCap API_Key", value=pbcoindata.api_key, type="password", key="edit_coindata_api_key", help=pbgui_help.coindata_api_key)
-    st.number_input("Fetch Limit", min_value=200, max_value=5000, value=pbcoindata.fetch_limit, step=200, format="%.d", key="edit_coindata_fetch_limit", help=pbgui_help.coindata_fetch_limit)
-    st.number_input("Fetch Interval", min_value=1, max_value=24, value=pbcoindata.fetch_interval, step=1, format="%.d", key="edit_coindata_fetch_interval", help=pbgui_help.coindata_fetch_interval)
-    st.number_input("Metadata Interval", min_value=1, max_value=7, value=pbcoindata.metadata_interval, step=1, format="%.d", key="edit_coindata_metadata_interval", help=pbgui_help.coindata_metadata_interval)
-    st.number_input("Mapping Interval", min_value=1, max_value=168, value=pbcoindata.mapping_interval, step=1, format="%.d", key="edit_coindata_mapping_interval", help=pbgui_help.coindata_mapping_interval)
+    # Configuration – one row
+    _cfg = st.columns([2, 1, 1, 1, 1])
+    with _cfg[0]:
+        st.text_input("CMC API Key", value=pbcoindata.api_key, type="password", key="edit_coindata_api_key", help=pbgui_help.coindata_api_key)
+    with _cfg[1]:
+        st.number_input("Fetch Limit", min_value=200, max_value=5000, value=pbcoindata.fetch_limit, step=200, format="%.d", key="edit_coindata_fetch_limit", help=pbgui_help.coindata_fetch_limit)
+    with _cfg[2]:
+        st.number_input("Fetch Interval (h)", min_value=1, max_value=24, value=pbcoindata.fetch_interval, step=1, format="%.d", key="edit_coindata_fetch_interval", help=pbgui_help.coindata_fetch_interval)
+    with _cfg[3]:
+        st.number_input("Metadata Interval (d)", min_value=1, max_value=7, value=pbcoindata.metadata_interval, step=1, format="%.d", key="edit_coindata_metadata_interval", help=pbgui_help.coindata_metadata_interval)
+    with _cfg[4]:
+        st.number_input("Mapping Interval (h)", min_value=1, max_value=168, value=pbcoindata.mapping_interval, step=1, format="%.d", key="edit_coindata_mapping_interval", help=pbgui_help.coindata_mapping_interval)
     # API status
     if pbcoindata.api_key:
         if pbcoindata.fetch_api_status():
