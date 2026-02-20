@@ -446,8 +446,7 @@ def pbmon_details():
     st.text_input("Telegram Bot Token", type="password", key="pbmon_telegram_token", help=pbgui_help.pbmon_telegram_token)
     st.text_input("Telegram Chat ID", key="pbmon_telegram_chat_id", help=pbgui_help.pbmon_telegram_chat_id)
 
-    if st.checkbox("Show logfile", key="pbmon_log"):
-        st.session_state.pbgui_instances.view_log("PBMon")
+    view_log_filtered("PBMon")
 
 def pbstat_details():
     # Navigation
@@ -457,8 +456,7 @@ def pbstat_details():
             st.rerun()
     st.subheader("PBStat Details")
     pbstat_overview()
-    if st.checkbox("Show logfile", key="pbstat_log"):
-        st.session_state.pbgui_instances.view_log("PBStat")
+    view_log_filtered("PBStat")
 
 def pbdata_details():
     pbdata = st.session_state.pbdata
@@ -1096,6 +1094,27 @@ elif 'pbcoindata_details' in st.session_state:
         guide_callback=lambda: _help_modal('PBCoinData'),
         guide_key='pbcoindata_guide_btn',
         guide_help='Open PBCoinData help & tutorials',
+    )
+elif 'pbmon_details' in st.session_state:
+    render_header_with_guide(
+        "PBGUI Services",
+        guide_callback=lambda: _help_modal('PBMon'),
+        guide_key='pbmon_guide_btn',
+        guide_help='Open PBMon help & tutorials',
+    )
+elif 'pbstat_details' in st.session_state:
+    render_header_with_guide(
+        "PBGUI Services",
+        guide_callback=lambda: _help_modal('PBStat'),
+        guide_key='pbstat_guide_btn',
+        guide_help='Open PBStat help & tutorials',
+    )
+elif 'pbremote_details' in st.session_state:
+    render_header_with_guide(
+        "PBGUI Services",
+        guide_callback=lambda: _help_modal('PBRemote'),
+        guide_key='pbremote_guide_btn',
+        guide_help='Open PBRemote help & tutorials',
     )
 else:
     render_header_with_guide(
