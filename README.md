@@ -323,6 +323,27 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.56 (20-02-2026)
+- New: Hyperliquid HIP-3 stock perpetuals support — Exchange.py fetches and tracks stock-perp markets (AAPL, NVDA, etc.) alongside crypto swaps
+- New: PBCoinData detects and records HIP-3 markets (`is_hip3` flag); HIP-3 symbols shown in a dedicated collapsible table in Coin Data Explorer
+- New: Auto-rebuild Hyperliquid mapping when HIP-3 symbols are missing (self-heal in UI)
+- New: HIP-3 stock perpetuals excluded from dynamic ignore lists (only regular crypto swaps are written to passivbot ini)
+- New: Dedicated "Logging" page in System navigation — central log viewer for all services, configurable log rotation (default + per-service max size and backup count)
+- New: Services page redesigned — tabbed layout (Overview + per-service tabs), unified ⚙ Settings expanders with dirty-aware save buttons (blue = unsaved)
+- New: Bucket edit form inline in PBRemote Settings expander (no separate page)
+- New: PBCoinData settings moved to service details page with live API status display and 5-minute credit cache
+- New: Data-driven CMC symbol matching — static SYMBOLMAP replaced by live exchange→CMC mapping
+- New: Mapping-based coin filters for BacktestV7, RunV7, OptimizeV7 and Multi
+- New: Balance Calculator uses mapping-based instant calculation; exchange selection dialog for multi-exchange backtest configs
+- New: Help guides added for Services, PBRemote, PBCoinData, Coin Data; PBRun and PBData guides updated
+- Improved: PBRun major overhaul — atomic file writes, improved process management, hardened startup and race condition handling
+- Improved: CMC fetch resilience and error logging
+- Improved: Mapping update skip and unmatched CMC coin logging
+- Fix: Self-heal success state correctly reset after recovery
+- Fix: Balance Calculator coin parity with short coin names
+- Fix: PBCoinData API status column width and label
+- Updated: ccxt to v4.5.38
+
 ## v1.55 (14-02-2026)
 - New: PB7 v7.8.x sync (candle interval, suite enablement, OHLCV source dir, market settings sources, volume normalization)
 - New: Optimizer supports candle_interval_minutes
