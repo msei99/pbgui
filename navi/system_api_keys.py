@@ -288,7 +288,7 @@ def edit_tradfi():
     NEEDS_SECRET = {"alpaca"}
 
     users = st.session_state.users
-    tradfi = users.tradfi
+    tradfi = getattr(users, "tradfi", {}) or {}
     provider = tradfi.get("provider", "yfinance")
     api_key = tradfi.get("api_key", "")
     api_secret = tradfi.get("api_secret", "")
@@ -333,12 +333,18 @@ def edit_tradfi():
                     new_tradfi["api_key"] = sel_key
                 if sel_secret:
                     new_tradfi["api_secret"] = sel_secret
-                users.tradfi = new_tradfi
+                if hasattr(type(users), "tradfi"):
+                    users.tradfi = new_tradfi
+                elif hasattr(users, "_top_level_extras"):
+                    users._top_level_extras["tradfi"] = new_tradfi
                 users.save()
                 st.success("TradFi config saved.")
         with col_clear:
             if st.button("Clear TradFi Config", key="tradfi_clear"):
-                users.tradfi = {}
+                if hasattr(type(users), "tradfi"):
+                    users.tradfi = {}
+                elif hasattr(users, "_top_level_extras"):
+                    users._top_level_extras.pop("tradfi", None)
                 users.save()
                 st.info("TradFi config cleared.")
 
