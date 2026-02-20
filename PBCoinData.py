@@ -1157,6 +1157,7 @@ class CoinData:
             while True:
                 if count > 5:
                     _log('PBCoinData', 'Can not start PBCoinData', level='ERROR')
+                    break
                 sleep(1)
                 if self.is_running():
                     break

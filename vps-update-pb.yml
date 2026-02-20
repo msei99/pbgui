@@ -130,6 +130,35 @@
         chdir: "{{ install_dir }}/pbgui"
       listen: "restart pbgui"
 
+    - name: Verify PBRun PBRemote and PBCoinData are running
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        missing=0
+        for proc in PBRun.py PBRemote.py PBCoinData.py; do
+          if ! pgrep -f "{{ install_dir }}/pbgui/${proc}" >/dev/null; then
+            echo "Missing process: ${proc}"
+            python "{{ install_dir }}/pbgui/starter.py" -s "${proc%.py}" || true
+            missing=1
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo "--- PBRun.log tail ---"
+          tail -n 40 "{{ install_dir }}/pbgui/data/logs/PBRun.log" || true
+          echo "--- PBRemote.log tail ---"
+          tail -n 40 "{{ install_dir }}/pbgui/data/logs/PBRemote.log" || true
+          echo "--- PBCoinData.log tail ---"
+          tail -n 40 "{{ install_dir }}/pbgui/data/logs/PBCoinData.log" || true
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      register: pbgui_process_health
+      retries: 8
+      delay: 3
+      until: pbgui_process_health.rc == 0
+      listen: "restart pbgui"
+
     - name: Install pb6 requirements
       pip:
         virtualenv: "{{ install_dir }}/venv_pb6"
