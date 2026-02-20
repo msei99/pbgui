@@ -81,7 +81,7 @@ class Base:
         self._ohlcv = new_ohlcv
 
     def update_symbols(self):
-        self.exchange.fetch_symbols()
+        self.exchange.load_symbols()
         if self._market_type == 'swap':
             self._symbols = self._exchange.swap
         else:
@@ -117,13 +117,15 @@ class Base:
             st.selectbox('User',self._users.list_single(), key="base_user")
             st.session_state.placeholder = st.empty()
         with col_2:
+            if len(self.symbols) <= 1:
+                st.warning("Keine Symbole gefunden. Bitte zuerst PBCoinData konfigurieren und starten.", icon=":material/warning:")
             if self.symbol == "Select Symbol":
                 symbol_label = ":red[SYMBOL]"
             else:
                 symbol_label = "SYMBOL"
                 st.session_state.base_symbol = self.symbol
             st.selectbox(f'{symbol_label}', self.symbols, key="base_symbol")
-            st.button("Update Symbols from Exchange", key="base_update_symbols")
+            st.button("Reload Symbols from Mapping", key="base_update_symbols")
         with col_3:
             st.radio("MARKET_TYPE", self.market_types, key="base_market_type")
             st.checkbox("OHLCV", help=pbgui_help.ohlcv, key="base_ohlcv")

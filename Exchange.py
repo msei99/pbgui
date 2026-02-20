@@ -2909,9 +2909,6 @@ class Exchange:
         self.swap.sort()
         if self.cpt:
             self.cpt.sort()
-        # print(self.spot)
-        # print(self.swap)
-        # print(self.cpt)
 
     def load_symbols(self):
         self.spot = []
@@ -2940,9 +2937,6 @@ class Exchange:
         self.spot = sorted(set(self.spot))
         self.swap = sorted(set(self.swap))
         self.cpt = sorted(set(self.cpt))
-
-        if not self.spot and not self.swap:
-            self.fetch_symbols()
     
     def fetch_symbol_infos(self, symbol: str):
         if not self.instance:
