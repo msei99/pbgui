@@ -1051,12 +1051,18 @@ def pbcoindata_details():
     # API status
     if pbcoindata.api_key:
         if pbcoindata.fetch_api_status():
-            st.success("API Key is valid", icon="✅")
-            st.write(f"API limit monthly: {pbcoindata.credit_limit_monthly}")
-            st.write(f"Next API credits reset in: {pbcoindata.credit_limit_monthly_reset} at: {pbcoindata.credit_limit_monthly_reset_timestamp}")
-            st.write(f"API credits used today: {pbcoindata.credits_used_day}")
-            st.write(f"API credits used monthly: {pbcoindata.credits_used_month}")
-            st.write(f"API credits left: {pbcoindata.credits_left}")
+            st.success("**API Key is valid**", icon="✅")
+            _api_cols = st.columns([1, 1, 1, 1, 2])
+            with _api_cols[0]:
+                st.metric("Monthly Limit", pbcoindata.credit_limit_monthly)
+            with _api_cols[1]:
+                st.metric("Used Today", pbcoindata.credits_used_day)
+            with _api_cols[2]:
+                st.metric("Used Monthly", pbcoindata.credits_used_month)
+            with _api_cols[3]:
+                st.metric("Credits Left", pbcoindata.credits_left)
+            with _api_cols[4]:
+                st.metric("Reset in", pbcoindata.credit_limit_monthly_reset.replace("In ", ""))
         else:
             st.error(pbcoindata.api_error, icon="🚨")
     view_log_filtered("PBCoinData")
