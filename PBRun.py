@@ -1225,11 +1225,6 @@ class PBRun():
             else:
                 _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
                 return
-        # Print Warning if only pbdir or pb7dir configured
-        if not self.pbdir:
-            _log("PBRun", "No passivbot directory configured in pbgui.ini", level="WARNING")
-        if not self.pb7dir:
-            _log("PBRun", "No passivbot v7 directory configured in pbgui.ini", level="WARNING")
         # Init pbvenvs
         self.pbvenv = None
         self.pb7venv = None
@@ -1244,11 +1239,15 @@ class PBRun():
             else:
                 _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 return
-        # Print Warning if only pbvenv or pb7venv configured
-        if not self.pbvenv:
-            _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="WARNING")
-        if not self.pb7venv:
-            _log("PBRun", "No passivbot v7 venv python interpreter configured in pbgui.ini", level="WARNING")
+        # Print warnings only for actual per-version mismatches.
+        if self.pbdir and not self.pbvenv:
+            _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini for pbdir", level="WARNING")
+        if self.pbvenv and not self.pbdir:
+            _log("PBRun", "No passivbot directory configured in pbgui.ini for pbvenv", level="WARNING")
+        if self.pb7dir and not self.pb7venv:
+            _log("PBRun", "No passivbot v7 venv python interpreter configured in pbgui.ini for pb7dir", level="WARNING")
+        if self.pb7venv and not self.pb7dir:
+            _log("PBRun", "No passivbot v7 directory configured in pbgui.ini for pb7venv", level="WARNING")
         # Init paths
         self.multi_path = f'{self.pbgdir}/data/multi'
         self.single_path = f'{self.pbgdir}/data/instances'
