@@ -257,7 +257,7 @@ class Monitor():
                     st.markdown(f":orange[Last Error: ] :blue[{self.d_single[row]['Last Error']}]")
                     st.markdown(f":red[Last Traceback: ] :blue[{self.d_single[row]['Last Traceback']}]")
 
-    def edit_monitor_config(self):
+    def edit_monitor_config(self, show_navigation=True):
         # Load config
         # Server
         if "edit_mem_warning_server" in st.session_state:
@@ -454,50 +454,51 @@ class Monitor():
         else:
             st.session_state.edit_traceback_error_single = self.monitor_config.traceback_error_single
         # Navigation
-        with st.sidebar:
-            if st.button(":material/home:"):
-                del st.session_state.edit_mem_warning_server
-                del st.session_state.edit_mem_error_server
-                del st.session_state.edit_swap_warning_server
-                del st.session_state.edit_swap_error_server
-                del st.session_state.edit_cpu_warning_server
-                del st.session_state.edit_cpu_error_server
-                del st.session_state.edit_disk_warning_server
-                del st.session_state.edit_disk_error_server
-                del st.session_state.edit_mem_warning_v7
-                del st.session_state.edit_mem_error_v7
-                del st.session_state.edit_swap_warning_v7
-                del st.session_state.edit_swap_error_v7
-                del st.session_state.edit_cpu_warning_v7
-                del st.session_state.edit_cpu_error_v7
-                del st.session_state.edit_error_warning_v7
-                del st.session_state.edit_error_error_v7
-                del st.session_state.edit_traceback_warning_v7
-                del st.session_state.edit_traceback_error_v7
-                del st.session_state.edit_mem_warning_multi
-                del st.session_state.edit_mem_error_multi
-                del st.session_state.edit_cpu_warning_multi
-                del st.session_state.edit_cpu_error_multi
-                del st.session_state.edit_error_warning_multi
-                del st.session_state.edit_error_error_multi
-                del st.session_state.edit_traceback_warning_multi
-                del st.session_state.edit_traceback_error_multi
-                del st.session_state.edit_mem_warning_single
-                del st.session_state.edit_mem_error_single
-                del st.session_state.edit_cpu_warning_single
-                del st.session_state.edit_cpu_error_single
-                del st.session_state.edit_error_warning_single
-                del st.session_state.edit_error_error_single
-                del st.session_state.edit_traceback_warning_single
-                del st.session_state.edit_traceback_error_single
-                self.monitor_config.load_monitor_config()
-                del st.session_state.monitor_edit
-                del st.session_state.monitor
-                st.rerun()
-            if st.button(":material/save:"):
-                self.monitor_config.save_monitor_config()
-                del st.session_state.monitor_edit
-                st.rerun()
+        if show_navigation:
+            with st.sidebar:
+                if st.button(":material/home:"):
+                    del st.session_state.edit_mem_warning_server
+                    del st.session_state.edit_mem_error_server
+                    del st.session_state.edit_swap_warning_server
+                    del st.session_state.edit_swap_error_server
+                    del st.session_state.edit_cpu_warning_server
+                    del st.session_state.edit_cpu_error_server
+                    del st.session_state.edit_disk_warning_server
+                    del st.session_state.edit_disk_error_server
+                    del st.session_state.edit_mem_warning_v7
+                    del st.session_state.edit_mem_error_v7
+                    del st.session_state.edit_swap_warning_v7
+                    del st.session_state.edit_swap_error_v7
+                    del st.session_state.edit_cpu_warning_v7
+                    del st.session_state.edit_cpu_error_v7
+                    del st.session_state.edit_error_warning_v7
+                    del st.session_state.edit_error_error_v7
+                    del st.session_state.edit_traceback_warning_v7
+                    del st.session_state.edit_traceback_error_v7
+                    del st.session_state.edit_mem_warning_multi
+                    del st.session_state.edit_mem_error_multi
+                    del st.session_state.edit_cpu_warning_multi
+                    del st.session_state.edit_cpu_error_multi
+                    del st.session_state.edit_error_warning_multi
+                    del st.session_state.edit_error_error_multi
+                    del st.session_state.edit_traceback_warning_multi
+                    del st.session_state.edit_traceback_error_multi
+                    del st.session_state.edit_mem_warning_single
+                    del st.session_state.edit_mem_error_single
+                    del st.session_state.edit_cpu_warning_single
+                    del st.session_state.edit_cpu_error_single
+                    del st.session_state.edit_error_warning_single
+                    del st.session_state.edit_error_error_single
+                    del st.session_state.edit_traceback_warning_single
+                    del st.session_state.edit_traceback_error_single
+                    self.monitor_config.load_monitor_config()
+                    del st.session_state.monitor_edit
+                    del st.session_state.monitor
+                    st.rerun()
+                if st.button(":material/save:"):
+                    self.monitor_config.save_monitor_config()
+                    del st.session_state.monitor_edit
+                    st.rerun()
         st.header("Edit Monitor Settings")
         st.subheader("Server Monitor Settings")
         col1, col2, col3, col4 = st.columns([1,1,1,1])
