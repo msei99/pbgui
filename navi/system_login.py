@@ -259,7 +259,6 @@ def do_init():
     elif not st.session_state.pbcoindata.is_running():
         st.warning('PBCoinData is not running — No exchange symbol data available. Please start PBCoinData on the Services page.', icon="⚠️")
     else:
-        from pathlib import Path
         mappings_exist = any(
             (Path.cwd() / "data" / "coindata" / ex / "mapping.json").exists()
             for ex in ["binance", "bybit", "bitget", "hyperliquid", "okx", "gateio", "bingx", "kucoinfutures"]
