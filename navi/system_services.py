@@ -222,8 +222,7 @@ def pbrun_details():
             st.rerun()
     st.subheader("PBRun Details")
     pbrun_overview()
-    if st.checkbox("Show logfile", key="pbrun_log"):
-        st.session_state.pbgui_instances.view_log("PBRun")
+    view_log_filtered("PBRun")
 
 def pbremote_details():
     # Init PBRemote
@@ -1018,8 +1017,7 @@ def pbcoindata_details():
             st.rerun()
     st.subheader("PBCoinData Details")
     pbcoindata_overview()
-    if st.checkbox("Show logfile", key="pbcoindata_log"):
-        st.session_state.pbgui_instances.view_log("PBCoinData")
+    view_log_filtered("PBCoinData")
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
@@ -1029,16 +1027,35 @@ if not is_authenticted() or is_session_state_not_initialized():
 # Page Setup
 set_page_config("PBGUI Services")
 
-# Header: show PBData Guide in the top header row (above a full-width divider)
-if 'pbdata_details' in st.session_state:
+# Header: show context guide in the top header row (above a full-width divider)
+if 'pbrun_details' in st.session_state:
+    render_header_with_guide(
+        "PBGUI Services",
+        guide_callback=lambda: _help_modal('PBRun'),
+        guide_key='pbrun_guide_btn',
+        guide_help='Open PBRun help & tutorials',
+    )
+elif 'pbdata_details' in st.session_state:
     render_header_with_guide(
         "PBGUI Services",
         guide_callback=lambda: _help_modal('PBData'),
         guide_key='pbdata_guide_btn',
         guide_help='Open PBData help & tutorials',
     )
+elif 'pbcoindata_details' in st.session_state:
+    render_header_with_guide(
+        "PBGUI Services",
+        guide_callback=lambda: _help_modal('PBCoinData'),
+        guide_key='pbcoindata_guide_btn',
+        guide_help='Open PBCoinData help & tutorials',
+    )
 else:
-    render_header_with_guide("PBGUI Services")
+    render_header_with_guide(
+        "PBGUI Services",
+        guide_callback=lambda: _help_modal('Services'),
+        guide_key='services_overview_guide_btn',
+        guide_help='Open Services help & tutorials',
+    )
 
 if 'monitor_edit' in st.session_state:
     st.session_state.monitor.edit_monitor_config()

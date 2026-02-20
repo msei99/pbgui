@@ -66,7 +66,7 @@ Manche Exchanges brauchen eine größere Pause.
 
 ## Log‑Viewer Tipps
 
-Der PBData Log‑Viewer unterstützt:
+Die PBData‑Detailseite nutzt den gefilterten Log‑Viewer für PBData‑Logs. Er unterstützt:
 
 - Auswahl von einem oder mehreren **Logfiles** (zusammengeführt nach Timestamp)
 - Filter:
@@ -80,7 +80,19 @@ Der PBData Log‑Viewer unterstützt:
   - 🔄 Refresh
   - 🗑️ Ausgewählte Logdatei(en) leeren/rotieren
 
-Zusätzlich gibt es **PBData Log level** (rechts neben Logfiles). Das steuert, wie ausführlich PBData selbst loggt.
+Zusätzlich gibt es **PBData Log level** im Log‑Header (rechts neben Logfiles). Das steuert, wie ausführlich PBData selbst loggt.
+
+## Fetch Summary Bereich
+
+In den PBData Details gibt es zusätzlich einen **Fetch Summary** Bereich (aus `data/logs/fetch_summary.json`).
+
+Er zeigt eine kompakte Laufzeitübersicht für:
+
+- Ergebnisse von Balances / Positions / Orders
+- Ergebnisse von History / Executions
+- Letzte Fetch‑Zeitpunkte und Status pro User
+
+Wenn noch keine Summary sichtbar ist, hat PBData meist noch keinen ersten Summary‑Zyklus geschrieben.
 
 ## Wo Settings gespeichert werden
 
@@ -110,5 +122,6 @@ Die meisten PBData‑Settings werden in `pbgui.ini` unter `[pbdata]` gespeichert
 ### UI wirkt „stale“
 
 - 🔄 im Log‑Viewer klicken
+- 🔄 im Fetch Summary Bereich klicken
 - Prüfen, ob PBData läuft (PBData Toggle)
 - Bei Überlast: Combined‑Intervall erhöhen

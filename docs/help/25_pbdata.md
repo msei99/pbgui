@@ -66,7 +66,7 @@ Some exchanges need a higher pause.
 
 ## Log viewer tips
 
-The PBData log viewer supports:
+The PBData details page uses the filtered log viewer for PBData logs. It supports:
 
 - Selecting one or more **Logfiles** (merged by timestamp)
 - Filtering by:
@@ -80,7 +80,19 @@ The PBData log viewer supports:
   - 🔄 Refresh
   - 🗑️ Purge/truncate the selected log file(s)
 
-PBData also has a separate **PBData Log level** selector which controls how verbose PBData itself logs.
+PBData also has a separate **PBData Log level** selector in the log header, which controls how verbose PBData itself logs.
+
+## Fetch Summary panel
+
+PBData Details also shows a **Fetch Summary** panel (from `data/logs/fetch_summary.json`).
+
+It gives a compact runtime snapshot of:
+
+- balances / positions / orders fetch results
+- history / executions results
+- per-user last fetch timestamps and status
+
+If no summary is visible yet, PBData likely has not written the first summary cycle.
 
 ## Where settings are stored
 
@@ -110,5 +122,6 @@ Most PBData settings are persisted in `pbgui.ini` under `[pbdata]`, including:
 ### The UI shows stale data
 
 - Click 🔄 in the log viewer
+- Click 🔄 in the Fetch Summary panel
 - Check whether PBData is running (PBData toggle)
 - Consider increasing the combined poll interval if the system is overloaded
