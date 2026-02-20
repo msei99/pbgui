@@ -501,21 +501,29 @@ class DynamicIgnore():
 
             symbol_set = set(self._normalize_symbol_list(available_symbols))
 
-            ignored_coins = sorted({
+            # Filter-based results are constrained to currently listed symbols.
+            # Manual long/short lists are always preserved regardless of listing status
+            # (e.g. a delisted coin stays in ignored_coins so it doesn't cause an
+            # endless remove/re-add loop when save() re-injects it from ignored_coins_long).
+            ignored_from_filter = {
                 symbol
-                for symbol in self._normalize_symbol_list(
-                    list(filtered_ignored) + self.ignored_coins_long + self.ignored_coins_short
-                )
+                for symbol in self._normalize_symbol_list(list(filtered_ignored))
                 if symbol in symbol_set
-            })
+            }
+            manual_ignored = set(self._normalize_symbol_list(
+                self.ignored_coins_long + self.ignored_coins_short
+            ))
+            ignored_coins = sorted(ignored_from_filter | manual_ignored)
 
-            approved_coins = sorted({
+            approved_from_filter = {
                 symbol
-                for symbol in self._normalize_symbol_list(
-                    list(filtered_approved) + self.approved_coins_long + self.approved_coins_short
-                )
+                for symbol in self._normalize_symbol_list(list(filtered_approved))
                 if symbol in symbol_set
-            })
+            }
+            manual_approved = set(self._normalize_symbol_list(
+                self.approved_coins_long + self.approved_coins_short
+            ))
+            approved_coins = sorted(approved_from_filter | manual_approved)
 
             ignored_set = set(ignored_coins)
             approved_coins = [symbol for symbol in approved_coins if symbol not in ignored_set]
