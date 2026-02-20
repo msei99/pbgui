@@ -275,6 +275,74 @@ def edit_user():
             elif balance_spot:
                 st.error(balance_spot, icon="🚨")    
 
+def edit_tradfi():
+    """TradFi data provider config section for stock perps backtesting."""
+    PROVIDERS = ["alpaca", "polygon", "yfinance", "finnhub", "alphavantage"]
+    PROVIDER_NOTES = {
+        "alpaca": "Free, 5+ years of 1-minute data. Recommended.",
+        "polygon": "Free tier: ~2 years of data.",
+        "yfinance": "No API key required. Limited to last 7 days.",
+        "finnhub": "Free tier available.",
+        "alphavantage": "Free tier available.",
+    }
+    NEEDS_SECRET = {"alpaca"}
+
+    users = st.session_state.users
+    tradfi = users.tradfi
+    provider = tradfi.get("provider", "yfinance")
+    api_key = tradfi.get("api_key", "")
+    api_secret = tradfi.get("api_secret", "")
+
+    has_config = bool(provider and provider != "yfinance" and api_key)
+
+    with st.expander("TradFi Data Provider  (Stock Perps Backtesting)", expanded=has_config):
+        st.info(
+            "Required for backtesting stock perpetuals (TSLA, NVDA, etc.) "
+            "beyond the last 7 days. **yfinance** works without a key but only covers "
+            "the most recent 7 days of data. **Alpaca** is recommended for free 5+ year history."
+        )
+        col1, col2 = st.columns([1, 2], vertical_alignment="top")
+        with col1:
+            idx = PROVIDERS.index(provider) if provider in PROVIDERS else PROVIDERS.index("yfinance")
+            sel_provider = st.selectbox(
+                "Provider",
+                PROVIDERS,
+                index=idx,
+                key="tradfi_provider",
+            )
+            st.caption(PROVIDER_NOTES.get(sel_provider, ""))
+        with col2:
+            if sel_provider == "yfinance":
+                st.info("No API key required for yfinance.")
+                sel_key = ""
+                sel_secret = ""
+            else:
+                sel_key = st.text_input("API Key", value=api_key, key="tradfi_api_key")
+                if sel_provider in NEEDS_SECRET:
+                    sel_secret = st.text_input(
+                        "API Secret", value=api_secret, key="tradfi_api_secret", type="password"
+                    )
+                else:
+                    sel_secret = ""
+
+        col_save, col_clear = st.columns([1, 1])
+        with col_save:
+            if st.button("Save TradFi Config", key="tradfi_save"):
+                new_tradfi: dict = {"provider": sel_provider}
+                if sel_key:
+                    new_tradfi["api_key"] = sel_key
+                if sel_secret:
+                    new_tradfi["api_secret"] = sel_secret
+                users.tradfi = new_tradfi
+                users.save()
+                st.success("TradFi config saved.")
+        with col_clear:
+            if st.button("Clear TradFi Config", key="tradfi_clear"):
+                users.tradfi = {}
+                users.save()
+                st.info("TradFi config cleared.")
+
+
 def select_user():
     # Init
     users = st.session_state.users
@@ -317,6 +385,8 @@ def select_user():
     column_config = {
         "id": None}
     st.data_editor(data=d, height=(len(users.users)+1)*36, key=f'editor_{st.session_state.ed_user_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Exchange',])
+    st.divider()
+    edit_tradfi()
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
