@@ -277,7 +277,36 @@ def edit_user():
 
 def _run_tradfi_test(py: str, dir: str, provider: str, api_key: str = "", api_secret: str = "") -> tuple[bool, str]:
     """Run tradfi connection test in pb7 venv. Returns (success, message)."""
-    import subprocess, tempfile, os
+    import subprocess, tempfile, os, re
+
+    def _is_inotify_watch_error(text: str) -> bool:
+        t = (text or "").lower()
+        return (
+            "ran out of inotify watches" in t
+            or "inotify watch limit" in t
+            or "failed to initialize c-ares channel" in t
+        )
+
+    def _zero_candle_reason(provider_name: str, stderr_text: str) -> str:
+        e = (stderr_text or "").lower()
+        if "rate limit" in e or "429" in e:
+            return "rate limit reached"
+        if "invalid" in e or "unauthorized" in e or "403" in e:
+            return "invalid/unauthorized API credentials or insufficient plan"
+        if "timeout" in e:
+            return "request timed out"
+        if provider_name == "finnhub":
+            return "Finnhub free tier does not support 1-minute intraday"
+        if provider_name == "alphavantage":
+            return "Alpha Vantage free tier is heavily limited"
+        if provider_name == "polygon":
+            return "no 1-minute data access for this key/plan or no data in requested range"
+        if provider_name == "alpaca":
+            return "missing market data access/permissions or no data in requested range"
+        if provider_name == "yfinance":
+            return "market holiday/weekend or temporary data gap"
+        return "unknown reason"
+
     _kwargs = {}
     if api_key:
         _kwargs["api_key"] = repr(api_key)
@@ -293,7 +322,9 @@ from datetime import datetime, timedelta, timezone
 async def _test():
     p = get_provider({repr(provider)}{_kw})
     async with p:
-        end = datetime.now(timezone.utc)
+        # Use a completed historical window (exclude current day)
+        # to avoid false negatives on delayed/EOD-limited plans.
+        end = datetime.now(timezone.utc) - timedelta(days=1)
         start = end - timedelta(days=7)
         c = await p.fetch_1m_candles(
             'AAPL',
@@ -301,6 +332,28 @@ async def _test():
             int(end.timestamp() * 1000),
         )
         print(f'OK:{{len(c)}}')
+        if {repr(provider)} == 'polygon' and len(c) == 0:
+            import json
+            import aiohttp
+            url = f"https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/minute/{{int(start.timestamp() * 1000)}}/{{int(end.timestamp() * 1000)}}"
+            params = {{
+                'adjusted': 'true',
+                'sort': 'asc',
+                'limit': 50000,
+                'apiKey': {repr(api_key)},
+            }}
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, params=params) as r:
+                    print(f'PHTTP:{{r.status}}')
+                    t = await r.text()
+                    try:
+                        d = json.loads(t)
+                        print(f"PSTATUS:{{d.get('status')}}")
+                        print(f"PERROR:{{d.get('error') or d.get('message') or ''}}")
+                        results = d.get('results')
+                        print(f"PRESULTS:{{len(results) if isinstance(results, list) else -1}}")
+                    except Exception:
+                        print(f"PRAW:{{t[:240]}}")
 
 asyncio.run(_test())
 """
@@ -313,14 +366,37 @@ asyncio.run(_test())
         out = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
         if result.returncode == 0 and "OK:" in out:
-            n = int(out.split("OK:")[-1].strip())
+            m = re.search(r"OK:(\d+)", out)
+            if not m:
+                return False, "Test failed: could not parse candle count from provider response."
+            n = int(m.group(1))
             if n > 0:
                 return True, f"Connection OK — {n} candles received (AAPL, last 7 days)."
             else:
-                if provider == "finnhub":
-                    return False, "0 candles — Finnhub free tier does NOT support 1-minute intraday data. Unusable for backtesting."
-                return True, "0 candles returned (AAPL, last 7 days) — likely weekend/holiday. Provider is reachable."
+                if _is_inotify_watch_error(err):
+                    return False, "System error: inotify watch limit reached (DNS resolver). Increase fs.inotify.max_user_watches and retry."
+                if provider == "polygon":
+                    phttp = ""
+                    pstatus = ""
+                    perror = ""
+                    for line in out.splitlines():
+                        if line.startswith("PHTTP:"):
+                            phttp = line.split("PHTTP:", 1)[1].strip()
+                        elif line.startswith("PSTATUS:"):
+                            pstatus = line.split("PSTATUS:", 1)[1].strip()
+                        elif line.startswith("PERROR:"):
+                            perror = line.split("PERROR:", 1)[1].strip()
+                    if phttp or pstatus or perror:
+                        details = ", ".join(x for x in [f"http={phttp}" if phttp else "", f"status={pstatus}" if pstatus else "", f"error={perror}" if perror else ""] if x)
+                        return False, f"0 candles — Polygon diagnostic: {details}."
+                reason = _zero_candle_reason(provider, err)
+                if err:
+                    err_last = err.splitlines()[-1]
+                    return False, f"0 candles — {reason}. Details: {err_last}"
+                return False, f"0 candles — {reason}."
         else:
+            if _is_inotify_watch_error(err):
+                return False, "System error: inotify watch limit reached (DNS resolver). Increase fs.inotify.max_user_watches and retry."
             msg = err.splitlines()[-1] if err else out or "Unknown error"
             return False, f"Test failed: {msg}"
     except subprocess.TimeoutExpired:
@@ -337,7 +413,7 @@ def edit_tradfi():
     PROVIDERS = ["alpaca", "polygon", "finnhub", "alphavantage"]
     PROVIDER_NOTES = {
         "alpaca": "Free, 5+ years of 1-minute data. Recommended.",
-        "polygon": "Free tier: ~2 years of data.",
+        "polygon": "Plan-dependent: intraday coverage and history vary by Polygon plan/key; free access may return no 1-minute data.",
         "finnhub": "⚠️ Free tier does NOT support 1-minute intraday data — unusable for backtesting.",
         "alphavantage": "Free tier: 25 calls/day, very limited for backtesting.",
     }
@@ -349,11 +425,32 @@ def edit_tradfi():
     }
     NEEDS_SECRET = {"alpaca"}
 
-    users = st.session_state.users
-    tradfi = getattr(users, "tradfi", {}) or {}
+    # Always use a fresh Users() instance to avoid stale session state objects
+    # that were created before the tradfi property was added to the Users class.
+    users = Users()
+    st.session_state.users = users
+    tradfi = users.tradfi or {}
     provider = tradfi.get("provider", "alpaca")
     api_key = tradfi.get("api_key", "")
     api_secret = tradfi.get("api_secret", "")
+
+    # Sync widget session state to saved config when config changed on disk
+    # (e.g. after save/clear, or first load).
+    _saved_sig = f"{provider}|{bool(api_key)}|{bool(api_secret)}"
+    if st.session_state.get("_tradfi_sig") != _saved_sig:
+        st.session_state["_tradfi_sig"] = _saved_sig
+        st.session_state["tradfi_provider"] = provider
+        st.session_state["tradfi_api_key"] = api_key
+        st.session_state["tradfi_api_secret"] = api_secret
+
+    def _on_tradfi_provider_change():
+        selected = st.session_state.get("tradfi_provider", "alpaca")
+        if selected == provider:
+            st.session_state["tradfi_api_key"] = api_key
+            st.session_state["tradfi_api_secret"] = api_secret
+        else:
+            st.session_state["tradfi_api_key"] = ""
+            st.session_state["tradfi_api_secret"] = ""
 
     has_config = bool(api_key)
 
@@ -426,24 +523,20 @@ def edit_tradfi():
         st.markdown("**Extended provider** — optional, for backtests older than 7 days")
         col1, col2, col3 = st.columns([1, 1, 1], vertical_alignment="bottom")
         with col1:
-            idx = PROVIDERS.index(provider) if provider in PROVIDERS else 0
-            _current_provider = st.session_state.get("tradfi_provider", provider or PROVIDERS[0])
-            if _current_provider not in PROVIDERS:
-                _current_provider = PROVIDERS[0]
+            _cur_provider = st.session_state.get("tradfi_provider", PROVIDERS[0])
             sel_provider = st.selectbox(
                 "Provider",
                 PROVIDERS,
-                index=idx,
+                index=PROVIDERS.index(provider) if provider in PROVIDERS else 0,
                 key="tradfi_provider",
-                help=PROVIDER_NOTES.get(_current_provider, ""),
+                help=PROVIDER_NOTES.get(_cur_provider if _cur_provider in PROVIDERS else PROVIDERS[0], ""),
+                on_change=_on_tradfi_provider_change,
             )
         with col2:
-            sel_key = st.text_input("API Key", value=api_key, key="tradfi_api_key", type="password")
+            sel_key = st.text_input("API Key", key="tradfi_api_key", type="password")
         with col3:
             if sel_provider in NEEDS_SECRET:
-                sel_secret = st.text_input(
-                    "API Secret", value=api_secret, key="tradfi_api_secret", type="password"
-                )
+                sel_secret = st.text_input("API Secret", key="tradfi_api_secret", type="password")
             else:
                 st.text_input("API Secret", value="", disabled=True, placeholder="not required", key="tradfi_secret_na")
                 sel_secret = ""
@@ -467,25 +560,23 @@ def edit_tradfi():
                         st.error(msg, icon="🚨")
         with col_save:
             if st.button("Save TradFi Config", key="tradfi_save"):
-                new_tradfi: dict = {"provider": sel_provider}
-                if sel_key:
-                    new_tradfi["api_key"] = sel_key
-                if sel_secret:
-                    new_tradfi["api_secret"] = sel_secret
-                if hasattr(type(users), "tradfi"):
+                if not sel_key:
+                    st.warning("Enter an API key first.", icon=":material/warning:")
+                else:
+                    new_tradfi: dict = {"provider": sel_provider, "api_key": sel_key}
+                    if sel_secret:
+                        new_tradfi["api_secret"] = sel_secret
                     users.tradfi = new_tradfi
-                elif hasattr(users, "_top_level_extras"):
-                    users._top_level_extras["tradfi"] = new_tradfi
-                users.save()
-                st.success("TradFi config saved.")
+                    users.save()
+                    st.success("TradFi config saved.")
         with col_clear:
             if st.button("Clear TradFi Config", key="tradfi_clear"):
-                if hasattr(type(users), "tradfi"):
-                    users.tradfi = {}
-                elif hasattr(users, "_top_level_extras"):
-                    users._top_level_extras.pop("tradfi", None)
+                users.tradfi = {}
                 users.save()
-                st.info("TradFi config cleared.")
+                st.session_state.pop("tradfi_provider", None)
+                st.session_state.pop("tradfi_api_key", None)
+                st.session_state.pop("tradfi_api_secret", None)
+                st.rerun()
 
 
 def select_user():
