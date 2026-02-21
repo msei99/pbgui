@@ -46,7 +46,7 @@ def normalize_hyperliquid_coin(coin: str) -> str:
     - If a symbol-like value is passed (e.g. ETHUSDC, kPEPEUSDC), strip the quote.
     """
 
-    c = str(coin or "").strip().upper()
+    c = str(coin or "").strip()
     if not c:
         raise ValueError("coin is empty")
 
@@ -55,11 +55,17 @@ def normalize_hyperliquid_coin(coin: str) -> str:
     elif "_" in c and ":" in c:
         c = c.split("_", 1)[0]
 
+    c_u = c.upper()
+    # Normalize stock-perp aliases to Hyperliquid dex-meta format.
+    # Supported inputs: xyz:AAPL, XYZ:AAPL, xyz-aapl, XYZ-AAPL
+    if (c_u.startswith("XYZ:") or c_u.startswith("XYZ-")) and len(c_u) > 4:
+        return f"xyz:{c_u[4:]}"
+
     for suffix in ("USDC", "USD", "USDT"):
-        if c.endswith(suffix) and len(c) > len(suffix):
-            c = c[: -len(suffix)]
+        if c_u.endswith(suffix) and len(c_u) > len(suffix):
+            c_u = c_u[: -len(suffix)]
             break
-    return c
+    return c_u
 
 
 def _load_hyperliquid_meta_names(*, timeout_s: float = 30.0) -> tuple[set[str], dict[str, str]]:
@@ -72,8 +78,10 @@ def _load_hyperliquid_meta_names(*, timeout_s: float = 30.0) -> tuple[set[str], 
     names: set[str] = set()
     names_upper: dict[str, str] = {}
     try:
-        res = hyperliquid_info_post({"type": "meta"}, timeout_s=timeout_s)
-        if isinstance(res, dict):
+        for payload in ({"type": "meta"}, {"type": "meta", "dex": "xyz"}):
+            res = hyperliquid_info_post(payload, timeout_s=timeout_s)
+            if not isinstance(res, dict):
+                continue
             universe = res.get("universe")
             if isinstance(universe, list):
                 for item in universe:

@@ -11,6 +11,7 @@ from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
 import json
+import configparser
 from pathlib import Path
 
 def _docs_index(lang: str) -> list[tuple[str, str]]:
@@ -424,6 +425,32 @@ def edit_tradfi():
         "alphavantage": ("Get free Alpha Vantage API key", "https://www.alphavantage.co/support/#api-key"),
     }
     NEEDS_SECRET = {"alpaca"}
+    _ini_path = Path(__file__).resolve().parents[1] / "pbgui.ini"
+    _profiles_section = "tradfi_profiles"
+
+    def _load_tradfi_profiles() -> dict[str, dict[str, str]]:
+        parser = configparser.ConfigParser()
+        parser.read(_ini_path)
+        out: dict[str, dict[str, str]] = {}
+        for p in PROVIDERS:
+            out[p] = {
+                "api_key": parser.get(_profiles_section, f"{p}_api_key", fallback=""),
+                "api_secret": parser.get(_profiles_section, f"{p}_api_secret", fallback=""),
+            }
+        return out
+
+    def _save_tradfi_profile(provider_name: str, key: str, secret: str) -> None:
+        parser = configparser.ConfigParser()
+        parser.read(_ini_path)
+        if not parser.has_section(_profiles_section):
+            parser.add_section(_profiles_section)
+        parser.set(_profiles_section, f"{provider_name}_api_key", key or "")
+        parser.set(_profiles_section, f"{provider_name}_api_secret", secret or "")
+
+        tmp_path = _ini_path.with_suffix(".ini.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            parser.write(f)
+        tmp_path.replace(_ini_path)
 
     # Always use a fresh Users() instance to avoid stale session state objects
     # that were created before the tradfi property was added to the Users class.
@@ -433,6 +460,10 @@ def edit_tradfi():
     provider = tradfi.get("provider", "alpaca")
     api_key = tradfi.get("api_key", "")
     api_secret = tradfi.get("api_secret", "")
+    profiles = _load_tradfi_profiles()
+
+    _initial_key = api_key if api_key else profiles.get(provider, {}).get("api_key", "")
+    _initial_secret = api_secret if api_secret else profiles.get(provider, {}).get("api_secret", "")
 
     # Sync widget session state to saved config when config changed on disk
     # (e.g. after save/clear, or first load).
@@ -440,17 +471,18 @@ def edit_tradfi():
     if st.session_state.get("_tradfi_sig") != _saved_sig:
         st.session_state["_tradfi_sig"] = _saved_sig
         st.session_state["tradfi_provider"] = provider
-        st.session_state["tradfi_api_key"] = api_key
-        st.session_state["tradfi_api_secret"] = api_secret
+        st.session_state["tradfi_api_key"] = _initial_key
+        st.session_state["tradfi_api_secret"] = _initial_secret
 
     def _on_tradfi_provider_change():
         selected = st.session_state.get("tradfi_provider", "alpaca")
+        selected_profile = profiles.get(selected, {"api_key": "", "api_secret": ""})
         if selected == provider:
-            st.session_state["tradfi_api_key"] = api_key
-            st.session_state["tradfi_api_secret"] = api_secret
+            st.session_state["tradfi_api_key"] = api_key if api_key else selected_profile.get("api_key", "")
+            st.session_state["tradfi_api_secret"] = api_secret if api_secret else selected_profile.get("api_secret", "")
         else:
-            st.session_state["tradfi_api_key"] = ""
-            st.session_state["tradfi_api_secret"] = ""
+            st.session_state["tradfi_api_key"] = selected_profile.get("api_key", "")
+            st.session_state["tradfi_api_secret"] = selected_profile.get("api_secret", "")
 
     has_config = bool(api_key)
 
@@ -543,6 +575,7 @@ def edit_tradfi():
         _link = PROVIDER_LINKS.get(sel_provider)
         if _link:
             st.caption(f"🔗 [{_link[0]}]({_link[1]})")
+        st.caption("Additional provider credentials are stored in pbgui.ini [tradfi_profiles] for quick switching.")
 
         col_test, col_save, col_clear = st.columns([1, 1, 1])
         with col_test:
@@ -568,7 +601,12 @@ def edit_tradfi():
                         new_tradfi["api_secret"] = sel_secret
                     users.tradfi = new_tradfi
                     users.save()
-                    st.success("TradFi config saved.")
+                    try:
+                        _save_tradfi_profile(sel_provider, sel_key, sel_secret)
+                    except Exception as e:
+                        st.warning(f"TradFi config saved, but profile could not be written to pbgui.ini: {e}")
+                    else:
+                        st.success("TradFi config saved.")
         with col_clear:
             if st.button("Clear TradFi Config", key="tradfi_clear"):
                 users.tradfi = {}

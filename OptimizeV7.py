@@ -1102,7 +1102,7 @@ class OptimizeV7Item(ConfigV7Editor):
                 st.rerun()
         else:
             st.session_state.edit_opt_v7_exchanges = self.config.backtest.exchanges
-        st.multiselect('Exchanges',["binance", "bybit", "gateio", "bitget"], key="edit_opt_v7_exchanges", help=pbgui_help.exchanges)
+        st.multiselect('Exchanges',["binance", "bybit", "gateio", "bitget", "hyperliquid", "okx"], key="edit_opt_v7_exchanges", help=pbgui_help.exchanges)
     
     # Coin Sources
     @st.fragment
@@ -1655,10 +1655,18 @@ class OptimizeV7Item(ConfigV7Editor):
             self.fragment_only_cpt()
         with col5:
             st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_opt_v7_apply_filters")
+        def _canonical_coin_symbol(coin):
+            symbol = str(coin).strip()
+            if not symbol:
+                return ""
+            lower = symbol.lower()
+            if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                return f"xyz:{symbol[4:].strip().upper()}"
+            return normalize_symbol(symbol)
         def _normalize_list(items):
             normalized = []
             for item in items:
-                base = normalize_symbol(item)
+                base = _canonical_coin_symbol(item)
                 if base and base not in normalized:
                     normalized.append(base)
             return normalized
@@ -1690,7 +1698,7 @@ class OptimizeV7Item(ConfigV7Editor):
                     use_cache=True,
                 )
                 approved.update(approved_coins)
-            approved_sorted = sorted(approved)
+            approved_sorted = sorted({_canonical_coin_symbol(c) for c in approved if _canonical_coin_symbol(c)})
             self.config.live.approved_coins.long = approved_sorted
             self.config.live.approved_coins.short = approved_sorted
 
@@ -1707,7 +1715,21 @@ class OptimizeV7Item(ConfigV7Editor):
                 use_cache=True,
                 active_only=True,
             )
-            symbols.update(exchange_symbols)
+
+            symbols.update(
+                {
+                    _canonical_coin_symbol(symbol)
+                    for symbol in exchange_symbols
+                    if _canonical_coin_symbol(symbol)
+                }
+            )
+
+        preserved_stock_perps = {
+            _canonical_coin_symbol(c)
+            for c in (self.config.live.approved_coins.long + self.config.live.approved_coins.short)
+            if _canonical_coin_symbol(c).startswith("xyz:")
+        }
+        symbols.update(preserved_stock_perps)
         symbols = sorted(symbols)
         symbol_set = set(symbols)
 
@@ -1724,7 +1746,10 @@ class OptimizeV7Item(ConfigV7Editor):
             st.session_state.edit_opt_v7_approved_coins_short = self.config.live.approved_coins.short
         # Warn if stock perps selected without TradFi configured
         _all_approved = self.config.live.approved_coins.long + self.config.live.approved_coins.short
-        _stock_perps = [c for c in _all_approved if str(c).lower().startswith("xyz:")]
+        _stock_perps = [
+            c for c in _all_approved
+            if str(c).lower().startswith("xyz:") or str(c).lower().startswith("xyz-")
+        ]
         if _stock_perps:
             try:
                 _start = datetime.date.fromisoformat(self.config.backtest.start_date)

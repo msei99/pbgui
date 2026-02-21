@@ -177,6 +177,19 @@ class MarketDataConfig:
         }
 
 
+def _canonical_enabled_coin(exchange: str, coin: str) -> str:
+    ex = str(exchange or "").strip().lower()
+    s = str(coin or "").strip()
+    if not s:
+        return ""
+    if ex == "hyperliquid":
+        lower = s.lower()
+        if lower.startswith("xyz:") or lower.startswith("xyz-"):
+            tail = s[4:].strip().upper()
+            return f"xyz:{tail}" if tail else ""
+    return s.upper()
+
+
 def load_market_data_config() -> MarketDataConfig:
     path = get_market_data_config_path()
     if not path.exists():
@@ -197,8 +210,15 @@ def load_market_data_config() -> MarketDataConfig:
             continue
         if not isinstance(coins, list):
             continue
-        norm_coins = sorted({str(c).strip().upper() for c in coins if str(c).strip()})
-        cleaned[ex.strip().lower()] = norm_coins
+        ex_key = ex.strip().lower()
+        norm_coins = sorted(
+            {
+                _canonical_enabled_coin(ex_key, c)
+                for c in coins
+                if _canonical_enabled_coin(ex_key, c)
+            }
+        )
+        cleaned[ex_key] = norm_coins
 
     return MarketDataConfig(version=version, enabled_coins=cleaned)
 
@@ -214,7 +234,13 @@ def set_enabled_coins(exchange: str, coins: list[str]) -> MarketDataConfig:
     ex = str(exchange or "").strip().lower()
     if not ex:
         raise ValueError("exchange is empty")
-    norm_coins = sorted({str(c).strip().upper() for c in (coins or []) if str(c).strip()})
+    norm_coins = sorted(
+        {
+            _canonical_enabled_coin(ex, c)
+            for c in (coins or [])
+            if _canonical_enabled_coin(ex, c)
+        }
+    )
     cfg.enabled_coins[ex] = norm_coins
     save_market_data_config(cfg)
     return cfg

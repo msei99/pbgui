@@ -11,7 +11,12 @@ import time
 import numpy as np
 import requests
 
-from hyperliquid_api import download_hyperliquid_candles_api, fetch_candle_snapshot, normalize_hyperliquid_coin
+from hyperliquid_api import (
+    download_hyperliquid_candles_api,
+    fetch_candle_snapshot,
+    normalize_hyperliquid_coin,
+    resolve_hyperliquid_coin_name,
+)
 from hyperliquid_l2book_candles import generate_1m_candles_from_l2book_range, iter_hyperliquid_l2book_mid_prices
 from market_data import (
     append_exchange_download_log,
@@ -1214,6 +1219,31 @@ def update_latest_hyperliquid_1m_api_for_coin(
     k_prefix_coins = {"BONK", "FLOKI", "LUNC", "PEPE", "SHIB", "DOGS", "NEIRO"}
     if coin_u in k_prefix_coins:
         coin_u = f"k{coin_u}"
+
+    # Resolve once upfront so unavailable coins are handled gracefully and we
+    # avoid repeated per-day resolve errors in logs.
+    try:
+        coin_u = resolve_hyperliquid_coin_name(coin=coin_u, timeout_s=float(timeout_s))
+    except ValueError as e:
+        msg = str(e)
+        if "does not contain coin" in msg:
+            append_exchange_download_log(
+                "hyperliquid",
+                f"[hl_latest_1m] skip coin={coin_u} reason=not_in_live_meta",
+                level="WARNING",
+            )
+            return {
+                "coin": coin_u,
+                "lookback_days": int(max(1, int(lookback_days))),
+                "overwrite": False,
+                "hours_requested": 0,
+                "minutes_filled": 0,
+                "best_sync_days_copied": 0,
+                "best_sync_days_skipped": 0,
+                "skipped": True,
+                "skip_reason": "not_in_live_meta",
+            }
+        raise
     lb = int(lookback_days)
     if lb < 1:
         lb = 1
@@ -1262,6 +1292,9 @@ def update_latest_hyperliquid_1m_api_for_coin(
     days_present = presence.get("days") if isinstance(presence, dict) else {}
     hours_requested = 0
     minutes_filled = 0
+    days_requested = 0
+    full_gap_days = 0
+    partial_gap_days = 0
 
     # Always scan the full lookback range; missing days should still be requested.
     if not isinstance(days_present, dict):
@@ -1352,6 +1385,11 @@ def update_latest_hyperliquid_1m_api_for_coin(
 
         if missing_total <= 0:
             continue
+        days_requested += 1
+        if missing_total >= valid_minutes:
+            full_gap_days += 1
+        else:
+            partial_gap_days += 1
         if dry_run:
             hours_requested += 1
             continue
@@ -1365,13 +1403,23 @@ def update_latest_hyperliquid_1m_api_for_coin(
         )
         append_exchange_download_log(
             "hyperliquid",
-            f"[hl_latest_1m] api_request coin={coin_u} day={day_s} missing_min={missing_total}",
+            (
+                f"[hl_latest_1m] api_request coin={coin_u} day={day_s} "
+                f"missing_min_before_fetch={missing_total} valid_min={valid_minutes} "
+                f"present_min_before_fetch={max(0, valid_minutes - missing_total)}"
+            ),
         )
         time.sleep(0.1)
 
+    sync_mode = "catchup" if full_gap_days > 0 else "incremental"
     append_exchange_download_log(
         "hyperliquid",
-        f"[hl_latest_1m] api_summary coin={coin_u} lookback_days={lb} hours_requested={hours_requested} minutes_filled={minutes_filled}",
+        (
+            f"[hl_latest_1m] api_summary coin={coin_u} lookback_days={lb} mode={sync_mode} "
+            f"days_requested={days_requested} full_gap_days={full_gap_days} "
+            f"partial_gap_days={partial_gap_days} hours_requested={hours_requested} "
+            f"minutes_filled={minutes_filled}"
+        ),
     )
 
     # Keep best 1m archive in sync with freshly updated API data.
@@ -1396,6 +1444,10 @@ def update_latest_hyperliquid_1m_api_for_coin(
         "overwrite": False,
         "hours_requested": int(hours_requested),
         "minutes_filled": int(minutes_filled),
+        "days_requested": int(days_requested),
+        "full_gap_days": int(full_gap_days),
+        "partial_gap_days": int(partial_gap_days),
+        "mode": sync_mode,
         "best_sync_days_copied": int(copied_best_days),
         "best_sync_days_skipped": int(skipped_best_days),
     }
