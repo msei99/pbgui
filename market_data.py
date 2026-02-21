@@ -19,6 +19,8 @@ from PBCoinData import get_symbol_for_coin
 _DAY_HOUR_RE = re.compile(r"^(\d{8})-(\d{2})\.(lz4|jsonl|npz)$")
 _DAY_RE = re.compile(r"^(\d{8})\.(lz4|jsonl|npz)$")
 _DAY_DASH_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.(lz4|jsonl|npz)$")
+_HL_COIN_TO_CCXT_SYMBOL_CACHE: dict[str, str] | None = None
+_HL_SYMBOL_TO_CCXT_SYMBOL_CACHE: dict[str, str] | None = None
 
 
 def _normalize_day_str(day: str) -> str:
@@ -90,6 +92,47 @@ def _format_ccxt_symbol_dir(symbol: str) -> str:
     return s
 
 
+def _get_hyperliquid_ccxt_symbol_for_coin(coin: str) -> str:
+    global _HL_COIN_TO_CCXT_SYMBOL_CACHE
+    global _HL_SYMBOL_TO_CCXT_SYMBOL_CACHE
+    key = str(coin or "").strip().upper()
+    if not key:
+        return ""
+
+    try:
+        if _HL_COIN_TO_CCXT_SYMBOL_CACHE is None:
+            cache: dict[str, str] = {}
+            sym_cache: dict[str, str] = {}
+            mapping_path = Path(__file__).resolve().parent / "data" / "coindata" / "hyperliquid" / "mapping.json"
+            if mapping_path.exists():
+                rows = json.loads(mapping_path.read_text(encoding="utf-8"))
+                for rec in rows if isinstance(rows, list) else []:
+                    c = str(rec.get("coin") or "").strip().upper()
+                    s = str(rec.get("symbol") or "").strip().upper()
+                    ccxt_symbol = str(rec.get("ccxt_symbol") or "").strip().upper()
+                    if c and ccxt_symbol:
+                        cache[c] = ccxt_symbol
+                    if s and ccxt_symbol:
+                        sym_cache[s] = ccxt_symbol
+            _HL_COIN_TO_CCXT_SYMBOL_CACHE = cache
+            _HL_SYMBOL_TO_CCXT_SYMBOL_CACHE = sym_cache
+        return str((_HL_COIN_TO_CCXT_SYMBOL_CACHE or {}).get(key) or "")
+    except Exception:
+        return ""
+
+
+def _get_hyperliquid_ccxt_symbol_for_market_id(market_id: str) -> str:
+    key = str(market_id or "").strip().upper()
+    if not key:
+        return ""
+    try:
+        if _HL_SYMBOL_TO_CCXT_SYMBOL_CACHE is None:
+            _get_hyperliquid_ccxt_symbol_for_coin("BTC")
+        return str((_HL_SYMBOL_TO_CCXT_SYMBOL_CACHE or {}).get(key) or "")
+    except Exception:
+        return ""
+
+
 def normalize_market_data_coin_dir(exchange: str, coin: str) -> str:
     ex = str(exchange or "").strip().lower()
     raw = str(coin or "").strip()
@@ -99,6 +142,10 @@ def normalize_market_data_coin_dir(exchange: str, coin: str) -> str:
         return raw.upper()
 
     sym = raw
+    if str(raw).strip().isdigit():
+        mid_symbol = _get_hyperliquid_ccxt_symbol_for_market_id(raw)
+        if mid_symbol:
+            sym = mid_symbol
     # Only call get_symbol_for_coin if input is NOT already a symbol (doesn't end with USDC/USDT)
     # This prevents kBONKUSDC from becoming kBONKUSDCUSDC
     looks_like_symbol = any(sym.upper().endswith(q) for q in ("USDC", "USDT"))
@@ -107,6 +154,18 @@ def normalize_market_data_coin_dir(exchange: str, coin: str) -> str:
         try:
             sym = get_symbol_for_coin(sym.upper(), "hyperliquid.swap")
         except Exception:
+            sym = raw
+
+    # Hyperliquid mapping stores `symbol` as numeric market id (e.g. BTC -> "0").
+    # If reverse lookup returned that id, resolve coin -> ccxt_symbol instead.
+    sym_u = str(sym).strip().upper()
+    if sym_u.isdigit():
+        ccxt_symbol = _get_hyperliquid_ccxt_symbol_for_market_id(sym_u)
+        if not ccxt_symbol:
+            ccxt_symbol = _get_hyperliquid_ccxt_symbol_for_coin(raw)
+        if ccxt_symbol:
+            sym = ccxt_symbol
+        else:
             sym = raw
 
     # Normalize and format for directory
@@ -440,6 +499,120 @@ def summarize_raw_inventory(exchange: str, *, limit: int = 200, skip_coverage: b
             )
             if limit and len(rows) >= int(limit):
                 return rows
+    return rows
+
+
+def _get_pb7_root_dir(pb7_root: str | Path | None = None) -> Path | None:
+    if pb7_root:
+        try:
+            p = Path(pb7_root).expanduser().resolve()
+            return p if p.exists() else None
+        except Exception:
+            return None
+
+    try:
+        cfg = configparser.ConfigParser()
+        cfg.read(Path(__file__).resolve().parent / "pbgui.ini")
+        ini_val = str(cfg.get("main", "pb7dir", fallback="") or "").strip()
+        if ini_val:
+            p = Path(ini_val).expanduser().resolve()
+            if p.exists():
+                return p
+    except Exception:
+        pass
+
+    try:
+        p = (Path(__file__).resolve().parents[1] / "pb7").resolve()
+        return p if p.exists() else None
+    except Exception:
+        return None
+
+
+def _parse_pb7_cache_day_from_name(name: str) -> str:
+    s = str(name or "")
+    stem = Path(s).stem
+    try:
+        if len(stem) == 10 and stem[4] == "-" and stem[7] == "-":
+            return stem.replace("-", "")
+        if len(stem) == 8 and stem.isdigit():
+            return stem
+    except Exception:
+        pass
+    return ""
+
+
+def summarize_pb7_cache_inventory(
+    exchange: str,
+    *,
+    pb7_root: str | Path | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    ex = str(exchange or "").strip().lower()
+    if not ex:
+        raise ValueError("exchange is empty")
+
+    root = _get_pb7_root_dir(pb7_root)
+    if root is None:
+        return []
+
+    base = root / "caches" / "ohlcv" / ex
+    if not base.exists() or not base.is_dir():
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for timeframe_dir in sorted([p for p in base.iterdir() if p.is_dir()], key=lambda p: p.name):
+        tf = str(timeframe_dir.name)
+        for coin_dir in sorted([p for p in timeframe_dir.iterdir() if p.is_dir()], key=lambda p: p.name):
+            n_files = 0
+            total_bytes = 0
+            days_present: set[str] = set()
+            for f in coin_dir.iterdir():
+                if not f.is_file():
+                    continue
+                if f.suffix.lower() != ".npy":
+                    continue
+                day = _parse_pb7_cache_day_from_name(f.name)
+                if not day:
+                    continue
+                n_files += 1
+                days_present.add(day)
+                try:
+                    total_bytes += int(f.stat().st_size)
+                except Exception:
+                    pass
+
+            if n_files <= 0:
+                continue
+
+            oldest_day = ""
+            newest_day = ""
+            n_days = 0
+            try:
+                oldest_day = min(days_present) if days_present else ""
+                newest_day = max(days_present) if days_present else ""
+                if oldest_day and newest_day:
+                    dt0 = datetime.strptime(oldest_day, "%Y%m%d").date()
+                    dt1 = datetime.strptime(newest_day, "%Y%m%d").date()
+                    if dt1 >= dt0:
+                        n_days = (dt1 - dt0).days + 1
+            except Exception:
+                pass
+
+            rows.append(
+                {
+                    "exchange": ex,
+                    "timeframe": tf,
+                    "coin": coin_dir.name,
+                    "n_files": int(n_files),
+                    "total_bytes": int(total_bytes),
+                    "oldest_day": oldest_day,
+                    "newest_day": newest_day,
+                    "n_days": int(n_days),
+                }
+            )
+            if limit and len(rows) >= int(limit):
+                return rows
+
     return rows
 
 

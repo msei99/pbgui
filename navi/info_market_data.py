@@ -32,6 +32,7 @@ from market_data import (
     load_market_data_config,
     set_enabled_coins,
     summarize_raw_inventory,
+    summarize_pb7_cache_inventory,
     get_daily_hour_coverage_for_dataset,
     get_minute_presence_for_dataset,
     get_exchange_download_log_path,
@@ -1196,7 +1197,7 @@ def view_market_data():
             rows_1m_api = [r for r in rows if str(r.get("dataset") or "").lower() in ("1m_api", "candles_1m_api")]
             rows_l2book = [r for r in rows if str(r.get("dataset") or "").lower() == "l2book"]
 
-            tab_1m, tab_1m_api, tab_l2book = st.tabs(["1m", "1m_api", "l2Book"])
+            tab_1m, tab_1m_api, tab_l2book, tab_pb7_cache = st.tabs(["1m", "1m_api", "l2Book", "PB7 cache"])
 
             try:
                 _latest_interval_s = int(str(load_ini("pbdata", "latest_1m_interval_seconds") or "120").strip())
@@ -1736,6 +1737,41 @@ def view_market_data():
             with tab_l2book:
                 sel_row_l2book = _render_dataset_table(rows_l2book, "l2Book", "l2book")
                 _render_deletion_tools(rows_l2book, "l2book", "l2Book", sel_row_l2book)
+
+            with tab_pb7_cache:
+                pb7_rows = summarize_pb7_cache_inventory(str(exchange).lower(), limit=2000)
+                if not pb7_rows:
+                    st.info("No PB7 cache files found for this exchange (expected path: pb7/caches/ohlcv/<exchange>/...).")
+                else:
+                    import pandas as pd
+                    df_pb7 = pd.DataFrame(pb7_rows)
+                    if not df_pb7.empty:
+                        total_files = int(df_pb7["n_files"].sum()) if "n_files" in df_pb7.columns else 0
+                        total_bytes = int(df_pb7["total_bytes"].sum()) if "total_bytes" in df_pb7.columns else 0
+                        n_coins = int(df_pb7["coin"].nunique()) if "coin" in df_pb7.columns else 0
+                        n_tf = int(df_pb7["timeframe"].nunique()) if "timeframe" in df_pb7.columns else 0
+
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("timeframes", n_tf)
+                        c2.metric("coins", n_coins)
+                        c3.metric("files", total_files)
+                        c4.metric("size", _fmt_bytes(total_bytes))
+
+                    if "total_bytes" in df_pb7.columns:
+                        df_pb7["size_mb"] = (df_pb7["total_bytes"].astype(float) / (1024.0 * 1024.0)).round(2)
+                        df_pb7 = df_pb7.drop(columns=["total_bytes"])
+
+                    col_cfg = {
+                        "size_mb": st.column_config.NumberColumn("size", format="%.2f MB")
+                    }
+                    st.dataframe(
+                        df_pb7,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config=col_cfg,
+                        key="market_data_pb7_cache_table",
+                    )
+                    st.caption("Read-only view of PB7 cache inventory from pb7/caches/ohlcv.")
 
             # Get the selected row from any of the tabs
             sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book
