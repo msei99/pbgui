@@ -60,6 +60,13 @@ Auf der API-Keys-Seite gibt es zusätzlich den Bereich **TradFi Data Provider**:
 	- API-Secret ist nur für `alpaca` erforderlich.
 	- Aktionen: **Test Connection**, **Save TradFi Config**, **Clear TradFi Config**.
 
+### TradFi-Runtime-Verhalten (Single Source of Truth)
+
+- Diese Seite ist für **Credentials und Provider-Setup** zuständig.
+- Das Runtime-Market-Data-Verhalten (HIP-3-Flow, Quellen-Priorität und Loop-Scope) steht im Market-Data-Guide:
+	- `docs/help/26_market_data.md` (EN)
+	- `docs/help_de/26_market_data.md` (DE)
+
 ### Free-Provider-Abdeckung (Kurzüberblick)
 
 Die Angaben sind als praktische PBGui/PB7-Richtwerte zu verstehen; Provider-Pläne können sich ändern.

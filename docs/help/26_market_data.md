@@ -31,6 +31,7 @@ Top metrics summarize total timeframes, coins, files, and disk usage.
 
 Notes:
 - This tab is informational only (no delete actions).
+- You can click a PB7 cache row to show the same **Overview (days)** panel below as in other inventory tabs.
 - If PB7 path is missing/misconfigured, the tab may be empty.
 
 ---
@@ -120,22 +121,31 @@ For each missing minute, sources are checked in this order:
    - Uses existing API downloads from `1m_api/`
    - Only for empty slots (SOURCE_CODE_MISSING)
 
-2. **l2Book → 1m Conversion** (highest quality)
-   - Converts **local** l2Book files to 1m candles
-   - Uses Order Book mid-price for OHLCV
-   - **No comparison with S3** - only local files
+2. **Branch by market type**
 
-3. **Binance USDT-Perp Gap Fill** (fallback 1)
-   - Downloads missing minutes from Binance USDT perpetuals
-   - **Smart Gap Smoothing:**
-     - `open` of first gap minute = `close` of previous l2Book candle
-     - `close` of last gap minute = `open` of next l2Book candle
-   - Smooths transitions between different data sources
+   **Crypto symbols**
+   1. **l2Book → 1m Conversion** (highest quality)
+      - Converts **local** l2Book files to 1m candles
+      - Uses Order Book mid-price for OHLCV
+      - **No comparison with S3** - only local files
+   2. **Binance USDT-Perp Gap Fill** (fallback 1)
+      - Downloads missing minutes from Binance USDT perpetuals
+      - **Smart Gap Smoothing:**
+        - `open` of first gap minute = `close` of previous l2Book candle
+        - `close` of last gap minute = `open` of next l2Book candle
+      - Smooths transitions between different data sources
+   3. **Bybit USDT-Perp Gap Fill** (fallback 2)
+      - Downloads remaining gaps from Bybit USDT perpetuals
+      - Important for tokens like HYPE that listed on Binance later
+      - Same smart smoothing logic as Binance
 
-4. **Bybit USDT-Perp Gap Fill** (fallback 2)
-   - Downloads remaining gaps from Bybit USDT perpetuals
-   - Important for tokens like HYPE that listed on Binance later
-   - Same smart smoothing logic as Binance
+   **HIP-3 / Stock-perp symbols** (for example `xyz:AAPL`)
+   1. **Alpaca 1m (IEX feed)** (primary source)
+   2. **Polygon 1m** only for remaining real gaps in the same RTH session window
+
+Scope:
+- Binance/Bybit gap-fill applies to the crypto branch.
+- HIP-3 TradFi branch uses credentials from `pbgui.ini` `[tradfi_profiles]`.
 
 ### Workflow
 
@@ -146,13 +156,16 @@ For each day:
      ↓
   2. Insert API 1m (if available)
      ↓
-  3. Convert local l2Book → 1m (optimized parser)
+  3. Branch by market type:
+     - Crypto path:
+       a) Convert local l2Book → 1m (optimized parser)
+       b) Fill remaining gaps with Binance (only if gaps exist)
+       c) Fill still open gaps with Bybit (only if gaps exist)
+     - HIP-3 / stock-perp path:
+       a) Fill from Alpaca 1m (IEX feed)
+       b) Fill remaining real gaps from Polygon 1m (same RTH session window)
      ↓
-  4. Fill remaining gaps with Binance (only if gaps exist)
-     ↓
-  5. Fill still open gaps with Bybit (only if gaps exist)
-     ↓
-  6. Update source codes
+  4. Update source codes
 ```
 
 ### Performance Optimizations
@@ -481,6 +494,33 @@ BTC (normalized)   → BTCUSDC           → BTC_USDC:USDC    → BTC
 ### Auto-Refresh Settings (PBData Background Service)
 
 PBData automatically refreshes the latest 1m candles from Hyperliquid API in the background.
+
+### Latest 1m Runtime Flow (current behavior)
+
+For each enabled Hyperliquid coin in one refresh cycle:
+
+1. Fetch latest candles from Hyperliquid API into `1m_api/<COIN>/YYYY-MM-DD.npz`
+2. Merge returned minutes into existing day files (incremental overwrite of fetched minutes)
+3. Run `best_sync` for the same coin to keep `1m/<COIN>/` aligned with `1m_api/`
+   - bootstrap: if `1m/` is empty but `1m_api/` already has days, copy the full available API window
+   - incremental: after regular updates, sync only the relevant recent window
+4. Continue with the next coin
+
+Important scope note:
+- This auto-refresh loop is Hyperliquid-API based.
+- TradFi/HIP-3 provider logic is not part of this normal latest-1m loop.
+
+### `best_sync` log metrics
+
+`[hl_latest_1m] best_sync ...` now logs both day and minute counters:
+- `copied_days`: number of day files touched in `1m/`
+- `skipped_days`: day files skipped (already aligned or no copy needed)
+- `copied_minutes`: total minutes written during sync
+- `new_minutes`: minutes created in previously empty slots
+- `overwritten_minutes`: existing minutes replaced by newer API values
+
+Interpretation tip:
+- `copied_days=2` can still be a tiny update if only a few boundary minutes changed; use minute counters as the real activity signal.
 
 **Configure via GUI:**
 - Market Data page → "Settings (Latest 1m Auto-Refresh)" expander

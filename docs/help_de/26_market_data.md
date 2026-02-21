@@ -31,6 +31,7 @@ Oben zeigen Metriken die Gesamtanzahl von Timeframes, Coins, Dateien und Speiche
 
 Hinweise:
 - Dieser Tab ist rein informativ (keine Löschaktionen).
+- Du kannst eine PB7-Cache-Zeile anklicken, um darunter die gleiche **Overview (days)**-Ansicht wie in den anderen Inventory-Tabs zu sehen.
 - Wenn der PB7-Pfad fehlt/falsch konfiguriert ist, kann der Tab leer bleiben.
 
 ---
@@ -120,22 +121,31 @@ Für jede fehlende Minute wird in dieser Reihenfolge geprüft:
    - Verwendet vorhandene API-Downloads aus `1m_api/`
    - Nur für leere Slots (SOURCE_CODE_MISSING)
 
-2. **l2Book → 1m Konvertierung** (höchste Qualität)
-   - Konvertiert **lokale** l2Book-Dateien zu 1m-Kerzen
-   - Nutzt Order Book Mid-Price für OHLCV
-   - **Kein Vergleich mit S3** - nur lokale Dateien
+2. **Nach Markt-Typ verzweigen**
 
-3. **Binance USDT-Perp Gap Fill** (Fallback 1)
-   - Lädt fehlende Minuten von Binance USDT-Perpetuals
-   - **Smart Gap-Smoothing:**
-     - `open` der ersten Gap-Minute = `close` der vorherigen l2Book-Kerze
-     - `close` der letzten Gap-Minute = `open` der nächsten l2Book-Kerze
-   - Glättet Übergänge zwischen verschiedenen Datenquellen
+   **Crypto-Symbole**
+   1. **l2Book → 1m Konvertierung** (höchste Qualität)
+      - Konvertiert **lokale** l2Book-Dateien zu 1m-Kerzen
+      - Nutzt Order Book Mid-Price für OHLCV
+      - **Kein Vergleich mit S3** - nur lokale Dateien
+   2. **Binance USDT-Perp Gap Fill** (Fallback 1)
+      - Lädt fehlende Minuten von Binance USDT-Perpetuals
+      - **Smart Gap-Smoothing:**
+        - `open` der ersten Gap-Minute = `close` der vorherigen l2Book-Kerze
+        - `close` der letzten Gap-Minute = `open` der nächsten l2Book-Kerze
+      - Glättet Übergänge zwischen verschiedenen Datenquellen
+   3. **Bybit USDT-Perp Gap Fill** (Fallback 2)
+      - Lädt verbleibende Lücken von Bybit USDT-Perpetuals
+      - Wichtig für Tokens wie HYPE, die auf Binance später listeten
+      - Gleiche Smart-Smoothing-Logik wie Binance
 
-4. **Bybit USDT-Perp Gap Fill** (Fallback 2)
-   - Lädt verbleibende Lücken von Bybit USDT-Perpetuals
-   - Wichtig für Tokens wie HYPE, die auf Binance später listeten
-   - Gleiche Smart-Smoothing-Logik wie Binance
+   **HIP-3 / Stock-Perp-Symbole** (z. B. `xyz:AAPL`)
+   1. **Alpaca 1m (IEX-Feed)** (Primärquelle)
+   2. **Polygon 1m** nur für verbleibende echte Lücken im selben RTH-Sessionfenster
+
+Scope:
+- Binance/Bybit-Gap-Fill gilt für den Crypto-Pfad.
+- Der HIP-3-TradFi-Pfad nutzt Credentials aus `pbgui.ini` `[tradfi_profiles]`.
 
 ### Workflow
 
@@ -146,13 +156,16 @@ Für jeden Tag:
      ↓
   2. API 1m einfügen (falls vorhanden)
      ↓
-  3. Lokale l2Book → 1m konvertieren (optimierter Parser)
+  3. Nach Markt-Typ verzweigen:
+     - Crypto-Pfad:
+       a) Lokale l2Book → 1m konvertieren (optimierter Parser)
+       b) Verbleibende Lücken mit Binance füllen (nur bei Lücken)
+       c) Noch offene Lücken mit Bybit füllen (nur bei Lücken)
+     - HIP-3 / Stock-Perp-Pfad:
+       a) Mit Alpaca 1m (IEX-Feed) füllen
+       b) Verbleibende echte Lücken mit Polygon 1m füllen (gleiches RTH-Sessionfenster)
      ↓
-  4. Verbleibende Lücken mit Binance füllen (nur bei Lücken)
-     ↓
-  5. Noch offene Lücken mit Bybit füllen (nur bei Lücken)
-     ↓
-  6. Source-Codes aktualisieren
+  4. Source-Codes aktualisieren
 ```
 
 ### Performance-Optimierungen
@@ -467,6 +480,33 @@ BTC (normalized)   → BTCUSDC           → BTC_USDC:USDC    → BTC
 ### Auto-Refresh Einstellungen (PBData Background Service)
 
 PBData aktualisiert automatisch die neuesten 1m-Kerzen von der Hyperliquid API im Hintergrund.
+
+### Latest-1m Runtime-Ablauf (aktuelles Verhalten)
+
+Für jeden aktivierten Hyperliquid-Coin in einem Refresh-Zyklus:
+
+1. Neueste Kerzen von der Hyperliquid API nach `1m_api/<COIN>/YYYY-MM-DD.npz` fetchen
+2. Zurückgelieferte Minuten in vorhandene Tagesdateien mergen (inkrementelles Überschreiben gefetchter Minuten)
+3. Für denselben Coin `best_sync` ausführen, damit `1m/<COIN>/` mit `1m_api/` synchron bleibt
+   - Bootstrap: wenn `1m/` leer ist, aber in `1m_api/` bereits Tage existieren, wird das volle verfügbare API-Fenster kopiert
+   - Inkrementell: nach normalen Updates wird nur das relevante aktuelle Fenster synchronisiert
+4. Mit dem nächsten Coin fortfahren
+
+Wichtiger Scope-Hinweis:
+- Dieser Auto-Refresh-Loop basiert auf der Hyperliquid API.
+- TradFi/HIP-3 Provider-Logik ist nicht Teil dieses normalen Latest-1m-Loops.
+
+### `best_sync` Log-Metriken
+
+`[hl_latest_1m] best_sync ...` loggt jetzt Tages- und Minutenzähler:
+- `copied_days`: Anzahl bearbeiteter Tagesdateien in `1m/`
+- `skipped_days`: übersprungene Tagesdateien (bereits synchron oder kein Kopieren nötig)
+- `copied_minutes`: insgesamt geschriebene Minuten beim Sync
+- `new_minutes`: Minuten in zuvor leeren Slots
+- `overwritten_minutes`: vorhandene Minuten, die durch neuere API-Werte ersetzt wurden
+
+Interpretation:
+- `copied_days=2` kann trotzdem ein sehr kleines Update sein, wenn nur wenige Rand-Minuten geändert wurden; die Minutenzähler zeigen die echte Aktivität.
 
 **Konfiguration über GUI:**
 - Market Data Seite → "Settings (Latest 1m Auto-Refresh)" Expander
