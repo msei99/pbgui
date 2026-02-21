@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import calendar
 
-from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -11,6 +11,11 @@ import signal
 import time
 import inspect
 import json
+
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+except Exception:
+    _ZoneInfo = None
 
 from Exchange import Exchanges
 from PBCoinData import CoinData, get_symbol_for_coin, compute_coin_name
@@ -33,6 +38,7 @@ from market_data import (
     set_enabled_coins,
     summarize_raw_inventory,
     summarize_pb7_cache_inventory,
+    get_daily_presence_for_pb7_cache,
     get_daily_hour_coverage_for_dataset,
     get_minute_presence_for_dataset,
     get_exchange_download_log_path,
@@ -55,6 +61,8 @@ from hyperliquid_aws import (
 
 from hyperliquid_best_1m import (
     update_latest_hyperliquid_1m_api_for_coin,
+    _load_tradfi_profiles_from_ini,
+    _alpaca_fetch_trading_sessions,
 )
 
 from task_queue import (
@@ -66,6 +74,77 @@ from task_queue import (
     force_fail_job,
     clear_worker_pid,
 )
+
+
+def _is_hyperliquid_stock_perp_1m(*, exchange: str, dataset: str, coin: str) -> bool:
+    ex_l = str(exchange or "").strip().lower()
+    ds_l = str(dataset or "").strip().lower()
+    coin_u = str(coin or "").strip().upper()
+    if ex_l != "hyperliquid":
+        return False
+    if ds_l not in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
+        return False
+    return coin_u.startswith("XYZ:") or coin_u.startswith("XYZ-")
+
+
+def _tradfi_expected_minute_indices(day: _date) -> set[int]:
+    # US equities regular session (09:30-16:00 ET), converted to UTC per day (DST-aware).
+    if int(day.weekday()) >= 5:
+        return set()
+    if _ZoneInfo is None:
+        # Conservative fallback when zoneinfo is unavailable: assume standard UTC window.
+        return set(range((14 * 60) + 30, (21 * 60)))
+    try:
+        et = _ZoneInfo("America/New_York")
+        utc = _ZoneInfo("UTC")
+        open_dt = _datetime(day.year, day.month, day.day, 9, 30, tzinfo=et).astimezone(utc)
+        close_dt = _datetime(day.year, day.month, day.day, 16, 0, tzinfo=et).astimezone(utc)
+        start_i = int(open_dt.hour) * 60 + int(open_dt.minute)
+        end_excl = int(close_dt.hour) * 60 + int(close_dt.minute)
+        if end_excl <= start_i:
+            return set()
+        return set(range(start_i, end_excl))
+    except Exception:
+        return set(range((14 * 60) + 30, (21 * 60)))
+
+
+def _tradfi_expected_minute_indices_from_session(*, day: _date, session_start_ms: int, session_end_ms: int) -> set[int]:
+    if int(session_end_ms) < int(session_start_ms):
+        return set()
+    utc = _ZoneInfo("UTC") if _ZoneInfo is not None else _timezone.utc
+    day_start = _datetime(day.year, day.month, day.day, tzinfo=utc)
+    day_start_ms = int(day_start.timestamp() * 1000)
+    start_idx = max(0, (int(session_start_ms) - day_start_ms) // 60_000)
+    end_idx = min(1439, (int(session_end_ms) - day_start_ms) // 60_000)
+    if end_idx < start_idx:
+        return set()
+    return set(range(int(start_idx), int(end_idx) + 1))
+
+
+def _load_tradfi_sessions_cached(*, start_day: _date, end_day: _date) -> tuple[dict[str, tuple[int, int]], bool]:
+    profiles = _load_tradfi_profiles_from_ini()
+    alpaca_key = str((profiles.get("alpaca") or {}).get("api_key") or "").strip()
+    alpaca_secret = str((profiles.get("alpaca") or {}).get("api_secret") or "").strip()
+    if not alpaca_key or not alpaca_secret:
+        return {}, False
+
+    cache_key = f"market_data_tradfi_sessions_{start_day.strftime('%Y%m%d')}_{end_day.strftime('%Y%m%d')}"
+    cached = st.session_state.get(cache_key)
+    if isinstance(cached, dict):
+        return cached, True
+
+    try:
+        sessions = _alpaca_fetch_trading_sessions(
+            start_date=start_day,
+            end_date=end_day,
+            api_key=alpaca_key,
+            api_secret=alpaca_secret,
+            timeout_s=20.0,
+        )
+    except Exception:
+        sessions = {}
+    st.session_state[cache_key] = sessions if isinstance(sessions, dict) else {}
+    return (sessions if isinstance(sessions, dict) else {}), True
 
 
 def _docs_index(lang: str) -> list[tuple[str, str]]:
@@ -109,6 +188,64 @@ def _load_market_data_status() -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+_HL_STATUS_SYMBOL_TO_COIN_CACHE: dict[str, str] | None = None
+
+
+def _load_hyperliquid_status_symbol_map() -> dict[str, str]:
+    global _HL_STATUS_SYMBOL_TO_COIN_CACHE
+    if isinstance(_HL_STATUS_SYMBOL_TO_COIN_CACHE, dict):
+        return _HL_STATUS_SYMBOL_TO_COIN_CACHE
+
+    out: dict[str, str] = {}
+    try:
+        mapping_path = Path(__file__).resolve().parents[1] / "data" / "coindata" / "hyperliquid" / "mapping.json"
+        if mapping_path.exists():
+            raw = json.loads(mapping_path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                for rec in raw:
+                    if not isinstance(rec, dict):
+                        continue
+                    symbol = str(rec.get("symbol") or "").strip().upper()
+                    coin = str(rec.get("coin") or "").strip().upper()
+                    if symbol and coin and symbol not in out:
+                        out[symbol] = coin
+    except Exception:
+        out = {}
+
+    _HL_STATUS_SYMBOL_TO_COIN_CACHE = out
+    return out
+
+
+def _display_market_data_status_coin(*, exchange: str, coin: object) -> str:
+    c = str(coin or "").strip()
+    if not c:
+        return ""
+
+    ex = str(exchange or "").strip().lower()
+    if ex != "hyperliquid":
+        return c
+
+    c_u = c.upper()
+
+    # Legacy / low-level Hyperliquid market ids (e.g. "0", "50") -> coin name.
+    if c_u.isdigit():
+        mapped = _load_hyperliquid_status_symbol_map().get(c_u)
+        if mapped:
+            return mapped
+
+    # Normalize stock-perp display variants to xyz:TICKER.
+    if c_u.startswith("XYZ:") or c_u.startswith("XYZ-"):
+        tail = c_u[4:].strip()
+        for suffix in ("/USDC:USDC", "_USDC:USDC", "_USDC_USDC", "USDC", "/USDT:USDT", "_USDT:USDT", "_USDT_USDT", "USDT"):
+            if tail.endswith(suffix):
+                tail = tail[: -len(suffix)]
+                break
+        tail = tail.strip(" _:-")
+        return f"xyz:{tail}" if tail else c
+
+    return c
 
 
 def _read_markdown(path: str) -> str:
@@ -193,6 +330,8 @@ def _render_jobs_panel(
 
         def _render_job_details(match: dict) -> None:
             pr = match.get("progress") if isinstance(match.get("progress"), dict) else {}
+            coin_local = str((pr or {}).get("coin") or "").strip().upper()
+            is_stock_perp = coin_local.startswith("XYZ:") or coin_local.startswith("XYZ-")
             step_i = (pr or {}).get("step")
             total_i = (pr or {}).get("total")
             step_txt = f"{step_i}/{total_i}" if total_i else ""
@@ -237,19 +376,28 @@ def _render_jobs_panel(
             last_binance_day = (pr or {}).get("last_binance_fill_day")
             if stage == "binance_fill" and sub_day:
                 st.caption(f"substatus: binance_fill day={sub_day}")
-            elif last_binance_day:
+            elif last_binance_day and not is_stock_perp:
                 st.caption(f"substatus: binance_fill day={last_binance_day}")
-            if (sub_day or sub_hour is not None) and stage != "binance_fill" and not sub_day:
+            if (sub_day or sub_hour is not None) and stage != "binance_fill":
                 try:
                     hour_txt = f"{int(sub_hour):02d}" if sub_hour is not None else ""
                 except Exception:
                     hour_txt = str(sub_hour)
                 if sub_day and hour_txt:
-                    st.caption(f"substatus: l2book {sub_day} {hour_txt}:00")
+                    if is_stock_perp:
+                        st.caption(f"substatus: tradfi {sub_day} {hour_txt}:00")
+                    else:
+                        st.caption(f"substatus: l2book {sub_day} {hour_txt}:00")
                 elif sub_day:
-                    st.caption(f"substatus: l2book {sub_day}")
+                    if is_stock_perp:
+                        st.caption(f"substatus: tradfi {sub_day}")
+                    else:
+                        st.caption(f"substatus: l2book {sub_day}")
                 elif hour_txt:
-                    st.caption(f"substatus: l2book hour {hour_txt}")
+                    if is_stock_perp:
+                        st.caption(f"substatus: tradfi hour {hour_txt}")
+                    else:
+                        st.caption(f"substatus: l2book hour {hour_txt}")
             corrupt = (pr or {}).get("corrupt_files")
             if isinstance(corrupt, list) and corrupt:
                 st.caption(f"corrupt_files: {len(corrupt)}")
@@ -306,6 +454,8 @@ def _render_jobs_panel(
             c4.write(coin)
             c5.write(chunk)
             c6.progress(pct)
+            coin_upper = str(coin or "").strip().upper()
+            is_stock_perp = coin_upper.startswith("XYZ:") or coin_upper.startswith("XYZ-")
             sub_day = (pr or {}).get("day")
             sub_hour = (pr or {}).get("hour")
             last_binance_day = (pr or {}).get("last_binance_fill_day")
@@ -315,12 +465,21 @@ def _render_jobs_panel(
                 except Exception:
                     hour_txt = str(sub_hour)
                 if sub_day and hour_txt:
-                    c6.caption(f"l2book {sub_day} {hour_txt}:00")
+                    if is_stock_perp:
+                        c6.caption(f"tradfi {sub_day} {hour_txt}:00")
+                    else:
+                        c6.caption(f"l2book {sub_day} {hour_txt}:00")
                 elif sub_day:
-                    c6.caption(f"l2book {sub_day}")
+                    if is_stock_perp:
+                        c6.caption(f"tradfi {sub_day}")
+                    else:
+                        c6.caption(f"l2book {sub_day}")
                 elif hour_txt:
-                    c6.caption(f"l2book hour {hour_txt}")
-            if last_binance_day:
+                    if is_stock_perp:
+                        c6.caption(f"tradfi hour {hour_txt}")
+                    else:
+                        c6.caption(f"l2book hour {hour_txt}")
+            if last_binance_day and not is_stock_perp:
                 c6.caption(f"binance_fill day={last_binance_day}")
             c7.write(str(j.get("updated_ts") or ""))
             with c8:
@@ -469,6 +628,8 @@ def _coin_options_for_exchange(exchange: str) -> list[str]:
 
 
 def view_market_data():
+    preserve_selection_once = bool(st.session_state.pop("market_data_preserve_selection_once", False))
+
     def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
         ex_name = str(exchange_name or "").strip().lower()
         value = str(coin_value or "").strip()
@@ -698,9 +859,14 @@ def view_market_data():
                 except Exception as e:
                     st.error(f'Failed to save settings: {e}')
 
-    tab_actions, tab_have, tab_log = st.tabs(["Actions", "Already have", "Activity log"])
+    main_view = st.segmented_control(
+        "",
+        options=["Actions", "Already have", "Activity log"],
+        default="Actions",
+        key="market_data_main_view",
+    )
 
-    with tab_actions:
+    if main_view == "Actions":
         if str(exchange).lower() != "hyperliquid":
             st.info("Market Data actions are currently implemented for Hyperliquid.")
         else:
@@ -728,12 +894,10 @@ def view_market_data():
                                     next_run = max(0, int(interval_s - (now - last_dt).total_seconds()))
                                 except Exception:
                                     next_run = ""
-                            coin_display = coin
-                            try:
-                                if str(exchange).lower() == "hyperliquid":
-                                    coin_display = get_symbol_for_coin(str(coin), ex_key)
-                            except Exception:
-                                coin_display = coin
+                            coin_display = _display_market_data_status_coin(
+                                exchange=str(exchange),
+                                coin=coin,
+                            )
                             rows.append(
                                 {
                                     "coin": coin_display,
@@ -935,6 +1099,15 @@ def view_market_data():
                                         f"l2book_added={lr.get('l2book_minutes_added')} "
                                         f"binance_filled={lr.get('binance_minutes_filled')} "
                                         f"bybit_filled={lr.get('bybit_minutes_filled', 0)}"
+                                        f"{dur_txt}"
+                                    )
+                                elif all(k in lr for k in ("days_checked", "alpaca_minutes_filled", "polygon_minutes_filled")):
+                                    st.caption(
+                                        "improve: "
+                                        f"days={lr.get('days_checked')} "
+                                        f"alpaca_filled={lr.get('alpaca_minutes_filled')} "
+                                        f"polygon_filled={lr.get('polygon_minutes_filled')} "
+                                        f"polygon_old_days_skipped={lr.get('polygon_old_days_skipped', 0)}"
                                         f"{dur_txt}"
                                     )
                                 else:
@@ -1178,16 +1351,32 @@ def view_market_data():
                         st.error(str(e))
 
 
-    with tab_have:
-        _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}"
-        if _cache_key not in st.session_state:
-            # Load inventory with intelligent coverage calculation
-            # - 1m: uses sources.idx (fast!)
-            # - l2book: hour from filename
-            # - 1m_api: minimal estimation
-            st.session_state[_cache_key] = summarize_raw_inventory(str(exchange).lower(), skip_coverage=False)
-        rows = st.session_state.get(_cache_key) or []
-        if not rows:
+    if main_view == "Already have":
+        have_view = st.segmented_control(
+            "",
+            options=["1m", "1m_api", "l2Book", "PB7 cache"],
+            default="1m",
+            key="market_data_have_view",
+        )
+
+        dataset_filters = {
+            "1m": ["1m", "candles_1m"],
+            "1m_api": ["1m_api", "candles_1m_api"],
+            "l2Book": ["l2book"],
+        }
+
+        rows = []
+        if have_view != "PB7 cache":
+            _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}_{str(have_view).lower()}"
+            if _cache_key not in st.session_state:
+                st.session_state[_cache_key] = summarize_raw_inventory(
+                    str(exchange).lower(),
+                    skip_coverage=False,
+                    datasets_filter=dataset_filters.get(have_view),
+                )
+            rows = st.session_state.get(_cache_key) or []
+
+        if have_view != "PB7 cache" and not rows:
             st.info("No raw files found yet.")
         else:
             import pandas as pd
@@ -1196,8 +1385,6 @@ def view_market_data():
             rows_1m = [r for r in rows if str(r.get("dataset") or "").lower() in ("1m", "candles_1m")]
             rows_1m_api = [r for r in rows if str(r.get("dataset") or "").lower() in ("1m_api", "candles_1m_api")]
             rows_l2book = [r for r in rows if str(r.get("dataset") or "").lower() == "l2book"]
-
-            tab_1m, tab_1m_api, tab_l2book, tab_pb7_cache = st.tabs(["1m", "1m_api", "l2Book", "PB7 cache"])
 
             try:
                 _latest_interval_s = int(str(load_ini("pbdata", "latest_1m_interval_seconds") or "120").strip())
@@ -1352,7 +1539,7 @@ def view_market_data():
                         )
                         st.session_state["market_data_heatmap_sel"] = clicked
                         st.session_state["market_data_heatmap_tab"] = tab_key
-                elif prev_sel:
+                elif prev_sel and not preserve_selection_once:
                     # Had a selection before, now empty → user deselected
                     st.session_state.pop("market_data_heatmap_sel", None)
                     st.session_state.pop("market_data_heatmap_tab", None)
@@ -1725,20 +1912,25 @@ def view_market_data():
                         except Exception as e:
                             st.error(f"Error: {e}")
 
-            # Render each dataset tab
-            with tab_1m:
+            sel_row_1m = None
+            sel_row_1m_api = None
+            sel_row_l2book = None
+            sel_row_pb7 = None
+
+            # Render selected dataset only (lazy)
+            if have_view == "1m":
                 sel_row_1m = _render_dataset_table(rows_1m, "1m", "1m")
                 _render_deletion_tools(rows_1m, "1m", "1m candles", sel_row_1m)
 
-            with tab_1m_api:
+            elif have_view == "1m_api":
                 sel_row_1m_api = _render_dataset_table(rows_1m_api, "1m_api", "1m_api")
                 _render_deletion_tools(rows_1m_api, "1m_api", "1m API", sel_row_1m_api)
 
-            with tab_l2book:
+            elif have_view == "l2Book":
                 sel_row_l2book = _render_dataset_table(rows_l2book, "l2Book", "l2book")
                 _render_deletion_tools(rows_l2book, "l2book", "l2Book", sel_row_l2book)
 
-            with tab_pb7_cache:
+            elif have_view == "PB7 cache":
                 pb7_rows = summarize_pb7_cache_inventory(str(exchange).lower(), limit=2000)
                 if not pb7_rows:
                     st.info("No PB7 cache files found for this exchange (expected path: pb7/caches/ohlcv/<exchange>/...).")
@@ -1764,17 +1956,65 @@ def view_market_data():
                     col_cfg = {
                         "size_mb": st.column_config.NumberColumn("size", format="%.2f MB")
                     }
-                    st.dataframe(
+                    event_pb7 = st.dataframe(
                         df_pb7,
                         use_container_width=True,
                         hide_index=True,
+                        on_select="rerun",
+                        selection_mode="single-row",
                         column_config=col_cfg,
                         key="market_data_pb7_cache_table",
                     )
+
+                    _prev_sel_key = "market_data_prev_sel_pb7_cache"
+                    sel_indices = event_pb7.selection.rows if event_pb7 and event_pb7.selection else []
+                    prev_sel = st.session_state.get(_prev_sel_key, [])
+                    if sel_indices:
+                        idx = sel_indices[0]
+                        if 0 <= idx < len(pb7_rows):
+                            row = pb7_rows[idx]
+                            tf = str(row.get("timeframe") or "").strip()
+                            coin = str(row.get("coin") or "").strip()
+                            if tf and coin:
+                                st.session_state["market_data_heatmap_sel"] = (f"pb7_cache:{tf}", coin)
+                                st.session_state["market_data_heatmap_tab"] = "pb7_cache"
+                                sel_row_pb7 = {
+                                    "dataset": f"pb7_cache:{tf}",
+                                    "coin": coin,
+                                    "timeframe": tf,
+                                }
+                    elif prev_sel and not preserve_selection_once:
+                        st.session_state.pop("market_data_heatmap_sel", None)
+                        st.session_state.pop("market_data_heatmap_tab", None)
+                    st.session_state[_prev_sel_key] = list(sel_indices)
+
+                    hm = st.session_state.get("market_data_heatmap_sel")
+                    hm_tab = st.session_state.get("market_data_heatmap_tab")
+                    if isinstance(hm, (tuple, list)) and len(hm) == 2 and hm_tab == "pb7_cache":
+                        hm_ds = str(hm[0] or "").strip().lower()
+                        hm_coin = str(hm[1] or "").strip()
+                        hm_tf = hm_ds.split(":", 1)[1] if hm_ds.startswith("pb7_cache:") and ":" in hm_ds else ""
+                        if hm_tf and hm_coin:
+                            for row in pb7_rows:
+                                row_tf = str(row.get("timeframe") or "").strip()
+                                row_coin = str(row.get("coin") or "").strip()
+                                if row_tf == hm_tf and row_coin == hm_coin:
+                                    sel_row_pb7 = {
+                                        "dataset": f"pb7_cache:{row_tf}",
+                                        "coin": row_coin,
+                                        "timeframe": row_tf,
+                                    }
+                                    break
+
+                    if sel_row_pb7:
+                        st.caption(f"Heatmap: PB7 cache {sel_row_pb7.get('timeframe')} / {sel_row_pb7.get('coin')}")
+                    else:
+                        st.info("Click a row to display the heatmap. Use the sidebar refresh button to reload inventory.")
+
                     st.caption("Read-only view of PB7 cache inventory from pb7/caches/ohlcv.")
 
             # Get the selected row from any of the tabs
-            sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book
+            sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book or sel_row_pb7
 
             def _render_gap_heatmap() -> None:
                 if sel_row:
@@ -1783,6 +2023,7 @@ def view_market_data():
                     ds = str(r.get("dataset") or "")
                     cn = str(r.get("coin") or "")
                     ds_l = ds.strip().lower()
+                    is_stock_perp_1m = _is_hyperliquid_stock_perp_1m(exchange=ex, dataset=ds, coin=cn)
 
                     # For candles datasets: show only the gap from l2Book->today.
                     start_day = None
@@ -1823,11 +2064,18 @@ def view_market_data():
                                     dt1 = None
 
                                 if dt0 and dt1:
+                                    tradfi_sessions: dict[str, tuple[int, int]] = {}
+                                    tradfi_calendar_present = False
+                                    if is_stock_perp_1m:
+                                        tradfi_sessions, tradfi_calendar_present = _load_tradfi_sessions_cached(
+                                            start_day=dt0,
+                                            end_day=dt1,
+                                        )
                                     years: list[int] = []
                                     cur = dt0
                                     while cur <= dt1:
                                         y = int(cur.strftime("%Y"))
-                                        if y not in years and y >= 2023:
+                                        if y not in years:
                                             years.append(y)
                                         cur = cur + _timedelta(days=1)
                                     years = sorted(years)
@@ -1856,7 +2104,28 @@ def view_market_data():
                                                 l2b = int(counts.get("l2Book_mid") or 0)
                                                 oth = int(counts.get("other_exchange") or 0)
                                                 miss = int(counts.get("missing") or 0)
-                                                if not counts:
+                                                if is_stock_perp_1m:
+                                                    sess = tradfi_sessions.get(day_s)
+                                                    if sess is not None:
+                                                        expected_minutes = len(
+                                                            _tradfi_expected_minute_indices_from_session(
+                                                                day=cur_day,
+                                                                session_start_ms=int(sess[0]),
+                                                                session_end_ms=int(sess[1]),
+                                                            )
+                                                        )
+                                                    elif tradfi_calendar_present:
+                                                        expected_minutes = 0
+                                                    else:
+                                                        expected_minutes = len(_tradfi_expected_minute_indices(cur_day))
+                                                    covered_minutes = api + l2b + oth
+                                                    miss = max(0, int(expected_minutes) - int(covered_minutes))
+                                                    if expected_minutes == 0 and covered_minutes == 0:
+                                                        row[idx] = None
+                                                        row_text[idx] = f"{day_s} | non-trading session"
+                                                        cur_day = cur_day + _timedelta(days=1)
+                                                        continue
+                                                elif not counts:
                                                     miss = 1440
                                                 if miss > 0:
                                                     row[idx] = 0.0
@@ -2019,20 +2288,49 @@ def view_market_data():
                             }
 
                             # colorscale: 0 missing (red), 1 filled (purple), 2 api (green), 3 best (teal), 4 other_exchange (orange), 5 l2book (blue)
-                            colorscale = [
-                                [0.0, "#b23b3b"],
-                                [0.2, "#6a1b9a"],
-                                [0.4, "#2e7d32"],
-                                [0.6, "#00897b"],
-                                [0.8, "#ef6c00"],
-                                [1.0, "#1e88e5"],
-                            ]
+                            if is_stock_perp_1m:
+                                # -1 expected out-of-session gap (neutral gray)
+                                colorscale = [
+                                    [0.0, "#4e4e4e"],
+                                    [1 / 6, "#b23b3b"],
+                                    [2 / 6, "#6a1b9a"],
+                                    [3 / 6, "#2e7d32"],
+                                    [4 / 6, "#00897b"],
+                                    [5 / 6, "#ef6c00"],
+                                    [1.0, "#1e88e5"],
+                                ]
+                            else:
+                                colorscale = [
+                                    [0.0, "#b23b3b"],
+                                    [0.2, "#6a1b9a"],
+                                    [0.4, "#2e7d32"],
+                                    [0.6, "#00897b"],
+                                    [0.8, "#ef6c00"],
+                                    [1.0, "#1e88e5"],
+                                ]
 
                             for d in days_list:
                                 day_s = d.strftime("%Y%m%d")
                                 # present[day_s] is {HH: {MM: src}}
                                 hours_map = present.get(day_s) if isinstance(present.get(day_s), dict) else {}
                                 hours_map = hours_map if isinstance(hours_map, dict) else {}
+                                expected_indices = None
+                                if is_stock_perp_1m:
+                                    try:
+                                        sess_map, sess_present = _load_tradfi_sessions_cached(start_day=d, end_day=d)
+                                    except Exception:
+                                        sess_map, sess_present = ({}, False)
+                                    sess = (sess_map or {}).get(day_s)
+                                    if sess is not None:
+                                        expected_indices = _tradfi_expected_minute_indices_from_session(
+                                            day=d,
+                                            session_start_ms=int(sess[0]),
+                                            session_end_ms=int(sess[1]),
+                                        )
+                                    elif sess_present:
+                                        expected_indices = set()
+                                    else:
+                                        expected_indices = _tradfi_expected_minute_indices(d)
 
                                 for block_start in (0, 12):
                                     row = []
@@ -2042,6 +2340,12 @@ def view_market_data():
                                         mins_map = hours_map.get(hh) or {}
                                         mins_map = mins_map if isinstance(mins_map, dict) else {}
                                         for minute in range(60):
+                                            minute_idx = (h * 60) + int(minute)
+                                            if is_stock_perp_1m and expected_indices is not None and minute_idx not in expected_indices:
+                                                row.append(-1)
+                                                hhmm = f"{h:02d}:{minute:02d}"
+                                                row_text.append(f"{day_s} {hhmm} (expected out-of-session gap)")
+                                                continue
                                             src = mins_map.get(minute)
                                             code = int(src_code.get(str(src), src_code.get(src, 0)))
                                             row.append(code)
@@ -2065,7 +2369,7 @@ def view_market_data():
                                     text=text,
                                     hovertemplate="%{text}<extra></extra>",
                                     colorscale=colorscale,
-                                    zmin=0,
+                                    zmin=-1 if is_stock_perp_1m else 0,
                                     zmax=5,
                                     showscale=False,
                                     xgap=1,
@@ -2078,17 +2382,32 @@ def view_market_data():
                                 xaxis=dict(tickmode="array", tickvals=list(range(0, 720, 60)), ticktext=[f"{x:02d}h" for x in range(0, 12)]),
                                 yaxis=dict(autorange="reversed", showgrid=False),
                             )
+                            if is_stock_perp_1m:
+                                st.markdown(
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#4e4e4e;color:#fff;margin-right:8px;'>expected out-of-session gap</span>",
+                                    unsafe_allow_html=True,
+                                )
                             st.plotly_chart(fig, use_container_width=True)
 
 
                     # Default view (incl. l2Book): render year rows with day-of-year columns.
-                    cov = get_daily_hour_coverage_for_dataset(
-                        ex,
-                        ds,
-                        cn,
-                        start_day=start_day,
-                        end_day=end_day,
-                    )
+                    if ds_l.startswith("pb7_cache:"):
+                        tf = str(ds.split(":", 1)[1] if ":" in ds else (r.get("timeframe") or "1m")).strip() or "1m"
+                        cov = get_daily_presence_for_pb7_cache(
+                            ex,
+                            tf,
+                            cn,
+                            start_day=start_day,
+                            end_day=end_day,
+                        )
+                    else:
+                        cov = get_daily_hour_coverage_for_dataset(
+                            ex,
+                            ds,
+                            cn,
+                            start_day=start_day,
+                            end_day=end_day,
+                        )
                     days = cov.get("days") if isinstance(cov, dict) else []
                     if isinstance(days, list) and days:
                         years: list[int] = []
@@ -2182,7 +2501,7 @@ def view_market_data():
 
                 _gap_fragment()
 
-    with tab_log:
+    if main_view == "Activity log":
         view_log_filtered("MarketData")
 
 
@@ -2200,10 +2519,13 @@ render_header_with_guide(
 
 with st.sidebar:
     if st.button(":material/refresh:", help="Reload page"):
+        # Preserve active table selection/overview across this refresh rerun.
+        st.session_state["market_data_preserve_selection_once"] = True
         for _k in list(st.session_state.keys()):
             if str(_k).startswith("market_data_have_table_cached_") or str(_k).startswith("market_data_trows_"):
                 st.session_state.pop(_k, None)
-        st.rerun()
+        # Button interaction already triggers a rerun; avoid forcing an extra rerun
+        # here so current segmented-control state is preserved.
 
     _pid = read_worker_pid()
     _running = bool(_pid and is_pid_running(int(_pid)))

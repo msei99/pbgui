@@ -1159,7 +1159,19 @@ class BacktestV7Item(ConfigV7Editor):
                 _needs_tradfi = True
             if _needs_tradfi:
                 _tradfi = st.session_state.users.tradfi if "users" in st.session_state else {}
-                if not _tradfi:
+                _has_tradfi = bool(_tradfi)
+                if not _has_tradfi:
+                    try:
+                        _cfg = configparser.ConfigParser()
+                        _cfg.read("pbgui.ini")
+                        _has_alpaca = bool((_cfg.get("tradfi_profiles", "alpaca_api_key", fallback="") or "").strip()) and bool(
+                            (_cfg.get("tradfi_profiles", "alpaca_api_secret", fallback="") or "").strip()
+                        )
+                        _has_polygon = bool((_cfg.get("tradfi_profiles", "polygon_api_key", fallback="") or "").strip())
+                        _has_tradfi = _has_alpaca or _has_polygon
+                    except Exception:
+                        _has_tradfi = False
+                if not _has_tradfi:
                     _names = ', '.join(_stock_perps[:3]) + ('...' if len(_stock_perps) > 3 else '')
                     st.warning(
                         f"Stock perp symbols detected ({_names}). "

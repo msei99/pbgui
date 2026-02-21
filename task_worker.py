@@ -525,6 +525,10 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
 
         update_job_file(job_path, mutate=mut)
 
+    def _is_stock_perp_coin_label(value: str) -> bool:
+        s = str(value or "").strip().upper()
+        return s.startswith("XYZ:") or s.startswith("XYZ-")
+
     update_progress(
         stage="starting",
         last_result={
@@ -544,6 +548,7 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         if _is_cancel_requested(job_path):
             raise RuntimeError("cancelled")
         step_i += 1
+        stock_coin = _is_stock_perp_coin_label(coin)
         update_progress(
             stage="running",
             coin=coin,
@@ -551,9 +556,12 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
             chunk_total=0,
             last_result={
                 "days_checked": 0,
-                "l2book_minutes_added": 0,
-                "binance_minutes_filled": 0,
-                "bybit_minutes_filled": 0,
+                "alpaca_minutes_filled": 0,
+                "polygon_minutes_filled": 0,
+                "polygon_old_days_skipped": 0,
+                "l2book_minutes_added": 0 if not stock_coin else None,
+                "binance_minutes_filled": 0 if not stock_coin else None,
+                "bybit_minutes_filled": 0 if not stock_coin else None,
                 "duration_s": int(max(0, time.time() - started_ts)),
             },
             last_binance_fill_day="",
@@ -579,14 +587,23 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                 kw["day"] = str(snap.get("day"))
             if stage == "binance_fill" and snap.get("day"):
                 kw["last_binance_fill_day"] = str(snap.get("day"))
-            if any(k in snap for k in ("days_checked", "l2book_minutes_added", "binance_minutes_filled", "bybit_minutes_filled")):
-                kw["last_result"] = {
-                    "days_checked": int(snap.get("days_checked") or 0),
-                    "l2book_minutes_added": int(snap.get("l2book_minutes_added") or 0),
-                    "binance_minutes_filled": int(snap.get("binance_minutes_filled") or 0),
-                    "bybit_minutes_filled": int(snap.get("bybit_minutes_filled") or 0),
-                    "duration_s": int(max(0, time.time() - started_ts)),
-                }
+            if any(k in snap for k in ("days_checked", "l2book_minutes_added", "binance_minutes_filled", "bybit_minutes_filled", "alpaca_minutes_filled", "polygon_minutes_filled", "polygon_old_days_skipped")):
+                if stock_coin:
+                    kw["last_result"] = {
+                        "days_checked": int(snap.get("days_checked") or 0),
+                        "alpaca_minutes_filled": int(snap.get("alpaca_minutes_filled") or 0),
+                        "polygon_minutes_filled": int(snap.get("polygon_minutes_filled") or 0),
+                        "polygon_old_days_skipped": int(snap.get("polygon_old_days_skipped") or 0),
+                        "duration_s": int(max(0, time.time() - started_ts)),
+                    }
+                else:
+                    kw["last_result"] = {
+                        "days_checked": int(snap.get("days_checked") or 0),
+                        "l2book_minutes_added": int(snap.get("l2book_minutes_added") or 0),
+                        "binance_minutes_filled": int(snap.get("binance_minutes_filled") or 0),
+                        "bybit_minutes_filled": int(snap.get("bybit_minutes_filled") or 0),
+                        "duration_s": int(max(0, time.time() - started_ts)),
+                    }
             update_progress(**kw)
 
         res = improve_best_hyperliquid_1m_archive_for_coin(
@@ -598,6 +615,10 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         out = res.to_dict()
         if isinstance(out, dict):
             out["duration_s"] = int(max(0, time.time() - started_ts))
+            if stock_coin:
+                out.pop("l2book_minutes_added", None)
+                out.pop("binance_minutes_filled", None)
+                out.pop("bybit_minutes_filled", None)
         append_exchange_download_log("hyperliquid", f"[INFO] [hl_best_1m_job] {coin} {out}")
         update_progress(stage="running", last_result=out)
 

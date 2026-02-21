@@ -87,9 +87,7 @@ def _format_ccxt_symbol_dir(symbol: str) -> str:
     s = str(symbol or "").strip().upper()
     if not s:
         return s
-    if "/" in s:
-        return s.replace("/", "_")
-    return s
+    return s.replace("/", "_").replace(":", "_")
 
 
 def _get_hyperliquid_ccxt_symbol_for_coin(coin: str) -> str:
@@ -140,6 +138,18 @@ def normalize_market_data_coin_dir(exchange: str, coin: str) -> str:
         return ""
     if ex != "hyperliquid":
         return raw.upper()
+
+    raw_base = str(raw).split("/")[0].strip()
+    raw_base_l = raw_base.lower()
+    if raw_base_l.startswith("xyz:") or raw_base_l.startswith("xyz-"):
+        tail = raw_base[4:].strip()
+        tail_u = tail.upper()
+        for suffix in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT"):
+            if tail_u.endswith(suffix):
+                tail = tail[: -len(suffix)]
+                break
+        tail = str(tail).strip(" _:-")
+        return f"XYZ-{tail.upper()}_USDC:USDC" if tail else ""
 
     sym = raw
     if str(raw).strip().isdigit():
@@ -305,7 +315,13 @@ def set_enabled_coins(exchange: str, coins: list[str]) -> MarketDataConfig:
     return cfg
 
 
-def summarize_raw_inventory(exchange: str, *, limit: int = 200, skip_coverage: bool = False) -> list[dict[str, Any]]:
+def summarize_raw_inventory(
+    exchange: str,
+    *,
+    limit: int = 200,
+    skip_coverage: bool = False,
+    datasets_filter: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Return a lightweight inventory of raw files per dataset+coin.
 
     Scans:
@@ -320,6 +336,8 @@ def summarize_raw_inventory(exchange: str, *, limit: int = 200, skip_coverage: b
 
     Args:
         skip_coverage: If True, skip expensive coverage/missing days calculation for faster initial load.
+        datasets_filter: Optional list of dataset names to include (case-insensitive),
+            e.g. ["1m", "candles_1m"]. If None, all datasets are scanned.
     """
 
     ex = str(exchange or "").strip().lower()
@@ -331,10 +349,15 @@ def summarize_raw_inventory(exchange: str, *, limit: int = 200, skip_coverage: b
         return []
 
     rows: list[dict[str, Any]] = []
+    ds_filter = None
+    if isinstance(datasets_filter, list) and datasets_filter:
+        ds_filter = {str(x).strip().lower() for x in datasets_filter if str(x).strip()}
     datasets = [p for p in base.iterdir() if p.is_dir()]
     for dataset_dir in sorted(datasets, key=lambda p: p.name):
         ds_l = dataset_dir.name.strip().lower()
         if ds_l.endswith("_src"):
+            continue
+        if ds_filter is not None and ds_l not in ds_filter:
             continue
         for coin_dir in sorted([p for p in dataset_dir.iterdir() if p.is_dir()], key=lambda p: p.name):
             n_files = 0
@@ -614,6 +637,79 @@ def summarize_pb7_cache_inventory(
                 return rows
 
     return rows
+
+
+def get_daily_presence_for_pb7_cache(
+    exchange: str,
+    timeframe: str,
+    coin: str,
+    *,
+    pb7_root: str | Path | None = None,
+    start_day: str | None = None,
+    end_day: str | None = None,
+) -> dict[str, Any]:
+    """Return per-day presence for PB7 cache files (status 0/2)."""
+
+    ex = str(exchange or "").strip().lower()
+    tf = str(timeframe or "").strip()
+    cn = str(coin or "").strip()
+    if not ex or not tf or not cn:
+        return {"oldest_day": "", "newest_day": "", "days": []}
+
+    root = _get_pb7_root_dir(pb7_root)
+    if root is None:
+        return {"oldest_day": "", "newest_day": "", "days": []}
+
+    base = root / "caches" / "ohlcv" / ex / tf / cn
+    if not base.exists() or not base.is_dir():
+        return {"oldest_day": "", "newest_day": "", "days": []}
+
+    days_present: set[str] = set()
+    for p in base.iterdir():
+        if not p.is_file() or p.suffix.lower() != ".npy":
+            continue
+        day = _parse_pb7_cache_day_from_name(p.name)
+        if day:
+            days_present.add(day)
+
+    if not days_present:
+        return {"oldest_day": "", "newest_day": "", "days": []}
+
+    try:
+        data_oldest = min(days_present)
+        data_newest = max(days_present)
+        dt0 = datetime.strptime(data_oldest, "%Y%m%d").date()
+        dt1 = datetime.strptime(data_newest, "%Y%m%d").date()
+
+        if start_day:
+            s0 = _normalize_day_str(start_day)
+            if re.fullmatch(r"\d{8}", s0):
+                dt0 = datetime.strptime(s0, "%Y%m%d").date()
+        if end_day:
+            s1 = _normalize_day_str(end_day)
+            if re.fullmatch(r"\d{8}", s1):
+                dt1 = datetime.strptime(s1, "%Y%m%d").date()
+
+        if dt1 < dt0:
+            return {"oldest_day": "", "newest_day": "", "days": []}
+    except Exception:
+        return {"oldest_day": "", "newest_day": "", "days": []}
+
+    days: list[dict[str, Any]] = []
+    cur = dt0
+    while cur <= dt1:
+        ds = cur.strftime("%Y%m%d")
+        present = ds in days_present
+        days.append(
+            {
+                "day": ds,
+                "hours": 24 if present else 0,
+                "status": 2 if present else 0,
+            }
+        )
+        cur = cur + timedelta(days=1)
+
+    return {"oldest_day": dt0.strftime("%Y%m%d"), "newest_day": dt1.strftime("%Y%m%d"), "days": days}
 
 
 def get_daily_presence_for_dataset(exchange: str, dataset: str, coin: str) -> dict[str, Any]:
