@@ -13,7 +13,7 @@ import inspect
 import json
 
 from Exchange import Exchanges
-from PBCoinData import get_normalized_coins, get_symbol_for_coin, compute_coin_name
+from PBCoinData import CoinData, get_symbol_for_coin, compute_coin_name
 from pbgui_purefunc import load_ini, save_ini
 
 from pbgui_func import (
@@ -402,31 +402,84 @@ def _normalize_archive_range(v: object) -> dict[str, str]:
 
 
 def _coin_options_for_exchange(exchange: str) -> list[str]:
+    def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
+        ex_name = str(exchange_name or "").strip().lower()
+        value = str(coin_value or "").strip()
+        if not value:
+            return ""
+        if ex_name == "hyperliquid":
+            lower = value.lower()
+            if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                tail = value[4:].strip().upper()
+                return f"xyz:{tail}" if tail else ""
+        return value.upper()
+
     try:
-        symbols = load_symbols_from_ini(exchange, "swap")
-        coins = sorted(get_normalized_coins(symbols))
-        if coins:
-            return coins
+        coindata = CoinData()
+        approved_coins, _ = coindata.filter_mapping(
+            exchange=str(exchange).lower(),
+            market_cap_min_m=0,
+            vol_mcap_max=float("inf"),
+            only_cpt=False,
+            notices_ignore=False,
+            tags=[],
+            quote_filter=None,
+            use_cache=True,
+            active_only=True,
+        )
+        approved = {
+            _canonical_market_coin(exchange, c)
+            for c in approved_coins
+            if _canonical_market_coin(exchange, c)
+        }
+        if approved:
+            return sorted(approved)
 
         mapping_path = Path(__file__).resolve().parents[1] / "data" / "coindata" / str(exchange).lower() / "mapping.json"
         if mapping_path.exists():
             mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
             mapped_coins = set()
             for row in mapping if isinstance(mapping, list) else []:
-                symbol = str(row.get("symbol") or "").strip()
-                quote = str(row.get("quote") or "").strip().upper()
-                if not symbol:
+                if not bool(row.get("swap", False)) or not bool(row.get("active", True)) or not bool(row.get("linear", True)):
                     continue
-                coin = compute_coin_name(symbol, quote)
+                coin = str(row.get("coin") or "").strip()
+                if not coin:
+                    symbol = str(row.get("ccxt_symbol") or row.get("symbol") or "").strip()
+                    quote = str(row.get("quote") or "").strip().upper()
+                    if not symbol:
+                        continue
+                    coin = compute_coin_name(symbol, quote)
+                coin = _canonical_market_coin(exchange, coin)
                 if coin:
-                    mapped_coins.add(str(coin).upper())
+                    mapped_coins.add(coin)
             return sorted(mapped_coins)
+
+        symbols = load_symbols_from_ini(exchange, "swap")
+        fallback_coins = {
+            _canonical_market_coin(exchange, s)
+            for s in symbols
+            if _canonical_market_coin(exchange, s)
+        }
+        if fallback_coins:
+            return sorted(fallback_coins)
         return []
     except Exception:
         return []
 
 
 def view_market_data():
+    def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
+        ex_name = str(exchange_name or "").strip().lower()
+        value = str(coin_value or "").strip()
+        if not value:
+            return ""
+        if ex_name == "hyperliquid":
+            lower = value.lower()
+            if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                tail = value[4:].strip().upper()
+                return f"xyz:{tail}" if tail else ""
+        return value.upper()
+
     exchanges = list(Exchanges.list())
     if "hyperliquid" in exchanges:
         default_exchange = "hyperliquid"
@@ -441,7 +494,11 @@ def view_market_data():
     )
 
     cfg = load_market_data_config()
-    enabled_default_raw = [str(c).strip().upper() for c in (cfg.enabled_coins.get(str(exchange).lower(), []) or []) if str(c).strip()]
+    enabled_default_raw = [
+        _canonical_market_coin(exchange, c)
+        for c in (cfg.enabled_coins.get(str(exchange).lower(), []) or [])
+        if _canonical_market_coin(exchange, c)
+    ]
 
     coin_options = _coin_options_for_exchange(str(exchange))
     option_set = set(coin_options)
@@ -453,9 +510,9 @@ def view_market_data():
     try:
         if enabled_key in st.session_state and isinstance(st.session_state.get(enabled_key), list):
             enabled_preview = [
-                str(c).strip().upper()
+                _canonical_market_coin(exchange, c)
                 for c in (st.session_state.get(enabled_key) or [])
-                if str(c).strip().upper() in option_set
+                if _canonical_market_coin(exchange, c) in option_set
             ]
     except Exception:
         enabled_preview = enabled_default
