@@ -8,7 +8,30 @@ Die Market Data Seite bietet:
 - Download von **Hyperliquid l2Book** Rohdaten vom AWS S3 Archive (Requester Pays)
 - **"Build best possible 1m archive"** - automatische Erstellung optimaler 1m-Kerzen aus mehreren Quellen
 - Anzeige vorhandener Raw-Dateien (Inventory)
+- **PB7-Cache-Status** (read-only) für `pb7/caches/ohlcv/<exchange>`
 - Download-Log pro Exchange
+
+## PB7-Cache-Status (Inventory-Tab)
+
+Unter **Already have** gibt es zusätzlich den Tab **PB7 cache**.
+
+Dort wird ein read-only Inventar der PB7-Cache-Dateien angezeigt aus:
+
+`pb7/caches/ohlcv/<exchange>/<timeframe>/<coin>/YYYY-MM-DD.npy`
+
+Angezeigte Felder:
+- `timeframe` (z. B. `1m`, `1h`)
+- `coin`
+- `n_files`
+- `size`
+- `oldest_day` / `newest_day`
+- `n_days`
+
+Oben zeigen Metriken die Gesamtanzahl von Timeframes, Coins, Dateien und Speichergröße.
+
+Hinweise:
+- Dieser Tab ist rein informativ (keine Löschaktionen).
+- Wenn der PB7-Pfad fehlt/falsch konfiguriert ist, kann der Tab leer bleiben.
 
 ---
 
