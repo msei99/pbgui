@@ -114,20 +114,38 @@ Eligibility in coin selector:
 Controls:
 - Build best 1m
 - Start date (optional)
+- End date (optional)
 - Refetch TradFi data from scratch (stock-perps)
 
-### Data strategy (stock-perps)
+### Data strategy
 
-Tiingo is the TradFi source.
+Build best 1m runs newest → oldest in the selected date window.
 
-For FX-mapped stock-perps:
-- Backfill direction is newest to oldest
-- Build stops after consecutive empty chunks
-- Existing source data is respected to avoid unnecessary fetches
+For crypto symbols (non-XYZ):
+- Uses local `1m_api` and local `l2Book` conversion first
+- Fills remaining gaps from perp exchange fallback data
+- `l2Book` is only used in this crypto path (not for XYZ stock-perps)
 
-For equity-mapped stock-perps:
+For FX-mapped stock-perps (`tiingo_fx_ticker`):
+- Uses Tiingo FX 1m in weekly chunks (to reduce request count)
+- Uses existing `other_exchange` history as anchor when not refetching
+  - Start cursor = oldest existing `other_exchange` day minus 1 day
+- `Refetch` starts from the selected/end day and rebuilds backwards in the allowed range
+
+For equity-mapped stock-perps (`tiingo_ticker`):
 - Uses Tiingo IEX 1m
-- Uses effective start logic (`tiingo_start_date` + IEX floor)
+- Uses existing `other_exchange` history as anchor when not refetching
+  - Start cursor = oldest existing `other_exchange` day minus 1 day
+- Lower bound remains `max(tiingo_start_date, 2016-12-12)`
+- Raw-first write behavior: any minute bars returned by Tiingo are written (no extra market-hours clipping in the write path)
+
+Write safety rules:
+- TradFi writes (`other_exchange`) only fill missing minutes or minutes already marked as `other_exchange`
+- Existing `api` / `l2Book_mid` minutes are not overwritten by TradFi
+
+Date controls:
+- `Start date` limits the oldest day to process
+- `End date` limits the newest day to process (default = today)
 
 ### Progress and waits
 

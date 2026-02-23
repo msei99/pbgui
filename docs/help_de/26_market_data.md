@@ -114,20 +114,38 @@ Berechtigung in der Coin-Auswahl:
 Controls:
 - Build best 1m
 - Start date (optional)
+- End date (optional)
 - Refetch TradFi data from scratch (stock-perps)
 
-### Datenstrategie (Stock-Perps)
+### Datenstrategie
 
-Tiingo ist die TradFi-Quelle.
+Build best 1m läuft im gewählten Datumsfenster immer von neu → alt.
 
-Für FX-gemappte Stock-Perps:
-- Backfill-Richtung ist neu nach alt
-- Build stoppt nach aufeinanderfolgenden leeren Chunks
-- Bereits vorhandene Source-Daten werden respektiert, um unnötige Fetches zu vermeiden
+Für Crypto-Symbole (non-XYZ):
+- Nutzt zuerst lokales `1m_api` und lokale `l2Book`-Konvertierung
+- Füllt verbleibende Lücken über Perp-Exchange-Fallback
+- `l2Book` wird nur in diesem Crypto-Pfad genutzt (nicht für XYZ-Stock-Perps)
 
-Für Equity-gemappte Stock-Perps:
+Für FX-gemappte Stock-Perps (`tiingo_fx_ticker`):
+- Nutzt Tiingo FX 1m in Wochen-Chunks (weniger Requests)
+- Nutzt bestehende `other_exchange`-Historie als Anker, wenn kein Refetch aktiv ist
+  - Start-Cursor = ältester vorhandener `other_exchange`-Tag minus 1 Tag
+- `Refetch` startet am gewählten/End-Tag und baut rückwärts im erlaubten Bereich neu auf
+
+Für Equity-gemappte Stock-Perps (`tiingo_ticker`):
 - Nutzt Tiingo IEX 1m
-- Nutzt effektive Startlogik (`tiingo_start_date` + IEX-Floor)
+- Nutzt bestehende `other_exchange`-Historie als Anker, wenn kein Refetch aktiv ist
+  - Start-Cursor = ältester vorhandener `other_exchange`-Tag minus 1 Tag
+- Untere Grenze bleibt `max(tiingo_start_date, 2016-12-12)`
+- Raw-first-Write-Verhalten: alle von Tiingo gelieferten Minuten werden geschrieben (kein zusätzliches Market-Hours-Clipping im Write-Pfad)
+
+Write-Sicherheitsregeln:
+- TradFi-Write (`other_exchange`) füllt nur fehlende Minuten oder Minuten, die bereits als `other_exchange` markiert sind
+- Bereits vorhandene `api` / `l2Book_mid` Minuten werden durch TradFi nicht überschrieben
+
+Datums-Controls:
+- `Start date` begrenzt den ältesten zu verarbeitenden Tag
+- `End date` begrenzt den neuesten zu verarbeitenden Tag (Standard = heute)
 
 ### Fortschritt und Wartezustände
 

@@ -991,6 +991,37 @@ def _default_us_equity_session_utc(day: date) -> tuple[int, int] | None:
     return (start_ms, end_ms)
 
 
+def _is_fx_market_holiday(day: date) -> bool:
+    # FX weekend closure is handled by session windows.
+    return False
+
+
+def _default_fx_session_utc(day: date) -> tuple[int, int] | None:
+    wd = int(day.weekday())
+    if wd == 5:
+        return None
+    if wd == 4:
+        start_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc)
+        end_dt = datetime(day.year, day.month, day.day, 21, 59, tzinfo=timezone.utc)
+    elif wd == 6:
+        start_dt = datetime(day.year, day.month, day.day, 22, 0, tzinfo=timezone.utc)
+        end_dt = datetime(day.year, day.month, day.day, 23, 59, tzinfo=timezone.utc)
+    else:
+        start_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc)
+        end_dt = start_dt + timedelta(days=1) - timedelta(minutes=1)
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
+    if end_ms < start_ms:
+        return None
+    return (start_ms, end_ms)
+
+
+def _full_day_session_utc(day: date) -> tuple[int, int]:
+    start_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc)
+    end_dt = start_dt + timedelta(days=1) - timedelta(minutes=1)
+    return (int(start_dt.timestamp() * 1000), int(end_dt.timestamp() * 1000))
+
+
 def _nth_weekday_of_month(year: int, month: int, weekday: int, n: int) -> date:
     d = date(year, month, 1)
     shift = (int(weekday) - int(d.weekday())) % 7
@@ -1080,17 +1111,9 @@ def _determine_stock_perp_improve_start(
     refetch: bool = False,
     timeout_s: float = 30.0,
 ) -> date:
-    profiles = _load_tradfi_profiles_from_ini()
-    has_tiingo = bool(str((profiles.get("tiingo") or {}).get("api_key") or "").strip())
-
-    if has_tiingo:
-        if tiingo_start_date is not None:
-            return max(_IEX_FLOOR_DATE, tiingo_start_date)
-        return _IEX_FLOOR_DATE
-
-    if earliest_candidates:
-        return min(earliest_candidates)
-    return d_end - timedelta(days=int(TRADFI_IMPROVE_DEFAULT_LOOKBACK_DAYS))
+    if tiingo_start_date is not None:
+        return max(_IEX_FLOOR_DATE, tiingo_start_date)
+    return _IEX_FLOOR_DATE
 
 
 def _parse_day_from_filename(name: str) -> str | None:
@@ -1804,7 +1827,10 @@ def _fill_missing_from_tradfi_1m(
         day_s = d.strftime("%Y%m%d")
         day_tag = _day_tag(day_s)
 
-        session = _default_us_equity_session_utc(d)
+        if source_kind == "fx":
+            session = _default_fx_session_utc(d)
+        else:
+            session = _full_day_session_utc(d)
         if not session:
             continue
 
@@ -2300,7 +2326,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     if best_days:
         earliest_candidates.append(min(best_days))
 
-    if is_stock_perp and tradfi_source_kind == "fx":
+    if is_stock_perp and tradfi_backfill_mode:
         oldest_other = None
         if not refetch:
             oldest_other = get_oldest_day_with_source_code(
@@ -2321,19 +2347,8 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         else:
             cursor_start = min(d_end, oldest_other_date - timedelta(days=1))
 
-        lower_bound = d_end - timedelta(days=int(TRADFI_DISCOVERY_MAX_LOOKBACK_DAYS))
-        if d_start_override is not None:
-            lower_bound = max(lower_bound, d_start_override)
-        days = []
-        cur = cursor_start
-        while cur >= lower_bound:
-            days.append(cur)
-            cur -= timedelta(days=1)
-    elif is_stock_perp:
-        if d_start_override is not None:
-            start_day = d_start_override
-        else:
-            start_day = _determine_stock_perp_improve_start(
+        if tradfi_source_kind == "iex":
+            lower_bound = _determine_stock_perp_improve_start(
                 coin_u=coin_u,
                 coin_dir=coin_dir,
                 d_end=d_end,
@@ -2342,12 +2357,20 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                 refetch=refetch,
                 timeout_s=30.0,
             )
-        lower_bound = start_day
+            if d_start_override is not None:
+                lower_bound = max(lower_bound, d_start_override)
+        else:
+            lower_bound = d_end - timedelta(days=int(TRADFI_DISCOVERY_MAX_LOOKBACK_DAYS))
+            if d_start_override is not None:
+                lower_bound = max(lower_bound, d_start_override)
+
         days = []
-        cur = d_end
+        cur = cursor_start
         while cur >= lower_bound:
             days.append(cur)
             cur -= timedelta(days=1)
+    elif is_stock_perp:
+        days = []
     else:
         if d_start_override is not None:
             start_day = d_start_override
@@ -2524,7 +2547,10 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                 # Explicit guard: skip TradFi fetch when target session minutes are already covered
                 # by best/API data for this day.
                 needs_tradfi_fetch = False
-                session = _default_us_equity_session_utc(d)
+                if tradfi_source_kind == "fx":
+                    session = _default_fx_session_utc(d)
+                else:
+                    session = _full_day_session_utc(d)
                 if session:
                     session_start_ms, session_end_ms = int(session[0]), int(session[1])
                     day_start_ms = _day_start_ms(d)
