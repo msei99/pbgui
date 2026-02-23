@@ -258,15 +258,45 @@ def _is_tradfi_market_holiday(day: _date, canonical_type: str) -> bool:
 
 
 def _fx_expected_minute_indices(day: _date) -> set[int]:
+    # FX weekend boundary from observed Tiingo EUR behavior:
+    # - Friday close follows 17:00 New York local time (DST-aware)
+    # - Sunday reopen is effectively fixed around 22:00 UTC year-round
+    cutover_minute_utc = 22 * 60
+    if _ZoneInfo is not None:
+        try:
+            et = _ZoneInfo("America/New_York")
+            utc = _ZoneInfo("UTC")
+            cutover_dt = _datetime(day.year, day.month, day.day, 17, 0, tzinfo=et).astimezone(utc)
+            cutover_minute_utc = (int(cutover_dt.hour) * 60) + int(cutover_dt.minute)
+        except Exception:
+            cutover_minute_utc = 22 * 60
+
     wd = int(day.weekday())
+
+    # Observed reduced sessions on major FX holidays (UTC minute of day).
+    special_open_minute_utc: int | None = None
+    special_close_minute_utc: int | None = None
+    md = (int(day.month), int(day.day))
+    if md == (1, 1):
+        special_open_minute_utc = 23 * 60
+    elif md == (12, 25):
+        special_open_minute_utc = 23 * 60
+    elif md in ((12, 24), (12, 31)):
+        special_close_minute_utc = 22 * 60
+
     # UTC session model:
-    # - Fri closes at 22:00 UTC
-    # - Sun opens at 22:00 UTC
-    # => closed window: Fri 22:00 UTC -> Sun 22:00 UTC
+    # => closed window: Fri cutover -> Sun 22:00 UTC
     if wd == 5:  # Saturday
         return set()
-    if wd == 4:  # Friday 00:00-21:59
-        return set(range(0, 22 * 60))
+    if special_open_minute_utc is not None and wd < 5:
+        normal_end_minute_utc = int(cutover_minute_utc - 1) if wd == 4 else 1439
+        if int(special_open_minute_utc) > int(normal_end_minute_utc):
+            return set()
+        return set(range(int(special_open_minute_utc), int(normal_end_minute_utc) + 1))
+    if special_close_minute_utc is not None and wd < 5:
+        return set(range(0, min(1440, max(0, int(special_close_minute_utc)))))
+    if wd == 4:  # Friday 00:00-cutover
+        return set(range(0, max(0, int(cutover_minute_utc))))
     if wd == 6:  # Sunday 22:00-23:59
         return set(range(22 * 60, 1440))
     return set(range(1440))

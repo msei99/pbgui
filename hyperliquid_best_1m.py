@@ -997,12 +997,56 @@ def _is_fx_market_holiday(day: date) -> bool:
 
 
 def _default_fx_session_utc(day: date) -> tuple[int, int] | None:
+    # FX weekend boundary from observed Tiingo EUR 2025 behavior:
+    # - Friday close follows 17:00 New York local time (DST-aware)
+    # - Sunday reopen is effectively fixed around 22:00 UTC year-round
+    cutover_dt_utc = datetime(day.year, day.month, day.day, 17, 0, tzinfo=_ET_TZ).astimezone(timezone.utc)
+    cutover_minute_utc = (int(cutover_dt_utc.hour) * 60) + int(cutover_dt_utc.minute)
+
+    # Observed reduced sessions on major FX holidays (UTC minute of day).
+    # Keep this explicit so we can preserve known late reopens/early closes
+    # instead of treating those dates as full-day closures.
+    special_open_minute_utc: int | None = None
+    special_close_minute_utc: int | None = None
+    md = (int(day.month), int(day.day))
+    if md == (1, 1):
+        special_open_minute_utc = 23 * 60
+    elif md == (12, 25):
+        special_open_minute_utc = 23 * 60
+    elif md in ((12, 24), (12, 31)):
+        special_close_minute_utc = 22 * 60
+
     wd = int(day.weekday())
     if wd == 5:
         return None
+
+    if special_open_minute_utc is not None and wd < 5:
+        normal_end_minute_utc = int(cutover_minute_utc - 1) if wd == 4 else 1439
+        if int(special_open_minute_utc) > int(normal_end_minute_utc):
+            return None
+        start_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=int(special_open_minute_utc))
+        end_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=int(normal_end_minute_utc))
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        if end_ms < start_ms:
+            return None
+        return (start_ms, end_ms)
+
+    if special_close_minute_utc is not None and wd < 5:
+        end_minute_utc = min(1439, max(0, int(special_close_minute_utc) - 1))
+        start_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc)
+        end_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=int(end_minute_utc))
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        if end_ms < start_ms:
+            return None
+        return (start_ms, end_ms)
+
     if wd == 4:
         start_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc)
-        end_dt = datetime(day.year, day.month, day.day, 21, 59, tzinfo=timezone.utc)
+        if cutover_minute_utc <= 0:
+            return None
+        end_dt = datetime(day.year, day.month, day.day, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=int(cutover_minute_utc - 1))
     elif wd == 6:
         start_dt = datetime(day.year, day.month, day.day, 22, 0, tzinfo=timezone.utc)
         end_dt = datetime(day.year, day.month, day.day, 23, 59, tzinfo=timezone.utc)

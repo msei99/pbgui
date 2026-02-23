@@ -131,6 +131,12 @@ For FX-mapped stock-perps (`tiingo_fx_ticker`):
 - Uses existing `other_exchange` history as anchor when not refetching
   - Start cursor = oldest existing `other_exchange` day minus 1 day
 - `Refetch` starts from the selected/end day and rebuilds backwards in the allowed range
+- Weekend session boundary uses observed feed behavior:
+  - Friday close = 17:00 New York local time (DST-aware in UTC)
+  - Sunday reopen ≈ 22:00 UTC (fixed)
+- Known reduced FX holiday sessions:
+  - `12-24` and `12-31`: early close around 22:00 UTC
+  - `12-25` and `01-01`: late reopen around 23:00 UTC
 
 For equity-mapped stock-perps (`tiingo_ticker`):
 - Uses Tiingo IEX 1m
