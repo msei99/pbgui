@@ -26,6 +26,7 @@ def remove_powers_of_ten(text):
 
 
 _HYPERLIQUID_K_PREFIX_COINS = {"BONK", "FLOKI", "LUNC", "PEPE", "SHIB", "DOGS", "NEIRO"}
+_HYPERLIQUID_HIP3_DEX_PREFIXES = {"XYZ", "FLX", "CASH", "HYNA", "KM", "VNTL", "ABCD"}
 
 
 def _strip_hyperliquid_k_prefix(name: str) -> str:
@@ -39,6 +40,16 @@ def _strip_hyperliquid_k_prefix(name: str) -> str:
         if tail.upper() in _HYPERLIQUID_K_PREFIX_COINS:
             return tail
     return name
+
+
+def _is_hyperliquid_hip3_base_symbol(name: str) -> bool:
+    s = str(name or "").strip().upper()
+    if not s or "-" not in s:
+        return False
+    prefix, tail = s.split("-", 1)
+    if not prefix or not tail:
+        return False
+    return prefix in _HYPERLIQUID_HIP3_DEX_PREFIXES
 
 
 def compute_coin_name(market_id, quote=""):
@@ -163,6 +174,11 @@ def normalize_symbol(symbol, symbol_mappings=None):
     if base in ["USDC", "USDT", "BUSD", "TUSD", "DAI"]:
         # These are either stablecoins traded as pairs or the coin itself
         return base
+
+    # Preserve Hyperliquid HIP-3 base symbols (XYZ-TSLA, XYZ-HYUNDAI, FLX-GOLD, ...)
+    # as-is to avoid accidental quote stripping (e.g. XYZ-HYUNDAI -> XYZ-HYUN).
+    if _is_hyperliquid_hip3_base_symbol(base):
+        return str(base).upper()
     
     for quote in ["USDT", "USDC", "BUSD", "TUSD", "USD", "EUR", "GBP", "DAI"]:
         if base.endswith(quote):
@@ -390,6 +406,8 @@ class CoinData:
         self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
         self._mapping_self_heal_state = {}  # {exchange: {fails:int, next_retry_ts:float}}
         self._last_build_mapping_stats = {}  # {exchange: {unmatched_* counters}}
+        self._tradfi_symbol_map: list = []
+        self._tradfi_symbol_map_ts: tuple | None = None
         self._cmc_metrics = {
             "listings_ok": 0,
             "listings_fail": 0,
@@ -522,6 +540,75 @@ class CoinData:
             _log('PBCoinData', f'Error saving mapping for {exchange}: {e}', level='ERROR')
             if temp_file.exists():
                 temp_file.unlink()
+
+    # ------------------------------------------------------------------
+    # TradFi symbol map (Hyperliquid XYZ stock-perps)
+    # ------------------------------------------------------------------
+
+    def _tradfi_symbol_map_path(self) -> Path:
+        """Path to tradfi_symbol_map.json for Hyperliquid."""
+        return self._get_exchange_dir("hyperliquid") / "tradfi_symbol_map.json"
+
+    def load_tradfi_symbol_map(self, use_cache: bool = True) -> list:
+        """Load tradfi_symbol_map.json with optional mtime-aware caching."""
+        path = self._tradfi_symbol_map_path()
+        if not path.exists():
+            self._tradfi_symbol_map_ts = None
+            self._tradfi_symbol_map = []
+            return []
+
+        stat = path.stat()
+        file_sig = (stat.st_mtime_ns, stat.st_size)
+        if use_cache and self._tradfi_symbol_map_ts == file_sig and self._tradfi_symbol_map is not None:
+            return self._tradfi_symbol_map
+
+        try:
+            data = _read_json_with_retry(path, retries=1, delay_s=0.2)
+            if isinstance(data, list):
+                self._tradfi_symbol_map = data
+                self._tradfi_symbol_map_ts = file_sig
+                return data
+            _log('PBCoinData', 'tradfi_symbol_map.json is not a list, ignoring', level='WARNING')
+            return []
+        except Exception as e:
+            _log('PBCoinData', f'Error loading tradfi_symbol_map.json: {e}', level='ERROR')
+            return []
+
+    def save_tradfi_symbol_map(self, records: list):
+        """Save tradfi_symbol_map.json atomically. Preserves existing file on failure."""
+        if records is None:
+            _log('PBCoinData', 'tradfi_symbol_map: nothing to save (None)', level='WARNING')
+            return
+
+        path = self._tradfi_symbol_map_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix('.json.tmp')
+        try:
+            with temp_path.open('w') as f:
+                json.dump(records, f, indent=4)
+            temp_path.replace(path)
+            self._tradfi_symbol_map = records
+            stat = path.stat()
+            self._tradfi_symbol_map_ts = (stat.st_mtime_ns, stat.st_size)
+            _log('PBCoinData', f'Saved tradfi_symbol_map.json ({len(records)} entries)', level='DEBUG')
+        except Exception as e:
+            _log('PBCoinData', f'Error saving tradfi_symbol_map.json: {e}', level='ERROR')
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+
+    def get_tradfi_map_entry(self, xyz_coin: str) -> dict | None:
+        """Return the tradfi_symbol_map entry for an xyz_coin (case-insensitive), or None."""
+        key = str(xyz_coin or '').strip().upper()
+        if not key:
+            return None
+        records = self.load_tradfi_symbol_map(use_cache=True)
+        for r in records:
+            if str(r.get('xyz_coin') or '').upper() == key:
+                return r
+        return None
 
     def get_mapping_symbols(self, exchange: str, quote_filter: list[str] | None = None, use_cache: bool = True) -> list[str]:
         """Return symbol strings from mapping.json for an exchange."""
@@ -1157,6 +1244,7 @@ class CoinData:
             while True:
                 if count > 5:
                     _log('PBCoinData', 'Can not start PBCoinData', level='ERROR')
+                    break
                 sleep(1)
                 if self.is_running():
                     break
@@ -2439,6 +2527,7 @@ class CoinData:
                     level='INFO'
                 )
                 _log('PBCoinData', 'Mapping update complete', level='INFO')
+                self._run_tradfi_sync()
                 return
 
             total_elapsed = datetime.now().timestamp() - cycle_started_ts
@@ -2468,6 +2557,29 @@ class CoinData:
                 level='INFO'
             )
             _log('PBCoinData', 'Mapping update complete', level='INFO')
+            self._run_tradfi_sync()
+
+    def _run_tradfi_sync(self):
+        """Sync TradFi symbol map + XYZ spec after a mapping update cycle.
+
+        Order matters: fetch_xyz_spec first (descriptions + canonical_type),
+        then sync_tradfi_spec so new entries get enriched metadata.
+        """
+        try:
+            from tradfi_sync import sync_tradfi_spec, fetch_xyz_spec
+            instruments = fetch_xyz_spec(pbgui_dir=Path.cwd())
+            _log('PBCoinData', f'XYZ spec refreshed: {len(instruments)} instruments', level='INFO')
+            summary = sync_tradfi_spec(pbgui_dir=Path.cwd())
+            _log(
+                'PBCoinData',
+                f"TradFi sync: +{summary['added_pending']} new pending, "
+                f"+{summary['added_delisted']} new delisted, "
+                f"{summary['auto_delisted']} auto-delisted, "
+                f"total {summary['total_entries']} entries",
+                level='INFO',
+            )
+        except Exception as exc:
+            _log('PBCoinData', f'TradFi sync failed (non-critical): {exc}', level='WARNING')
 
     def load_symbols(self):
         exchange = str(self.exchange or "").lower()

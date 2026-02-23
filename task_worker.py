@@ -13,7 +13,7 @@ from hyperliquid_aws import (
     download_hyperliquid_l2book_aws,
     get_hyperliquid_archive_day_range_aws,
 )
-from hyperliquid_best_1m import improve_best_hyperliquid_1m_archive_for_coin
+from hyperliquid_best_1m import improve_best_hyperliquid_1m_archive_for_coin, _is_stock_perp_coin
 from market_data import (
     append_exchange_download_log,
     load_aws_profile_credentials,
@@ -509,6 +509,8 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     end_day = str(payload.get("end_day") or "").strip()
     if not end_day:
         end_day = datetime.utcnow().strftime("%Y%m%d")
+    start_day = str(payload.get("start_day") or "").strip()
+    refetch = bool(payload.get("refetch") or False)
 
     total_steps = max(1, len(coins))
     step_i = 0
@@ -544,6 +546,7 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         if _is_cancel_requested(job_path):
             raise RuntimeError("cancelled")
         step_i += 1
+        stock_coin = bool(_is_stock_perp_coin(coin))
         update_progress(
             stage="running",
             coin=coin,
@@ -551,9 +554,11 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
             chunk_total=0,
             last_result={
                 "days_checked": 0,
-                "l2book_minutes_added": 0,
-                "binance_minutes_filled": 0,
-                "bybit_minutes_filled": 0,
+                "tiingo_minutes_filled": 0,
+                "tiingo_month_requests_used": 0,
+                "l2book_minutes_added": 0 if not stock_coin else None,
+                "binance_minutes_filled": 0 if not stock_coin else None,
+                "bybit_minutes_filled": 0 if not stock_coin else None,
                 "duration_s": int(max(0, time.time() - started_ts)),
             },
             last_binance_fill_day="",
@@ -577,27 +582,55 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                 kw["chunk_done"] = int(done)
             if snap.get("day"):
                 kw["day"] = str(snap.get("day"))
+            if snap.get("month_key"):
+                kw["month_key"] = str(snap.get("month_key"))
+            if snap.get("month_day_index") is not None:
+                kw["month_day_index"] = int(snap.get("month_day_index") or 0)
+            if snap.get("month_day_total") is not None:
+                kw["month_day_total"] = int(snap.get("month_day_total") or 0)
+            if snap.get("ticker"):
+                kw["ticker"] = str(snap.get("ticker"))
+            if snap.get("tiingo_wait_s") is not None:
+                kw["tiingo_wait_s"] = int(snap.get("tiingo_wait_s") or 0)
+            if snap.get("tiingo_wait_reason") is not None:
+                kw["tiingo_wait_reason"] = str(snap.get("tiingo_wait_reason") or "")
+            if snap.get("tiingo_wait_kind") is not None:
+                kw["tiingo_wait_kind"] = str(snap.get("tiingo_wait_kind") or "")
             if stage == "binance_fill" and snap.get("day"):
                 kw["last_binance_fill_day"] = str(snap.get("day"))
-            if any(k in snap for k in ("days_checked", "l2book_minutes_added", "binance_minutes_filled", "bybit_minutes_filled")):
-                kw["last_result"] = {
-                    "days_checked": int(snap.get("days_checked") or 0),
-                    "l2book_minutes_added": int(snap.get("l2book_minutes_added") or 0),
-                    "binance_minutes_filled": int(snap.get("binance_minutes_filled") or 0),
-                    "bybit_minutes_filled": int(snap.get("bybit_minutes_filled") or 0),
-                    "duration_s": int(max(0, time.time() - started_ts)),
-                }
+            if any(k in snap for k in ("days_checked", "l2book_minutes_added", "binance_minutes_filled", "bybit_minutes_filled", "tiingo_minutes_filled", "tiingo_month_requests_used")):
+                if stock_coin:
+                    kw["last_result"] = {
+                        "days_checked": int(snap.get("days_checked") or 0),
+                        "tiingo_minutes_filled": int(snap.get("tiingo_minutes_filled") or 0),
+                        "tiingo_month_requests_used": int(snap.get("tiingo_month_requests_used") or 0),
+                        "duration_s": int(max(0, time.time() - started_ts)),
+                    }
+                else:
+                    kw["last_result"] = {
+                        "days_checked": int(snap.get("days_checked") or 0),
+                        "l2book_minutes_added": int(snap.get("l2book_minutes_added") or 0),
+                        "binance_minutes_filled": int(snap.get("binance_minutes_filled") or 0),
+                        "bybit_minutes_filled": int(snap.get("bybit_minutes_filled") or 0),
+                        "duration_s": int(max(0, time.time() - started_ts)),
+                    }
             update_progress(**kw)
 
         res = improve_best_hyperliquid_1m_archive_for_coin(
             coin=coin,
             end_date=end_day,
+            start_date_override=start_day or None,
             dry_run=False,
+            refetch=refetch,
             progress_cb=progress_cb,
         )
         out = res.to_dict()
         if isinstance(out, dict):
             out["duration_s"] = int(max(0, time.time() - started_ts))
+            if stock_coin:
+                out.pop("l2book_minutes_added", None)
+                out.pop("binance_minutes_filled", None)
+                out.pop("bybit_minutes_filled", None)
         append_exchange_download_log("hyperliquid", f"[INFO] [hl_best_1m_job] {coin} {out}")
         update_progress(stage="running", last_result=out)
 

@@ -25,6 +25,8 @@
 ## Merkliste aus Chat
 
 - Future `Merke Dir:` entries must be appended here as short bullet points.
+- **NIEMALS eigenmächtige grosse Design-Änderungen**: Kein Modul-Rewrite, Datei löschen, Architektur-Umbau oder Löschen/Ersetzen von bestehendem Code ohne explizite User-Bestätigung. Erst Vorschlag formulieren, fragen, auf „Ja" warten — dann implementieren.
+- GUI-Sprache ist durchgehend Englisch; nur Guides/Tutorials werden in Englisch und Deutsch angeboten.
 
 ## Repo boundaries (important)
 
@@ -53,6 +55,13 @@
 
 - If a Help modal already exists on the page/module, reuse that behavior (do not invent a new modal flow).
   - Prefer opening the modal (don’t navigate away) so user context is preserved.
+
+- **Guide sync is mandatory for user-facing changes**:
+  - If a page’s visible behavior, labels, workflow, defaults, or warnings change, update the matching guide(s) in the same task.
+  - For pages with EN+DE guides, update both `docs/help/...` and `docs/help_de/...` together.
+  - This explicitly includes `navi/system_api_keys.py` and `20_api_keys.md` when API key or TradFi provider UX changes.
+  - Before finishing, verify guide parity by checking changed UI strings/options against guide text.
+  - Do not leave placeholder-only translations when a full EN guide exists; provide a real DE update.
 
 ## Backups before mass edits
 

@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import calendar
 
-from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -11,9 +11,15 @@ import signal
 import time
 import inspect
 import json
+from typing import Any
+
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+except Exception:
+    _ZoneInfo = None
 
 from Exchange import Exchanges
-from PBCoinData import get_normalized_coins, get_symbol_for_coin, compute_coin_name
+from PBCoinData import CoinData, compute_coin_name
 from pbgui_purefunc import load_ini, save_ini
 
 from pbgui_func import (
@@ -32,6 +38,8 @@ from market_data import (
     load_market_data_config,
     set_enabled_coins,
     summarize_raw_inventory,
+    summarize_pb7_cache_inventory,
+    get_daily_presence_for_pb7_cache,
     get_daily_hour_coverage_for_dataset,
     get_minute_presence_for_dataset,
     get_exchange_download_log_path,
@@ -54,7 +62,12 @@ from hyperliquid_aws import (
 
 from hyperliquid_best_1m import (
     update_latest_hyperliquid_1m_api_for_coin,
+    _load_tradfi_profiles_from_ini,
+    probe_tiingo_iex_1m,
+    get_tiingo_runtime_usage,
+    resolve_tradfi_symbol,
 )
+from hyperliquid_api import resolve_hyperliquid_coin_name
 
 from task_queue import (
     enqueue_job,
@@ -65,6 +78,186 @@ from task_queue import (
     force_fail_job,
     clear_worker_pid,
 )
+from tradfi_sync import load_xyz_spec, fetch_xyz_spec, auto_map_tradfi, fetch_tiingo_meta
+
+
+def _is_hyperliquid_stock_perp_1m(*, exchange: str, dataset: str, coin: str) -> bool:
+    ex_l = str(exchange or "").strip().lower()
+    ds_l = str(dataset or "").strip().lower()
+    coin_u = str(coin or "").strip().upper()
+    if ex_l != "hyperliquid":
+        return False
+    if ds_l not in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
+        return False
+    return coin_u.startswith("XYZ:") or coin_u.startswith("XYZ-")
+
+
+def _tradfi_expected_minute_indices(day: _date) -> set[int]:
+    # US equities regular session (09:30-16:00 ET), converted to UTC per day (DST-aware).
+    if int(day.weekday()) >= 5:
+        return set()
+    if _ZoneInfo is None:
+        # Conservative fallback when zoneinfo is unavailable: assume standard UTC window.
+        return set(range((14 * 60) + 30, (21 * 60)))
+    try:
+        et = _ZoneInfo("America/New_York")
+        utc = _ZoneInfo("UTC")
+        open_dt = _datetime(day.year, day.month, day.day, 9, 30, tzinfo=et).astimezone(utc)
+        close_dt = _datetime(day.year, day.month, day.day, 16, 0, tzinfo=et).astimezone(utc)
+        start_i = int(open_dt.hour) * 60 + int(open_dt.minute)
+        end_excl = int(close_dt.hour) * 60 + int(close_dt.minute)
+        if end_excl <= start_i:
+            return set()
+        return set(range(start_i, end_excl))
+    except Exception:
+        return set(range((14 * 60) + 30, (21 * 60)))
+
+
+def _tradfi_expected_minute_indices_custom_close(day: _date, *, close_hour: int, close_minute: int = 0) -> set[int]:
+    if int(day.weekday()) >= 5:
+        return set()
+    if _ZoneInfo is None:
+        start_i = (14 * 60) + 30
+        end_excl = int(close_hour) * 60 + int(close_minute)
+        return set(range(start_i, end_excl)) if end_excl > start_i else set()
+    try:
+        et = _ZoneInfo("America/New_York")
+        utc = _ZoneInfo("UTC")
+        open_dt = _datetime(day.year, day.month, day.day, 9, 30, tzinfo=et).astimezone(utc)
+        close_dt = _datetime(day.year, day.month, day.day, int(close_hour), int(close_minute), tzinfo=et).astimezone(utc)
+        start_i = int(open_dt.hour) * 60 + int(open_dt.minute)
+        end_excl = int(close_dt.hour) * 60 + int(close_dt.minute)
+        if end_excl <= start_i:
+            return set()
+        return set(range(start_i, end_excl))
+    except Exception:
+        start_i = (14 * 60) + 30
+        end_excl = int(close_hour) * 60 + int(close_minute)
+        return set(range(start_i, end_excl)) if end_excl > start_i else set()
+
+
+def _nth_weekday_of_month(year: int, month: int, weekday: int, n: int) -> _date:
+    first = _date(year, month, 1)
+    delta = (int(weekday) - int(first.weekday())) % 7
+    return first + _timedelta(days=delta + (max(1, int(n)) - 1) * 7)
+
+
+def _last_weekday_of_month(year: int, month: int, weekday: int) -> _date:
+    last_dom = calendar.monthrange(year, month)[1]
+    d = _date(year, month, last_dom)
+    while int(d.weekday()) != int(weekday):
+        d = d - _timedelta(days=1)
+    return d
+
+
+def _easter_sunday(year: int) -> _date:
+    # Anonymous Gregorian algorithm
+    a = int(year) % 19
+    b = int(year) // 100
+    c = int(year) % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return _date(int(year), int(month), int(day))
+
+
+def _is_us_market_holiday(day: _date) -> bool:
+    y = int(day.year)
+    # Fixed-date holidays (observed)
+    fixed: set[_date] = set()
+    for m, d in ((1, 1), (6, 19), (7, 4), (12, 25)):
+        if m == 6 and y < 2021:
+            continue
+        h = _date(y, m, d)
+        if h.weekday() == 5:
+            h = h - _timedelta(days=1)
+        elif h.weekday() == 6:
+            h = h + _timedelta(days=1)
+        fixed.add(h)
+
+    floating: set[_date] = {
+        _nth_weekday_of_month(y, 1, 0, 3),    # MLK Day
+        _nth_weekday_of_month(y, 2, 0, 3),    # Presidents' Day
+        _last_weekday_of_month(y, 5, 0),      # Memorial Day
+        _nth_weekday_of_month(y, 9, 0, 1),    # Labor Day
+        _nth_weekday_of_month(y, 11, 3, 4),   # Thanksgiving
+    }
+    floating.add(_easter_sunday(y) - _timedelta(days=2))  # Good Friday
+
+    return day in fixed or day in floating
+
+
+def _is_us_market_early_close(day: _date) -> bool:
+    if int(day.weekday()) >= 5:
+        return False
+    if _is_us_market_holiday(day):
+        return False
+    # Day after Thanksgiving (Friday)
+    thanksgiving = _nth_weekday_of_month(int(day.year), 11, 3, 4)
+    if day == (thanksgiving + _timedelta(days=1)):
+        return True
+    # Common NYSE early-close dates
+    if int(day.month) == 7 and int(day.day) == 3:
+        return True
+    if int(day.month) == 12 and int(day.day) == 24:
+        return True
+    return False
+
+
+def _tradfi_canonical_type_for_coin(coin: str) -> str:
+    key = str(coin or "").strip().upper()
+    if not key:
+        return ""
+    if key.startswith("XYZ:") or key.startswith("XYZ-"):
+        key = key[4:].strip()
+    for suffix in (
+        "/USDC:USDC", "_USDC:USDC", "_USDC_USDC", "USDC",
+        "/USDT:USDT", "_USDT:USDT", "_USDT_USDT", "USDT",
+    ):
+        if key.endswith(suffix):
+            key = key[: -len(suffix)]
+            break
+    key = key.strip(" _:-")
+    rows = _load_tradfi_map_for_ui()
+    for row in rows:
+        if str(row.get("xyz_coin") or "").strip().upper() == key:
+            return str(row.get("canonical_type") or "").strip().lower()
+    return ""
+
+
+def _uses_us_holiday_calendar(canonical_type: str) -> bool:
+    return str(canonical_type or "").strip().lower() in {"equity_us", "etf", "commodity_etf", "index_etf"}
+
+
+def _tradfi_expected_indices_for_type(day: _date, canonical_type: str) -> set[int]:
+    if _uses_us_holiday_calendar(canonical_type):
+        if _is_us_market_holiday(day):
+            return set()
+        if _is_us_market_early_close(day):
+            # 09:30-13:00 ET
+            return _tradfi_expected_minute_indices_custom_close(day, close_hour=13, close_minute=0)
+    return _tradfi_expected_minute_indices(day)
+
+
+def _tradfi_expected_minute_indices_from_session(*, day: _date, session_start_ms: int, session_end_ms: int) -> set[int]:
+    if int(session_end_ms) < int(session_start_ms):
+        return set()
+    utc = _ZoneInfo("UTC") if _ZoneInfo is not None else _timezone.utc
+    day_start = _datetime(day.year, day.month, day.day, tzinfo=utc)
+    day_start_ms = int(day_start.timestamp() * 1000)
+    start_idx = max(0, (int(session_start_ms) - day_start_ms) // 60_000)
+    end_idx = min(1439, (int(session_end_ms) - day_start_ms) // 60_000)
+    if end_idx < start_idx:
+        return set()
+    return set(range(int(start_idx), int(end_idx) + 1))
 
 
 def _docs_index(lang: str) -> list[tuple[str, str]]:
@@ -108,6 +301,64 @@ def _load_market_data_status() -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+_HL_STATUS_SYMBOL_TO_COIN_CACHE: dict[str, str] | None = None
+
+
+def _load_hyperliquid_status_symbol_map() -> dict[str, str]:
+    global _HL_STATUS_SYMBOL_TO_COIN_CACHE
+    if isinstance(_HL_STATUS_SYMBOL_TO_COIN_CACHE, dict):
+        return _HL_STATUS_SYMBOL_TO_COIN_CACHE
+
+    out: dict[str, str] = {}
+    try:
+        mapping_path = Path(__file__).resolve().parents[1] / "data" / "coindata" / "hyperliquid" / "mapping.json"
+        if mapping_path.exists():
+            raw = json.loads(mapping_path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                for rec in raw:
+                    if not isinstance(rec, dict):
+                        continue
+                    symbol = str(rec.get("symbol") or "").strip().upper()
+                    coin = str(rec.get("coin") or "").strip().upper()
+                    if symbol and coin and symbol not in out:
+                        out[symbol] = coin
+    except Exception:
+        out = {}
+
+    _HL_STATUS_SYMBOL_TO_COIN_CACHE = out
+    return out
+
+
+def _display_market_data_status_coin(*, exchange: str, coin: object) -> str:
+    c = str(coin or "").strip()
+    if not c:
+        return ""
+
+    ex = str(exchange or "").strip().lower()
+    if ex != "hyperliquid":
+        return c
+
+    c_u = c.upper()
+
+    # Legacy / low-level Hyperliquid market ids (e.g. "0", "50") -> coin name.
+    if c_u.isdigit():
+        mapped = _load_hyperliquid_status_symbol_map().get(c_u)
+        if mapped:
+            return mapped
+
+    # Normalize stock-perp display variants to xyz:TICKER.
+    if c_u.startswith("XYZ:") or c_u.startswith("XYZ-"):
+        tail = c_u[4:].strip()
+        for suffix in ("/USDC:USDC", "_USDC:USDC", "_USDC_USDC", "USDC", "/USDT:USDT", "_USDT:USDT", "_USDT_USDT", "USDT"):
+            if tail.endswith(suffix):
+                tail = tail[: -len(suffix)]
+                break
+        tail = tail.strip(" _:-")
+        return f"xyz:{tail}" if tail else c
+
+    return c
 
 
 def _read_markdown(path: str) -> str:
@@ -192,6 +443,8 @@ def _render_jobs_panel(
 
         def _render_job_details(match: dict) -> None:
             pr = match.get("progress") if isinstance(match.get("progress"), dict) else {}
+            coin_local = str((pr or {}).get("coin") or "").strip().upper()
+            is_stock_perp = coin_local.startswith("XYZ:") or coin_local.startswith("XYZ-")
             step_i = (pr or {}).get("step")
             total_i = (pr or {}).get("total")
             step_txt = f"{step_i}/{total_i}" if total_i else ""
@@ -236,19 +489,44 @@ def _render_jobs_panel(
             last_binance_day = (pr or {}).get("last_binance_fill_day")
             if stage == "binance_fill" and sub_day:
                 st.caption(f"substatus: binance_fill day={sub_day}")
-            elif last_binance_day:
+            elif last_binance_day and not is_stock_perp:
                 st.caption(f"substatus: binance_fill day={last_binance_day}")
-            if (sub_day or sub_hour is not None) and stage != "binance_fill" and not sub_day:
+            if (sub_day or sub_hour is not None) and stage != "binance_fill":
                 try:
                     hour_txt = f"{int(sub_hour):02d}" if sub_hour is not None else ""
                 except Exception:
                     hour_txt = str(sub_hour)
                 if sub_day and hour_txt:
-                    st.caption(f"substatus: l2book {sub_day} {hour_txt}:00")
+                    if is_stock_perp:
+                        st.caption(f"substatus: tradfi {sub_day} {hour_txt}:00")
+                    else:
+                        st.caption(f"substatus: l2book {sub_day} {hour_txt}:00")
                 elif sub_day:
-                    st.caption(f"substatus: l2book {sub_day}")
+                    if is_stock_perp:
+                        st.caption(f"substatus: tradfi {sub_day}")
+                    else:
+                        st.caption(f"substatus: l2book {sub_day}")
                 elif hour_txt:
-                    st.caption(f"substatus: l2book hour {hour_txt}")
+                    if is_stock_perp:
+                        st.caption(f"substatus: tradfi hour {hour_txt}")
+                    else:
+                        st.caption(f"substatus: l2book hour {hour_txt}")
+            if is_stock_perp:
+                month_key = str((pr or {}).get("month_key") or "").strip()
+                month_day_index = int((pr or {}).get("month_day_index") or 0)
+                month_day_total = int((pr or {}).get("month_day_total") or 0)
+                tiingo_wait_s = int((pr or {}).get("tiingo_wait_s") or 0)
+                tiingo_wait_reason = str((pr or {}).get("tiingo_wait_reason") or "").strip()
+                tiingo_ticker = str((pr or {}).get("ticker") or "").strip().upper()
+                last_result = (pr or {}).get("last_result") if isinstance((pr or {}).get("last_result"), dict) else {}
+                tiingo_month_requests_used = int((last_result or {}).get("tiingo_month_requests_used") or 0)
+                if month_key and month_day_total > 0:
+                    st.caption(f"substatus: tradfi month {month_key} day {month_day_index}/{month_day_total} (Tiingo loaded monthly, written day-by-day)")
+                st.caption(f"substatus: tiingo_month_requests_used={tiingo_month_requests_used}")
+                if tiingo_wait_s > 0:
+                    reason_txt = tiingo_wait_reason or "rate_limit"
+                    ticker_txt = f" ticker={tiingo_ticker}" if tiingo_ticker else ""
+                    st.warning(f"⚠️ Tiingo rate-limit{ticker_txt}: waiting {tiingo_wait_s}s (reason={reason_txt})")
             corrupt = (pr or {}).get("corrupt_files")
             if isinstance(corrupt, list) and corrupt:
                 st.caption(f"corrupt_files: {len(corrupt)}")
@@ -305,6 +583,8 @@ def _render_jobs_panel(
             c4.write(coin)
             c5.write(chunk)
             c6.progress(pct)
+            coin_upper = str(coin or "").strip().upper()
+            is_stock_perp = coin_upper.startswith("XYZ:") or coin_upper.startswith("XYZ-")
             sub_day = (pr or {}).get("day")
             sub_hour = (pr or {}).get("hour")
             last_binance_day = (pr or {}).get("last_binance_fill_day")
@@ -314,12 +594,35 @@ def _render_jobs_panel(
                 except Exception:
                     hour_txt = str(sub_hour)
                 if sub_day and hour_txt:
-                    c6.caption(f"l2book {sub_day} {hour_txt}:00")
+                    if is_stock_perp:
+                        c6.caption(f"tradfi {sub_day} {hour_txt}:00")
+                    else:
+                        c6.caption(f"l2book {sub_day} {hour_txt}:00")
                 elif sub_day:
-                    c6.caption(f"l2book {sub_day}")
+                    if is_stock_perp:
+                        c6.caption(f"tradfi {sub_day}")
+                    else:
+                        c6.caption(f"l2book {sub_day}")
                 elif hour_txt:
-                    c6.caption(f"l2book hour {hour_txt}")
-            if last_binance_day:
+                    if is_stock_perp:
+                        c6.caption(f"tradfi hour {hour_txt}")
+                    else:
+                        c6.caption(f"l2book hour {hour_txt}")
+            if is_stock_perp:
+                month_key = str((pr or {}).get("month_key") or "").strip()
+                month_day_index = int((pr or {}).get("month_day_index") or 0)
+                month_day_total = int((pr or {}).get("month_day_total") or 0)
+                tiingo_wait_s = int((pr or {}).get("tiingo_wait_s") or 0)
+                tiingo_wait_reason = str((pr or {}).get("tiingo_wait_reason") or "").strip()
+                last_result = (pr or {}).get("last_result") if isinstance((pr or {}).get("last_result"), dict) else {}
+                tiingo_month_requests_used = int((last_result or {}).get("tiingo_month_requests_used") or 0)
+                if month_key and month_day_total > 0:
+                    c6.caption(f"month {month_key} day {month_day_index}/{month_day_total}")
+                c6.caption(f"tiingo month reqs {tiingo_month_requests_used}")
+                if tiingo_wait_s > 0:
+                    reason_txt = tiingo_wait_reason or "rate_limit"
+                    c6.caption(f"⚠️ tiingo wait {tiingo_wait_s}s ({reason_txt})")
+            if last_binance_day and not is_stock_perp:
                 c6.caption(f"binance_fill day={last_binance_day}")
             c7.write(str(j.get("updated_ts") or ""))
             with c8:
@@ -389,6 +692,797 @@ def _help_modal(default_topic: str = "Market Data"):
         pass
 
 
+@st.dialog("📋 XYZ Specs", width="large")
+def _tradfi_spec_view_dialog():
+    spec_path = Path.cwd() / "data" / "coindata" / "hyperliquid" / "xyz_spec.json"
+    if not spec_path.exists():
+        st.info("No local spec cache found. Click 'Spec' first to fetch the latest XYZ specs.")
+        return
+
+    try:
+        raw = json.loads(spec_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        st.error(f"Failed to read spec cache: {exc}")
+        return
+
+    fetched_at = str((raw or {}).get("fetched_at") or "").strip()
+    instruments_raw = (raw or {}).get("instruments") or []
+    instruments = [r for r in instruments_raw if isinstance(r, dict)]
+
+    c_spec_meta, c_spec_link = st.columns([0.78, 0.22], vertical_alignment="center")
+    with c_spec_meta:
+        st.caption(
+            f"Source: {spec_path.name} · Fetched at: {fetched_at or 'unknown'} · "
+            f"Rows: {len(instruments):,}"
+        )
+    with c_spec_link:
+        st.markdown(
+            "<div style='text-align:right;'>"
+            "<a href='https://docs.trade.xyz/consolidated-resources/specification-index' target='_blank'>"
+            "Original XYZ page"
+            "</a></div>",
+            unsafe_allow_html=True,
+        )
+
+    if not instruments:
+        st.info("Spec cache is empty.")
+        return
+
+    view_rows: list[dict[str, str]] = []
+    for row in instruments:
+        coin = str(row.get("xyz_coin") or "").strip().upper()
+        ctype = str(row.get("canonical_type") or "").strip()
+        instrument = str(row.get("instrument_label") or "").strip()
+        desc = str(row.get("description") or "").strip()
+        underlying = str(row.get("underlying") or "").strip()
+        underlying_href = str(row.get("underlying_href") or "").strip()
+        pyth_symbol = str(row.get("pyth_symbol") or "").strip()
+        max_leverage = str(row.get("max_leverage") or "").strip()
+
+        if underlying_href.startswith("//"):
+            underlying_href = "https:" + underlying_href
+        elif underlying_href and "://" in underlying_href and not underlying_href.startswith(("http://", "https://")):
+            underlying_href = "https://" + underlying_href.split("://", 1)[1]
+
+        hl_link = f"https://app.hyperliquid.xyz/trade/xyz:{coin}" if coin else ""
+
+        view_rows.append(
+            {
+                "XYZ": coin,
+                "Type": ctype,
+                "Instrument": instrument,
+                "Description": desc,
+                "Underlying": underlying,
+                "Max Leverage": max_leverage,
+                "Pyth": pyth_symbol,
+                "Pyth Link": underlying_href,
+                "HL Link": hl_link,
+            }
+        )
+
+    if not view_rows:
+        st.info("No spec rows available.")
+        return
+
+    table_height = min(1100, max(540, 34 * (len(view_rows) + 2)))
+    st.dataframe(
+        view_rows,
+        use_container_width=True,
+        hide_index=True,
+        height=int(table_height),
+        column_config={
+            "Pyth Link": st.column_config.LinkColumn(
+                "Pyth Link",
+                display_text="🔗",
+                help="Open Pyth insights page",
+                width="small",
+            ),
+            "HL Link": st.column_config.LinkColumn(
+                "HL Link",
+                display_text=r".+xyz:(.+)",
+                help="Open on Hyperliquid",
+                width="small",
+            ),
+        },
+    )
+
+
+# ---- TradFi symbol map helpers ----
+
+def _tradfi_map_path() -> Path:
+    return Path.cwd() / "data" / "coindata" / "hyperliquid" / "tradfi_symbol_map.json"
+
+
+def _load_tradfi_map_for_ui() -> list:
+    path = _tradfi_map_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_tradfi_map_for_ui(records: list) -> None:
+    path = _tradfi_map_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    normalized_records: list = []
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            normalized_records.append(rec)
+            continue
+        item = dict(rec)
+        fx = str(item.get("tiingo_fx_ticker") or "").strip()
+        if fx:
+            item["tiingo_fx_ticker"] = fx.upper()
+        normalized_records.append(item)
+
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(normalized_records, indent=4, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _load_xyz_spec_cache_info() -> dict | None:
+    """Kept for backwards compat — returns None (cache file no longer used)."""
+    return None
+
+
+_TRADFI_CANONICAL_TYPES = [
+    "equity_us", "equity_kr", "equity_jp", "fx", "commodity",
+    "commodity_etf", "index_etf", "etf",
+]
+_TRADFI_STATUSES = ["ok", "alias", "pending", "no_provider", "delisted"]
+
+_TRADFI_STATUSES_SELECTABLE = ["ok", "alias", "pending", "no_provider"]
+
+# Local descriptions for known XYZ symbols — used as fallback for coins not yet in tradfi_symbol_map.json.
+_TRADFI_KNOWN_DESCRIPTIONS: dict[str, str] = {
+    # Commodities
+    "GOLD": "Gold (XAU/USD spot)",
+    "SILVER": "Silver (XAG/USD spot)",
+    "PLATINUM": "Platinum (XPT/USD spot)",
+    "PALLADIUM": "Palladium (XPD/USD spot)",
+    "CL": "WTI Crude Oil (WTIJ6 front-month futures)",
+    "NATGAS": "Natural Gas (NGJ26 front-month futures)",
+    "COPPER": "Copper (HGK6 front-month futures)",
+    "ALUMINIUM": "Aluminium (LME spot commodity)",
+    "URANIUM": "Uranium (UX spot price)",
+    # FX
+    "EUR": "Euro / US Dollar FX (EUR/USD)",
+    "JPY": "Japanese Yen (USD/JPY rate)",
+    "GBP": "British Pound / US Dollar FX (GBP/USD)",
+    "DXY": "US Dollar Index (DXY basket)",
+    # Indices
+    "XYZ100": "XYZ100 index (XYZ stock-perps basket, NMH6/USD oracle)",
+    "JP225": "Nikkei 225 index (Japan)",
+    "KR200": "KOSPI 200 index (South Korea)",
+    # ETF
+    "URNM": "Sprott Uranium Miners ETF (NASDAQ: URNM)",
+    # Korean equities
+    "HYUN": "Hyundai Motor Company (KRX: 005380.KS)",
+    "SKHX": "SK Hynix Inc. (KRX: 000660.KS)",
+    "SMSN": "Samsung Electronics Co. Ltd. (KRX: 005930.KS)",
+    # Japanese equities
+    "SOFTBANK": "SoftBank Group Corp. (TYO: 9984)",
+    # US equities — for any not yet saved to tradfi_symbol_map.json
+    "TSLA": "Tesla Inc. (NASDAQ: TSLA)",
+    "NVDA": "NVIDIA Corp. (NASDAQ: NVDA)",
+    "AAPL": "Apple Inc. (NASDAQ: AAPL)",
+    "MSFT": "Microsoft Corp. (NASDAQ: MSFT)",
+    "AMZN": "Amazon.com Inc. (NASDAQ: AMZN)",
+    "GOOGL": "Alphabet Inc. Class A (NASDAQ: GOOGL)",
+    "META": "Meta Platforms Inc. (NASDAQ: META)",
+    "INTC": "Intel Corp. (NASDAQ: INTC)",
+    "AMD": "Advanced Micro Devices Inc. (NASDAQ: AMD)",
+    "MU": "Micron Technology Inc. (NASDAQ: MU)",
+    "PLTR": "Palantir Technologies Inc. (NYSE: PLTR)",
+    "ORCL": "Oracle Corp. (NYSE: ORCL)",
+    "MSTR": "Strategy Inc. / MicroStrategy (NASDAQ: MSTR)",
+    "COIN": "Coinbase Global Inc. (NASDAQ: COIN)",
+    "HOOD": "Robinhood Markets Inc. (NASDAQ: HOOD)",
+    "NFLX": "Netflix Inc. (NASDAQ: NFLX)",
+    "CRCL": "Circle Internet Group Inc. (NYSE: CRCL)",
+    "SNDK": "SanDisk Corp. (NASDAQ: SNDK)",
+    "RIVN": "Rivian Automotive Inc. (NASDAQ: RIVN)",
+    "TSM": "Taiwan Semiconductor Mfg. Co. Ltd. (NYSE: TSM)",
+    "BABA": "Alibaba Group Holding Ltd. (NYSE: BABA)",
+    "CRWV": "CoreWeave Inc. (NASDAQ: CRWV)",
+    "USAR": "USAR / USD (synthetic XYZ instrument)",
+}
+
+
+def _guess_tradfi_canonical_type(xyz_coin: str) -> str:
+    u = xyz_coin.upper()
+    if u in {"GOLD", "SILVER", "PLATINUM", "PALLADIUM", "CL", "NATGAS", "COPPER", "ALUMINIUM", "URANIUM"}:
+        return "commodity"
+    if u in {"EUR", "JPY", "GBP", "DXY"}:
+        return "fx"
+    if u in {"JP225", "KR200", "XYZ100"}:
+        return "index"
+    if u in {"URNM"}:
+        return "commodity_etf"
+    if u in {"HYUN", "SKHX", "SMSN"}:
+        return "equity_kr"
+    if u in {"SOFTBANK"}:
+        return "equity_jp"
+    return "equity_us"
+
+
+def _build_merged_tradfi_table() -> list[dict]:
+    """Merge mapping.json XYZ coins with tradfi_symbol_map.json.
+
+    Returns one row per XYZ coin (plus any manually-added entries not in mapping.json).
+    Rows not yet saved to tradfi_symbol_map.json have ``_in_map=False``.
+    canonical_type is taken from the live XYZ spec if available (cached for 24 h),
+    falling back to the local heuristic.
+    """
+    # Load live spec from cache (fast — no network call if cache is fresh)
+    spec_list = load_xyz_spec()
+    spec_by_coin: dict[str, dict] = {}
+    if spec_list:
+        for s in spec_list:
+            coin = str(s.get("xyz_coin") or "").upper()
+            if coin:
+                spec_by_coin[coin] = s
+
+    # Load XYZ coins from mapping.json
+    mapping_path = Path.cwd() / "data" / "coindata" / "hyperliquid" / "mapping.json"
+    xyz_coins: dict[str, bool] = {}  # normalized coin name → is_active
+    if mapping_path.exists():
+        try:
+            raw = json.loads(mapping_path.read_text(encoding="utf-8"))
+            entries = raw if isinstance(raw, list) else list(raw.values())
+            for e in entries:
+                if not (e.get("is_hip3") and str(e.get("dex") or "").lower() == "xyz"):
+                    continue
+                coin_field = str(e.get("coin") or e.get("base") or "").strip()
+                if coin_field.upper().startswith("XYZ-"):
+                    coin_name = coin_field[4:].upper()
+                elif coin_field.upper().startswith("XYZ:"):
+                    coin_name = coin_field[4:].upper()
+                else:
+                    coin_name = coin_field.upper()
+                if coin_name:
+                    xyz_coins[coin_name] = bool(e.get("active", True))
+        except Exception:
+            pass
+
+    # Load saved symbol map
+    saved_map: dict[str, dict] = {}
+    for r in _load_tradfi_map_for_ui():
+        key = str(r.get("xyz_coin") or "").upper()
+        if key:
+            saved_map[key] = r
+
+    rows: list[dict] = []
+
+    # Coins from mapping.json
+    for coin_name, is_active in xyz_coins.items():
+        if coin_name in saved_map:
+            row = dict(saved_map[coin_name])
+            row["_in_map"] = True
+        else:
+            row = {
+                "xyz_coin": coin_name,
+                "description": _TRADFI_KNOWN_DESCRIPTIONS.get(coin_name, ""),
+                "canonical_type": (
+                    spec_by_coin[coin_name]["canonical_type"]
+                    if coin_name in spec_by_coin
+                    else _guess_tradfi_canonical_type(coin_name)
+                ),
+                "tiingo_ticker": None,
+                "tiingo_fx_ticker": None,
+                "tiingo_fx_invert": False,
+                "tiingo_start_date": None,
+                "status": "pending" if is_active else "delisted",
+                "note": "",
+                "last_verified": None,
+                "spec_source": "mapping.json",
+                "_in_map": False,
+            }
+        # Attach Pyth link and Hyperliquid link from spec cache / coin name
+        _href = str((spec_by_coin.get(coin_name) or {}).get("underlying_href") or "")
+        if _href.startswith("//"):
+            _href = "https:" + _href
+        elif _href and "://" in _href and not _href.startswith(("http://", "https://")):
+            _href = "https://" + _href.split("://", 1)[1]
+        row["pyth_link"] = _href
+        row["hl_link"] = f"https://app.hyperliquid.xyz/trade/xyz:{coin_name}"
+        rows.append(row)
+
+    # Manually-added entries not in mapping.json
+    for coin_name, entry in saved_map.items():
+        if coin_name not in xyz_coins:
+            row = dict(entry)
+            row["_in_map"] = True
+            _href = str((spec_by_coin.get(coin_name) or {}).get("underlying_href") or "")
+            if _href.startswith("//"):
+                _href = "https:" + _href
+            elif _href and "://" in _href and not _href.startswith(("http://", "https://")):
+                _href = "https://" + _href.split("://", 1)[1]
+            row["pyth_link"] = _href
+            row["hl_link"] = f"https://app.hyperliquid.xyz/trade/xyz:{coin_name}"
+            rows.append(row)
+
+    rows.sort(key=lambda r: str(r.get("xyz_coin") or ""))
+    # Delisted coins are not actionable — exclude from the table
+    rows = [r for r in rows if str(r.get("status") or "").lower() != "delisted"]
+    return rows
+
+
+@st.dialog("Add / Edit TradFi Symbol", width="large")
+def _tradfi_map_edit_dialog(mode: str, existing: dict | None = None):
+    """Add or edit a tradfi_symbol_map entry. mode: 'add' | 'edit'"""
+    ex = existing or {}
+    is_edit = mode == "edit"
+
+    xyz_coin_def = str(ex.get("xyz_coin") or "").strip().upper()
+    if is_edit:
+        st.markdown(f"**Symbol:** `{xyz_coin_def}`")
+        xyz_coin = xyz_coin_def
+    else:
+        xyz_coin = st.text_input(
+            "XYZ coin name (without XYZ- prefix)",
+            value=xyz_coin_def,
+            key="tradfi_edit_xyz_coin",
+            help="e.g. TSLA, HYUNDAI, GOLD",
+        ).strip().upper()
+
+    can_types = _TRADFI_CANONICAL_TYPES
+    can_def = str(ex.get("canonical_type") or "equity_us")
+    can_idx = can_types.index(can_def) if can_def in can_types else 0
+    canonical_type = st.selectbox("Canonical type", options=can_types, index=can_idx, key="tradfi_edit_ctype")
+
+    description = st.text_input(
+        "Description",
+        value=str(ex.get("description") or ""),
+        key="tradfi_edit_description",
+        help="Human-readable name auto-populated by sync (e.g. 'Tesla Inc.'). Helps identify the correct Tiingo ticker.",
+    )
+
+    st.divider()
+    st.markdown("**Tiingo Equity (IEX)**")
+    tiingo_ticker = (
+        st.text_input(
+            "tiingo_ticker",
+            value=str(ex.get("tiingo_ticker") or ""),
+            key="tradfi_edit_ticker",
+            help="Ticker for Tiingo IEX 1m endpoint. Leave empty if using FX endpoint.",
+        ).strip().upper() or None
+    )
+
+    st.markdown("**Tiingo FX (Spot)**")
+    tiingo_fx_ticker = (
+        st.text_input(
+            "tiingo_fx_ticker",
+            value=str(ex.get("tiingo_fx_ticker") or ""),
+            key="tradfi_edit_fx_ticker",
+            help="Ticker for Tiingo FX endpoint, e.g. XAUUSD, EURUSD.",
+        ).strip().upper() or None
+    )
+    tiingo_fx_invert = st.checkbox(
+        "tiingo_fx_invert (e.g. usdjpy → invert to get price in USD)",
+        value=bool(ex.get("tiingo_fx_invert") or False),
+        key="tradfi_edit_fx_invert",
+    )
+
+    tiingo_start_date = (
+        st.text_input(
+            "tiingo_start_date (ISO, e.g. 2025-03-28)",
+            value=str(ex.get("tiingo_start_date") or ""),
+            key="tradfi_edit_start_date",
+            help="Symbol listing date from /tiingo/daily/{ticker}. Leave empty if unknown.",
+        ).strip() or None
+    )
+
+    st.divider()
+    statuses = _TRADFI_STATUSES
+    stat_def = str(ex.get("status") or "pending")
+    stat_idx = statuses.index(stat_def) if stat_def in statuses else 2
+    status = st.selectbox("Status", options=statuses, index=stat_idx, key="tradfi_edit_status")
+
+    note = st.text_input(
+        "Note",
+        value=str(ex.get("note") or ""),
+        key="tradfi_edit_note",
+        help="Free-text, e.g. 'Hyundai OTC traded as HYMTF'",
+    )
+
+    col_save, col_cancel = st.columns(2)
+    with col_cancel:
+        if st.button("Cancel", key="tradfi_edit_cancel"):
+            st.rerun()
+    with col_save:
+        if st.button("💾 Save", key="tradfi_edit_save", type="primary"):
+            key_u = xyz_coin.strip().upper()
+            if not key_u:
+                st.error("xyz_coin cannot be empty")
+                return
+            entry = {
+                "xyz_coin": key_u,
+                "description": str(description),
+                "canonical_type": str(canonical_type),
+                "tiingo_ticker": tiingo_ticker,
+                "tiingo_fx_ticker": tiingo_fx_ticker,
+                "tiingo_fx_invert": bool(tiingo_fx_invert),
+                "tiingo_start_date": tiingo_start_date,
+                "status": str(status),
+                "note": str(note),
+                "last_verified": _date.today().isoformat(),
+                "spec_source": "manual",
+            }
+            try:
+                all_records = _load_tradfi_map_for_ui()
+                idx = next(
+                    (i for i, r in enumerate(all_records) if str(r.get("xyz_coin") or "").upper() == key_u),
+                    None,
+                )
+                if idx is not None:
+                    all_records[idx] = entry
+                else:
+                    all_records.append(entry)
+                _save_tradfi_map_for_ui(all_records)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+
+# ── TradFi price check + Tiingo search ───────────────────────────────────────
+
+def _tradfi_quote_cache_path() -> Path:
+    return Path.cwd() / "data" / "coindata" / "hyperliquid" / "tradfi_quote_cache.json"
+
+
+def _load_tradfi_quote_cache() -> dict:
+    path = _tradfi_quote_cache_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_tradfi_quote_cache(cache: dict) -> None:
+    path = _tradfi_quote_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cache, indent=4, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _tiingo_pick_iex_price(quote: dict) -> tuple[float | None, str | None]:
+    for field in ("tngoLast", "last", "mid", "prevClose"):
+        raw = quote.get(field)
+        if raw not in (None, ""):
+            try:
+                return float(raw), field
+            except Exception:
+                continue
+    return None, None
+
+
+def _tiingo_pick_fx_price(quote: dict) -> tuple[float | None, str | None]:
+    raw_mid = quote.get("midPrice")
+    if raw_mid not in (None, ""):
+        try:
+            return float(raw_mid), "midPrice"
+        except Exception:
+            pass
+    bid = quote.get("bidPrice")
+    ask = quote.get("askPrice")
+    try:
+        if bid not in (None, "") and ask not in (None, ""):
+            return (float(bid) + float(ask)) / 2.0, "bidAskMid"
+    except Exception:
+        pass
+    return None, None
+
+
+def refresh_tradfi_quote_cache(api_key: str, records: list[dict] | None = None) -> dict[str, int]:
+    """Refresh quote cache from Tiingo in bulk (IEX all + FX top).
+
+    Returns counts with fetched/saved/used metrics.
+    """
+    import urllib.request
+    import urllib.parse
+
+    rows = records if isinstance(records, list) else _load_tradfi_map_for_ui()
+    equity_tickers = {
+        str(r.get("tiingo_ticker") or "").upper()
+        for r in rows
+        if str(r.get("tiingo_ticker") or "").strip()
+    }
+    fx_tickers = {
+        str(r.get("tiingo_fx_ticker") or "").lower()
+        for r in rows
+        if str(r.get("tiingo_fx_ticker") or "").strip()
+    }
+
+    out_quotes: dict[str, dict] = {}
+    iex_payload: list[dict] = []
+    fx_payload: list[dict] = []
+
+    # 1) IEX bulk snapshot (all tickers in one request)
+    try:
+        iex_url = f"https://api.tiingo.com/iex?token={urllib.parse.quote(api_key)}"
+        iex_req = urllib.request.Request(iex_url, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(iex_req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        if isinstance(data, list):
+            iex_payload = [q for q in data if isinstance(q, dict)]
+    except Exception:
+        iex_payload = []
+
+    # Keep only mapped equity tickers
+    for q in iex_payload:
+        ticker = str(q.get("ticker") or "").upper()
+        if not ticker or ticker not in equity_tickers:
+            continue
+        price, field = _tiingo_pick_iex_price(q)
+        if price is None:
+            continue
+        out_quotes[ticker] = {
+            "price": price,
+            "source": "iex_all",
+            "field": field,
+            "quote_timestamp": str(q.get("timestamp") or q.get("lastSaleTimestamp") or ""),
+        }
+
+    # 2) FX bulk snapshot (only mapped FX tickers)
+    if fx_tickers:
+        try:
+            tickers_csv = ",".join(sorted(fx_tickers))
+            fx_url = (
+                "https://api.tiingo.com/tiingo/fx/top?"
+                f"tickers={urllib.parse.quote(tickers_csv)}&token={urllib.parse.quote(api_key)}"
+            )
+            fx_req = urllib.request.Request(fx_url, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(fx_req, timeout=20) as resp:
+                data = json.loads(resp.read())
+            if isinstance(data, list):
+                fx_payload = [q for q in data if isinstance(q, dict)]
+        except Exception:
+            fx_payload = []
+
+    for q in fx_payload:
+        ticker = str(q.get("ticker") or "").lower()
+        if not ticker or ticker not in fx_tickers:
+            continue
+        price, field = _tiingo_pick_fx_price(q)
+        if price is None:
+            continue
+        out_quotes[ticker] = {
+            "price": price,
+            "source": "fx_top",
+            "field": field,
+            "quote_timestamp": str(q.get("quoteTimestamp") or ""),
+        }
+
+    cache = {
+        "fetched_at": _datetime.now(_timezone.utc).isoformat(),
+        "quotes": out_quotes,
+    }
+    _save_tradfi_quote_cache(cache)
+    return {
+        "mapped_equity_tickers": len(equity_tickers),
+        "mapped_fx_tickers": len(fx_tickers),
+        "iex_rows": len(iex_payload),
+        "fx_rows": len(fx_payload),
+        "quotes_saved": len(out_quotes),
+    }
+
+
+def _hl_fetch_cached_price_for_xyz(xyz_coin: str, pbgui_dir: Path | None = None) -> float | None:
+    """Return latest HL close from local 1m cache (no network)."""
+    import numpy as np
+
+    base_dir = (pbgui_dir or Path.cwd()) / "data" / "ohlcv" / "hyperliquid" / "1m"
+    coin_upper = xyz_coin.upper()
+    coin_dir = base_dir / f"XYZ-{coin_upper}_USDC:USDC"
+    if not coin_dir.is_dir():
+        return None
+    npz_files = sorted(coin_dir.glob("*.npz"))
+    if not npz_files:
+        return None
+    try:
+        f = np.load(str(npz_files[-1]))
+        data = f[f.files[0]]
+        if len(data) > 0:
+            return float(data[-1]["c"])
+    except Exception:
+        return None
+    return None
+
+
+def tiingo_search(query: str, api_key: str, timeout_s: float = 10.0) -> list[dict]:
+    """Search Tiingo database. Early Beta — 1 request per call.
+    Free-Tier: ~50 requests/day.
+    """
+    import urllib.request, urllib.parse
+    q = urllib.parse.quote(query.strip())
+    url = f"https://api.tiingo.com/tiingo/utilities/search/{q}?token={api_key}"
+    req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return json.loads(resp.read())
+
+
+def _tiingo_fetch_daily_start_date(ticker: str, api_key: str, timeout_s: float = 15.0) -> str | None:
+    """Fetch `startDate` for one Tiingo daily ticker."""
+    import urllib.request
+    import urllib.parse
+
+    t = str(ticker or "").strip().upper()
+    token = str(api_key or "").strip()
+    if not t or not token:
+        return None
+
+    url = f"https://api.tiingo.com/tiingo/daily/{urllib.parse.quote(t)}?token={urllib.parse.quote(token)}"
+    req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=float(timeout_s)) as resp:
+            payload = json.loads(resp.read())
+    except Exception:
+        return None
+
+    if isinstance(payload, dict):
+        sd = str(payload.get("startDate") or "").strip()
+        return sd[:10] if sd else None
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        sd = str(payload[0].get("startDate") or "").strip()
+        return sd[:10] if sd else None
+    return None
+
+
+def _update_tiingo_start_date_for_selected(*, selected_entry: dict | None, api_key: str) -> dict[str, Any]:
+    if not selected_entry:
+        return {"updated": 0, "reason": "no selection"}
+
+    xyz = str((selected_entry or {}).get("xyz_coin") or "").strip().upper()
+    ticker = str((selected_entry or {}).get("tiingo_ticker") or "").strip().upper()
+    if not ticker:
+        return {"updated": 0, "reason": "selected symbol has no Tiingo equity ticker"}
+
+    start_date = _tiingo_fetch_daily_start_date(ticker=ticker, api_key=api_key)
+
+    if not start_date:
+        return {"updated": 0, "reason": f"no startDate for {ticker}"}
+
+    records = _load_tradfi_map_for_ui()
+    idx = next((i for i, r in enumerate(records) if str(r.get("xyz_coin") or "").upper() == xyz), None)
+
+    if idx is None:
+        row = dict(selected_entry)
+        row.pop("_in_map", None)
+        row.pop("hl_link", None)
+        row.pop("pyth_link", None)
+        row["tiingo_start_date"] = start_date
+        row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
+        records.append(row)
+    else:
+        records[idx]["tiingo_start_date"] = start_date
+        records[idx]["last_verified"] = _datetime.now(_timezone.utc).isoformat()
+
+    _save_tradfi_map_for_ui(records)
+    return {
+        "updated": 1,
+        "xyz_coin": xyz,
+        "ticker": ticker,
+        "start_date": start_date,
+    }
+
+
+def _update_tiingo_start_dates_for_all(*, api_key: str, rows: list[dict]) -> dict[str, Any]:
+    by_xyz: dict[str, dict] = {
+        str(r.get("xyz_coin") or "").strip().upper(): dict(r)
+        for r in _load_tradfi_map_for_ui()
+        if str(r.get("xyz_coin") or "").strip()
+    }
+
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    for row in rows:
+        xyz = str(row.get("xyz_coin") or "").strip().upper()
+        ticker = str(row.get("tiingo_ticker") or "").strip().upper()
+        if not xyz or not ticker:
+            skipped += 1
+            continue
+
+        existing_start = str(row.get("tiingo_start_date") or "").strip()
+        if existing_start:
+            skipped += 1
+            continue
+
+        start_date = _tiingo_fetch_daily_start_date(ticker=ticker, api_key=api_key)
+        if not start_date:
+            errors += 1
+            continue
+
+        if xyz in by_xyz:
+            by_xyz[xyz]["tiingo_start_date"] = start_date
+            by_xyz[xyz]["last_verified"] = _datetime.now(_timezone.utc).isoformat()
+        else:
+            new_row = dict(row)
+            new_row.pop("_in_map", None)
+            new_row.pop("hl_link", None)
+            new_row.pop("pyth_link", None)
+            new_row["tiingo_start_date"] = start_date
+            new_row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
+            by_xyz[xyz] = new_row
+        updated += 1
+
+    _save_tradfi_map_for_ui(list(by_xyz.values()))
+    return {"updated": updated, "skipped": skipped, "errors": errors}
+
+
+@st.dialog("🔍 Search Tiingo Ticker", width="large")
+def _tiingo_search_dialog(xyz_coin: str, api_key: str):
+    """Search Tiingo for a ticker and optionally write it to the map entry."""
+    st.markdown(f"Search a Tiingo ticker for **XYZ-{xyz_coin}**")
+    st.caption("⚠️ Tiingo Search API (Early Beta) — 1 request per search, free tier ~50/day")
+    query = st.text_input("Query", value=xyz_coin, key="_tiingo_search_query")
+    if st.button("Search", key="_tiingo_search_go"):
+        if not api_key:
+            st.error("No Tiingo API key configured. Please set it under 'TradFi / Tiingo'.")
+            return
+        try:
+            results = tiingo_search(query, api_key)
+            if not results:
+                st.info("No results.")
+            else:
+                st.markdown(f"**{len(results)} results** (max 5):")
+                for r in results[:5]:
+                    ticker = str(r.get("ticker") or "")
+                    name = str(r.get("name") or "")
+                    asset_type = str(r.get("assetType") or "")
+                    is_active = r.get("isActive", False)
+                    active_lbl = "✅ active" if is_active else "⛔ inactive"
+                    col_info, col_use = st.columns([4, 1])
+                    with col_info:
+                        st.markdown(f"**`{ticker}`** — {name}  \n`{asset_type}` · {active_lbl}")
+                    with col_use:
+                        if st.button("Apply", key=f"_tiingo_use_{ticker}"):
+                            # Write ticker into the map entry
+                            all_records = _load_tradfi_map_for_ui()
+                            key_u = xyz_coin.upper()
+                            idx = next(
+                                (i for i, rec in enumerate(all_records)
+                                 if str(rec.get("xyz_coin") or "").upper() == key_u),
+                                None,
+                            )
+                            if idx is not None:
+                                all_records[idx]["tiingo_ticker"] = ticker
+                                all_records[idx]["status"] = "alias"
+                                all_records[idx]["note"] = (
+                                    str(all_records[idx].get("note") or "") +
+                                    f" [Tiingo search: {name}]"
+                                ).strip()
+                            else:
+                                all_records.append({
+                                    "xyz_coin": key_u,
+                                    "description": name,
+                                    "canonical_type": "equity_us",
+                                    "tiingo_ticker": ticker,
+                                    "tiingo_fx_ticker": None,
+                                    "tiingo_fx_invert": False,
+                                    "tiingo_start_date": None,
+                                    "status": "alias",
+                                    "note": f"Tiingo search: {name}",
+                                    "last_verified": _date.today().isoformat(),
+                                    "spec_source": "manual",
+                                })
+                            _save_tradfi_map_for_ui(all_records)
+                            st.success(f"Ticker `{ticker}` saved.")
+                            st.rerun()
+        except Exception as exc:
+            st.error(f"Tiingo search failed: {exc}")
+
+
 def _normalize_archive_range(v: object) -> dict[str, str]:
     if isinstance(v, dict):
         oldest = str(v.get("oldest_day") or "").strip()
@@ -402,31 +1496,103 @@ def _normalize_archive_range(v: object) -> dict[str, str]:
 
 
 def _coin_options_for_exchange(exchange: str) -> list[str]:
+    def _filter_hyperliquid_live_meta(coins: list[str]) -> list[str]:
+        ex_l = str(exchange or "").strip().lower()
+        if ex_l != "hyperliquid":
+            return sorted(set(str(c).strip() for c in coins if str(c).strip()))
+        out: list[str] = []
+        for c in sorted(set(str(v).strip() for v in coins if str(v).strip())):
+            cl = c.lower()
+            if not (cl.startswith("xyz:") or cl.startswith("xyz-")):
+                out.append(c)
+                continue
+            try:
+                resolve_hyperliquid_coin_name(coin=c, timeout_s=5.0)
+                out.append(c)
+            except Exception:
+                continue
+        return out
+
+    def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
+        ex_name = str(exchange_name or "").strip().lower()
+        value = str(coin_value or "").strip()
+        if not value:
+            return ""
+        if ex_name == "hyperliquid":
+            lower = value.lower()
+            if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                tail = value[4:].strip().upper()
+                return f"xyz:{tail}" if tail else ""
+        return value.upper()
+
     try:
-        symbols = load_symbols_from_ini(exchange, "swap")
-        coins = sorted(get_normalized_coins(symbols))
-        if coins:
-            return coins
+        coindata = CoinData()
+        approved_coins, _ = coindata.filter_mapping(
+            exchange=str(exchange).lower(),
+            market_cap_min_m=0,
+            vol_mcap_max=float("inf"),
+            only_cpt=False,
+            notices_ignore=False,
+            tags=[],
+            quote_filter=None,
+            use_cache=True,
+            active_only=True,
+        )
+        approved = {
+            _canonical_market_coin(exchange, c)
+            for c in approved_coins
+            if _canonical_market_coin(exchange, c)
+        }
+        if approved:
+            return _filter_hyperliquid_live_meta(sorted(approved))
 
         mapping_path = Path(__file__).resolve().parents[1] / "data" / "coindata" / str(exchange).lower() / "mapping.json"
         if mapping_path.exists():
             mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
             mapped_coins = set()
             for row in mapping if isinstance(mapping, list) else []:
-                symbol = str(row.get("symbol") or "").strip()
-                quote = str(row.get("quote") or "").strip().upper()
-                if not symbol:
+                if not bool(row.get("swap", False)) or not bool(row.get("active", True)) or not bool(row.get("linear", True)):
                     continue
-                coin = compute_coin_name(symbol, quote)
+                coin = str(row.get("coin") or "").strip()
+                if not coin:
+                    symbol = str(row.get("ccxt_symbol") or row.get("symbol") or "").strip()
+                    quote = str(row.get("quote") or "").strip().upper()
+                    if not symbol:
+                        continue
+                    coin = compute_coin_name(symbol, quote)
+                coin = _canonical_market_coin(exchange, coin)
                 if coin:
-                    mapped_coins.add(str(coin).upper())
-            return sorted(mapped_coins)
+                    mapped_coins.add(coin)
+            return _filter_hyperliquid_live_meta(sorted(mapped_coins))
+
+        symbols = load_symbols_from_ini(exchange, "swap")
+        fallback_coins = {
+            _canonical_market_coin(exchange, s)
+            for s in symbols
+            if _canonical_market_coin(exchange, s)
+        }
+        if fallback_coins:
+            return _filter_hyperliquid_live_meta(sorted(fallback_coins))
         return []
     except Exception:
         return []
 
 
 def view_market_data():
+    preserve_selection_once = bool(st.session_state.pop("market_data_preserve_selection_once", False))
+
+    def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
+        ex_name = str(exchange_name or "").strip().lower()
+        value = str(coin_value or "").strip()
+        if not value:
+            return ""
+        if ex_name == "hyperliquid":
+            lower = value.lower()
+            if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                tail = value[4:].strip().upper()
+                return f"xyz:{tail}" if tail else ""
+        return value.upper()
+
     exchanges = list(Exchanges.list())
     if "hyperliquid" in exchanges:
         default_exchange = "hyperliquid"
@@ -441,7 +1607,11 @@ def view_market_data():
     )
 
     cfg = load_market_data_config()
-    enabled_default_raw = [str(c).strip().upper() for c in (cfg.enabled_coins.get(str(exchange).lower(), []) or []) if str(c).strip()]
+    enabled_default_raw = [
+        _canonical_market_coin(exchange, c)
+        for c in (cfg.enabled_coins.get(str(exchange).lower(), []) or [])
+        if _canonical_market_coin(exchange, c)
+    ]
 
     coin_options = _coin_options_for_exchange(str(exchange))
     option_set = set(coin_options)
@@ -453,9 +1623,9 @@ def view_market_data():
     try:
         if enabled_key in st.session_state and isinstance(st.session_state.get(enabled_key), list):
             enabled_preview = [
-                str(c).strip().upper()
+                _canonical_market_coin(exchange, c)
                 for c in (st.session_state.get(enabled_key) or [])
-                if str(c).strip().upper() in option_set
+                if _canonical_market_coin(exchange, c) in option_set
             ]
     except Exception:
         enabled_preview = enabled_default
@@ -557,6 +1727,9 @@ def view_market_data():
 
             st.markdown("**AWS Settings (l2Book)**")
             profile_for_settings = str(st.session_state.get("market_data_hl_aws_profile") or "pbgui-hyperliquid")
+            tradfi_profiles = _load_tradfi_profiles_from_ini()
+            tiingo_cfg = tradfi_profiles.get("tiingo") if isinstance(tradfi_profiles, dict) else {}
+            tiingo_api_key_default = str((tiingo_cfg or {}).get("api_key") or "")
 
             creds_settings = {}
             try:
@@ -618,6 +1791,75 @@ def view_market_data():
                     help="Parallel workers used for archive scan checks.",
                 )
 
+            st.markdown("**Tiingo Settings (stock-perp)**")
+            c_tk, c_tt, c_tl = st.columns([1.05, 0.38, 1.45], vertical_alignment="bottom")
+            with c_tk:
+                st.text_input(
+                    "tiingo_api_key",
+                    value=str(st.session_state.get("market_data_tiingo_api_key", tiingo_api_key_default) or ""),
+                    key="market_data_tiingo_api_key",
+                    type="password",
+                    help="Tiingo API token for stock-perp history fetch.",
+                )
+            tiingo_api_key_current = str(st.session_state.get("market_data_tiingo_api_key") or "").strip()
+            with c_tt:
+                st.caption("")
+                do_test_tiingo = st.button("Test Tiingo", key="market_data_test_tiingo_btn")
+            with c_tl:
+                st.caption("")
+                tiingo_limits = "Limits: 50 req/hour, 1000 req/day, 2 GB/month"
+                st.markdown(f"[{tiingo_limits}](https://www.tiingo.com/account/api/usage)")
+
+            st.markdown("[Get free Tiingo API key](https://www.tiingo.com/)")
+
+            if tiingo_api_key_current:
+                try:
+                    usage = get_tiingo_runtime_usage(api_key=tiingo_api_key_current)
+                except Exception:
+                    usage = {}
+
+                hour_used = int(usage.get("hour_requests") or 0)
+                hour_limit = int(usage.get("hour_limit") or 0)
+                hour_remaining = int(usage.get("hour_remaining") or 0)
+                day_used = int(usage.get("day_requests") or 0)
+                day_limit = int(usage.get("day_limit") or 0)
+                day_remaining = int(usage.get("day_remaining") or 0)
+                month_used_bytes = int(usage.get("month_bytes") or 0)
+                month_limit_bytes = int(usage.get("month_bytes_limit") or 0)
+                month_remaining_bytes = int(usage.get("month_bytes_remaining") or 0)
+
+                u1, u2, u3 = st.columns(3)
+                hour_ratio = 0.0 if hour_limit <= 0 else min(1.0, max(0.0, float(hour_used) / float(hour_limit)))
+                day_ratio = 0.0 if day_limit <= 0 else min(1.0, max(0.0, float(day_used) / float(day_limit)))
+                month_ratio = 0.0 if month_limit_bytes <= 0 else min(1.0, max(0.0, float(month_used_bytes) / float(month_limit_bytes)))
+                with u1:
+                    st.caption(f"Hour: {hour_used}/{hour_limit} used, {hour_remaining} remaining")
+                    st.progress(hour_ratio)
+                with u2:
+                    st.caption(f"Day: {day_used}/{day_limit} used, {day_remaining} remaining")
+                    st.progress(day_ratio)
+                with u3:
+                    st.caption(
+                        f"Month bandwidth: {_fmt_bytes(month_used_bytes)}/{_fmt_bytes(month_limit_bytes)} used, {_fmt_bytes(month_remaining_bytes)} remaining"
+                    )
+                    st.progress(month_ratio)
+            else:
+                st.caption("Tiingo current usage: set tiingo_api_key to view tracked counters.")
+
+            tiingo_api_key_preview = tiingo_api_key_current
+
+            if do_test_tiingo:
+                if not tiingo_api_key_preview:
+                    st.error("Tiingo API key is empty.")
+                else:
+                    try:
+                        probe = probe_tiingo_iex_1m(api_key=tiingo_api_key_preview, ticker="AAPL", timeout_s=20.0)
+                        st.success(
+                            f"Tiingo connection OK: status={probe.get('status', 200)} message={probe.get('message', '')}"
+                        )
+                    except Exception as e:
+                        st.error(f"Tiingo test failed: {e}")
+
             if st.button('Save', key='md_save_settings_btn'):
                 try:
                     set_enabled_coins(exchange, enabled_in_settings)
@@ -636,13 +1878,20 @@ def view_market_data():
                     workers = int(st.session_state.get("market_data_hl_l2book_scan_workers", 8))
                     save_ini("market_data", "hl_l2book_scan_timeout_s", str(timeout_s))
                     save_ini("market_data", "hl_l2book_scan_workers", str(workers))
+                    tiingo_key = str(st.session_state.get("market_data_tiingo_api_key") or "").strip()
+                    save_ini("tradfi_profiles", "tiingo_api_key", tiingo_key)
                     st.success('✅ Settings saved. Enabled coins and auto-refresh settings are applied automatically in the next refresh cycle.')
                 except Exception as e:
                     st.error(f'Failed to save settings: {e}')
 
-    tab_actions, tab_have, tab_log = st.tabs(["Actions", "Already have", "Activity log"])
+    main_view = st.segmented_control(
+        "",
+        options=["Actions", "Already have", "Activity log"],
+        default="Actions",
+        key="market_data_main_view",
+    )
 
-    with tab_actions:
+    if main_view == "Actions":
         if str(exchange).lower() != "hyperliquid":
             st.info("Market Data actions are currently implemented for Hyperliquid.")
         else:
@@ -670,12 +1919,10 @@ def view_market_data():
                                     next_run = max(0, int(interval_s - (now - last_dt).total_seconds()))
                                 except Exception:
                                     next_run = ""
-                            coin_display = coin
-                            try:
-                                if str(exchange).lower() == "hyperliquid":
-                                    coin_display = get_symbol_for_coin(str(coin), ex_key)
-                            except Exception:
-                                coin_display = coin
+                            coin_display = _display_market_data_status_coin(
+                                exchange=str(exchange),
+                                coin=coin,
+                            )
                             rows.append(
                                 {
                                     "coin": coin_display,
@@ -689,6 +1936,10 @@ def view_market_data():
                         st.dataframe(rows, use_container_width=True)
                     else:
                         st.info("No latest 1m status available yet.")
+
+            tradfi_anchor = st.container()
+            download_anchor = st.container()
+            build_anchor = st.container()
 
             if False:
                 st.caption(
@@ -743,34 +1994,102 @@ def view_market_data():
                         append_exchange_download_log("hyperliquid", f"[hl_latest_1m] ERROR {e}")
                         st.error(str(e))
 
-            with st.expander("Build OHLCV", expanded=False):
-                if not coin_list:
-                    st.warning("No enabled coins selected.")
+            with build_anchor.expander("Build best 1m OHLCV", expanded=False):
+                def _extract_xyz_coin_name(coin: str) -> str | None:
+                    c_u = str(coin or "").strip().upper()
+                    if not c_u:
+                        return None
+                    if c_u.startswith("XYZ:") or c_u.startswith("XYZ-"):
+                        tail = c_u[4:].strip()
+                    else:
+                        # Some enabled coin lists store stock-perp tickers without XYZ prefix
+                        # (e.g. "EUR"). Treat as candidate XYZ coin name.
+                        tail = c_u
+                    for suffix in (
+                        "/USDC:USDC", "_USDC:USDC", "_USDC_USDC", "USDC",
+                        "/USDT:USDT", "_USDT:USDT", "_USDT_USDT", "USDT",
+                    ):
+                        if tail.endswith(suffix):
+                            tail = tail[: -len(suffix)]
+                            break
+                    tail = tail.strip(" _:-")
+                    return tail or None
 
-                build_coin_options = ["All"] + coin_list if coin_list else []
+                tradfi_by_xyz: dict[str, dict] = {
+                    str(r.get("xyz_coin") or "").strip().upper(): dict(r)
+                    for r in _load_tradfi_map_for_ui()
+                    if str(r.get("xyz_coin") or "").strip()
+                }
+
+                eligible_build_coins: list[str] = []
+                for coin in coin_list:
+                    xyz_name = _extract_xyz_coin_name(coin)
+                    if not xyz_name:
+                        continue
+                    entry = tradfi_by_xyz.get(xyz_name)
+                    if isinstance(entry, dict):
+                        # TradFi/XYZ coin: enforce Tiingo mapping + status=ok
+                        status = str(entry.get("status") or "").strip().lower()
+                        has_tiingo = bool(
+                            str(entry.get("tiingo_ticker") or "").strip()
+                            or str(entry.get("tiingo_fx_ticker") or "").strip()
+                        )
+                        if status == "ok" and has_tiingo:
+                            eligible_build_coins.append(coin)
+                    else:
+                        # Non-XYZ (crypto): always allow build selection
+                        eligible_build_coins.append(coin)
+
+                if not eligible_build_coins:
+                    st.warning("No eligible coins found. XYZ symbols require Tiingo mapping with status 'ok'.")
+
+                build_coin_options = ["All"] + eligible_build_coins if eligible_build_coins else []
                 build_coin_sel = st.multiselect(
                     "Coins for build",
                     options=build_coin_options,
-                    default=["All"] if coin_list else [],
+                    default=["All"] if eligible_build_coins else [],
                     key="market_data_hl_best_1m_coins",
                 )
                 if "All" in build_coin_sel or not build_coin_sel:
-                    build_coins = list(coin_list)
+                    build_coins = list(eligible_build_coins)
                 else:
-                    build_coins = [c for c in build_coin_sel if c in coin_list]
+                    build_coins = [c for c in build_coin_sel if c in eligible_build_coins]
 
-                run_improve = st.button("Build best 1m", key="market_data_hl_best_1m_run_improve")
+                c_build, c_start, c_refetch = st.columns([0.20, 0.24, 0.56], vertical_alignment="bottom")
+                with c_build:
+                    run_improve = st.button("Build best 1m", key="market_data_hl_best_1m_run_improve", use_container_width=True)
+                with c_start:
+                    build_start_date = st.date_input(
+                        "Start date (optional)",
+                        value=None,
+                        key="market_data_hl_best_1m_start_date",
+                        help=(
+                            "Optional lower bound for Build best 1m. "
+                            "If set: FX backfill runs newest→oldest only down to this date; "
+                            "other symbols use this as start date even if older data exists."
+                        ),
+                    )
+                with c_refetch:
+                    refetch_tradfi = st.checkbox(
+                        "Refetch TradFi data from scratch (stock-perps)",
+                        value=False,
+                        key="market_data_hl_best_1m_refetch",
+                        help="Ignores existing TradFi 1m data and re-fetches from 2016-12-12. "
+                             "Use after symbol mapping corrections. Applies only to XYZ-* coins.",
+                    )
 
                 if run_improve:
                     try:
                         if not build_coins:
-                            raise ValueError("No enabled coins selected")
+                            raise ValueError("No eligible coins selected")
 
                         job = enqueue_job(
                             job_type="hl_best_1m",
                             payload={
                                 "coins": list(build_coins),
                                 "end_day": _date.today().strftime("%Y%m%d"),
+                                "start_day": build_start_date.strftime("%Y%m%d") if build_start_date else "",
+                                "refetch": bool(refetch_tradfi),
                             },
                         )
                         st.session_state["market_data_hl_last_job_id"] = job.job_id
@@ -852,6 +2171,13 @@ def view_market_data():
                             )
                             if coins_preview:
                                 st.caption(f"coins: {coins_preview}")
+                            if isinstance(pr, dict) and bool(pr.get("fx_backfill_mode")):
+                                st.caption(
+                                    "fx_backfill: "
+                                    f"direction={pr.get('fx_backfill_direction') or 'newest_to_oldest'} "
+                                    f"empty_chunk_streak={int(pr.get('fx_empty_chunk_streak') or 0)} "
+                                    f"source={pr.get('tradfi_source_kind') or 'fx'}"
+                                )
                             if isinstance(lr, dict) and lr:
                                 dur_s = None
                                 try:
@@ -879,6 +2205,14 @@ def view_market_data():
                                         f"bybit_filled={lr.get('bybit_minutes_filled', 0)}"
                                         f"{dur_txt}"
                                     )
+                                elif all(k in lr for k in ("days_checked", "tiingo_minutes_filled")):
+                                    st.caption(
+                                        "improve: "
+                                        f"days={lr.get('days_checked')} "
+                                        f"tiingo_filled={lr.get('tiingo_minutes_filled', 0)} "
+                                        f"tiingo_month_requests={lr.get('tiingo_month_requests_used', 0)}"
+                                        f"{dur_txt}"
+                                    )
                                 else:
                                     st.caption(f"result: {lr}")
                         else:
@@ -904,7 +2238,476 @@ def view_market_data():
                 except Exception:
                     pass
 
-            with st.expander("Download l2books from AWS", expanded=False):
+            with tradfi_anchor.expander("TradFi Symbol Mappings", expanded=False):
+                # Table is built live from mapping.json merged with tradfi_symbol_map.json.
+                # No sync step needed — new coins from mapping.json appear automatically.
+                st.markdown("##### 🗂 Symbol Map")
+
+                status_opts = ["all"] + _TRADFI_STATUSES_SELECTABLE
+                status_filter = st.selectbox(
+                    "Filter by status",
+                    options=status_opts,
+                    index=0,
+                    key="tradfi_map_status_filter",
+                )
+
+                merged = _build_merged_tradfi_table()
+                filtered = [
+                    r for r in merged
+                    if status_filter == "all" or str(r.get("status") or "") == status_filter
+                ]
+
+                selected_entry = None
+                selected_xyz_key = "tradfi_map_selected_xyz"
+                if filtered:
+                    import pandas as pd
+                    quote_cache = (_load_tradfi_quote_cache().get("quotes") or {})
+
+                    def _row_prices(row: dict) -> tuple[float | None, float | None]:
+                        xyz = str(row.get("xyz_coin") or "").upper()
+                        hl_p = _hl_fetch_cached_price_for_xyz(xyz)
+
+                        ti_p = None
+                        t_tick = str(row.get("tiingo_ticker") or "").upper()
+                        t_fx = str(row.get("tiingo_fx_ticker") or "").lower()
+                        t_inv = bool(row.get("tiingo_fx_invert", False))
+                        canonical_type = str(row.get("canonical_type") or "").lower()
+                        status = str(row.get("status") or "").lower()
+
+                        # Optional manual scaling for alias tickers with different share units
+                        # (e.g. OTC ADR/ORD ratios). Keep None by default to avoid misleading values.
+                        multiplier = None
+                        try:
+                            raw_mult = row.get("tiingo_price_multiplier")
+                            if raw_mult not in (None, ""):
+                                mv = float(raw_mult)
+                                if mv > 0:
+                                    multiplier = mv
+                        except Exception:
+                            multiplier = None
+
+                        # Guard: alias KR/JP equities often have unit mismatch vs HL index constituents.
+                        if (
+                            t_tick
+                            and status == "alias"
+                            and canonical_type in {"equity_kr", "equity_jp"}
+                            and multiplier is None
+                        ):
+                            return hl_p, None
+
+                        if t_tick:
+                            q = quote_cache.get(t_tick)
+                            if isinstance(q, dict):
+                                try:
+                                    ti_p = float(q.get("price"))
+                                    if multiplier is not None:
+                                        ti_p = ti_p * multiplier
+                                except Exception:
+                                    ti_p = None
+                        elif t_fx:
+                            q = quote_cache.get(t_fx)
+                            if isinstance(q, dict):
+                                try:
+                                    raw = float(q.get("price"))
+                                    ti_p = (1.0 / raw) if (raw and t_inv) else raw
+                                except Exception:
+                                    ti_p = None
+
+                        return hl_p, ti_p
+
+                    def _row_tiingo_symbol(row: dict) -> str:
+                        t_tick = str(row.get("tiingo_ticker") or "").strip().upper()
+                        if t_tick:
+                            return f"IEX:{t_tick}"
+                        t_fx = str(row.get("tiingo_fx_ticker") or "").strip().upper()
+                        if t_fx:
+                            inv = bool(row.get("tiingo_fx_invert", False))
+                            return f"FX:{t_fx}" + (" (inv)" if inv else "")
+                        return ""
+
+                    def _row_fetch_start_date(row: dict) -> str:
+                        raw = str(row.get("tiingo_start_date") or "").strip()
+                        t_tick = str(row.get("tiingo_ticker") or "").strip().upper()
+
+                        parsed: _date | None = None
+                        if raw:
+                            try:
+                                parsed = _date.fromisoformat(raw[:10])
+                            except Exception:
+                                parsed = None
+
+                        # Only show fetch start if we know the real provider start date.
+                        if parsed is None:
+                            return ""
+
+                        if t_tick:
+                            floor = _date(2016, 12, 12)
+                            return max(parsed, floor).isoformat()
+
+                        return parsed.isoformat()
+
+                    display_cols = [
+                        ("hl_link", "Symbol"),
+                        ("hl_price", "HL Price"),
+                        ("tiingo_price", "Tiingo Price"),
+                        ("description", "Description"),
+                        ("pyth_link", "Pyth"),
+                        ("canonical_type", "Type"),
+                        ("tiingo_symbol", "Tiingo Symbol"),
+                        ("status", "Status"),
+                        ("tiingo_start_date", "Start Date"),
+                        ("tiingo_fetch_start", "Fetch Start"),
+                        ("last_verified", "Verified"),
+                        ("note", "Note"),
+                    ]
+
+                    df_rows = []
+                    for r in filtered:
+                        hl_p, ti_p = _row_prices(r)
+                        item = dict(r)
+                        item["hl_price"] = hl_p
+                        item["tiingo_price"] = ti_p
+                        item["tiingo_symbol"] = _row_tiingo_symbol(r)
+                        item["tiingo_fetch_start"] = _row_fetch_start_date(r)
+                        df_rows.append(item)
+
+                    df = pd.DataFrame(
+                        [
+                            {
+                                col: (
+                                    rr.get(col)
+                                    if col in {"hl_price", "tiingo_price"}
+                                    else str(rr.get(col) or "")
+                                )
+                                for col, _ in display_cols
+                            }
+                            for rr in df_rows
+                        ]
+                    )
+                    df.columns = [label for _, label in display_cols]
+                    sel = st.dataframe(
+                        df,
+                        use_container_width=True,
+                        hide_index=True,
+                        selection_mode="single-row",
+                        on_select="rerun",
+                        key="tradfi_map_df",
+                        column_config={
+                            "Symbol": st.column_config.LinkColumn(
+                                "Symbol",
+                                display_text=r"xyz:(.+)",
+                                help="Open on Hyperliquid",
+                                width="small",
+                            ),
+                            "Pyth": st.column_config.LinkColumn(
+                                "Pyth",
+                                display_text="🔗",
+                                help="Pyth Insights — price feed details",
+                                width="small",
+                            ),
+                            "HL Price": st.column_config.NumberColumn(
+                                "HL Price",
+                                format="%.4f",
+                                width="small",
+                            ),
+                            "Tiingo Price": st.column_config.NumberColumn(
+                                "Tiingo Price",
+                                format="%.4f",
+                                width="small",
+                            ),
+                            "Start Date": st.column_config.TextColumn(
+                                "Start Date",
+                                help="Provider-reported listing/start date from Tiingo metadata.",
+                            ),
+                            "Fetch Start": st.column_config.TextColumn(
+                                "Fetch Start",
+                                help=(
+                                    "Effective earliest fetch date based on known Start Date. "
+                                    "For IEX symbols it is max(Start Date, 2016-12-12). "
+                                    "Empty if Start Date is unknown."
+                                ),
+                            ),
+                        },
+                    )
+                    st.caption(
+                        "Start Date = provider metadata. "
+                        "Fetch Start = effective earliest fetch date (IEX floor 2016-12-12, "
+                        "only shown when Start Date is known)."
+                    )
+                    sel_rows = (sel.get("selection") or {}).get("rows") or []
+                    sel_idx = int(sel_rows[0]) if sel_rows else None
+                    if sel_idx is not None and 0 <= sel_idx < len(filtered):
+                        selected_entry = filtered[sel_idx]
+                        st.session_state[selected_xyz_key] = str(
+                            selected_entry.get("xyz_coin") or ""
+                        ).strip().upper()
+                    else:
+                        selected_xyz = str(st.session_state.get(selected_xyz_key) or "").strip().upper()
+                        if selected_xyz:
+                            selected_entry = next(
+                                (r for r in filtered if str(r.get("xyz_coin") or "").strip().upper() == selected_xyz),
+                                None,
+                            )
+                        if selected_entry is None:
+                            st.session_state.pop(selected_xyz_key, None)
+                else:
+                    st.session_state.pop(selected_xyz_key, None)
+                    st.caption("No entries match this filter." if merged else
+                               "mapping.json not found. Run a Hyperliquid market data sync first.")
+
+                # Row 1: selected-row workflow (find -> edit -> validate -> fetch start)
+                tiingo_key_for_actions = str(
+                    st.session_state.get("market_data_tiingo_api_key") or ""
+                ).strip()
+                selected_has_equity_ticker = bool(
+                    str((selected_entry or {}).get("tiingo_ticker") or "").strip()
+                )
+                col_search, col_edit, col_test, col_start_one, col_spec = st.columns([2, 2, 2, 2, 2])
+                with col_search:
+                    if st.button(
+                        "🔍 Search ticker",
+                        key="tradfi_ticker_search_btn",
+                        disabled=selected_entry is None,
+                        help="Search Tiingo ticker database (beta). Cost: 1 API request per search.",
+                    ):
+                        xyz = str((selected_entry or {}).get("xyz_coin") or "")
+                        _tiingo_search_dialog(xyz_coin=xyz, api_key=tiingo_key_for_actions)
+                with col_edit:
+                    if st.button("✏️ Edit", key="tradfi_map_edit_btn", disabled=selected_entry is None):
+                        _tradfi_map_edit_dialog(mode="edit", existing=selected_entry)
+                with col_test:
+                    if st.button("🔍 Test Resolve", key="tradfi_map_test_btn", disabled=selected_entry is None):
+                        xyz = str((selected_entry or {}).get("xyz_coin") or "")
+                        t_ticker, t_fx, t_inv, t_start = resolve_tradfi_symbol(xyz)
+                        st.session_state["tradfi_map_test_result"] = {
+                            "xyz_coin": xyz,
+                            "tiingo_ticker": t_ticker,
+                            "tiingo_fx_ticker": t_fx,
+                            "tiingo_fx_invert": t_inv,
+                            "tiingo_start_date": str(t_start) if t_start else None,
+                        }
+                with col_start_one:
+                    if st.button(
+                        "📅 Fetch start date",
+                        key="tradfi_startdate_selected_btn",
+                        disabled=(selected_entry is None or not tiingo_key_for_actions or not selected_has_equity_ticker),
+                        help="Fetch startDate for selected equity symbol via /tiingo/daily/{ticker}. Cost: 1 API request.",
+                    ):
+                        with st.spinner("Fetching start date for selected symbol…"):
+                            try:
+                                _sd = _update_tiingo_start_date_for_selected(
+                                    selected_entry=selected_entry,
+                                    api_key=tiingo_key_for_actions,
+                                )
+                                st.session_state["tradfi_startdate_selected_result"] = _sd
+                                st.rerun()
+                            except Exception as _exc:
+                                st.error(f"Start-date fetch failed: {_exc}")
+                with col_spec:
+                    if st.button("🔄 Spec", key="tradfi_spec_refresh_btn",
+                                 help="Re-fetch the XYZ Specification Index from docs.trade.xyz"):
+                        try:
+                            instruments = fetch_xyz_spec()
+                            st.success(f"Spec updated: {len(instruments)} instruments")
+                            st.rerun()
+                        except Exception as _exc:
+                            st.error(f"Spec fetch failed: {_exc}")
+
+                # Row 2: global/batch workflow (sync -> map -> batch dates -> refresh caches)
+                col_automap, col_start_all, col_metarefresh, col_pricerefresh, col_spec_view = st.columns([2, 2, 2, 2, 2])
+                with col_automap:
+                    if st.button(
+                        "🤖 Auto-Map",
+                        key="tradfi_automap_btn",
+                        disabled=not tiingo_key_for_actions,
+                        help="Auto-map all 'pending' entries to Tiingo tickers."
+                             " Cost: usually 0 requests (uses meta cache), up to 1 request if meta cache is missing.",
+                    ):
+                        with st.spinner("Auto-Map running…"):
+                            try:
+                                _am_result = auto_map_tradfi(
+                                    api_key=tiingo_key_for_actions,
+                                    force_meta_refresh=False,
+                                )
+                                st.session_state["tradfi_automap_result"] = _am_result
+                                st.rerun()
+                            except Exception as _exc:
+                                st.error(f"Auto-Map failed: {_exc}")
+
+                with col_start_all:
+                    if st.button(
+                        "📅 Fetch all start dates",
+                        key="tradfi_startdate_all_btn",
+                        disabled=not tiingo_key_for_actions,
+                        help="Fetch startDate for all symbols missing it and having Tiingo equity tickers. Cost: 1 API request per symbol fetched.",
+                    ):
+                        with st.spinner("Fetching start dates for all symbols…"):
+                            try:
+                                _sd_all = _update_tiingo_start_dates_for_all(
+                                    api_key=tiingo_key_for_actions,
+                                    rows=merged,
+                                )
+                                st.session_state["tradfi_startdate_all_result"] = _sd_all
+                                st.rerun()
+                            except Exception as _exc:
+                                st.error(f"Bulk start-date fetch failed: {_exc}")
+
+                # Cache info for global refresh actions
+                _meta_cache = (
+                    Path.cwd() / "data" / "coindata" / "tiingo_meta.json"
+                )
+                _meta_info = ""
+                if _meta_cache.exists():
+                    try:
+                        _md = json.loads(_meta_cache.read_text(encoding="utf-8"))
+                        _meta_ts = (_md.get("fetched_at") or "")[:10]
+                        _meta_n = len(_md.get("meta") or {})
+                        _meta_info = f"Cache: {_meta_n:,} tickers from {_meta_ts}"
+                    except Exception:
+                        _meta_info = "Cache available"
+                else:
+                    _meta_info = "No cache — fetched on first Auto-Map"
+
+                _quote_cache = _tradfi_quote_cache_path()
+                _quote_info = ""
+                if _quote_cache.exists():
+                    try:
+                        _qd = json.loads(_quote_cache.read_text(encoding="utf-8"))
+                        _qt = str(_qd.get("fetched_at") or "")[:19].replace("T", " ")
+                        _qn = len((_qd.get("quotes") or {}))
+                        _quote_info = f"Price cache: {_qn:,} quotes · {_qt} UTC"
+                    except Exception:
+                        _quote_info = "Price cache available"
+                else:
+                    _quote_info = "No price cache — load via 'Refresh prices'"
+                with col_metarefresh:
+                    if st.button(
+                        "🔄 Refresh metadata",
+                        key="tradfi_meta_refresh_btn",
+                        disabled=not tiingo_key_for_actions,
+                        help=f"Refresh Tiingo fundamentals/meta cache. Cost: 1 API request.\n{_meta_info}",
+                    ):
+                        with st.spinner("Loading Tiingo metadata…"):
+                            try:
+                                _meta = fetch_tiingo_meta(
+                                    api_key=tiingo_key_for_actions,
+                                    force_refresh=True,
+                                )
+                                st.success(f"Metadata refreshed: {len(_meta):,} tickers loaded")
+                                st.rerun()
+                            except Exception as _exc:
+                                st.error(f"Metadata refresh failed: {_exc}")
+
+                with col_pricerefresh:
+                    if st.button(
+                        "💲 Refresh prices",
+                        key="tradfi_price_refresh_btn",
+                        disabled=not tiingo_key_for_actions,
+                        help=f"Refresh Tiingo quotes (IEX all + FX top). Cost: 1 IEX request + up to 1 FX request.\n{_quote_info}",
+                    ):
+                        with st.spinner("Loading Tiingo prices…"):
+                            try:
+                                _pr = refresh_tradfi_quote_cache(
+                                    api_key=tiingo_key_for_actions,
+                                    records=_load_tradfi_map_for_ui(),
+                                )
+                                st.session_state["tradfi_price_refresh_result"] = _pr
+                                st.rerun()
+                            except Exception as _exc:
+                                st.error(f"Price refresh failed: {_exc}")
+
+                with col_spec_view:
+                    if st.button(
+                        "📋 View specs",
+                        key="tradfi_spec_view_btn",
+                        help="Open the cached XYZ specification list in a popup.",
+                    ):
+                        _tradfi_spec_view_dialog()
+
+                if not tiingo_key_for_actions:
+                    st.caption("🤖 Auto-Map and metadata refresh require a configured Tiingo API key.")
+                else:
+                    st.caption(f"{_meta_info} · {_quote_info}")
+
+                # Auto-Map Ergebnis anzeigen
+                _am_res = st.session_state.pop("tradfi_automap_result", None)
+                if _am_res:
+                    eq = _am_res.get("mapped_equity", 0)
+                    fx = _am_res.get("mapped_fx", 0)
+                    np_ = _am_res.get("no_provider", 0)
+                    nf = _am_res.get("not_found", 0)
+                    sk = _am_res.get("skipped", 0)
+                    st.success(
+                        f"✅ Auto-Map completed: "
+                        f"**{eq}** equities/ETFs mapped · "
+                        f"**{fx}** FX/commodities · "
+                        f"**{np_}** no provider · "
+                        f"**{nf}** not found · "
+                        f"**{sk}** skipped (already set)"
+                    )
+
+                _pr_res = st.session_state.pop("tradfi_price_refresh_result", None)
+                if _pr_res:
+                    st.success(
+                        "✅ Prices refreshed: "
+                        f"**{_pr_res.get('quotes_saved', 0)}** quotes saved · "
+                        f"IEX Rows: **{_pr_res.get('iex_rows', 0)}** · "
+                        f"FX Rows: **{_pr_res.get('fx_rows', 0)}**"
+                    )
+
+                _sd_one_res = st.session_state.pop("tradfi_startdate_selected_result", None)
+                if _sd_one_res:
+                    if int(_sd_one_res.get("updated", 0)) > 0:
+                        st.success(
+                            f"✅ Start date updated: XYZ-{_sd_one_res.get('xyz_coin')} → "
+                            f"{_sd_one_res.get('ticker')} · {_sd_one_res.get('start_date')}"
+                        )
+                    else:
+                        st.info(f"Start-date skipped: {_sd_one_res.get('reason')}")
+
+                _sd_all_res = st.session_state.pop("tradfi_startdate_all_result", None)
+                if _sd_all_res:
+                    st.success(
+                        "✅ Start dates fetched: "
+                        f"**{_sd_all_res.get('updated', 0)}** updated · "
+                        f"**{_sd_all_res.get('skipped', 0)}** skipped · "
+                        f"**{_sd_all_res.get('errors', 0)}** no-data/errors"
+                    )
+
+                # Test resolve result
+                test_res = st.session_state.get("tradfi_map_test_result")
+                if test_res:
+                    t_tick = test_res.get("tiingo_ticker")
+                    t_fx = test_res.get("tiingo_fx_ticker")
+                    xyz_label = str(test_res.get("xyz_coin") or "")
+                    if t_tick or t_fx:
+                        parts = []
+                        if t_tick:
+                            parts.append(f"Tiingo IEX: `{t_tick}`")
+                        if t_fx:
+                            inv_note = " (inverted)" if test_res.get("tiingo_fx_invert") else ""
+                            parts.append(f"Tiingo FX: `{t_fx}`{inv_note}")
+                        if test_res.get("tiingo_start_date"):
+                            parts.append(f"Start: `{test_res['tiingo_start_date']}`")
+                        st.success(f"**XYZ-{xyz_label}** → " + "  ·  ".join(parts))
+                    else:
+                        entry_status = next(
+                            (str(r.get("status") or "") for r in merged
+                             if str(r.get("xyz_coin") or "").upper() == xyz_label.upper()),
+                            None,
+                        )
+                        if entry_status in ("no_provider", "delisted", "pending"):
+                            st.info(f"XYZ-{xyz_label}: status={entry_status} → fetch skipped silently")
+                        else:
+                            st.warning(
+                                f"XYZ-{xyz_label}: no map entry or no ticker configured "
+                                f"→ fetch skipped with WARNING in log"
+                            )
+                    if st.button("✖ Clear result", key="tradfi_map_test_clear"):
+                        st.session_state.pop("tradfi_map_test_result", None)
+                        st.rerun()
+
+            with download_anchor.expander("Download l2Book from AWS", expanded=False):
                 profile = str(st.session_state.get("market_data_hl_aws_profile") or "pbgui-hyperliquid").strip() or "pbgui-hyperliquid"
                 region_default = load_aws_profile_region(profile) or HYPERLIQUID_AWS_REGION
                 region = str(st.session_state.get("market_data_hl_aws_region") or region_default).strip()
@@ -929,8 +2732,6 @@ def view_market_data():
                             panel_key="market_data_hl_jobs",
                             show_worker_controls=True,
                         )
-
-                _jobs_fragment()
 
                 if coin_list:
                     aws_coin_options = ["All"] + coin_list if coin_list else []
@@ -1005,15 +2806,10 @@ def view_market_data():
                         if not _payload_coins:
                             raise ValueError("No enabled coins selected")
 
-                        # Convert normalized coin names to full symbols (e.g., PEPE -> PEPE_USDC:USDC)
-                        _payload_symbols = []
-                        for coin in _payload_coins:
-                            symbol = get_symbol_for_coin(coin=coin, exchange=f"{str(exchange).lower()}.swap")
-                            if symbol:
-                                _payload_symbols.append(symbol)
-                            else:
-                                _payload_symbols.append(coin)  # Fallback to coin name
-                        _payload_coins = _payload_symbols
+                        # Keep canonical coin names for l2Book archive checks/download.
+                        # Hyperliquid mapping symbols may be numeric IDs (e.g. BABY -> 189),
+                        # while AWS l2Book objects are keyed by coin names.
+                        _payload_coins = [str(c).strip() for c in _payload_coins if str(c).strip()]
 
                         ak = str(st.session_state.get("market_data_hl_aws_access_key_id") or "").strip()
                         sk = str(st.session_state.get("market_data_hl_aws_secret_access_key") or "").strip()
@@ -1119,17 +2915,147 @@ def view_market_data():
                         append_exchange_download_log("hyperliquid", f"[hl_aws_l2book_auto] ERROR {e}")
                         st.error(str(e))
 
+                # Job queue (shown below download controls)
+                _jobs_fragment()
 
-    with tab_have:
-        _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}"
-        if _cache_key not in st.session_state:
-            # Load inventory with intelligent coverage calculation
-            # - 1m: uses sources.idx (fast!)
-            # - l2book: hour from filename
-            # - 1m_api: minimal estimation
-            st.session_state[_cache_key] = summarize_raw_inventory(str(exchange).lower(), skip_coverage=False)
-        rows = st.session_state.get(_cache_key) or []
-        if not rows:
+                # Last download job summary (auto-refresh while jobs are active)
+                try:
+                    def _render_last_download_job() -> None:
+                        jobs_any = list_jobs(states=["running", "done", "failed"], limit=50)
+                        jobs_any = [j for j in jobs_any if str(j.get("type") or "") == "hl_aws_l2book_auto"]
+                        try:
+                            jobs_any = sorted(
+                                jobs_any,
+                                key=lambda j: int(float(j.get("updated_ts") or 0)),
+                                reverse=True,
+                            )
+                        except Exception:
+                            pass
+
+                        if jobs_any:
+                            last = jobs_any[0]
+                            status = str(last.get("status") or "")
+                            upd_ts = _format_unix_ts(last.get("updated_ts"))
+                            err = str(last.get("error") or "")
+                            payload = last.get("payload") if isinstance(last.get("payload"), dict) else {}
+                            pr = last.get("progress") if isinstance(last.get("progress"), dict) else {}
+                            coins = payload.get("coins") if isinstance(payload, dict) else None
+                            coins = coins if isinstance(coins, list) else []
+                            coins_preview = ", ".join(str(c) for c in coins[:12])
+                            if coins_preview and len(coins) > 12:
+                                coins_preview += " …"
+                            start_day = str(payload.get("start_day") or "") if isinstance(payload, dict) else ""
+                            end_day = str(payload.get("end_day") or "") if isinstance(payload, dict) else ""
+                            st.write(
+                                f"status={status}"
+                                + (f" updated={upd_ts}" if upd_ts else "")
+                                + (f" error={err}" if err else "")
+                            )
+                            if coins_preview:
+                                st.caption(f"coins: {coins_preview}")
+                            if start_day or end_day:
+                                st.caption(f"range: {start_day or '?'} → {end_day or '?'}")
+
+                            lr = pr.get("last_result") if isinstance(pr, dict) and isinstance(pr.get("last_result"), dict) else {}
+                            downloaded = int(pr.get("downloaded_total", lr.get("downloaded", 0)) or 0)
+                            skipped = int(pr.get("skipped_existing_total", lr.get("skipped_existing", 0)) or 0)
+                            failed = int(pr.get("failed_total", lr.get("failed", 0)) or 0)
+                            planned = int(lr.get("planned", 0) or 0)
+                            if planned <= 0:
+                                planned = int(pr.get("chunk_total", 0) or 0)
+                            done = downloaded + skipped + failed
+
+                            progress_pct = ""
+                            if planned > 0:
+                                try:
+                                    pct = max(0.0, min(100.0, (float(done) / float(planned)) * 100.0))
+                                    progress_pct = f" ({pct:.1f}%)"
+                                except Exception:
+                                    progress_pct = ""
+
+                            duration_txt = ""
+                            try:
+                                created_ts_raw = last.get("created_ts")
+                                updated_ts_raw = last.get("updated_ts")
+                                created_ts = float(created_ts_raw) if created_ts_raw is not None else 0.0
+                                updated_ts = float(updated_ts_raw) if updated_ts_raw is not None else 0.0
+                                if created_ts > 0 and updated_ts >= created_ts:
+                                    dur_s = int(updated_ts - created_ts)
+                                    h = dur_s // 3600
+                                    m = (dur_s % 3600) // 60
+                                    s = dur_s % 60
+                                    if h > 0:
+                                        duration_txt = f" duration={h}h {m:02d}m {s:02d}s"
+                                    elif m > 0:
+                                        duration_txt = f" duration={m}m {s:02d}s"
+                                    else:
+                                        duration_txt = f" duration={s}s"
+                            except Exception:
+                                duration_txt = ""
+
+                            dl_b = int(pr.get("downloaded_bytes_total", lr.get("downloaded_bytes", 0)) or 0)
+                            sk_b = int(pr.get("skipped_existing_bytes_total", lr.get("skipped_existing_bytes", 0)) or 0)
+                            fl_b = int(pr.get("failed_bytes_total", lr.get("failed_bytes", 0)) or 0)
+                            total_b = dl_b + sk_b + fl_b
+
+                            st.caption(
+                                f"stats: downloaded={downloaded} skipped={skipped} failed={failed}"
+                                + (f" done={done}/{planned}{progress_pct}" if planned > 0 else "")
+                                + duration_txt
+                            )
+                            st.caption(
+                                f"size: downloaded={_fmt_bytes(dl_b)} skipped={_fmt_bytes(sk_b)} "
+                                f"failed={_fmt_bytes(fl_b)} total={_fmt_bytes(total_b)}"
+                            )
+                        else:
+                            st.write("No download jobs yet.")
+
+                    with st.expander("Last download job", expanded=False):
+                        jobs_active_last = _has_active_jobs(["hl_aws_l2book_auto"])
+                        if jobs_active_last and _supports_fragment_run_every():
+                            @st.fragment(run_every=2)
+                            def _last_download_fragment():
+                                try:
+                                    if not bool(list_jobs(states=["pending", "running"], limit=1)):
+                                        st.rerun()
+                                except Exception:
+                                    pass
+                                _render_last_download_job()
+                        else:
+                            @st.fragment
+                            def _last_download_fragment():
+                                _render_last_download_job()
+                        _last_download_fragment()
+                except Exception:
+                    pass
+
+
+    if main_view == "Already have":
+        have_view = st.segmented_control(
+            "",
+            options=["1m", "1m_api", "l2Book", "PB7 cache"],
+            default="1m",
+            key="market_data_have_view",
+        )
+
+        dataset_filters = {
+            "1m": ["1m", "candles_1m"],
+            "1m_api": ["1m_api", "candles_1m_api"],
+            "l2Book": ["l2book"],
+        }
+
+        rows = []
+        if have_view != "PB7 cache":
+            _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}_{str(have_view).lower()}"
+            if _cache_key not in st.session_state:
+                st.session_state[_cache_key] = summarize_raw_inventory(
+                    str(exchange).lower(),
+                    skip_coverage=False,
+                    datasets_filter=dataset_filters.get(have_view),
+                )
+            rows = st.session_state.get(_cache_key) or []
+
+        if have_view != "PB7 cache" and not rows:
             st.info("No raw files found yet.")
         else:
             import pandas as pd
@@ -1138,8 +3064,6 @@ def view_market_data():
             rows_1m = [r for r in rows if str(r.get("dataset") or "").lower() in ("1m", "candles_1m")]
             rows_1m_api = [r for r in rows if str(r.get("dataset") or "").lower() in ("1m_api", "candles_1m_api")]
             rows_l2book = [r for r in rows if str(r.get("dataset") or "").lower() == "l2book"]
-
-            tab_1m, tab_1m_api, tab_l2book = st.tabs(["1m", "1m_api", "l2Book"])
 
             try:
                 _latest_interval_s = int(str(load_ini("pbdata", "latest_1m_interval_seconds") or "120").strip())
@@ -1294,7 +3218,7 @@ def view_market_data():
                         )
                         st.session_state["market_data_heatmap_sel"] = clicked
                         st.session_state["market_data_heatmap_tab"] = tab_key
-                elif prev_sel:
+                elif prev_sel and not preserve_selection_once:
                     # Had a selection before, now empty → user deselected
                     st.session_state.pop("market_data_heatmap_sel", None)
                     st.session_state.pop("market_data_heatmap_tab", None)
@@ -1667,21 +3591,109 @@ def view_market_data():
                         except Exception as e:
                             st.error(f"Error: {e}")
 
-            # Render each dataset tab
-            with tab_1m:
+            sel_row_1m = None
+            sel_row_1m_api = None
+            sel_row_l2book = None
+            sel_row_pb7 = None
+
+            # Render selected dataset only (lazy)
+            if have_view == "1m":
                 sel_row_1m = _render_dataset_table(rows_1m, "1m", "1m")
                 _render_deletion_tools(rows_1m, "1m", "1m candles", sel_row_1m)
 
-            with tab_1m_api:
+            elif have_view == "1m_api":
                 sel_row_1m_api = _render_dataset_table(rows_1m_api, "1m_api", "1m_api")
                 _render_deletion_tools(rows_1m_api, "1m_api", "1m API", sel_row_1m_api)
 
-            with tab_l2book:
+            elif have_view == "l2Book":
                 sel_row_l2book = _render_dataset_table(rows_l2book, "l2Book", "l2book")
                 _render_deletion_tools(rows_l2book, "l2book", "l2Book", sel_row_l2book)
 
+            elif have_view == "PB7 cache":
+                pb7_rows = summarize_pb7_cache_inventory(str(exchange).lower(), limit=2000)
+                if not pb7_rows:
+                    st.info("No PB7 cache files found for this exchange (expected path: pb7/caches/ohlcv/<exchange>/...).")
+                else:
+                    import pandas as pd
+                    df_pb7 = pd.DataFrame(pb7_rows)
+                    if not df_pb7.empty:
+                        total_files = int(df_pb7["n_files"].sum()) if "n_files" in df_pb7.columns else 0
+                        total_bytes = int(df_pb7["total_bytes"].sum()) if "total_bytes" in df_pb7.columns else 0
+                        n_coins = int(df_pb7["coin"].nunique()) if "coin" in df_pb7.columns else 0
+                        n_tf = int(df_pb7["timeframe"].nunique()) if "timeframe" in df_pb7.columns else 0
+
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("timeframes", n_tf)
+                        c2.metric("coins", n_coins)
+                        c3.metric("files", total_files)
+                        c4.metric("size", _fmt_bytes(total_bytes))
+
+                    if "total_bytes" in df_pb7.columns:
+                        df_pb7["size_mb"] = (df_pb7["total_bytes"].astype(float) / (1024.0 * 1024.0)).round(2)
+                        df_pb7 = df_pb7.drop(columns=["total_bytes"])
+
+                    col_cfg = {
+                        "size_mb": st.column_config.NumberColumn("size", format="%.2f MB")
+                    }
+                    event_pb7 = st.dataframe(
+                        df_pb7,
+                        use_container_width=True,
+                        hide_index=True,
+                        on_select="rerun",
+                        selection_mode="single-row",
+                        column_config=col_cfg,
+                        key="market_data_pb7_cache_table",
+                    )
+
+                    _prev_sel_key = "market_data_prev_sel_pb7_cache"
+                    sel_indices = event_pb7.selection.rows if event_pb7 and event_pb7.selection else []
+                    prev_sel = st.session_state.get(_prev_sel_key, [])
+                    if sel_indices:
+                        idx = sel_indices[0]
+                        if 0 <= idx < len(pb7_rows):
+                            row = pb7_rows[idx]
+                            tf = str(row.get("timeframe") or "").strip()
+                            coin = str(row.get("coin") or "").strip()
+                            if tf and coin:
+                                st.session_state["market_data_heatmap_sel"] = (f"pb7_cache:{tf}", coin)
+                                st.session_state["market_data_heatmap_tab"] = "pb7_cache"
+                                sel_row_pb7 = {
+                                    "dataset": f"pb7_cache:{tf}",
+                                    "coin": coin,
+                                    "timeframe": tf,
+                                }
+                    elif prev_sel and not preserve_selection_once:
+                        st.session_state.pop("market_data_heatmap_sel", None)
+                        st.session_state.pop("market_data_heatmap_tab", None)
+                    st.session_state[_prev_sel_key] = list(sel_indices)
+
+                    hm = st.session_state.get("market_data_heatmap_sel")
+                    hm_tab = st.session_state.get("market_data_heatmap_tab")
+                    if isinstance(hm, (tuple, list)) and len(hm) == 2 and hm_tab == "pb7_cache":
+                        hm_ds = str(hm[0] or "").strip().lower()
+                        hm_coin = str(hm[1] or "").strip()
+                        hm_tf = hm_ds.split(":", 1)[1] if hm_ds.startswith("pb7_cache:") and ":" in hm_ds else ""
+                        if hm_tf and hm_coin:
+                            for row in pb7_rows:
+                                row_tf = str(row.get("timeframe") or "").strip()
+                                row_coin = str(row.get("coin") or "").strip()
+                                if row_tf == hm_tf and row_coin == hm_coin:
+                                    sel_row_pb7 = {
+                                        "dataset": f"pb7_cache:{row_tf}",
+                                        "coin": row_coin,
+                                        "timeframe": row_tf,
+                                    }
+                                    break
+
+                    if sel_row_pb7:
+                        st.caption(f"Heatmap: PB7 cache {sel_row_pb7.get('timeframe')} / {sel_row_pb7.get('coin')}")
+                    else:
+                        st.info("Click a row to display the heatmap. Use the sidebar refresh button to reload inventory.")
+
+                    st.caption("Read-only view of PB7 cache inventory from pb7/caches/ohlcv.")
+
             # Get the selected row from any of the tabs
-            sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book
+            sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book or sel_row_pb7
 
             def _render_gap_heatmap() -> None:
                 if sel_row:
@@ -1690,6 +3702,8 @@ def view_market_data():
                     ds = str(r.get("dataset") or "")
                     cn = str(r.get("coin") or "")
                     ds_l = ds.strip().lower()
+                    is_stock_perp_1m = _is_hyperliquid_stock_perp_1m(exchange=ex, dataset=ds, coin=cn)
+                    tradfi_type = _tradfi_canonical_type_for_coin(cn) if is_stock_perp_1m else ""
 
                     # For candles datasets: show only the gap from l2Book->today.
                     start_day = None
@@ -1730,11 +3744,13 @@ def view_market_data():
                                     dt1 = None
 
                                 if dt0 and dt1:
+                                    tradfi_sessions: dict[str, tuple[int, int]] = {}
+                                    tradfi_calendar_present = False
                                     years: list[int] = []
                                     cur = dt0
                                     while cur <= dt1:
                                         y = int(cur.strftime("%Y"))
-                                        if y not in years and y >= 2023:
+                                        if y not in years:
                                             years.append(y)
                                         cur = cur + _timedelta(days=1)
                                     years = sorted(years)
@@ -1763,7 +3779,35 @@ def view_market_data():
                                                 l2b = int(counts.get("l2Book_mid") or 0)
                                                 oth = int(counts.get("other_exchange") or 0)
                                                 miss = int(counts.get("missing") or 0)
-                                                if not counts:
+                                                if is_stock_perp_1m:
+                                                    is_holiday = _uses_us_holiday_calendar(tradfi_type) and _is_us_market_holiday(cur_day)
+                                                    sess = tradfi_sessions.get(day_s)
+                                                    if sess is not None:
+                                                        expected_minutes = len(
+                                                            _tradfi_expected_minute_indices_from_session(
+                                                                day=cur_day,
+                                                                session_start_ms=int(sess[0]),
+                                                                session_end_ms=int(sess[1]),
+                                                            )
+                                                        )
+                                                    elif tradfi_calendar_present:
+                                                        expected_minutes = 0
+                                                    else:
+                                                        expected_minutes = len(_tradfi_expected_indices_for_type(cur_day, tradfi_type))
+                                                    if is_holiday:
+                                                        expected_minutes = 0
+                                                    covered_minutes = api + l2b + oth
+                                                    miss = max(0, int(expected_minutes) - int(covered_minutes))
+                                                    if expected_minutes == 0 and covered_minutes == 0:
+                                                        if is_holiday:
+                                                            row[idx] = 0.25
+                                                            row_text[idx] = f"{day_s} | market holiday"
+                                                        else:
+                                                            row[idx] = None
+                                                            row_text[idx] = f"{day_s} | non-trading session"
+                                                        cur_day = cur_day + _timedelta(days=1)
+                                                        continue
+                                                elif not counts:
                                                     miss = 1440
                                                 if miss > 0:
                                                     row[idx] = 0.0
@@ -1787,7 +3831,9 @@ def view_market_data():
                                             hovertemplate="%{text}<extra></extra>",
                                             colorscale=[
                                                 [0.0, "#b23b3b"],
-                                                [0.49, "#b23b3b"],
+                                                [0.24, "#b23b3b"],
+                                                [0.25, "#7e57c2"],
+                                                [0.49, "#7e57c2"],
                                                 [0.5, "#ef6c00"],
                                                 [0.74, "#ef6c00"],
                                                 [0.75, "#7cb342"],
@@ -1820,6 +3866,7 @@ def view_market_data():
                                         "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>HL only</span>"
                                         "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7cb342;color:#fff;margin-right:8px;'>other_exchange &lt; 5 min</span>"
                                         "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange ≥ 5 min</span>"
+                                        "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
                                         "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing minutes</span>",
                                         unsafe_allow_html=True,
                                     )
@@ -1917,7 +3964,6 @@ def view_market_data():
                             src_code = {
                                 None: 0,
                                 "missing": 0,
-                                "filled_gap": 1,
                                 "api": 2,
                                 "best": 3,
                                 "other_exchange": 4,
@@ -1926,20 +3972,57 @@ def view_market_data():
                             }
 
                             # colorscale: 0 missing (red), 1 filled (purple), 2 api (green), 3 best (teal), 4 other_exchange (orange), 5 l2book (blue)
-                            colorscale = [
-                                [0.0, "#b23b3b"],
-                                [0.2, "#6a1b9a"],
-                                [0.4, "#2e7d32"],
-                                [0.6, "#00897b"],
-                                [0.8, "#ef6c00"],
-                                [1.0, "#1e88e5"],
-                            ]
+                            if is_stock_perp_1m:
+                                # -2 market holiday, -1 expected out-of-session gap (neutral gray)
+                                colorscale = [
+                                    [0.0, "#7e57c2"],
+                                    [1 / 7, "#4e4e4e"],
+                                    [2 / 7, "#b23b3b"],
+                                    [3 / 7, "#6a1b9a"],
+                                    [4 / 7, "#2e7d32"],
+                                    [5 / 7, "#00897b"],
+                                    [6 / 7, "#ef6c00"],
+                                    [1.0, "#1e88e5"],
+                                ]
+                            else:
+                                colorscale = [
+                                    [0.0, "#b23b3b"],
+                                    [0.2, "#6a1b9a"],
+                                    [0.4, "#2e7d32"],
+                                    [0.6, "#00897b"],
+                                    [0.8, "#ef6c00"],
+                                    [1.0, "#1e88e5"],
+                                ]
 
                             for d in days_list:
                                 day_s = d.strftime("%Y%m%d")
                                 # present[day_s] is {HH: {MM: src}}
                                 hours_map = present.get(day_s) if isinstance(present.get(day_s), dict) else {}
                                 hours_map = hours_map if isinstance(hours_map, dict) else {}
+                                expected_indices = None
+                                if is_stock_perp_1m:
+                                    holiday_session_indices = _tradfi_expected_minute_indices(d)
+                                    is_market_holiday = bool(
+                                        _uses_us_holiday_calendar(tradfi_type)
+                                        and _is_us_market_holiday(d)
+                                    )
+                                    sess_map, sess_present = ({}, False)
+                                    sess = (sess_map or {}).get(day_s)
+                                    if sess is not None:
+                                        expected_indices = _tradfi_expected_minute_indices_from_session(
+                                            day=d,
+                                            session_start_ms=int(sess[0]),
+                                            session_end_ms=int(sess[1]),
+                                        )
+                                    elif sess_present:
+                                        expected_indices = set()
+                                    else:
+                                        expected_indices = _tradfi_expected_indices_for_type(d, tradfi_type)
+                                    if is_market_holiday:
+                                        expected_indices = set()
+                                else:
+                                    is_market_holiday = False
+                                    holiday_session_indices = set()
 
                                 for block_start in (0, 12):
                                     row = []
@@ -1949,6 +4032,17 @@ def view_market_data():
                                         mins_map = hours_map.get(hh) or {}
                                         mins_map = mins_map if isinstance(mins_map, dict) else {}
                                         for minute in range(60):
+                                            minute_idx = (h * 60) + int(minute)
+                                            if is_market_holiday and minute_idx in holiday_session_indices:
+                                                row.append(-2)
+                                                hhmm = f"{h:02d}:{minute:02d}"
+                                                row_text.append(f"{day_s} {hhmm} (market holiday)")
+                                                continue
+                                            if is_stock_perp_1m and expected_indices is not None and minute_idx not in expected_indices:
+                                                row.append(-1)
+                                                hhmm = f"{h:02d}:{minute:02d}"
+                                                row_text.append(f"{day_s} {hhmm} (expected out-of-session gap)")
+                                                continue
                                             src = mins_map.get(minute)
                                             code = int(src_code.get(str(src), src_code.get(src, 0)))
                                             row.append(code)
@@ -1972,7 +4066,7 @@ def view_market_data():
                                     text=text,
                                     hovertemplate="%{text}<extra></extra>",
                                     colorscale=colorscale,
-                                    zmin=0,
+                                    zmin=-2 if is_stock_perp_1m else 0,
                                     zmax=5,
                                     showscale=False,
                                     xgap=1,
@@ -1985,17 +4079,48 @@ def view_market_data():
                                 xaxis=dict(tickmode="array", tickvals=list(range(0, 720, 60)), ticktext=[f"{x:02d}h" for x in range(0, 12)]),
                                 yaxis=dict(autorange="reversed", showgrid=False),
                             )
+                            if is_stock_perp_1m:
+                                st.markdown(
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#4e4e4e;color:#fff;margin-right:8px;'>expected out-of-session gap</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                st.markdown(
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
+                                    unsafe_allow_html=True,
+                                )
                             st.plotly_chart(fig, use_container_width=True)
+                            return
 
 
                     # Default view (incl. l2Book): render year rows with day-of-year columns.
-                    cov = get_daily_hour_coverage_for_dataset(
-                        ex,
-                        ds,
-                        cn,
-                        start_day=start_day,
-                        end_day=end_day,
-                    )
+                    if ds_l.startswith("pb7_cache:"):
+                        tf = str(ds.split(":", 1)[1] if ":" in ds else (r.get("timeframe") or "1m")).strip() or "1m"
+                        cov = get_daily_presence_for_pb7_cache(
+                            ex,
+                            tf,
+                            cn,
+                            start_day=start_day,
+                            end_day=end_day,
+                        )
+                    else:
+                        cov = get_daily_hour_coverage_for_dataset(
+                            ex,
+                            ds,
+                            cn,
+                            start_day=start_day,
+                            end_day=end_day,
+                        )
                     days = cov.get("days") if isinstance(cov, dict) else []
                     if isinstance(days, list) and days:
                         years: list[int] = []
@@ -2089,7 +4214,7 @@ def view_market_data():
 
                 _gap_fragment()
 
-    with tab_log:
+    if main_view == "Activity log":
         view_log_filtered("MarketData")
 
 
@@ -2107,10 +4232,13 @@ render_header_with_guide(
 
 with st.sidebar:
     if st.button(":material/refresh:", help="Reload page"):
+        # Preserve active table selection/overview across this refresh rerun.
+        st.session_state["market_data_preserve_selection_once"] = True
         for _k in list(st.session_state.keys()):
             if str(_k).startswith("market_data_have_table_cached_") or str(_k).startswith("market_data_trows_"):
                 st.session_state.pop(_k, None)
-        st.rerun()
+        # Button interaction already triggers a rerun; avoid forcing an extra rerun
+        # here so current segmented-control state is preserved.
 
     _pid = read_worker_pid()
     _running = bool(_pid and is_pid_running(int(_pid)))

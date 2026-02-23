@@ -889,13 +889,26 @@ class BacktestV7Item(ConfigV7Editor):
             with col1:
                 # Step 1: Select coin from approved_coins (with "All Coins" option)
                 available_coins = []
+                def _canonical_coin_symbol(coin):
+                    symbol = str(coin).strip()
+                    if not symbol:
+                        return ""
+                    lower = symbol.lower()
+                    if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                        return f"xyz:{symbol[4:].strip().upper()}"
+                    return normalize_symbol(symbol)
+                def _normalize_ui_coin(coin):
+                    return _canonical_coin_symbol(coin)
                 try:
                     raw_coins = list(set(
                         self.config.live.approved_coins.long + 
                         self.config.live.approved_coins.short
                     ))
                     # Normalize coins (remove USDT, etc.) and filter
-                    available_coins = sorted([c for c in {normalize_symbol(coin) for coin in raw_coins if coin} if c not in mss])
+                    available_coins = sorted([
+                        c for c in {_normalize_ui_coin(coin) for coin in raw_coins if coin}
+                        if c and c not in mss
+                    ])
                 except:
                     available_coins = []
                 
@@ -971,10 +984,30 @@ class BacktestV7Item(ConfigV7Editor):
             self.fragment_notices_ignore()
         with col5:
             st.checkbox("apply_filters", value=False, help=pbgui_help.apply_filters, key="edit_bt_v7_apply_filters")
+        def _canonical_coin_symbol(coin):
+            symbol = str(coin).strip()
+            if not symbol:
+                return ""
+            lower = symbol.lower()
+            if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                return f"xyz:{symbol[4:].strip().upper()}"
+            return normalize_symbol(symbol)
+        def _allowed_hyperliquid_market_data_coins() -> set[str]:
+            allowed = set()
+            for record in coindata.load_mapping(exchange="hyperliquid", use_cache=True):
+                if not bool(record.get("swap", False)) or not bool(record.get("active", True)) or not bool(record.get("linear", True)):
+                    continue
+                dex = str(record.get("dex") or "").strip().lower()
+                if dex not in ("", "xyz"):
+                    continue
+                coin = _canonical_coin_symbol(record.get("coin") or "")
+                if coin:
+                    allowed.add(coin)
+            return allowed
         def _normalize_list(items):
             normalized = []
             for item in items:
-                base = normalize_symbol(item)
+                base = _canonical_coin_symbol(item)
                 if base and base not in normalized:
                     normalized.append(base)
             return normalized
@@ -1027,8 +1060,8 @@ class BacktestV7Item(ConfigV7Editor):
                 ignored.update(ignored_coins)
 
             ignored -= approved
-            approved_sorted = sorted(approved)
-            ignored_sorted = sorted(ignored)
+            approved_sorted = sorted({_canonical_coin_symbol(c) for c in approved if _canonical_coin_symbol(c)})
+            ignored_sorted = sorted({_canonical_coin_symbol(c) for c in ignored if _canonical_coin_symbol(c)})
             self.config.live.approved_coins.long = approved_sorted
             self.config.live.approved_coins.short = approved_sorted
             self.config.live.ignored_coins.long = ignored_sorted
@@ -1051,12 +1084,31 @@ class BacktestV7Item(ConfigV7Editor):
                 use_cache=True,
                 active_only=True,
             )
-            mapping_coins.update(exchange_symbols)
+
+            mapping_coins.update(
+                {
+                    _canonical_coin_symbol(symbol)
+                    for symbol in exchange_symbols
+                    if _canonical_coin_symbol(symbol)
+                }
+            )
             for record in coindata.load_mapping(exchange=exchange, use_cache=True):
-                coin = (record.get("coin") or "").upper()
+                coin = _canonical_coin_symbol(record.get("coin") or "")
                 notice = str(record.get("notice") or "").strip()
                 if coin and coin in mapping_coins and notice and coin not in notices_by_coin:
                     notices_by_coin[coin] = notice
+
+        preserved_stock_perps = {
+            _canonical_coin_symbol(c)
+            for c in (
+                self.config.live.approved_coins.long
+                + self.config.live.approved_coins.short
+                + self.config.live.ignored_coins.long
+                + self.config.live.ignored_coins.short
+            )
+            if _canonical_coin_symbol(c).startswith("xyz:")
+        }
+        mapping_coins.update(preserved_stock_perps)
         symbols = sorted(mapping_coins)
 
         self.config.live.approved_coins.long = [
@@ -1093,6 +1145,40 @@ class BacktestV7Item(ConfigV7Editor):
             notice = notices_by_coin.get(coin) or notices_by_coin.get(base)
             if notice:
                 st.warning(f'{base}: {notice}')
+        # Warn if stock perps selected without TradFi configured
+        _all_approved = self.config.live.approved_coins.long + self.config.live.approved_coins.short
+        _stock_perps = [
+            c for c in _all_approved
+            if str(c).lower().startswith("xyz:") or str(c).lower().startswith("xyz-")
+        ]
+        if _stock_perps:
+            try:
+                _start = datetime.date.fromisoformat(self.config.backtest.start_date)
+                _needs_tradfi = (datetime.date.today() - _start).days > 7
+            except Exception:
+                _needs_tradfi = True
+            if _needs_tradfi:
+                _tradfi = st.session_state.users.tradfi if "users" in st.session_state else {}
+                _has_tradfi = bool(_tradfi)
+                if not _has_tradfi:
+                    try:
+                        _cfg = configparser.ConfigParser()
+                        _cfg.read("pbgui.ini")
+                        _has_alpaca = bool((_cfg.get("tradfi_profiles", "alpaca_api_key", fallback="") or "").strip()) and bool(
+                            (_cfg.get("tradfi_profiles", "alpaca_api_secret", fallback="") or "").strip()
+                        )
+                        _has_polygon = bool((_cfg.get("tradfi_profiles", "polygon_api_key", fallback="") or "").strip())
+                        _has_tradfi = _has_alpaca or _has_polygon
+                    except Exception:
+                        _has_tradfi = False
+                if not _has_tradfi:
+                    _names = ', '.join(_stock_perps[:3]) + ('...' if len(_stock_perps) > 3 else '')
+                    st.warning(
+                        f"Stock perp symbols detected ({_names}). "
+                        "Backtests older than 7 days require a **TradFi data provider**. "
+                        "Please configure it on the **API-Keys** page (TradFi section at the bottom).",
+                        icon=":material/warning:",
+                    )
         # Select approved coins
         col1, col2 = st.columns([1,1], vertical_alignment="bottom")
         with col1:
@@ -1391,10 +1477,18 @@ class BacktestV7Result:
     def initialize(self):
         self.time = None
         self.result = self.load_result()
-        self.config = ConfigV7(PurePath(f'{self.result_path}/config.json'))
-        self.config.load_config()
-        self.backtest_config = self.load_backtest_config()
-        self.ed = self.config.backtest.end_date
+        self.config = None
+        self.backtest_config = None
+        self.ed = datetime.date.today().strftime("%Y-%m-%d")
+        self.exchanges = []
+        self.base_dir = ""
+        self.btc_collateral_cap = 0.0
+        self.twe_long = 0.0
+        self.twe_short = 0.0
+        self.pos_long = 0.0
+        self.pos_short = 0.0
+        self.starting_balance = 0.0
+        self._load_config_summary()
         # Support both old and new JSON formats
         # New format has _usd/_btc suffixes, old format has no suffix
         if self.result:
@@ -1415,10 +1509,17 @@ class BacktestV7Result:
             self.drawdown_worst = 0
             self.sharpe_ratio = 0
             self.equity_balance_diff_neg_max = None
-        self.starting_balance = self.config.backtest.starting_balance
         self.be = None
-        self.final_balance, self.final_balance_btc = self.load_final_balance()
+        gain = 0.0
+        try:
+            if self.result:
+                gain = float(self.result.get("gain_usd") or self.result.get("gain") or 0.0)
+        except Exception:
+            gain = 0.0
+        self.final_balance = float(self.starting_balance) * gain if self.starting_balance else 0.0
+        self.final_balance_btc = 0
         self.fills = None
+        self._has_timeseries_data = None
         # If the analysis indicates liquidation, reflect that in the final balances
         try:
             if self.is_liquidated():
@@ -1426,6 +1527,71 @@ class BacktestV7Result:
                 self.final_balance_btc = 0
         except Exception:
             pass
+
+    def _load_config_summary(self):
+        cfg_path = Path(f'{self.result_path}/config.json')
+        try:
+            with open(cfg_path, "r", encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            return
+
+        backtest_cfg = cfg.get("backtest", {}) if isinstance(cfg, dict) else {}
+        bot_cfg = cfg.get("bot", {}) if isinstance(cfg, dict) else {}
+        long_cfg = bot_cfg.get("long", {}) if isinstance(bot_cfg, dict) else {}
+        short_cfg = bot_cfg.get("short", {}) if isinstance(bot_cfg, dict) else {}
+
+        self.ed = str(backtest_cfg.get("end_date") or self.ed)
+        self.exchanges = backtest_cfg.get("exchanges", [])
+        self.base_dir = str(backtest_cfg.get("base_dir") or "")
+        self.starting_balance = float(backtest_cfg.get("starting_balance") or 0.0)
+        self.btc_collateral_cap = float(backtest_cfg.get("btc_collateral_cap") or 0.0)
+        self.twe_long = float(long_cfg.get("total_wallet_exposure_limit") or 0.0)
+        self.twe_short = float(short_cfg.get("total_wallet_exposure_limit") or 0.0)
+        self.pos_long = float(long_cfg.get("n_positions") or 0.0)
+        self.pos_short = float(short_cfg.get("n_positions") or 0.0)
+
+    def ensure_config_loaded(self):
+        if self.config is not None:
+            return
+        self.config = ConfigV7(PurePath(f'{self.result_path}/config.json'))
+        self.config.load_config()
+        self.backtest_config = self.load_backtest_config()
+        self.ed = self.config.backtest.end_date
+
+    def _result_file_has_data_rows(self, path: Path, is_gzip: bool = False) -> bool:
+        try:
+            if not path.exists():
+                return False
+            if is_gzip:
+                import gzip
+
+                with gzip.open(path, 'rt', encoding='utf-8') as f:
+                    _ = f.readline()  # header
+                    return bool(f.readline())
+            with open(path, 'r', encoding='utf-8') as f:
+                _ = f.readline()  # header
+                return bool(f.readline())
+        except Exception:
+            return False
+
+    def _has_nonempty_timeseries_data(self) -> bool:
+        if self._has_timeseries_data is not None:
+            return bool(self._has_timeseries_data)
+
+        fills_csv = Path(f'{self.result_path}/fills.csv')
+        fills_gz = Path(f'{self.result_path}/fills.csv.gz')
+        be_csv = Path(f'{self.result_path}/balance_and_equity.csv')
+        be_gz = Path(f'{self.result_path}/balance_and_equity.csv.gz')
+
+        has_data = (
+            self._result_file_has_data_rows(fills_csv)
+            or self._result_file_has_data_rows(fills_gz, is_gzip=True)
+            or self._result_file_has_data_rows(be_csv)
+            or self._result_file_has_data_rows(be_gz, is_gzip=True)
+        )
+        self._has_timeseries_data = has_data
+        return has_data
 
     def is_liquidated(self) -> bool:
         """Return True if the backtest ended in liquidation.
@@ -1437,7 +1603,12 @@ class BacktestV7Result:
         try:
             if self.equity_balance_diff_neg_max is None:
                 return False
-            return float(self.equity_balance_diff_neg_max) >= 1.0
+            if float(self.equity_balance_diff_neg_max) < 1.0:
+                return False
+
+            # Guard against degenerate result artifacts where analysis exists but
+            # fills/balance files contain headers only (no actual time-series rows).
+            return self._has_nonempty_timeseries_data()
         except Exception:
             return False
     
@@ -1561,17 +1732,49 @@ class BacktestV7Result:
             # Try both .csv and .csv.gz
             fills = f'{self.result_path}/fills.csv'
             fills_gz = f'{self.result_path}/fills.csv.gz'
-            
+
+            file_path = None
+            compression = None
             if Path(fills).exists():
-                self.fills = pd.read_csv(fills)
-                timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
-                start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
-                self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
+                file_path = fills
             elif Path(fills_gz).exists():
-                self.fills = pd.read_csv(fills_gz, compression='gzip')
+                file_path = fills_gz
+                compression = 'gzip'
+
+            if not file_path:
+                return
+
+            self.fills = pd.read_csv(file_path, compression=compression)
+            if self.fills.empty:
+                self.fills = None
+                return
+
+            if 'time' in self.fills.columns:
+                self.fills['time'] = pd.to_datetime(self.fills['time'], errors='coerce')
+                if self.fills['time'].isna().all():
+                    self.fills = None
+                return
+
+            if 'minute' in self.fills.columns:
                 timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
-                start_time = timestamp - (self.fills['minute'].iloc[-1] * 60)
+                minute_max = pd.to_numeric(self.fills['minute'], errors='coerce').max()
+                if pd.isna(minute_max):
+                    self.fills = None
+                    return
+                start_time = timestamp - (float(minute_max) * 60)
                 self.fills['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.fills['minute'], unit='m')
+                return
+
+            if 'timestamp' in self.fills.columns:
+                ts_num = pd.to_numeric(self.fills['timestamp'], errors='coerce')
+                if ts_num.notna().any():
+                    # Support both seconds and milliseconds
+                    unit = 'ms' if float(ts_num.dropna().iloc[0]) > 1e11 else 's'
+                    self.fills['time'] = pd.to_datetime(ts_num, unit=unit, errors='coerce')
+                    if self.fills['time'].notna().any():
+                        return
+
+            self.fills = None
 
     def view_plot(self):
         # Note: liquidation banner is displayed once above `view_chart_be`
@@ -1605,6 +1808,7 @@ class BacktestV7Result:
 
     def view(self):
         # Overview: show result/config; liquidation banner is shown above charts
+        self.ensure_config_loaded()
         col1, col2 = st.columns([1,1])
         with col1:
             st.code(json.dumps(self.result, indent=4))
@@ -2233,7 +2437,7 @@ class BacktestV7Results:
                     'Plot': False,
                     'Fills': False,
                     'Backtest Name': result_path,
-                    'Exch.': result.config.backtest.exchanges,
+                    'Exch.': result.exchanges,
                     'Result Time': result.time,
                     'ADG': float(f"{result.adg:.4f}"),
                     'Gain': float(f"{gain:.2f}"),
@@ -2242,8 +2446,8 @@ class BacktestV7Results:
                     'Starting Balance': float(f"{starting_balance_float:.0f}"),
                     'Final Balance': float(f"{final_balance_float:.0f}"),
                     'Final Balance BTC': float(result.final_balance_btc) if result.final_balance_btc is not None else 0,
-                    'TWE': f"{result.config.bot.long.total_wallet_exposure_limit:.2f} / {result.config.bot.short.total_wallet_exposure_limit:.2f}",
-                    'POS': f"{result.config.bot.long.n_positions:.2f} / {result.config.bot.short.n_positions:.2f}",
+                    'TWE': f"{result.twe_long:.2f} / {result.twe_short:.2f}",
+                    'POS': f"{result.pos_long:.2f} / {result.pos_short:.2f}",
                     'index': result,
                 })
         column_config = {
@@ -2295,11 +2499,12 @@ class BacktestV7Results:
             for row in ed["edited_rows"]:
                 if "View" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["View"]:
+                        self.results_d[row]["index"].ensure_config_loaded()
                         self.results_d[row]["index"].load_fills()
                         self.results_d[row]["index"].load_be()
                         self.results_d[row]["index"].view_chart_be()
                         self.results_d[row]["index"].view_chart_drawdown()
-                        if self.results_d[row]["index"].config.backtest.btc_collateral_cap > 0:
+                        if self.results_d[row]["index"].btc_collateral_cap > 0:
                             self.results_d[row]["index"].view_chart_be_btc()
                             self.results_d[row]["index"].view_chart_drawdown_btc()
                         self.results_d[row]["index"].view_chart_symbol()
@@ -2358,6 +2563,7 @@ class BacktestV7Results:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     sel_result = self.results_d[row]["index"]
+                    sel_result.ensure_config_loaded()
                     st.session_state.v7_strategy_explorer_config = sel_result.config
                     st.session_state.v7_strategy_explorer_config.pbgui.note = f'{sel_result.config.backtest.base_dir.split("/")[-1]}'
 
@@ -2390,6 +2596,7 @@ class BacktestV7Results:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.opt_v7 = OptimizeV7.OptimizeV7Item()
+                    self.results_d[row]["index"].ensure_config_loaded()
                     st.session_state.opt_v7.config = self.results_d[row]["index"].config
                     st.session_state.opt_v7.config.pbgui.starting_config = True
                     st.session_state.opt_v7.name = self.results_d[row]["index"].config.backtest.base_dir.split('/')[-1]
@@ -2420,6 +2627,7 @@ class BacktestV7Results:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.edit_v7_instance = V7Instance()
+                    self.results_d[row]["index"].ensure_config_loaded()
                     st.session_state.edit_v7_instance.config = self.results_d[row]["index"].config
                     st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
                     st.switch_page(get_navi_paths()["V7_RUN"])
@@ -2559,7 +2767,7 @@ class BacktestV7Results:
                     formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
                     self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity'], name=f"{name} {formatted_time} equity", line=dict(width=0.75)))
                     self.compare_fig.add_trace(go.Scatter(x=result.be['time'], y=result.be['balance'], name=f"{name} {formatted_time} balance", line=dict(width=2.5)))
-                    if result.config.backtest.btc_collateral_cap > 0:
+                    if result.btc_collateral_cap > 0:
                         name = PurePath(*result.result_path.parts[-3:-2])
                         formatted_time = result.time.strftime("%Y-%m-%d %H:%M:%S")
                         self.compare_fig_btc.add_trace(go.Scatter(x=result.be['time'], y=result.be['equity_btc'], name=f"{name} {formatted_time} equity_btc", line=dict(width=0.75)))
