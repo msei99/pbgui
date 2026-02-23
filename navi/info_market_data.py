@@ -50,7 +50,13 @@ from market_data import (
     load_aws_profile_region,
     save_aws_profile_region,
 )
-from market_data_sources import get_daily_source_counts_for_range, remove_days_from_index
+from market_data_sources import (
+    SOURCE_CODE_API,
+    get_daily_source_counts_for_range,
+    get_source_codes_for_day,
+    remove_days_from_index,
+    update_source_index_for_day,
+)
 
 from hyperliquid_aws import (
     HYPERLIQUID_AWS_REGION,
@@ -3151,6 +3157,82 @@ def view_market_data():
                                     hl_minutes = hl
                                     other_minutes = oth
                                     missing_minutes = miss
+
+                                    tradfi_type = _tradfi_canonical_type_for_coin(cn)
+                                    if tradfi_type:
+                                        try:
+                                            d0 = _datetime.strptime(start_day, "%Y%m%d").date() if start_day else None
+                                            d1 = _datetime.strptime(end_day, "%Y%m%d").date() if end_day else None
+                                        except Exception:
+                                            d0 = None
+                                            d1 = None
+
+                                        if d0 is not None and d1 is not None and d1 >= d0:
+                                            try:
+                                                lag_min = max(0, int(_missing_lag_minutes))
+                                            except Exception:
+                                                lag_min = 0
+                                            effective_now_utc: _datetime
+                                            cutoff_ts_ms = _latest_1m_api_cutoff_ts_ms(cn)
+                                            if cutoff_ts_ms is not None:
+                                                try:
+                                                    effective_now_utc = _datetime.utcfromtimestamp(int(cutoff_ts_ms) / 1000.0)
+                                                except Exception:
+                                                    effective_now_utc = _datetime.utcnow()
+                                            else:
+                                                effective_now_utc = _datetime.utcnow()
+                                            if lag_min > 0:
+                                                effective_now_utc = effective_now_utc - _timedelta(minutes=lag_min)
+                                            effective_day_utc = effective_now_utc.date()
+                                            effective_minute_idx = (int(effective_now_utc.hour) * 60) + int(effective_now_utc.minute)
+
+                                            expected_minutes_total = 0
+                                            covered_minutes_total = 0
+                                            missing_days: list[str] = []
+
+                                            cur_day = d0
+                                            while cur_day <= d1:
+                                                expected_indices = _tradfi_expected_indices_for_type(cur_day, tradfi_type)
+                                                if expected_indices:
+                                                    if cur_day > effective_day_utc:
+                                                        expected_indices = set()
+                                                    elif cur_day == effective_day_utc:
+                                                        expected_indices = {mi for mi in expected_indices if int(mi) <= int(effective_minute_idx)}
+                                                expected_cnt = int(len(expected_indices))
+                                                if expected_cnt > 0:
+                                                    expected_minutes_total += expected_cnt
+                                                    day_s = cur_day.strftime("%Y%m%d")
+                                                    day_codes = get_source_codes_for_day(
+                                                        exchange=ex,
+                                                        coin=cn,
+                                                        day=day_s,
+                                                    )
+                                                    covered_cnt = 0
+                                                    if isinstance(day_codes, list) and day_codes:
+                                                        for minute_idx in expected_indices:
+                                                            if minute_idx < len(day_codes) and int(day_codes[minute_idx]) != 0:
+                                                                covered_cnt += 1
+                                                    covered_minutes_total += int(covered_cnt)
+                                                    if covered_cnt < expected_cnt:
+                                                        missing_days.append(day_s)
+                                                cur_day = cur_day + _timedelta(days=1)
+
+                                            missing_expected_minutes = max(0, int(expected_minutes_total) - int(covered_minutes_total))
+                                            missing_minutes = int(missing_expected_minutes)
+                                            r["expected_hours"] = round(float(expected_minutes_total) / 60.0, 2)
+                                            r["coverage_pct"] = (
+                                                round((float(covered_minutes_total) / float(expected_minutes_total)) * 100.0, 2)
+                                                if expected_minutes_total > 0
+                                                else 0.0
+                                            )
+                                            r["missing_days_count"] = int(len(missing_days))
+                                            if missing_days:
+                                                sample = ",".join(missing_days[:10])
+                                                if len(missing_days) > 10:
+                                                    sample += ",..."
+                                                r["missing_days_sample"] = sample
+                                            else:
+                                                r["missing_days_sample"] = ""
                             except Exception:
                                 pass
 
@@ -3246,6 +3328,62 @@ def view_market_data():
                 """Render deletion tools for a specific dataset."""
                 import shutil
 
+                def _remove_source_index_dirs_for_coin(actual_coin: str) -> int:
+                    base = get_exchange_raw_root_dir(str(exchange).lower())
+                    removed_count = 0
+                    src_dir = base / "1m_src" / str(actual_coin).strip()
+                    if src_dir.exists():
+                        shutil.rmtree(src_dir)
+                        removed_count += 1
+                    return removed_count
+
+                def _rebuild_source_index_from_api_for_coin(actual_coin: str) -> tuple[int, int]:
+                    presence = get_minute_presence_for_dataset(
+                        str(exchange).lower(),
+                        "1m_api",
+                        str(actual_coin).strip(),
+                    )
+                    days = presence.get("days") if isinstance(presence, dict) else {}
+                    if not isinstance(days, dict) or not days:
+                        return (0, 0)
+
+                    days_written = 0
+                    minutes_written = 0
+                    for day_s, hours_map in days.items():
+                        if not isinstance(hours_map, dict):
+                            continue
+                        minute_indices: set[int] = set()
+                        for hour_s, mins_map in hours_map.items():
+                            try:
+                                hour_i = int(hour_s)
+                            except Exception:
+                                continue
+                            if hour_i < 0 or hour_i > 23:
+                                continue
+                            if not isinstance(mins_map, dict):
+                                continue
+                            for minute_k in mins_map.keys():
+                                try:
+                                    minute_i = int(minute_k)
+                                except Exception:
+                                    continue
+                                if minute_i < 0 or minute_i > 59:
+                                    continue
+                                minute_indices.add((hour_i * 60) + minute_i)
+
+                        if minute_indices:
+                            update_source_index_for_day(
+                                exchange=str(exchange).lower(),
+                                coin=str(actual_coin).strip(),
+                                day=str(day_s),
+                                minute_indices=sorted(minute_indices),
+                                code=SOURCE_CODE_API,
+                            )
+                            days_written += 1
+                            minutes_written += len(minute_indices)
+
+                    return (days_written, minutes_written)
+
                 if not dataset_rows:
                     return
 
@@ -3281,11 +3419,14 @@ def view_market_data():
                                 else:
                                     st.error(f"❌ Directory not found: {coin_dir}")
                                 
-                                # Also delete 1m_src index if deleting 1m dataset
+                                # Also reset + rebuild source index from existing 1m_api if deleting 1m dataset
                                 if actual_dataset_lower in ("1m", "candles_1m"):
-                                    src_dir = get_exchange_raw_root_dir(str(exchange).lower()) / "1m_src" / actual_coin
-                                    if src_dir.exists():
-                                        shutil.rmtree(src_dir)
+                                    _remove_source_index_dirs_for_coin(actual_coin)
+                                    rebuilt_days, rebuilt_minutes = _rebuild_source_index_from_api_for_coin(actual_coin)
+                                    if rebuilt_days > 0:
+                                        st.caption(
+                                            f"Rebuilt source index from 1m_api: {rebuilt_days} days, {rebuilt_minutes} minutes"
+                                        )
                                 
                                 # Clear cache
                                 _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}"
@@ -3335,6 +3476,8 @@ def view_market_data():
                         if st.button("🗑️ Delete selected coins", key=f"market_data_delete_selected_btn_{dataset_key}", type="secondary"):
                             try:
                                 deleted_count = 0
+                                rebuilt_days_total = 0
+                                rebuilt_minutes_total = 0
                                 # Use actual dataset name from first row
                                 actual_dataset = str(dataset_rows[0].get("dataset", "")).strip() if dataset_rows else dataset_key
                                 actual_dataset_lower = actual_dataset.lower()
@@ -3351,11 +3494,12 @@ def view_market_data():
                                         shutil.rmtree(coin_dir)
                                         deleted_count += 1
                                     
-                                    # Also delete 1m_src index if deleting 1m dataset
+                                    # Also reset + rebuild source index from existing 1m_api if deleting 1m dataset
                                     if actual_dataset_lower in ("1m", "candles_1m"):
-                                        src_dir = get_exchange_raw_root_dir(str(exchange).lower()) / "1m_src" / actual_coin
-                                        if src_dir.exists():
-                                            shutil.rmtree(src_dir)
+                                        _remove_source_index_dirs_for_coin(actual_coin)
+                                        rebuilt_days, rebuilt_minutes = _rebuild_source_index_from_api_for_coin(actual_coin)
+                                        rebuilt_days_total += int(rebuilt_days)
+                                        rebuilt_minutes_total += int(rebuilt_minutes)
 
                                 # Clear cache to refresh inventory
                                 _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}"
@@ -3363,7 +3507,13 @@ def view_market_data():
                                 _trows_key = f"market_data_trows_{dataset_key}"
                                 st.session_state.pop(_trows_key, None)
 
-                                st.success(f"✅ Deleted {deleted_count} coin directories ({size_str})")
+                                rebuild_msg = ""
+                                if rebuilt_days_total > 0:
+                                    rebuild_msg = (
+                                        f" · rebuilt API-only source index ({rebuilt_days_total} days, "
+                                        f"{rebuilt_minutes_total} minutes)"
+                                    )
+                                st.success(f"✅ Deleted {deleted_count} coin directories ({size_str}){rebuild_msg}")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Error deleting: {e}")

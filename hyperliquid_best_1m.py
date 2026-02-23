@@ -50,8 +50,8 @@ ENABLE_TIMING_LOGS = os.getenv("PBGUI_TIMING_LOGS", "0") == "1"
 _ET_TZ = ZoneInfo("America/New_York")
 TRADFI_IMPROVE_DEFAULT_LOOKBACK_DAYS = 365 * 5
 TRADFI_DISCOVERY_MAX_LOOKBACK_DAYS = 365 * 30
-TRADFI_DISCOVERY_WINDOW_DAYS = 14
 TRADFI_FX_EMPTY_CHUNKS_STOP = 8
+TRADFI_EMPTY_PERIODS_STOP = 2
 TRADFI_ERROR_LOG_THROTTLE_SECONDS = 300
 TIINGO_RETRY_ATTEMPTS = 4
 TIINGO_RETRY_BACKOFF_SECONDS = 1.5
@@ -429,25 +429,38 @@ def _tiingo_wait_until_quota_allows_call(
             reasons.append("month")
 
         wait_s = max(1, min(waits) if waits else 1)
-        if status_cb is not None:
+        reason_txt = ",".join(reasons)
+
+        def _emit_wait_status(remaining_s: int) -> None:
+            if status_cb is None:
+                return
             try:
                 status_cb(
                     {
                         "stage": "tiingo_wait",
                         "ticker": str(ticker or "").upper(),
-                        "tiingo_wait_s": int(wait_s),
-                        "tiingo_wait_reason": ",".join(reasons),
+                        "tiingo_wait_s": int(max(0, remaining_s)),
+                        "tiingo_wait_reason": reason_txt,
                         "tiingo_wait_kind": "quota",
                     }
                 )
             except Exception:
                 pass
+
+        _emit_wait_status(wait_s)
         append_exchange_download_log(
             "hyperliquid",
-            f"[hl_tradfi] tiingo_wait_for_quota reasons={','.join(reasons)} wait_s={wait_s}",
+            f"[hl_tradfi] tiingo_wait_for_quota reasons={reason_txt} wait_s={wait_s}",
             level="WARNING",
         )
-        time.sleep(float(min(wait_s, int(TIINGO_LIMIT_WAIT_CHUNK_SECONDS))))
+
+        remaining = int(wait_s)
+        while remaining > 0:
+            sleep_chunk = int(min(remaining, 1))
+            time.sleep(float(sleep_chunk))
+            remaining -= sleep_chunk
+            if remaining > 0:
+                _emit_wait_status(remaining)
 
 
 def _tiingo_fetch_1m_iex(
@@ -760,10 +773,10 @@ def _tiingo_fetch_1m_iex_day_from_month_cache(
     api_key: str,
     timeout_s: float,
     status_cb: Callable[[dict[str, Any]], None] | None = None,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], bool, bool]:
     token = str(api_key or "").strip()
     if not token:
-        return ([], False)
+        return ([], False, False)
 
     cache_key = (token, "iex", str(ticker or "").upper())
     month_key = day.strftime("%Y%m")
@@ -799,9 +812,10 @@ def _tiingo_fetch_1m_iex_day_from_month_cache(
         _TIINGO_MONTH_BAR_CACHE[cache_key] = (month_key, grouped)
         day_map = grouped
 
+    month_has_any_bars = any(bool(v) for v in day_map.values())
     bars = day_map.get(day.strftime("%Y%m%d")) or []
     if not bars:
-        return ([], did_fetch_month)
+        return ([], did_fetch_month, month_has_any_bars)
     filtered = [
         bar
         for bar in bars
@@ -809,7 +823,7 @@ def _tiingo_fetch_1m_iex_day_from_month_cache(
         and int(bar.get("t", 0)) >= int(session_start_ms)
         and int(bar.get("t", 0)) <= int(session_end_ms)
     ]
-    return (filtered, did_fetch_month)
+    return (filtered, did_fetch_month, month_has_any_bars)
 
 
 def _tiingo_fetch_1m_fx_day_from_month_cache(
@@ -958,16 +972,102 @@ def probe_tiingo_iex_1m(*, api_key: str, ticker: str = "AAPL", timeout_s: float 
 
 
 def _default_us_equity_session_utc(day: date) -> tuple[int, int] | None:
-    # Fallback RTH session: weekdays only, 09:30-16:00 America/New_York.
+    # Fallback RTH session with US market holiday/early-close handling.
     if int(day.weekday()) >= 5:
         return None
+    if _is_us_market_holiday(day):
+        return None
+    close_hour = 16
+    close_minute = 0
+    if _is_us_market_early_close(day):
+        close_hour = 13
+        close_minute = 0
     open_dt = datetime(day.year, day.month, day.day, 9, 30, tzinfo=_ET_TZ).astimezone(timezone.utc)
-    close_dt = datetime(day.year, day.month, day.day, 16, 0, tzinfo=_ET_TZ).astimezone(timezone.utc)
+    close_dt = datetime(day.year, day.month, day.day, close_hour, close_minute, tzinfo=_ET_TZ).astimezone(timezone.utc)
     start_ms = int(open_dt.timestamp() * 1000)
     end_ms = int(close_dt.timestamp() * 1000) - 60_000
     if end_ms < start_ms:
         return None
     return (start_ms, end_ms)
+
+
+def _nth_weekday_of_month(year: int, month: int, weekday: int, n: int) -> date:
+    d = date(year, month, 1)
+    shift = (int(weekday) - int(d.weekday())) % 7
+    d = d + timedelta(days=shift)
+    d = d + timedelta(days=(int(n) - 1) * 7)
+    return d
+
+
+def _last_weekday_of_month(year: int, month: int, weekday: int) -> date:
+    if int(month) == 12:
+        next_month = date(int(year) + 1, 1, 1)
+    else:
+        next_month = date(int(year), int(month) + 1, 1)
+    d = next_month - timedelta(days=1)
+    while int(d.weekday()) != int(weekday):
+        d = d - timedelta(days=1)
+    return d
+
+
+def _easter_sunday(year: int) -> date:
+    # Anonymous Gregorian algorithm
+    a = int(year) % 19
+    b = int(year) // 100
+    c = int(year) % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(int(year), int(month), int(day))
+
+
+def _is_us_market_holiday(day: date) -> bool:
+    y = int(day.year)
+    fixed: set[date] = set()
+    for m, d in ((1, 1), (6, 19), (7, 4), (12, 25)):
+        if m == 6 and y < 2021:
+            continue
+        h = date(y, m, d)
+        if h.weekday() == 5:
+            h = h - timedelta(days=1)
+        elif h.weekday() == 6:
+            h = h + timedelta(days=1)
+        fixed.add(h)
+
+    floating: set[date] = {
+        _nth_weekday_of_month(y, 1, 0, 3),
+        _nth_weekday_of_month(y, 2, 0, 3),
+        _last_weekday_of_month(y, 5, 0),
+        _nth_weekday_of_month(y, 9, 0, 1),
+        _nth_weekday_of_month(y, 11, 3, 4),
+    }
+    floating.add(_easter_sunday(y) - timedelta(days=2))
+
+    return day in fixed or day in floating
+
+
+def _is_us_market_early_close(day: date) -> bool:
+    if int(day.weekday()) >= 5:
+        return False
+    if _is_us_market_holiday(day):
+        return False
+
+    thanksgiving = _nth_weekday_of_month(int(day.year), 11, 3, 4)
+    if day == (thanksgiving + timedelta(days=1)):
+        return True
+    if int(day.month) == 7 and int(day.day) == 3:
+        return True
+    if int(day.month) == 12 and int(day.day) == 24:
+        return True
+    return False
 
 
 def _determine_stock_perp_improve_start(
@@ -976,28 +1076,16 @@ def _determine_stock_perp_improve_start(
     coin_dir: str,
     d_end: date,
     earliest_candidates: list[date],
+    tiingo_start_date: date | None = None,
     refetch: bool = False,
     timeout_s: float = 30.0,
 ) -> date:
-    if not refetch:
-        oldest_other = get_oldest_day_with_source_code(
-            exchange="hyperliquid",
-            coin=coin_dir,
-            code=SOURCE_CODE_OTHER,
-        )
-        oldest_other_date: date | None = None
-        if oldest_other:
-            try:
-                oldest_other_date = datetime.strptime(oldest_other, "%Y%m%d").date()
-            except Exception:
-                oldest_other_date = None
-        if oldest_other_date is not None:
-            return oldest_other_date
-
     profiles = _load_tradfi_profiles_from_ini()
     has_tiingo = bool(str((profiles.get("tiingo") or {}).get("api_key") or "").strip())
 
     if has_tiingo:
+        if tiingo_start_date is not None:
+            return max(_IEX_FLOOR_DATE, tiingo_start_date)
         return _IEX_FLOOR_DATE
 
     if earliest_candidates:
@@ -1699,6 +1787,8 @@ def _fill_missing_from_tradfi_1m(
     last_tiingo_day_bars = 0
     last_fx_chunk_fetched = False
     last_fx_chunk_has_any_bars = False
+    last_iex_month_fetched = False
+    last_iex_month_has_any_bars = False
 
     # IEX floor applies only to equity. FX runs without guessed listing floor.
     if source_kind == "fx":
@@ -1804,7 +1894,7 @@ def _fill_missing_from_tradfi_1m(
             )
             fx_chunk_fetched = bool(tiingo_month_fetch)
         else:
-            tiingo_bars, tiingo_month_fetch = _tiingo_fetch_1m_iex_day_from_month_cache(
+            tiingo_bars, tiingo_month_fetch, iex_month_has_any_bars = _tiingo_fetch_1m_iex_day_from_month_cache(
                 ticker=ticker,
                 day=d,
                 session_start_ms=session_start_ms,
@@ -1813,6 +1903,8 @@ def _fill_missing_from_tradfi_1m(
                 timeout_s=float(timeout_s),
                 status_cb=_tiingo_status_cb,
             )
+            last_iex_month_fetched = bool(tiingo_month_fetch)
+            last_iex_month_has_any_bars = bool(iex_month_has_any_bars)
         last_tiingo_day_bars = int(len(tiingo_bars)) if isinstance(tiingo_bars, list) else 0
         last_fx_chunk_fetched = bool(fx_chunk_fetched)
         last_fx_chunk_has_any_bars = bool(fx_chunk_has_any_bars)
@@ -1840,6 +1932,8 @@ def _fill_missing_from_tradfi_1m(
         stats_out["tiingo_day_bars"] = int(last_tiingo_day_bars)
         stats_out["tiingo_fx_chunk_fetched"] = 1 if bool(last_fx_chunk_fetched) else 0
         stats_out["tiingo_fx_chunk_has_data"] = 1 if bool(last_fx_chunk_has_any_bars) else 0
+        stats_out["tiingo_iex_month_fetched"] = 1 if bool(last_iex_month_fetched) else 0
+        stats_out["tiingo_iex_month_has_data"] = 1 if bool(last_iex_month_has_any_bars) else 0
 
     return int(tiingo_minutes_filled)
 
@@ -2185,14 +2279,15 @@ def improve_best_hyperliquid_1m_archive_for_coin(
 
     is_stock_perp = _is_stock_perp_coin(coin_u)
     tradfi_source_kind: str | None = None
+    tradfi_tiingo_start_date: date | None = None
     if is_stock_perp:
         xyz_coin_name = _tradfi_ticker_from_hyperliquid_coin(coin_u)
-        tiingo_ticker, tiingo_fx_ticker, _, _ = resolve_tradfi_symbol(xyz_coin_name)
+        tiingo_ticker, tiingo_fx_ticker, _, tradfi_tiingo_start_date = resolve_tradfi_symbol(xyz_coin_name)
         if tiingo_ticker:
             tradfi_source_kind = "iex"
         elif tiingo_fx_ticker:
             tradfi_source_kind = "fx"
-    fx_backfill_mode = bool(is_stock_perp and tradfi_source_kind == "fx")
+    tradfi_backfill_mode = bool(is_stock_perp and tradfi_source_kind in ("fx", "iex"))
 
     earliest_candidates: list[date] = []
     l2_rng = get_local_l2book_day_range(coin=coin_u)
@@ -2243,10 +2338,16 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                 coin_dir=coin_dir,
                 d_end=d_end,
                 earliest_candidates=earliest_candidates,
+                tiingo_start_date=tradfi_tiingo_start_date,
                 refetch=refetch,
                 timeout_s=30.0,
             )
-        days = [d for d in _iter_dates_inclusive(start_day, d_end)]
+        lower_bound = start_day
+        days = []
+        cur = d_end
+        while cur >= lower_bound:
+            days.append(cur)
+            cur -= timedelta(days=1)
     else:
         if d_start_override is not None:
             start_day = d_start_override
@@ -2281,7 +2382,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         except Exception:
             pass
 
-    fx_empty_chunk_streak = 0
+    tradfi_empty_period_streak = 0
 
     for i, d in enumerate(days, start=1):
         day_start_time = time.time()
@@ -2322,9 +2423,9 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                         "tiingo_wait_reason": "",
                         "tiingo_wait_kind": "",
                         "tradfi_source_kind": str(tradfi_source_kind or ""),
-                        "fx_backfill_mode": bool(fx_backfill_mode),
-                        "fx_backfill_direction": "newest_to_oldest" if fx_backfill_mode else "",
-                        "fx_empty_chunk_streak": int(fx_empty_chunk_streak),
+                        "fx_backfill_mode": bool(tradfi_backfill_mode),
+                        "fx_backfill_direction": "newest_to_oldest" if tradfi_backfill_mode else "",
+                        "fx_empty_chunk_streak": int(tradfi_empty_period_streak),
                     })
                 except Exception:
                     pass
@@ -2458,9 +2559,15 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                 if tradfi_source_kind == "fx":
                     if int(tradfi_fill_stats.get("tiingo_fx_chunk_fetched") or 0) > 0:
                         if int(tradfi_fill_stats.get("tiingo_fx_chunk_has_data") or 0) > 0:
-                            fx_empty_chunk_streak = 0
+                            tradfi_empty_period_streak = 0
                         else:
-                            fx_empty_chunk_streak += 1
+                            tradfi_empty_period_streak += 1
+                elif tradfi_source_kind == "iex":
+                    if int(tradfi_fill_stats.get("tiingo_iex_month_fetched") or 0) > 0:
+                        if int(tradfi_fill_stats.get("tiingo_iex_month_has_data") or 0) > 0:
+                            tradfi_empty_period_streak = 0
+                        else:
+                            tradfi_empty_period_streak += 1
                 t_binance = time.time() - t0
                 t_bybit = 0.0
             else:
@@ -2551,9 +2658,9 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                         "tiingo_wait_reason": "",
                         "tiingo_wait_kind": "",
                         "tradfi_source_kind": str(tradfi_source_kind or ""),
-                        "fx_backfill_mode": bool(fx_backfill_mode),
-                        "fx_backfill_direction": "newest_to_oldest" if fx_backfill_mode else "",
-                        "fx_empty_chunk_streak": int(fx_empty_chunk_streak),
+                        "fx_backfill_mode": bool(tradfi_backfill_mode),
+                        "fx_backfill_direction": "newest_to_oldest" if tradfi_backfill_mode else "",
+                        "fx_empty_chunk_streak": int(tradfi_empty_period_streak),
                     }
                 )
             except Exception:
@@ -2561,12 +2668,12 @@ def improve_best_hyperliquid_1m_archive_for_coin(
 
         if (
             is_stock_perp
-            and tradfi_source_kind == "fx"
-            and int(fx_empty_chunk_streak) >= int(TRADFI_FX_EMPTY_CHUNKS_STOP)
+            and tradfi_source_kind in ("fx", "iex")
+            and int(tradfi_empty_period_streak) >= int(TRADFI_EMPTY_PERIODS_STOP)
         ):
             append_exchange_download_log(
                 "hyperliquid",
-                f"[hl_best_1m] {coin_u} tradfi_1m FX stop: {fx_empty_chunk_streak} consecutive empty chunks (newest→oldest)",
+                f"[hl_best_1m] {coin_u} tradfi_1m stop: {tradfi_empty_period_streak} consecutive empty {'weeks' if tradfi_source_kind == 'fx' else 'months'} (newest→oldest)",
                 level="INFO",
             )
             break
