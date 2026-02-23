@@ -2249,18 +2249,62 @@ def view_market_data():
                 # No sync step needed — new coins from mapping.json appear automatically.
                 st.markdown("##### 🗂 Symbol Map")
 
-                status_opts = ["all"] + _TRADFI_STATUSES_SELECTABLE
-                status_filter = st.selectbox(
-                    "Filter by status",
-                    options=status_opts,
-                    index=0,
-                    key="tradfi_map_status_filter",
+                merged = _build_merged_tradfi_table()
+                type_values = sorted(
+                    {
+                        str(r.get("canonical_type") or "").strip()
+                        for r in merged
+                        if str(r.get("canonical_type") or "").strip()
+                    }
                 )
 
-                merged = _build_merged_tradfi_table()
+                c_symbol, c_type, c_status = st.columns([1, 1, 1])
+                with c_symbol:
+                    symbol_filter = str(
+                        st.text_input(
+                            "Filter by symbol",
+                            value=str(st.session_state.get("tradfi_map_symbol_filter", "") or ""),
+                            key="tradfi_map_symbol_filter",
+                            placeholder="e.g. GOOGL or EURUSD",
+                        )
+                        or ""
+                    ).strip().upper()
+                with c_type:
+                    type_opts = ["all"] + list(type_values)
+                    type_filter = st.selectbox(
+                        "Filter by type",
+                        options=type_opts,
+                        index=0,
+                        key="tradfi_map_type_filter",
+                    )
+                with c_status:
+                    status_opts = ["all"] + _TRADFI_STATUSES_SELECTABLE
+                    status_filter = st.selectbox(
+                        "Filter by status",
+                        options=status_opts,
+                        index=0,
+                        key="tradfi_map_status_filter",
+                    )
+
+                def _symbol_match(row: dict) -> bool:
+                    if not symbol_filter:
+                        return True
+                    xyz = str(row.get("xyz_coin") or "").strip().upper()
+                    t_tick = str(row.get("tiingo_ticker") or "").strip().upper()
+                    t_fx = str(row.get("tiingo_fx_ticker") or "").strip().upper()
+                    tiingo_sym = (f"IEX:{t_tick}" if t_tick else (f"FX:{t_fx}" if t_fx else ""))
+                    return (
+                        symbol_filter in xyz
+                        or symbol_filter in t_tick
+                        or symbol_filter in t_fx
+                        or symbol_filter in tiingo_sym
+                    )
+
                 filtered = [
                     r for r in merged
-                    if status_filter == "all" or str(r.get("status") or "") == status_filter
+                    if (status_filter == "all" or str(r.get("status") or "") == status_filter)
+                    and (type_filter == "all" or str(r.get("canonical_type") or "") == type_filter)
+                    and _symbol_match(r)
                 ]
 
                 selected_entry = None
@@ -3244,6 +3288,7 @@ def view_market_data():
                                 "dataset": r.get("dataset", ""),
                                 "coin": r.get("coin", ""),
                                 "n_files": r.get("n_files", 0),
+                                "total_bytes": int(total_bytes),
                                 "size": float(size_mb),
                                 "oldest_day": r.get("oldest_day", ""),
                                 "newest_day": r.get("newest_day", ""),
@@ -3262,11 +3307,61 @@ def view_market_data():
                 table_rows = st.session_state[_trows_key]
 
                 df_cached = pd.DataFrame(table_rows)
-                df_view = df_cached
+                if not df_cached.empty:
+                    total_files = int(df_cached["n_files"].sum()) if "n_files" in df_cached.columns else 0
+                    total_bytes = int(df_cached["total_bytes"].sum()) if "total_bytes" in df_cached.columns else 0
+                    n_coins = int(df_cached["coin"].nunique()) if "coin" in df_cached.columns else 0
+
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("coins", n_coins)
+                    c2.metric("files", total_files)
+                    c3.metric("size", _fmt_bytes(total_bytes))
+
+                df_cached["_src_idx"] = list(range(len(df_cached)))
+                df_view = df_cached.copy()
                 if str(tab_key).lower() in ("1m_api", "l2book"):
                     drop_cols = [c for c in ("hl_minutes", "other_minutes", "missing_minutes") if c in df_cached.columns]
                     if drop_cols:
                         df_view = df_cached.drop(columns=drop_cols)
+
+                c_coin, c_kind = st.columns([0.7, 0.3])
+                with c_coin:
+                    coin_filter = str(
+                        st.text_input(
+                            "Filter by coin",
+                            value=str(st.session_state.get(f"market_data_have_coin_filter_{tab_key}", "") or ""),
+                            key=f"market_data_have_coin_filter_{tab_key}",
+                            placeholder="e.g. GOOGL or BTC",
+                        )
+                        or ""
+                    ).strip().upper()
+                with c_kind:
+                    kind_filter = st.selectbox(
+                        "Filter by type",
+                        options=["all", "stocks (xyz)", "crypto"],
+                        index=0,
+                        key=f"market_data_have_kind_filter_{tab_key}",
+                    )
+
+                if not df_view.empty:
+                    if coin_filter:
+                        df_view = df_view[
+                            df_view["coin"].astype(str).str.upper().str.contains(coin_filter, na=False)
+                        ]
+
+                    if kind_filter != "all":
+                        coin_upper = df_view["coin"].astype(str).str.upper()
+                        is_stock = coin_upper.str.startswith("XYZ:") | coin_upper.str.startswith("XYZ-")
+                        if kind_filter == "stocks (xyz)":
+                            df_view = df_view[is_stock]
+                        else:
+                            df_view = df_view[~is_stock]
+
+                drop_display_cols = [c for c in ("exchange", "dataset", "_src_idx", "total_bytes") if c in df_view.columns]
+                if drop_display_cols:
+                    df_display = df_view.drop(columns=drop_display_cols)
+                else:
+                    df_display = df_view
 
                 # ---- stable st.dataframe with on_select ----
                 column_config = {
@@ -3276,7 +3371,7 @@ def view_market_data():
                     )
                 }
                 event = st.dataframe(
-                    df_view,
+                    df_display,
                     use_container_width=True,
                     hide_index=True,
                     on_select="rerun",
@@ -3293,10 +3388,17 @@ def view_market_data():
                 if sel_indices:
                     # User selected a row
                     idx = sel_indices[0]
-                    if 0 <= idx < len(dataset_rows):
+                    if 0 <= idx < len(df_view):
+                        try:
+                            src_idx = int(df_view.iloc[idx]["_src_idx"])
+                        except Exception:
+                            src_idx = idx
+                    else:
+                        src_idx = -1
+                    if 0 <= src_idx < len(dataset_rows):
                         clicked = (
-                            str(dataset_rows[idx].get("dataset") or ""),
-                            str(dataset_rows[idx].get("coin") or ""),
+                            str(dataset_rows[src_idx].get("dataset") or ""),
+                            str(dataset_rows[src_idx].get("coin") or ""),
                         )
                         st.session_state["market_data_heatmap_sel"] = clicked
                         st.session_state["market_data_heatmap_tab"] = tab_key
@@ -3766,6 +3868,7 @@ def view_market_data():
                 else:
                     import pandas as pd
                     df_pb7 = pd.DataFrame(pb7_rows)
+                    df_pb7["_src_idx"] = list(range(len(df_pb7)))
                     if not df_pb7.empty:
                         total_files = int(df_pb7["n_files"].sum()) if "n_files" in df_pb7.columns else 0
                         total_bytes = int(df_pb7["total_bytes"].sum()) if "total_bytes" in df_pb7.columns else 0
@@ -3782,11 +3885,50 @@ def view_market_data():
                         df_pb7["size_mb"] = (df_pb7["total_bytes"].astype(float) / (1024.0 * 1024.0)).round(2)
                         df_pb7 = df_pb7.drop(columns=["total_bytes"])
 
+                    c_coin, c_kind = st.columns([0.7, 0.3])
+                    with c_coin:
+                        pb7_coin_filter = str(
+                            st.text_input(
+                                "Filter by coin",
+                                value=str(st.session_state.get("market_data_pb7_coin_filter", "") or ""),
+                                key="market_data_pb7_coin_filter",
+                                placeholder="e.g. GOOGL or BTC",
+                            )
+                            or ""
+                        ).strip().upper()
+                    with c_kind:
+                        pb7_kind_filter = st.selectbox(
+                            "Filter by type",
+                            options=["all", "stocks (xyz)", "crypto"],
+                            index=0,
+                            key="market_data_pb7_kind_filter",
+                        )
+
+                    df_pb7_view = df_pb7.copy()
+                    if pb7_coin_filter:
+                        df_pb7_view = df_pb7_view[
+                            df_pb7_view["coin"].astype(str).str.upper().str.contains(pb7_coin_filter, na=False)
+                        ]
+
+                    if pb7_kind_filter != "all":
+                        coin_upper = df_pb7_view["coin"].astype(str).str.upper()
+                        is_stock = coin_upper.str.startswith("XYZ:") | coin_upper.str.startswith("XYZ-")
+                        if pb7_kind_filter == "stocks (xyz)":
+                            df_pb7_view = df_pb7_view[is_stock]
+                        else:
+                            df_pb7_view = df_pb7_view[~is_stock]
+
+                    drop_display_cols = [c for c in ("exchange", "_src_idx") if c in df_pb7_view.columns]
+                    if drop_display_cols:
+                        df_pb7_display = df_pb7_view.drop(columns=drop_display_cols)
+                    else:
+                        df_pb7_display = df_pb7_view
+
                     col_cfg = {
                         "size_mb": st.column_config.NumberColumn("size", format="%.2f MB")
                     }
                     event_pb7 = st.dataframe(
-                        df_pb7,
+                        df_pb7_display,
                         use_container_width=True,
                         hide_index=True,
                         on_select="rerun",
@@ -3800,8 +3942,15 @@ def view_market_data():
                     prev_sel = st.session_state.get(_prev_sel_key, [])
                     if sel_indices:
                         idx = sel_indices[0]
-                        if 0 <= idx < len(pb7_rows):
-                            row = pb7_rows[idx]
+                        if 0 <= idx < len(df_pb7_view):
+                            try:
+                                src_idx = int(df_pb7_view.iloc[idx]["_src_idx"])
+                            except Exception:
+                                src_idx = idx
+                        else:
+                            src_idx = -1
+                        if 0 <= src_idx < len(pb7_rows):
+                            row = pb7_rows[src_idx]
                             tf = str(row.get("timeframe") or "").strip()
                             coin = str(row.get("coin") or "").strip()
                             if tf and coin:
