@@ -58,11 +58,7 @@ def get_source_index_path(exchange: str, coin: str) -> Path:
     if not cn:
         raise ValueError("coin is empty")
     base = Path(__file__).resolve().parent / "data" / "ohlcv" / ex
-    new_path = base / "1m_src" / cn / "sources.idx"
-    legacy_path = base / "candles_1m_src" / cn / "sources.idx"
-    if legacy_path.exists() and not new_path.exists():
-        return legacy_path
-    return new_path
+    return base / "1m_src" / cn / "sources.idx"
 
 
 def _read_index(path: Path) -> tuple[int, int, bytearray] | None:
