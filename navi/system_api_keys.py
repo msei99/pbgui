@@ -11,6 +11,7 @@ from User import User, Users
 from Exchange import Exchange, Exchanges, Spot, Passphrase
 from PBRemote import PBRemote
 import json
+import configparser
 from pathlib import Path
 
 def _docs_index(lang: str) -> list[tuple[str, str]]:
@@ -275,6 +276,347 @@ def edit_user():
             elif balance_spot:
                 st.error(balance_spot, icon="🚨")    
 
+def _run_tradfi_test(py: str, dir: str, provider: str, api_key: str = "", api_secret: str = "") -> tuple[bool, str]:
+    """Run tradfi connection test in pb7 venv. Returns (success, message)."""
+    import subprocess, tempfile, os, re
+
+    def _is_inotify_watch_error(text: str) -> bool:
+        t = (text or "").lower()
+        return (
+            "ran out of inotify watches" in t
+            or "inotify watch limit" in t
+            or "failed to initialize c-ares channel" in t
+        )
+
+    def _zero_candle_reason(provider_name: str, stderr_text: str) -> str:
+        e = (stderr_text or "").lower()
+        if "rate limit" in e or "429" in e:
+            return "rate limit reached"
+        if "invalid" in e or "unauthorized" in e or "403" in e:
+            return "invalid/unauthorized API credentials or insufficient plan"
+        if "timeout" in e:
+            return "request timed out"
+        if provider_name == "finnhub":
+            return "Finnhub free tier does not support 1-minute intraday"
+        if provider_name == "alphavantage":
+            return "Alpha Vantage free tier is heavily limited"
+        if provider_name == "polygon":
+            return "no 1-minute data access for this key/plan or no data in requested range"
+        if provider_name == "alpaca":
+            return "missing market data access/permissions or no data in requested range"
+        if provider_name == "yfinance":
+            return "market holiday/weekend or temporary data gap"
+        return "unknown reason"
+
+    _kwargs = {}
+    if api_key:
+        _kwargs["api_key"] = repr(api_key)
+    if api_secret:
+        _kwargs["api_secret"] = repr(api_secret)
+    _kw = (", " + ", ".join(f"{k}={v}" for k, v in _kwargs.items())) if _kwargs else ""
+    _script = f"""\
+import sys, asyncio
+sys.path.insert(0, {repr(str(dir) + '/src')})
+from tradfi_data import get_provider
+from datetime import datetime, timedelta, timezone
+
+async def _test():
+    p = get_provider({repr(provider)}{_kw})
+    async with p:
+        # Use a completed historical window (exclude current day)
+        # to avoid false negatives on delayed/EOD-limited plans.
+        end = datetime.now(timezone.utc) - timedelta(days=1)
+        start = end - timedelta(days=7)
+        c = await p.fetch_1m_candles(
+            'AAPL',
+            int(start.timestamp() * 1000),
+            int(end.timestamp() * 1000),
+        )
+        print(f'OK:{{len(c)}}')
+        if {repr(provider)} == 'polygon' and len(c) == 0:
+            import json
+            import aiohttp
+            url = f"https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/minute/{{int(start.timestamp() * 1000)}}/{{int(end.timestamp() * 1000)}}"
+            params = {{
+                'adjusted': 'true',
+                'sort': 'asc',
+                'limit': 50000,
+                'apiKey': {repr(api_key)},
+            }}
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, params=params) as r:
+                    print(f'PHTTP:{{r.status}}')
+                    t = await r.text()
+                    try:
+                        d = json.loads(t)
+                        print(f"PSTATUS:{{d.get('status')}}")
+                        print(f"PERROR:{{d.get('error') or d.get('message') or ''}}")
+                        results = d.get('results')
+                        print(f"PRESULTS:{{len(results) if isinstance(results, list) else -1}}")
+                    except Exception:
+                        print(f"PRAW:{{t[:240]}}")
+
+asyncio.run(_test())
+"""
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
+            tf.write(_script)
+            _tmp = tf.name
+        result = subprocess.run([py, _tmp], capture_output=True, text=True, timeout=30)
+        os.unlink(_tmp)
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
+        if result.returncode == 0 and "OK:" in out:
+            m = re.search(r"OK:(\d+)", out)
+            if not m:
+                return False, "Test failed: could not parse candle count from provider response."
+            n = int(m.group(1))
+            if n > 0:
+                return True, f"Connection OK — {n} candles received (AAPL, last 7 days)."
+            else:
+                if _is_inotify_watch_error(err):
+                    return False, "System error: inotify watch limit reached (DNS resolver). Increase fs.inotify.max_user_watches and retry."
+                if provider == "polygon":
+                    phttp = ""
+                    pstatus = ""
+                    perror = ""
+                    for line in out.splitlines():
+                        if line.startswith("PHTTP:"):
+                            phttp = line.split("PHTTP:", 1)[1].strip()
+                        elif line.startswith("PSTATUS:"):
+                            pstatus = line.split("PSTATUS:", 1)[1].strip()
+                        elif line.startswith("PERROR:"):
+                            perror = line.split("PERROR:", 1)[1].strip()
+                    if phttp or pstatus or perror:
+                        details = ", ".join(x for x in [f"http={phttp}" if phttp else "", f"status={pstatus}" if pstatus else "", f"error={perror}" if perror else ""] if x)
+                        return False, f"0 candles — Polygon diagnostic: {details}."
+                reason = _zero_candle_reason(provider, err)
+                if err:
+                    err_last = err.splitlines()[-1]
+                    return False, f"0 candles — {reason}. Details: {err_last}"
+                return False, f"0 candles — {reason}."
+        else:
+            if _is_inotify_watch_error(err):
+                return False, "System error: inotify watch limit reached (DNS resolver). Increase fs.inotify.max_user_watches and retry."
+            msg = err.splitlines()[-1] if err else out or "Unknown error"
+            return False, f"Test failed: {msg}"
+    except subprocess.TimeoutExpired:
+        return False, "Test timed out (30s)."
+    except Exception as e:
+        return False, f"Test error: {e}"
+
+
+def edit_tradfi():
+    """TradFi data provider config section for stock perps backtesting."""
+    import subprocess
+    from pbgui_func import pb7venv, pb7dir
+
+    PROVIDERS = ["alpaca", "polygon", "finnhub", "alphavantage"]
+    PROVIDER_NOTES = {
+        "alpaca": "Free, 5+ years of 1-minute data. Recommended.",
+        "polygon": "Plan-dependent: intraday coverage and history vary by Polygon plan/key; free access may return no 1-minute data.",
+        "finnhub": "⚠️ Free tier does NOT support 1-minute intraday data — unusable for backtesting.",
+        "alphavantage": "Free tier: 25 calls/day, very limited for backtesting.",
+    }
+    PROVIDER_LINKS = {
+        "alpaca": ("Get free Alpaca API key", "https://app.alpaca.markets/signup"),
+        "polygon": ("Get free Polygon API key", "https://polygon.io/dashboard/signup"),
+        "finnhub": ("Get free Finnhub API key", "https://finnhub.io/register"),
+        "alphavantage": ("Get free Alpha Vantage API key", "https://www.alphavantage.co/support/#api-key"),
+    }
+    NEEDS_SECRET = {"alpaca"}
+    _ini_path = Path(__file__).resolve().parents[1] / "pbgui.ini"
+    _profiles_section = "tradfi_profiles"
+
+    def _load_tradfi_profiles() -> dict[str, dict[str, str]]:
+        parser = configparser.ConfigParser()
+        parser.read(_ini_path)
+        out: dict[str, dict[str, str]] = {}
+        for p in PROVIDERS:
+            out[p] = {
+                "api_key": parser.get(_profiles_section, f"{p}_api_key", fallback=""),
+                "api_secret": parser.get(_profiles_section, f"{p}_api_secret", fallback=""),
+            }
+        return out
+
+    def _save_tradfi_profile(provider_name: str, key: str, secret: str) -> None:
+        parser = configparser.ConfigParser()
+        parser.read(_ini_path)
+        if not parser.has_section(_profiles_section):
+            parser.add_section(_profiles_section)
+        parser.set(_profiles_section, f"{provider_name}_api_key", key or "")
+        parser.set(_profiles_section, f"{provider_name}_api_secret", secret or "")
+
+        tmp_path = _ini_path.with_suffix(".ini.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            parser.write(f)
+        tmp_path.replace(_ini_path)
+
+    # Always use a fresh Users() instance to avoid stale session state objects
+    # that were created before the tradfi property was added to the Users class.
+    users = Users()
+    st.session_state.users = users
+    tradfi = users.tradfi or {}
+    provider = tradfi.get("provider", "alpaca")
+    api_key = tradfi.get("api_key", "")
+    api_secret = tradfi.get("api_secret", "")
+    profiles = _load_tradfi_profiles()
+
+    _initial_key = api_key if api_key else profiles.get(provider, {}).get("api_key", "")
+    _initial_secret = api_secret if api_secret else profiles.get(provider, {}).get("api_secret", "")
+
+    # Sync widget session state to saved config when config changed on disk
+    # (e.g. after save/clear, or first load).
+    _saved_sig = f"{provider}|{bool(api_key)}|{bool(api_secret)}"
+    if st.session_state.get("_tradfi_sig") != _saved_sig:
+        st.session_state["_tradfi_sig"] = _saved_sig
+        st.session_state["tradfi_provider"] = provider
+        st.session_state["tradfi_api_key"] = _initial_key
+        st.session_state["tradfi_api_secret"] = _initial_secret
+
+    def _on_tradfi_provider_change():
+        selected = st.session_state.get("tradfi_provider", "alpaca")
+        selected_profile = profiles.get(selected, {"api_key": "", "api_secret": ""})
+        if selected == provider:
+            st.session_state["tradfi_api_key"] = api_key if api_key else selected_profile.get("api_key", "")
+            st.session_state["tradfi_api_secret"] = api_secret if api_secret else selected_profile.get("api_secret", "")
+        else:
+            st.session_state["tradfi_api_key"] = selected_profile.get("api_key", "")
+            st.session_state["tradfi_api_secret"] = selected_profile.get("api_secret", "")
+
+    has_config = bool(api_key)
+
+    _py = pb7venv()
+    _dir = pb7dir()
+
+    with st.expander("TradFi Data Provider  (Stock Perps Backtesting)", expanded=has_config):
+        st.info(
+            "Stock perp backtests use **yfinance** automatically for the last 7 days (free, no key). "
+            "For older data (months/years), configure an extended provider like **Alpaca** (free, 5+ years)."
+        )
+
+        # ── Section 1: yfinance ────────────────────────────────────────────
+        st.markdown("**yfinance** — automatic default, last 7 days, no API key")
+        col_yf_status, col_yf_install, col_yf_test = st.columns([2, 1, 1])
+        _yf_installed = False
+        _yf_version = ""
+        if _py:
+            r = subprocess.run([_py, "-c", "import yfinance; print(yfinance.__version__)"],
+                               capture_output=True, text=True)
+            _yf_installed = r.returncode == 0
+            _yf_version = r.stdout.strip() if _yf_installed else ""
+        with col_yf_status:
+            if not _py:
+                st.warning("pb7 venv not configured")
+            elif _yf_installed:
+                st.success(f"yfinance {_yf_version} installed ✓", icon=":material/check_circle:")
+            else:
+                st.warning("yfinance not installed", icon=":material/warning:")
+        with col_yf_install:
+            if _yf_installed:
+                if st.button("Uninstall yfinance", key="tradfi_yf_install"):
+                    with st.spinner("Uninstalling yfinance..."):
+                        r = subprocess.run([_py, "-m", "pip", "uninstall", "yfinance", "-y"],
+                                           capture_output=True, text=True, timeout=60)
+                    if r.returncode == 0:
+                        st.success("yfinance uninstalled.")
+                        st.rerun()
+                    else:
+                        st.error(f"Uninstall failed: {r.stderr.splitlines()[-1] if r.stderr else r.stdout}", icon="🚨")
+            else:
+                if st.button("Install yfinance", key="tradfi_yf_install"):
+                    if not _py:
+                        st.error("pb7 venv not configured.", icon="🚨")
+                    else:
+                        with st.spinner("Installing yfinance..."):
+                            r = subprocess.run([_py, "-m", "pip", "install", "yfinance"],
+                                               capture_output=True, text=True, timeout=120)
+                        if r.returncode == 0:
+                            st.success("yfinance installed successfully.")
+                            st.rerun()
+                        else:
+                            st.error(f"Install failed: {r.stderr.splitlines()[-1] if r.stderr else r.stdout}", icon="🚨")
+        with col_yf_test:
+            if _yf_installed:
+                if st.button("Test yfinance", key="tradfi_yf_test"):
+                    if not _py or not _dir:
+                        st.error("pb7 venv/dir not configured.", icon="🚨")
+                    else:
+                        with st.spinner("Testing yfinance..."):
+                            ok, msg = _run_tradfi_test(_py, _dir, "yfinance")
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg, icon="🚨")
+
+        st.divider()
+
+        # ── Section 2: Extended provider (optional) ────────────────────────
+        st.markdown("**Extended provider** — optional, for backtests older than 7 days")
+        col1, col2, col3 = st.columns([1, 1, 1], vertical_alignment="bottom")
+        with col1:
+            _cur_provider = st.session_state.get("tradfi_provider", PROVIDERS[0])
+            sel_provider = st.selectbox(
+                "Provider",
+                PROVIDERS,
+                index=PROVIDERS.index(provider) if provider in PROVIDERS else 0,
+                key="tradfi_provider",
+                help=PROVIDER_NOTES.get(_cur_provider if _cur_provider in PROVIDERS else PROVIDERS[0], ""),
+                on_change=_on_tradfi_provider_change,
+            )
+        with col2:
+            sel_key = st.text_input("API Key", key="tradfi_api_key", type="password")
+        with col3:
+            if sel_provider in NEEDS_SECRET:
+                sel_secret = st.text_input("API Secret", key="tradfi_api_secret", type="password")
+            else:
+                st.text_input("API Secret", value="", disabled=True, placeholder="not required", key="tradfi_secret_na")
+                sel_secret = ""
+        _link = PROVIDER_LINKS.get(sel_provider)
+        if _link:
+            st.caption(f"🔗 [{_link[0]}]({_link[1]})")
+        st.caption("Additional provider credentials are stored in pbgui.ini [tradfi_profiles] for quick switching.")
+
+        col_test, col_save, col_clear = st.columns([1, 1, 1])
+        with col_test:
+            if st.button("Test Connection", key="tradfi_test"):
+                if not _py or not _dir:
+                    st.error("pb7 venv/dir not configured.", icon="🚨")
+                elif not sel_key:
+                    st.warning("Enter an API key first.", icon=":material/warning:")
+                else:
+                    with st.spinner(f"Testing {sel_provider}..."):
+                        ok, msg = _run_tradfi_test(_py, _dir, sel_provider, sel_key, sel_secret)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg, icon="🚨")
+        with col_save:
+            if st.button("Save TradFi Config", key="tradfi_save"):
+                if not sel_key:
+                    st.warning("Enter an API key first.", icon=":material/warning:")
+                else:
+                    new_tradfi: dict = {"provider": sel_provider, "api_key": sel_key}
+                    if sel_secret:
+                        new_tradfi["api_secret"] = sel_secret
+                    users.tradfi = new_tradfi
+                    users.save()
+                    try:
+                        _save_tradfi_profile(sel_provider, sel_key, sel_secret)
+                    except Exception as e:
+                        st.warning(f"TradFi config saved, but profile could not be written to pbgui.ini: {e}")
+                    else:
+                        st.success("TradFi config saved.")
+        with col_clear:
+            if st.button("Clear TradFi Config", key="tradfi_clear"):
+                users.tradfi = {}
+                users.save()
+                st.session_state.pop("tradfi_provider", None)
+                st.session_state.pop("tradfi_api_key", None)
+                st.session_state.pop("tradfi_api_secret", None)
+                st.rerun()
+
+
 def select_user():
     # Init
     users = st.session_state.users
@@ -317,6 +659,8 @@ def select_user():
     column_config = {
         "id": None}
     st.data_editor(data=d, height=(len(users.users)+1)*36, key=f'editor_{st.session_state.ed_user_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','User','Exchange',])
+    st.divider()
+    edit_tradfi()
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():

@@ -20,7 +20,7 @@ import asyncio
 import random
 from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
 from Exchange import set_ws_limits
-from market_data import load_market_data_config, get_daily_hour_coverage_for_dataset
+from market_data import load_market_data_config, get_daily_hour_coverage_for_dataset, set_enabled_coins
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
 
 class PBData():
@@ -479,6 +479,7 @@ class PBData():
                 cfg = load_market_data_config()
                 coins = list(cfg.enabled_coins.get("hyperliquid", []) or [])
                 coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+                invalid_live_meta_coins: set[str] = set()
 
                 now = datetime.now()
                 now_ts = now.timestamp()
@@ -534,6 +535,11 @@ class PBData():
                         coin_status["lookback_days"] = int(lookback_days)
                         coin_status["newest_day"] = newest_day
                         coin_status["api_result"] = res
+                        try:
+                            if isinstance(res, dict) and bool(res.get("skipped")) and str(res.get("skip_reason") or "") == "not_in_live_meta":
+                                invalid_live_meta_coins.add(str(coin).strip().upper())
+                        except Exception:
+                            pass
                     except Exception as e:
                         coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "error"
@@ -544,6 +550,18 @@ class PBData():
                     # Pause between coins to avoid rate limits
                     if self._latest_1m_coin_pause_seconds > 0:
                         await asyncio.sleep(float(self._latest_1m_coin_pause_seconds))
+
+                if invalid_live_meta_coins:
+                    try:
+                        updated_enabled = [c for c in coins if str(c).strip().upper() not in invalid_live_meta_coins]
+                        set_enabled_coins("hyperliquid", updated_enabled)
+                        _human_log(
+                            "PBData",
+                            f"[market-data] removed invalid live-meta coins from enabled list: {', '.join(sorted(invalid_live_meta_coins))}",
+                            level="WARNING",
+                        )
+                    except Exception as e:
+                        _human_log("PBData", f"[market-data] failed to auto-prune invalid live-meta coins: {e}", level="WARNING")
 
                 if now_ts - float(self._latest_1m_last_hist_scan_ts or 0.0) >= float(self._latest_1m_hist_interval_seconds):
                     self._latest_1m_last_hist_scan_ts = now_ts

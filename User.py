@@ -141,6 +141,19 @@ class Users:
             if user.exchange == exchange:
                 return user.name
     
+    @property
+    def tradfi(self) -> dict:
+        """TradFi data provider config (alpaca, polygon, etc.) for stock perps backtesting."""
+        val = self._top_level_extras.get("tradfi", {})
+        return val if isinstance(val, dict) else {}
+
+    @tradfi.setter
+    def tradfi(self, value: dict):
+        if value:
+            self._top_level_extras["tradfi"] = value
+        else:
+            self._top_level_extras.pop("tradfi", None)
+
     def find_binance_user(self):
         for user in self.users:
             if user.exchange == "binance":
@@ -213,7 +226,7 @@ class Users:
             return None
 
         for user_name, user_data in users.items():
-            if user_name == "referrals" or str(user_name).startswith("_"):
+            if user_name == "referrals" or user_name == "tradfi" or str(user_name).startswith("_"):
                 self._top_level_extras[user_name] = user_data
                 continue
 

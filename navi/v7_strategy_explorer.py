@@ -7440,10 +7440,10 @@ class GVData:
     gridonly_entries_short: List[Order] = field(default_factory=list)
     gridonly_closes_short: List[Order] = field(default_factory=list)
 
-    long_entry_grid: int = 0
-    long_close_grid: int = 0
-    short_entry_grid: int = 0
-    short_close_grid: int = 0
+    long_entry_grid: float = 0.0
+    long_close_grid: float = 0.0
+    short_entry_grid: float = 0.0
+    short_close_grid: float = 0.0
 
     # Visualization-only: potential trailing entry levels ("what if trailing is active")
     potential_entry_trailing_prices_long: List[float] = field(default_factory=list)
@@ -7884,6 +7884,16 @@ def create_plotly_graph(side: OrderType, data: GVData):
             if bid > 0.0 and ask > 0.0:
                 start_price = (bid + ask) / 2.0
 
+    def _grid_range_pct(min_price: float, max_price: float) -> float:
+        if min_price <= 0.0 or max_price <= 0.0:
+            return 0.0
+        ref = (min_price + max_price) / 2.0
+        if ref <= 0.0:
+            ref = max_price
+        if ref <= 0.0:
+            return 0.0
+        return max(0.0, ((max_price - min_price) / ref) * 100.0)
+
     enable_plotly_entry_spacing_slider = False
 
     # Extract entry and close prices (server-side computed baseline)
@@ -7891,11 +7901,12 @@ def create_plotly_graph(side: OrderType, data: GVData):
     if len(normal_entry_prices) > 0:
         normal_enty_grid_min = min(normal_entry_prices)
         normal_enty_grid_max = max(normal_entry_prices)
+        entry_grid_pct = _grid_range_pct(float(normal_enty_grid_min), float(normal_enty_grid_max))
         
         if side == Side.Long:
-            data.long_entry_grid = normal_enty_grid_max - normal_enty_grid_min
+            data.long_entry_grid = entry_grid_pct
         else:
-            data.short_entry_grid = normal_enty_grid_max - normal_enty_grid_min
+            data.short_entry_grid = entry_grid_pct
     else:
         normal_enty_grid_min = 100
         normal_enty_grid_max = 100
@@ -7905,11 +7916,12 @@ def create_plotly_graph(side: OrderType, data: GVData):
     if len(normal_close_prices) > 0:
         normal_close_grid_min = min(normal_close_prices)
         normal_close_grid_max = max(normal_close_prices)
+        close_grid_pct = _grid_range_pct(float(normal_close_grid_min), float(normal_close_grid_max))
         
         if side == Side.Long:
-            data.long_close_grid = normal_close_grid_max - normal_close_grid_min
+            data.long_close_grid = close_grid_pct
         else:
-            data.short_close_grid = normal_close_grid_max - normal_close_grid_min
+            data.short_close_grid = close_grid_pct
     else:
         normal_close_grid_min = 100
         normal_close_grid_max = 100
@@ -9346,6 +9358,9 @@ def create_statistics(side: OrderType, data: GVData):
     # Display the main statistics as a table
     st.write(f"**{title_side} Statistics**")
 
+    def _format_grid_pct(value: float) -> str:
+        return f"{float(value):.2f}%"
+
     stats_data = {
         "Metric": [
             "Entry: Mode",
@@ -9361,11 +9376,11 @@ def create_statistics(side: OrderType, data: GVData):
             str(data.long_entry_mode.name if title_side == "LONG" else data.short_entry_mode.name),
             str(entry_count),
             str(avg_entry_price) if avg_entry_price is not None else "N/A", 
-            f"{int(data.long_entry_grid)}%" if title_side == "LONG" else f"{int(data.short_entry_grid)}%",
+            _format_grid_pct(data.long_entry_grid) if title_side == "LONG" else _format_grid_pct(data.short_entry_grid),
             str(data.long_close_mode.name if title_side == "LONG" else data.short_close_mode.name),
             str(close_count),
             str(avg_close_price) if avg_close_price is not None else "N/A",
-            f"{int(data.long_close_grid)}%" if title_side == "LONG" else f"{int(data.short_close_grid)}%",
+            _format_grid_pct(data.long_close_grid) if title_side == "LONG" else _format_grid_pct(data.short_close_grid),
         ]
     }
 

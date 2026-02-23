@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import os
 import struct
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
+
+if os.name == "posix":
+    import fcntl
+else:
+    fcntl = None
 
 
 SOURCE_CODE_MISSING = 0
@@ -85,6 +91,20 @@ def _write_index(path: Path, base_day: int, day_count: int, data: bytearray) -> 
     os.replace(tmp, path)
 
 
+@contextmanager
+def _index_write_lock(path: Path):
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+b") as lock_fh:
+        if fcntl is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
 def _ensure_range(
     base_day: int,
     day_count: int,
@@ -120,30 +140,31 @@ def update_source_index_for_day(
     path = get_source_index_path(exchange, coin)
     target_day = _day_to_int(day)
 
-    existing = _read_index(path)
-    if existing is None:
-        base_day = target_day
-        day_count = 1
-        data = bytearray(b"\x00" * DAY_BYTES)
-        day_index = 0
-    else:
-        base_day, day_count, data = existing
-        base_day, day_count, data, day_index = _ensure_range(base_day, day_count, data, target_day)
+    with _index_write_lock(path):
+        existing = _read_index(path)
+        if existing is None:
+            base_day = target_day
+            day_count = 1
+            data = bytearray(b"\x00" * DAY_BYTES)
+            day_index = 0
+        else:
+            base_day, day_count, data = existing
+            base_day, day_count, data, day_index = _ensure_range(base_day, day_count, data, target_day)
 
-    day_offset = day_index * DAY_BYTES
-    for minute in minute_indices:
-        try:
-            m = int(minute)
-        except Exception:
-            continue
-        if m < 0 or m >= DAY_MINUTES:
-            continue
-        byte_index = day_offset + (m // 4)
-        shift = (m % 4) * 2
-        cur = data[byte_index]
-        data[byte_index] = (cur & ~(0x03 << shift)) | ((int(code) & 0x03) << shift)
+        day_offset = day_index * DAY_BYTES
+        for minute in minute_indices:
+            try:
+                m = int(minute)
+            except Exception:
+                continue
+            if m < 0 or m >= DAY_MINUTES:
+                continue
+            byte_index = day_offset + (m // 4)
+            shift = (m % 4) * 2
+            cur = data[byte_index]
+            data[byte_index] = (cur & ~(0x03 << shift)) | ((int(code) & 0x03) << shift)
 
-    _write_index(path, base_day, day_count, data)
+        _write_index(path, base_day, day_count, data)
 
 
 def get_source_minutes_for_range(
@@ -388,32 +409,33 @@ def remove_days_from_index(
     """
     if not days_to_remove:
         return 0
-    
+
     index_path = get_source_index_path(exchange, coin)
-    existing = _read_index(index_path)
-    if existing is None:
-        return 0  # No index exists, nothing to remove
-    
-    base_day, day_count, data = existing
-    base_date = _int_to_date(base_day)
-    
-    removed_count = 0
-    for day_str in days_to_remove:
-        try:
-            target_day = _day_to_int(day_str)
-            target_date = _int_to_date(target_day)
-            day_index = (target_date - base_date).days
-            
-            if 0 <= day_index < day_count:
-                # Zero out this day's data
-                day_offset = day_index * DAY_BYTES
-                for i in range(DAY_BYTES):
-                    data[day_offset + i] = 0x00
-                removed_count += 1
-        except Exception:
-            continue  # Skip invalid day strings
-    
-    if removed_count > 0:
-        _write_index(index_path, base_day, day_count, data)
-    
-    return removed_count
+
+    with _index_write_lock(index_path):
+        existing = _read_index(index_path)
+        if existing is None:
+            return 0
+
+        base_day, day_count, data = existing
+        base_date = _int_to_date(base_day)
+
+        removed_count = 0
+        for day_str in days_to_remove:
+            try:
+                target_day = _day_to_int(day_str)
+                target_date = _int_to_date(target_day)
+                day_index = (target_date - base_date).days
+
+                if 0 <= day_index < day_count:
+                    day_offset = day_index * DAY_BYTES
+                    for i in range(DAY_BYTES):
+                        data[day_offset + i] = 0x00
+                    removed_count += 1
+            except Exception:
+                continue
+
+        if removed_count > 0:
+            _write_index(index_path, base_day, day_count, data)
+
+        return removed_count
