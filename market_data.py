@@ -87,7 +87,7 @@ def _format_ccxt_symbol_dir(symbol: str) -> str:
     s = str(symbol or "").strip().upper()
     if not s:
         return s
-    return s.replace("/", "_").replace(":", "_")
+    return s.replace("/", "_")
 
 
 def _get_hyperliquid_ccxt_symbol_for_coin(coin: str) -> str:

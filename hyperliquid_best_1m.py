@@ -6,12 +6,19 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Callable
+from contextlib import contextmanager
 import configparser
+import hashlib
 import json
 import os
 import time
 import numpy as np
 import requests
+
+if os.name == "posix":
+    import fcntl
+else:
+    fcntl = None
 
 from hyperliquid_api import (
     download_hyperliquid_candles_api,
@@ -44,20 +51,109 @@ _ET_TZ = ZoneInfo("America/New_York")
 TRADFI_IMPROVE_DEFAULT_LOOKBACK_DAYS = 365 * 5
 TRADFI_DISCOVERY_MAX_LOOKBACK_DAYS = 365 * 30
 TRADFI_DISCOVERY_WINDOW_DAYS = 14
+TRADFI_FX_EMPTY_CHUNKS_STOP = 8
 TRADFI_ERROR_LOG_THROTTLE_SECONDS = 300
-POLYGON_RETRY_ATTEMPTS = 4
-POLYGON_RETRY_BACKOFF_SECONDS = 1.5
-ALPACA_RETRY_ATTEMPTS = 4
-ALPACA_RETRY_BACKOFF_SECONDS = 1.5
-POLYGON_FREE_MAX_LOOKBACK_DAYS = 730
-POLYGON_MAX_RESULTS_PER_CALL = 50_000
-POLYGON_EST_SESSION_MINUTES_PER_DAY = 390
-# Derived from Polygon aggregate-bars docs (limit max 50,000 results).
-# For stock session data (~390 1m bars/day), this is the largest minute window
-# that should stay within one call's result cap.
-POLYGON_MAX_RANGE_MINUTES_PER_CALL = int((POLYGON_MAX_RESULTS_PER_CALL * 1440) // POLYGON_EST_SESSION_MINUTES_PER_DAY)
+TIINGO_RETRY_ATTEMPTS = 4
+TIINGO_RETRY_BACKOFF_SECONDS = 1.5
+# Earliest date Tiingo IEX 1m data is available (IEX exchange launch date)
+_IEX_FLOOR_DATE = date(2016, 12, 12)
+TIINGO_MAX_REQ_PER_HOUR = 50
+TIINGO_MAX_REQ_PER_DAY = 1000
+TIINGO_MAX_BANDWIDTH_PER_MONTH_BYTES = 2 * 1024 * 1024 * 1024
+TIINGO_LIMIT_WAIT_CHUNK_SECONDS = 60
 _TRADFI_ERROR_LAST_TS: dict[str, float] = {}
-_POLYGON_ACCESS_MODE_CACHE: dict[str, str] = {}
+_TIINGO_USAGE_STATE: dict[str, dict[str, Any]] = {}
+_TIINGO_USAGE_LOADED = False
+_TIINGO_MONTH_BAR_CACHE: dict[tuple[str, str, str], tuple[str, dict[str, list[dict[str, Any]]]]] = {}
+_TIINGO_DAY_BAR_CACHE: dict[tuple[str, str, str], tuple[str, dict[str, list[dict[str, Any]]]]] = {}
+_TRADFI_SYMBOL_MAP_CACHE: dict[str, Any] = {}  # {"records": list, "sig": (mtime_ns, size)}
+
+
+def _tiingo_usage_state_path() -> Path:
+    return Path(__file__).resolve().parent / "data" / "logs" / "tiingo_usage_state.json"
+
+
+@contextmanager
+def _tiingo_usage_file_lock():
+    lock_path = _tiingo_usage_state_path().with_suffix(".json.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+b") as lock_fh:
+        if fcntl is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _tiingo_usage_key_id(api_key: str) -> str:
+    token = str(api_key or "").strip().encode("utf-8")
+    return hashlib.sha256(token).hexdigest()[:24]
+
+
+def _tiingo_default_state() -> dict[str, Any]:
+    return {
+        "hour_key": "",
+        "day_key": "",
+        "month_key": "",
+        "hour_requests": 0,
+        "day_requests": 0,
+        "month_bytes": 0,
+    }
+
+
+def _tiingo_load_usage_state_once() -> None:
+    global _TIINGO_USAGE_LOADED
+    if _TIINGO_USAGE_LOADED:
+        return
+    _TIINGO_USAGE_LOADED = True
+    path = _tiingo_usage_state_path()
+    if not path.exists():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    entries = raw.get("entries") if isinstance(raw, dict) else None
+    if not isinstance(entries, dict):
+        return
+    for key_id, rec in entries.items():
+        if not isinstance(key_id, str) or not isinstance(rec, dict):
+            continue
+        _TIINGO_USAGE_STATE[key_id] = {
+            "hour_key": str(rec.get("hour_key") or ""),
+            "day_key": str(rec.get("day_key") or ""),
+            "month_key": str(rec.get("month_key") or ""),
+            "hour_requests": max(0, int(rec.get("hour_requests") or 0)),
+            "day_requests": max(0, int(rec.get("day_requests") or 0)),
+            "month_bytes": max(0, int(rec.get("month_bytes") or 0)),
+        }
+
+
+def _tiingo_persist_usage_state() -> None:
+    path = _tiingo_usage_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serializable_entries: dict[str, dict[str, Any]] = {}
+    for key_id, state in _TIINGO_USAGE_STATE.items():
+        if not isinstance(key_id, str) or not isinstance(state, dict):
+            continue
+        serializable_entries[key_id] = {
+            "hour_key": str(state.get("hour_key") or ""),
+            "day_key": str(state.get("day_key") or ""),
+            "month_key": str(state.get("month_key") or ""),
+            "hour_requests": max(0, int(state.get("hour_requests") or 0)),
+            "day_requests": max(0, int(state.get("day_requests") or 0)),
+            "month_bytes": max(0, int(state.get("month_bytes") or 0)),
+        }
+    payload = {
+        "version": 1,
+        "updated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "entries": serializable_entries,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _log_tradfi_error_throttled(*, provider: str, ticker: str, err: Exception, status: int | None = None) -> None:
@@ -74,21 +170,95 @@ def _log_tradfi_error_throttled(*, provider: str, ticker: str, err: Exception, s
     )
 
 
+def _log_tradfi_warning_throttled(key: str, msg: str) -> None:
+    """Throttled warning log for resolver/mapping issues (one per TRADFI_ERROR_LOG_THROTTLE_SECONDS)."""
+    now = float(time.time())
+    last = float(_TRADFI_ERROR_LAST_TS.get(key) or 0.0)
+    if now - last < float(TRADFI_ERROR_LOG_THROTTLE_SECONDS):
+        return
+    _TRADFI_ERROR_LAST_TS[key] = now
+    append_exchange_download_log("hyperliquid", msg, level="WARNING")
+
+
+def _load_tradfi_symbol_map_cached() -> list[dict]:
+    """Load data/coindata/hyperliquid/tradfi_symbol_map.json with module-level mtime cache."""
+    path = Path.cwd() / "data" / "coindata" / "hyperliquid" / "tradfi_symbol_map.json"
+    if not path.exists():
+        return []
+    try:
+        stat = path.stat()
+        sig = (stat.st_mtime_ns, stat.st_size)
+        if _TRADFI_SYMBOL_MAP_CACHE.get("sig") == sig and "records" in _TRADFI_SYMBOL_MAP_CACHE:
+            return _TRADFI_SYMBOL_MAP_CACHE["records"]
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            _TRADFI_SYMBOL_MAP_CACHE["sig"] = sig
+            _TRADFI_SYMBOL_MAP_CACHE["records"] = data
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def resolve_tradfi_symbol(xyz_coin: str) -> tuple[str | None, str | None, bool, date | None]:
+    """Resolve an XYZ coin name to Tiingo ticker info via tradfi_symbol_map.json.
+
+    Returns (tiingo_ticker, tiingo_fx_ticker, tiingo_fx_invert, tiingo_start_date).
+    Returns all-None/False when coin has no provider or map entry is missing.
+
+    Tier 1: map entry with tiingo_ticker or tiingo_fx_ticker → use it
+    Tier 2: map entry with status=no_provider/pending/delisted → None (silent)
+    Tier 3: no map entry → None + throttled WARNING in log
+    """
+    key = str(xyz_coin or "").strip().upper()
+    if not key:
+        return None, None, False, None
+
+    records = _load_tradfi_symbol_map_cached()
+    entry = next((r for r in records if str(r.get("xyz_coin") or "").upper() == key), None)
+
+    if entry is None:
+        _log_tradfi_warning_throttled(
+            f"resolver_missing:{key}",
+            f"[hl_best_1m] {key} not in tradfi_symbol_map.json — TradFi fetch skipped (add mapping entry)",
+        )
+        return None, None, False, None
+
+    status = str(entry.get("status") or "").lower()
+    if status in ("no_provider", "pending", "delisted"):
+        return None, None, False, None
+
+    tiingo_ticker: str | None = str(entry.get("tiingo_ticker") or "").strip() or None
+    tiingo_fx_ticker: str | None = str(entry.get("tiingo_fx_ticker") or "").strip() or None
+    tiingo_fx_invert: bool = bool(entry.get("tiingo_fx_invert") or False)
+    tiingo_start_date: date | None = None
+    sd = str(entry.get("tiingo_start_date") or "").strip()
+    if sd:
+        try:
+            tiingo_start_date = date.fromisoformat(sd)
+        except ValueError:
+            pass
+
+    return tiingo_ticker, tiingo_fx_ticker, tiingo_fx_invert, tiingo_start_date
+
+
 def _load_tradfi_profiles_from_ini() -> dict[str, dict[str, str]]:
     cfg = configparser.ConfigParser()
     ini_path = Path(__file__).resolve().parent / "pbgui.ini"
     cfg.read(ini_path)
     sec = "tradfi_profiles"
     out: dict[str, dict[str, str]] = {
-        "alpaca": {"api_key": "", "api_secret": ""},
-        "polygon": {"api_key": "", "api_secret": ""},
+        "tiingo": {"api_key": "", "api_secret": "", "enabled": "0"},
     }
     if not cfg.has_section(sec):
+        if cfg.has_section("market_data"):
+            out["tiingo"]["enabled"] = str(cfg.get("market_data", "tiingo_enabled", fallback="0") or "").strip()
         return out
-    out["alpaca"]["api_key"] = str(cfg.get(sec, "alpaca_api_key", fallback="") or "").strip()
-    out["alpaca"]["api_secret"] = str(cfg.get(sec, "alpaca_api_secret", fallback="") or "").strip()
-    out["polygon"]["api_key"] = str(cfg.get(sec, "polygon_api_key", fallback="") or "").strip()
-    out["polygon"]["api_secret"] = str(cfg.get(sec, "polygon_api_secret", fallback="") or "").strip()
+    out["tiingo"]["api_key"] = str(cfg.get(sec, "tiingo_api_key", fallback="") or "").strip()
+    out["tiingo"]["enabled"] = str(cfg.get(sec, "tiingo_enabled", fallback="") or "").strip()
+    if not out["tiingo"]["enabled"] and cfg.has_section("market_data"):
+        out["tiingo"]["enabled"] = str(cfg.get("market_data", "tiingo_enabled", fallback="0") or "").strip()
     return out
 
 
@@ -98,7 +268,15 @@ def _is_stock_perp_coin(coin: str) -> bool:
         return False
     base = s.split("/")[0]
     u = base.upper()
-    return u.startswith("XYZ:") or u.startswith("XYZ-")
+    if u.startswith("XYZ:") or u.startswith("XYZ-"):
+        return True
+    # Some call-sites pass bare XYZ coin names without prefix (e.g. "EUR").
+    # If the coin exists in tradfi_symbol_map, treat it as stock-perp.
+    key = _tradfi_ticker_from_hyperliquid_coin(u)
+    if not key:
+        return False
+    records = _load_tradfi_symbol_map_cached()
+    return any(str(r.get("xyz_coin") or "").strip().upper() == key for r in records)
 
 
 def _tradfi_ticker_from_hyperliquid_coin(coin: str) -> str:
@@ -131,41 +309,197 @@ def _retry_after_or_backoff_seconds(*, resp: Any | None, attempt: int, base_back
     return float(base_backoff_s) * float(2 ** max(0, int(attempt)))
 
 
-def _alpaca_fetch_trading_sessions(
+def _tiingo_state_for_key_unlocked(api_key: str) -> dict[str, Any]:
+    key = str(api_key or "").strip()
+    if not key:
+        return _tiingo_default_state()
+
+    _tiingo_load_usage_state_once()
+    key_id = _tiingo_usage_key_id(key)
+    state = _TIINGO_USAGE_STATE.get(key_id)
+    if not isinstance(state, dict):
+        state = _tiingo_default_state()
+        _TIINGO_USAGE_STATE[key_id] = state
+        _tiingo_persist_usage_state()
+
+    now = datetime.now(timezone.utc)
+    hour_key = now.strftime("%Y%m%d%H")
+    day_key = now.strftime("%Y%m%d")
+    month_key = now.strftime("%Y%m")
+
+    if str(state.get("hour_key") or "") != hour_key:
+        state["hour_key"] = hour_key
+        state["hour_requests"] = 0
+        _tiingo_persist_usage_state()
+    if str(state.get("day_key") or "") != day_key:
+        state["day_key"] = day_key
+        state["day_requests"] = 0
+        _tiingo_persist_usage_state()
+    if str(state.get("month_key") or "") != month_key:
+        state["month_key"] = month_key
+        state["month_bytes"] = 0
+        _tiingo_persist_usage_state()
+    return state
+
+
+def _tiingo_state_for_key(api_key: str) -> dict[str, Any]:
+    with _tiingo_usage_file_lock():
+        return _tiingo_state_for_key_unlocked(api_key)
+
+
+def get_tiingo_runtime_usage(*, api_key: str) -> dict[str, int]:
+    state = _tiingo_state_for_key(api_key)
+    hour_requests = int(state.get("hour_requests") or 0)
+    day_requests = int(state.get("day_requests") or 0)
+    month_bytes = int(state.get("month_bytes") or 0)
+    return {
+        "hour_requests": hour_requests,
+        "hour_remaining": max(0, int(TIINGO_MAX_REQ_PER_HOUR) - hour_requests),
+        "day_requests": day_requests,
+        "day_remaining": max(0, int(TIINGO_MAX_REQ_PER_DAY) - day_requests),
+        "month_bytes": month_bytes,
+        "month_bytes_remaining": max(0, int(TIINGO_MAX_BANDWIDTH_PER_MONTH_BYTES) - month_bytes),
+        "hour_limit": int(TIINGO_MAX_REQ_PER_HOUR),
+        "day_limit": int(TIINGO_MAX_REQ_PER_DAY),
+        "month_bytes_limit": int(TIINGO_MAX_BANDWIDTH_PER_MONTH_BYTES),
+    }
+
+
+def _tiingo_register_call(*, api_key: str, response_bytes: int) -> None:
+    with _tiingo_usage_file_lock():
+        state = _tiingo_state_for_key_unlocked(api_key)
+        state["hour_requests"] = int(state.get("hour_requests") or 0) + 1
+        state["day_requests"] = int(state.get("day_requests") or 0) + 1
+        state["month_bytes"] = int(state.get("month_bytes") or 0) + max(0, int(response_bytes))
+        _tiingo_persist_usage_state()
+
+
+def _tiingo_limit_allows_call(*, api_key: str) -> bool:
+    usage = get_tiingo_runtime_usage(api_key=api_key)
+    return (
+        int(usage.get("hour_remaining") or 0) > 0
+        and int(usage.get("day_remaining") or 0) > 0
+        and int(usage.get("month_bytes_remaining") or 0) > 0
+    )
+
+
+def _seconds_until_next_hour_utc(now: datetime) -> int:
+    nxt = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+    return max(1, int((nxt - now).total_seconds()) + 1)
+
+
+def _seconds_until_next_day_utc(now: datetime) -> int:
+    nxt = (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
+    return max(1, int((nxt - now).total_seconds()) + 1)
+
+
+def _seconds_until_next_month_utc(now: datetime) -> int:
+    if int(now.month) == 12:
+        nxt = now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        nxt = now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((nxt - now).total_seconds()) + 1)
+
+
+def _tiingo_wait_until_quota_allows_call(
     *,
-    start_date: date,
-    end_date: date,
     api_key: str,
-    api_secret: str,
+    ticker: str = "",
+    status_cb: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    while True:
+        usage = get_tiingo_runtime_usage(api_key=api_key)
+        hour_remaining = int(usage.get("hour_remaining") or 0)
+        day_remaining = int(usage.get("day_remaining") or 0)
+        month_remaining = int(usage.get("month_bytes_remaining") or 0)
+        if hour_remaining > 0 and day_remaining > 0 and month_remaining > 0:
+            return
+
+        now = datetime.now(timezone.utc)
+        waits: list[int] = []
+        reasons: list[str] = []
+        if hour_remaining <= 0:
+            waits.append(_seconds_until_next_hour_utc(now))
+            reasons.append("hour")
+        if day_remaining <= 0:
+            waits.append(_seconds_until_next_day_utc(now))
+            reasons.append("day")
+        if month_remaining <= 0:
+            waits.append(_seconds_until_next_month_utc(now))
+            reasons.append("month")
+
+        wait_s = max(1, min(waits) if waits else 1)
+        if status_cb is not None:
+            try:
+                status_cb(
+                    {
+                        "stage": "tiingo_wait",
+                        "ticker": str(ticker or "").upper(),
+                        "tiingo_wait_s": int(wait_s),
+                        "tiingo_wait_reason": ",".join(reasons),
+                        "tiingo_wait_kind": "quota",
+                    }
+                )
+            except Exception:
+                pass
+        append_exchange_download_log(
+            "hyperliquid",
+            f"[hl_tradfi] tiingo_wait_for_quota reasons={','.join(reasons)} wait_s={wait_s}",
+            level="WARNING",
+        )
+        time.sleep(float(min(wait_s, int(TIINGO_LIMIT_WAIT_CHUNK_SECONDS))))
+
+
+def _tiingo_fetch_1m_iex(
+    *,
+    ticker: str,
+    start_ms: int,
+    end_ms: int,
+    api_key: str,
     timeout_s: float,
-) -> dict[str, tuple[int, int]]:
-    if not api_key or not api_secret:
-        return {}
-    url = "https://paper-api.alpaca.markets/v2/calendar"
-    headers = {
-        "APCA-API-KEY-ID": api_key,
-        "APCA-API-SECRET-KEY": api_secret,
+    allow_rate_limit_hour_retry: bool = True,
+    status_cb: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    token = str(api_key or "").strip()
+    if not token:
+        return []
+    _tiingo_wait_until_quota_allows_call(api_key=token, ticker=ticker, status_cb=status_cb)
+
+    url = f"https://api.tiingo.com/iex/{ticker}/prices"
+    params: dict[str, Any] = {
+        "startDate": datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
+        "endDate": datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
+        "resampleFreq": "1min",
+        "columns": "open,high,low,close,volume",
+        "token": token,
     }
-    params = {
-        "start": start_date.strftime("%Y-%m-%d"),
-        "end": end_date.strftime("%Y-%m-%d"),
-    }
-    out: dict[str, tuple[int, int]] = {}
-    attempts = int(max(1, ALPACA_RETRY_ATTEMPTS))
-    rows: Any = None
+
+    attempts = int(max(1, TIINGO_RETRY_ATTEMPTS))
+    payload: Any = None
     last_err: Exception | None = None
     for attempt in range(attempts):
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=float(timeout_s))
+            resp = requests.get(url, params=params, timeout=float(timeout_s))
             status = int(resp.status_code)
             if status in (401, 403, 422):
-                return {}
+                return []
             if status in (429, 500, 502, 503, 504):
                 if attempt < attempts - 1:
-                    time.sleep(_retry_after_or_backoff_seconds(resp=resp, attempt=attempt, base_backoff_s=float(ALPACA_RETRY_BACKOFF_SECONDS)))
+                    time.sleep(_retry_after_or_backoff_seconds(resp=resp, attempt=attempt, base_backoff_s=float(TIINGO_RETRY_BACKOFF_SECONDS)))
                     continue
             resp.raise_for_status()
-            rows = resp.json()
+            payload = resp.json()
+            content_len = 0
+            try:
+                content_len = int(resp.headers.get("Content-Length") or 0)
+            except Exception:
+                content_len = 0
+            if content_len <= 0:
+                try:
+                    content_len = len(resp.content or b"")
+                except Exception:
+                    content_len = 0
+            _tiingo_register_call(api_key=token, response_bytes=int(content_len))
             last_err = None
             break
         except Exception as e:
@@ -180,7 +514,7 @@ def _alpaca_fetch_trading_sessions(
                 or isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
             )
             if is_transient and attempt < attempts - 1:
-                time.sleep(_retry_after_or_backoff_seconds(resp=getattr(e, "response", None), attempt=attempt, base_backoff_s=float(ALPACA_RETRY_BACKOFF_SECONDS)))
+                time.sleep(_retry_after_or_backoff_seconds(resp=getattr(e, "response", None), attempt=attempt, base_backoff_s=float(TIINGO_RETRY_BACKOFF_SECONDS)))
                 continue
             break
 
@@ -190,136 +524,437 @@ def _alpaca_fetch_trading_sessions(
             status = int(getattr(getattr(last_err, "response", None), "status_code", None))
         except Exception:
             status = None
-        _log_tradfi_error_throttled(provider="alpaca", ticker="CALENDAR", err=last_err, status=status)
-        return {}
+        if status == 429 and allow_rate_limit_hour_retry:
+            wait_s = _seconds_until_next_hour_utc(datetime.now(timezone.utc))
+            if status_cb is not None:
+                try:
+                    status_cb(
+                        {
+                            "stage": "tiingo_wait",
+                            "ticker": str(ticker or "").upper(),
+                            "tiingo_wait_s": int(wait_s),
+                            "tiingo_wait_reason": "server_429",
+                            "tiingo_wait_kind": "server_429",
+                        }
+                    )
+                except Exception:
+                    pass
+            append_exchange_download_log(
+                "hyperliquid",
+                f"[hl_tradfi] tiingo_server_429_wait ticker={ticker} wait_s={wait_s}",
+                level="WARNING",
+            )
+            time.sleep(float(wait_s))
+            return _tiingo_fetch_1m_iex(
+                ticker=ticker,
+                start_ms=int(start_ms),
+                end_ms=int(end_ms),
+                api_key=token,
+                timeout_s=float(timeout_s),
+                allow_rate_limit_hour_retry=False,
+                status_cb=status_cb,
+            )
+        _log_tradfi_error_throttled(provider="tiingo", ticker=ticker, err=last_err, status=status)
+        return []
 
-    if not isinstance(rows, list):
-        return {}
+    if not isinstance(payload, list):
+        return []
 
-    for row in rows:
+    out: list[dict[str, Any]] = []
+    for row in payload:
         if not isinstance(row, dict):
             continue
-        day_s = str(row.get("date") or "").strip()
-        open_s = str(row.get("open") or "").strip()
-        close_s = str(row.get("close") or "").strip()
-        if not day_s or not open_s or not close_s:
-            continue
         try:
-            y, m, d = [int(x) for x in day_s.split("-")]
-            oh, om = [int(x) for x in open_s.split(":")[:2]]
-            ch, cm = [int(x) for x in close_s.split(":")[:2]]
-            open_dt = datetime(y, m, d, oh, om, tzinfo=_ET_TZ).astimezone(timezone.utc)
-            close_dt = datetime(y, m, d, ch, cm, tzinfo=_ET_TZ).astimezone(timezone.utc)
-            start_ms = int(open_dt.timestamp() * 1000)
-            end_ms = int(close_dt.timestamp() * 1000) - 60_000
-            if end_ms >= start_ms:
-                out[day_s.replace("-", "")] = (start_ms, end_ms)
+            ts_raw = str(row.get("date") or "").replace("Z", "+00:00")
+            ts_ms = int(datetime.fromisoformat(ts_raw).astimezone(timezone.utc).timestamp() * 1000)
+            if ts_ms < int(start_ms) or ts_ms > int(end_ms):
+                continue
+            out.append(
+                {
+                    "t": ts_ms,
+                    "o": float(row.get("open")),
+                    "h": float(row.get("high")),
+                    "l": float(row.get("low")),
+                    "c": float(row.get("close")),
+                    "v": float(row.get("volume")) if row.get("volume") is not None else 0.0,
+                }
+            )
         except Exception:
             continue
     return out
 
 
-def _alpaca_fetch_1m_iex(
+def _tiingo_fetch_1m_fx(
     *,
     ticker: str,
     start_ms: int,
     end_ms: int,
     api_key: str,
-    api_secret: str,
     timeout_s: float,
+    allow_rate_limit_hour_retry: bool = True,
+    status_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    if not api_key or not api_secret:
+    token = str(api_key or "").strip()
+    if not token:
         return []
-    url = f"https://data.alpaca.markets/v2/stocks/{ticker}/bars"
-    headers = {
-        "APCA-API-KEY-ID": api_key,
-        "APCA-API-SECRET-KEY": api_secret,
-    }
-    params: dict[str, Any] = {
-        "timeframe": "1Min",
-        "start": datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "end": datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "limit": 10000,
-        "adjustment": "split",
-        "feed": "iex",
-    }
-    out: list[dict[str, Any]] = []
-    page_token: str | None = None
-    for _ in range(20):
-        if page_token:
-            params["page_token"] = page_token
-        elif "page_token" in params:
-            params.pop("page_token", None)
-        attempts = int(max(1, ALPACA_RETRY_ATTEMPTS))
-        data: Any = None
-        last_err: Exception | None = None
-        for attempt in range(attempts):
-            try:
-                resp = requests.get(url, params=params, headers=headers, timeout=float(timeout_s))
-                status = int(resp.status_code)
-                if status in (403, 422):
-                    return []
-                if status in (429, 500, 502, 503, 504):
-                    if attempt < attempts - 1:
-                        time.sleep(_retry_after_or_backoff_seconds(resp=resp, attempt=attempt, base_backoff_s=float(ALPACA_RETRY_BACKOFF_SECONDS)))
-                        continue
-                resp.raise_for_status()
-                data = resp.json()
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-                status = None
-                try:
-                    status = int(getattr(getattr(e, "response", None), "status_code", None))
-                except Exception:
-                    status = None
-                is_transient = (
-                    status in (429, 500, 502, 503, 504)
-                    or isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
-                )
-                if is_transient and attempt < attempts - 1:
-                    time.sleep(_retry_after_or_backoff_seconds(resp=getattr(e, "response", None), attempt=attempt, base_backoff_s=float(ALPACA_RETRY_BACKOFF_SECONDS)))
-                    continue
-                break
+    t_u = str(ticker or "").strip().lower()
+    if not t_u:
+        return []
 
-        if last_err is not None:
+    _tiingo_wait_until_quota_allows_call(api_key=token, ticker=t_u, status_cb=status_cb)
+
+    url = f"https://api.tiingo.com/tiingo/fx/{t_u}/prices"
+    params: dict[str, Any] = {
+        "startDate": datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
+        "endDate": datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
+        "resampleFreq": "1min",
+        "token": token,
+    }
+
+    attempts = int(max(1, TIINGO_RETRY_ATTEMPTS))
+    payload: Any = None
+    last_err: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            resp = requests.get(url, params=params, timeout=float(timeout_s))
+            status = int(resp.status_code)
+            if status in (401, 403, 422):
+                return []
+            if status in (429, 500, 502, 503, 504):
+                if attempt < attempts - 1:
+                    time.sleep(_retry_after_or_backoff_seconds(resp=resp, attempt=attempt, base_backoff_s=float(TIINGO_RETRY_BACKOFF_SECONDS)))
+                    continue
+            resp.raise_for_status()
+            payload = resp.json()
+            content_len = 0
+            try:
+                content_len = int(resp.headers.get("Content-Length") or 0)
+            except Exception:
+                content_len = 0
+            if content_len <= 0:
+                try:
+                    content_len = len(resp.content or b"")
+                except Exception:
+                    content_len = 0
+            _tiingo_register_call(api_key=token, response_bytes=int(content_len))
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
             status = None
             try:
-                status = int(getattr(getattr(last_err, "response", None), "status_code", None))
+                status = int(getattr(getattr(e, "response", None), "status_code", None))
             except Exception:
                 status = None
-            _log_tradfi_error_throttled(provider="alpaca", ticker=ticker, err=last_err, status=status)
-            return out
-        bars = data.get("bars") if isinstance(data, dict) else None
-        if not isinstance(bars, list) or not bars:
+            is_transient = (
+                status in (429, 500, 502, 503, 504)
+                or isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+            )
+            if is_transient and attempt < attempts - 1:
+                time.sleep(_retry_after_or_backoff_seconds(resp=getattr(e, "response", None), attempt=attempt, base_backoff_s=float(TIINGO_RETRY_BACKOFF_SECONDS)))
+                continue
             break
-        for bar in bars:
+
+    if last_err is not None:
+        status = None
+        try:
+            status = int(getattr(getattr(last_err, "response", None), "status_code", None))
+        except Exception:
+            status = None
+        if status == 429 and allow_rate_limit_hour_retry:
+            wait_s = _seconds_until_next_hour_utc(datetime.now(timezone.utc))
+            if status_cb is not None:
+                try:
+                    status_cb(
+                        {
+                            "stage": "tiingo_wait",
+                            "ticker": str(t_u or "").upper(),
+                            "tiingo_wait_s": int(wait_s),
+                            "tiingo_wait_reason": "server_429",
+                            "tiingo_wait_kind": "server_429",
+                        }
+                    )
+                except Exception:
+                    pass
+            append_exchange_download_log(
+                "hyperliquid",
+                f"[hl_tradfi] tiingo_fx_server_429_wait ticker={t_u} wait_s={wait_s}",
+                level="WARNING",
+            )
+            time.sleep(float(wait_s))
+            return _tiingo_fetch_1m_fx(
+                ticker=t_u,
+                start_ms=int(start_ms),
+                end_ms=int(end_ms),
+                api_key=token,
+                timeout_s=float(timeout_s),
+                allow_rate_limit_hour_retry=False,
+                status_cb=status_cb,
+            )
+        _log_tradfi_error_throttled(provider="tiingo_fx", ticker=t_u, err=last_err, status=status)
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ts_raw = str(row.get("date") or "").replace("Z", "+00:00")
+            ts_ms = int(datetime.fromisoformat(ts_raw).astimezone(timezone.utc).timestamp() * 1000)
+            if ts_ms < int(start_ms) or ts_ms > int(end_ms):
+                continue
+            out.append(
+                {
+                    "t": ts_ms,
+                    "o": float(row.get("open")),
+                    "h": float(row.get("high")),
+                    "l": float(row.get("low")),
+                    "c": float(row.get("close")),
+                    "v": float(row.get("volume")) if row.get("volume") is not None else 0.0,
+                }
+            )
+        except Exception:
+            continue
+    return out
+
+
+def _invert_ohlc_bar(bar: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        o = float(bar.get("o"))
+        h = float(bar.get("h"))
+        l = float(bar.get("l"))
+        c = float(bar.get("c"))
+        if o <= 0 or h <= 0 or l <= 0 or c <= 0:
+            return None
+        return {
+            "t": int(bar.get("t")),
+            "o": float(1.0 / o),
+            "h": float(1.0 / l),
+            "l": float(1.0 / h),
+            "c": float(1.0 / c),
+            "v": float(bar.get("v", 0.0) or 0.0),
+        }
+    except Exception:
+        return None
+
+
+def _month_start_end_dates_utc(day: date) -> tuple[date, date]:
+    month_start = date(day.year, day.month, 1)
+    if day.month == 12:
+        month_end = date(day.year, 12, 31)
+    else:
+        next_month_start = date(day.year + (1 if day.month == 12 else 0), 1 if day.month == 12 else day.month + 1, 1)
+        month_end = next_month_start - timedelta(days=1)
+    return month_start, month_end
+
+
+def _tiingo_fetch_1m_iex_day_from_month_cache(
+    *,
+    ticker: str,
+    day: date,
+    session_start_ms: int,
+    session_end_ms: int,
+    api_key: str,
+    timeout_s: float,
+    status_cb: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    token = str(api_key or "").strip()
+    if not token:
+        return ([], False)
+
+    cache_key = (token, "iex", str(ticker or "").upper())
+    month_key = day.strftime("%Y%m")
+    cached = _TIINGO_MONTH_BAR_CACHE.get(cache_key)
+
+    day_map: dict[str, list[dict[str, Any]]]
+    did_fetch_month = False
+    if cached and str(cached[0]) == month_key and isinstance(cached[1], dict):
+        day_map = cached[1]
+    else:
+        did_fetch_month = True
+        month_start, month_end = _month_start_end_dates_utc(day)
+        month_start_ms = int(datetime(month_start.year, month_start.month, month_start.day, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        month_end_ms = int(datetime(month_end.year, month_end.month, month_end.day, 23, 59, tzinfo=timezone.utc).timestamp() * 1000)
+        month_bars = _tiingo_fetch_1m_iex(
+            ticker=ticker,
+            start_ms=month_start_ms,
+            end_ms=month_end_ms,
+            api_key=token,
+            timeout_s=float(timeout_s),
+            status_cb=status_cb,
+        )
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for bar in month_bars:
             if not isinstance(bar, dict):
                 continue
             try:
-                ts_str = str(bar.get("t") or "")
-                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                ts_ms = int(dt.timestamp() * 1000)
-                if ts_ms < start_ms or ts_ms > end_ms:
-                    continue
-                out.append(
-                    {
-                        "t": ts_ms,
-                        "o": float(bar.get("o")),
-                        "h": float(bar.get("h")),
-                        "l": float(bar.get("l")),
-                        "c": float(bar.get("c")),
-                        "v": float(bar.get("v", 0.0)),
-                    }
-                )
+                ts_ms = int(bar.get("t"))
+                ds = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).strftime("%Y%m%d")
             except Exception:
                 continue
-        nxt = data.get("next_page_token") if isinstance(data, dict) else None
-        page_token = str(nxt) if nxt else None
-        if not page_token:
+            grouped.setdefault(ds, []).append(bar)
+        _TIINGO_MONTH_BAR_CACHE[cache_key] = (month_key, grouped)
+        day_map = grouped
+
+    bars = day_map.get(day.strftime("%Y%m%d")) or []
+    if not bars:
+        return ([], did_fetch_month)
+    filtered = [
+        bar
+        for bar in bars
+        if isinstance(bar, dict)
+        and int(bar.get("t", 0)) >= int(session_start_ms)
+        and int(bar.get("t", 0)) <= int(session_end_ms)
+    ]
+    return (filtered, did_fetch_month)
+
+
+def _tiingo_fetch_1m_fx_day_from_month_cache(
+    *,
+    ticker: str,
+    day: date,
+    session_start_ms: int,
+    session_end_ms: int,
+    api_key: str,
+    timeout_s: float,
+    invert: bool = False,
+    status_cb: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    token = str(api_key or "").strip()
+    if not token:
+        return ([], False, False)
+
+    t_u = str(ticker or "").strip().lower()
+    if not t_u:
+        return ([], False, False)
+
+    cache_key = (token, "fx", t_u)
+    # 7-day chunk aligned to Monday..Sunday to reduce request count while staying
+    # below Tiingo's datapoint limits.
+    chunk_start = day - timedelta(days=int(day.weekday()))
+    chunk_end = chunk_start + timedelta(days=6)
+    chunk_key = f"{chunk_start.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"
+    cached = _TIINGO_DAY_BAR_CACHE.get(cache_key)
+
+    did_fetch_day = False
+    if cached and str(cached[0]) == chunk_key and isinstance(cached[1], dict):
+        day_map = cached[1]
+    else:
+        did_fetch_day = True
+        start_ms = int(datetime(chunk_start.year, chunk_start.month, chunk_start.day, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        end_ms = int(datetime(chunk_end.year, chunk_end.month, chunk_end.day, 23, 59, tzinfo=timezone.utc).timestamp() * 1000)
+        chunk_bars = _tiingo_fetch_1m_fx(
+            ticker=t_u,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            api_key=token,
+            timeout_s=float(timeout_s),
+            status_cb=status_cb,
+        )
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for bar in chunk_bars:
+            if not isinstance(bar, dict):
+                continue
+            try:
+                ts_ms = int(bar.get("t"))
+                ds = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).strftime("%Y%m%d")
+            except Exception:
+                continue
+            grouped.setdefault(ds, []).append(bar)
+        _TIINGO_DAY_BAR_CACHE[cache_key] = (chunk_key, grouped)
+        day_map = grouped
+
+    chunk_has_any_bars = any(bool(v) for v in day_map.values())
+    bars = day_map.get(day.strftime("%Y%m%d")) or []
+
+    if not bars:
+        return ([], did_fetch_day, chunk_has_any_bars)
+
+    filtered = [
+        bar
+        for bar in bars
+        if isinstance(bar, dict)
+        and int(bar.get("t", 0)) >= int(session_start_ms)
+        and int(bar.get("t", 0)) <= int(session_end_ms)
+    ]
+    if not invert:
+        return (filtered, did_fetch_day, chunk_has_any_bars)
+
+    inverted: list[dict[str, Any]] = []
+    for bar in filtered:
+        b = _invert_ohlc_bar(bar)
+        if b is not None:
+            inverted.append(b)
+    return (inverted, did_fetch_day, chunk_has_any_bars)
+
+
+def probe_tiingo_iex_1m(*, api_key: str, ticker: str = "AAPL", timeout_s: float = 20.0) -> dict[str, Any]:
+    token = str(api_key or "").strip()
+    if not token:
+        raise ValueError("Tiingo API key is empty.")
+
+    url = "https://api.tiingo.com/api/test/"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Token {token}",
+    }
+
+    attempts = int(max(1, TIINGO_RETRY_ATTEMPTS))
+    payload: Any = None
+    status_code: int | None = None
+    last_err: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            resp = requests.get(url, headers=headers, timeout=float(timeout_s))
+            status = int(resp.status_code)
+            status_code = status
+            if status in (429, 500, 502, 503, 504):
+                if attempt < attempts - 1:
+                    time.sleep(_retry_after_or_backoff_seconds(resp=resp, attempt=attempt, base_backoff_s=float(TIINGO_RETRY_BACKOFF_SECONDS)))
+                    continue
+            resp.raise_for_status()
+            payload = resp.json()
+            last_err = None
             break
-    return out
+        except Exception as e:
+            last_err = e
+            status = None
+            try:
+                status = int(getattr(getattr(e, "response", None), "status_code", None))
+                status_code = status
+            except Exception:
+                status = None
+            is_transient = (
+                status in (429, 500, 502, 503, 504)
+                or isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+            )
+            if is_transient and attempt < attempts - 1:
+                time.sleep(_retry_after_or_backoff_seconds(resp=getattr(e, "response", None), attempt=attempt, base_backoff_s=float(TIINGO_RETRY_BACKOFF_SECONDS)))
+                continue
+            break
+
+    if last_err is not None:
+        status = None
+        try:
+            status = int(getattr(getattr(last_err, "response", None), "status_code", None))
+        except Exception:
+            status = status_code
+        if status in (401, 403):
+            raise ValueError("Tiingo authentication failed (invalid API key).")
+        raise last_err
+
+    message = ""
+    if isinstance(payload, dict):
+        message = str(payload.get("message") or "").strip()
+
+    return {
+        "ok": True,
+        "status": int(status_code or 200),
+        "message": message or "You successfully sent a request",
+    }
 
 
 def _default_us_equity_session_utc(day: date) -> tuple[int, int] | None:
@@ -335,426 +970,39 @@ def _default_us_equity_session_utc(day: date) -> tuple[int, int] | None:
     return (start_ms, end_ms)
 
 
-def _tradfi_earliest_marker_path(*, coin_dir: str) -> Path:
-    return get_exchange_raw_root_dir("hyperliquid") / "1m_src" / str(coin_dir) / "tradfi_earliest.txt"
-
-
-def _load_tradfi_earliest_marker(*, coin_dir: str) -> date | None:
-    p = _tradfi_earliest_marker_path(coin_dir=coin_dir)
-    if not p.exists():
-        return None
-    try:
-        s = str(p.read_text(encoding="utf-8") or "").strip()
-        if len(s) != 8 or not s.isdigit():
-            return None
-        return datetime.strptime(s, "%Y%m%d").date()
-    except Exception:
-        return None
-
-
-def _save_tradfi_earliest_marker(*, coin_dir: str, day: date) -> None:
-    p = _tradfi_earliest_marker_path(coin_dir=coin_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(day.strftime("%Y%m%d") + "\n", encoding="utf-8")
-    os.replace(tmp, p)
-
-
-def _alpaca_has_data_in_window(
-    *,
-    ticker: str,
-    start_date: date,
-    end_date: date,
-    api_key: str,
-    api_secret: str,
-    timeout_s: float,
-) -> bool | None:
-    if not api_key or not api_secret:
-        return None
-    if end_date < start_date:
-        return False
-
-    url = f"https://data.alpaca.markets/v2/stocks/{ticker}/bars"
-    headers = {
-        "APCA-API-KEY-ID": api_key,
-        "APCA-API-SECRET-KEY": api_secret,
-    }
-    params: dict[str, Any] = {
-        "timeframe": "1Min",
-        "start": datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "end": datetime(end_date.year, end_date.month, end_date.day, 23, 59, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "limit": 1,
-        "adjustment": "split",
-        "feed": "iex",
-    }
-    attempts = int(max(1, ALPACA_RETRY_ATTEMPTS))
-    last_err: Exception | None = None
-    payload: Any = None
-    for attempt in range(attempts):
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=float(timeout_s))
-            status = int(resp.status_code)
-            if status in (401, 403, 422):
-                _log_tradfi_error_throttled(
-                    provider="alpaca",
-                    ticker=ticker,
-                    err=requests.exceptions.HTTPError(f"status={resp.status_code}"),
-                    status=int(resp.status_code),
-                )
-                return None
-            if status in (429, 500, 502, 503, 504):
-                if attempt < attempts - 1:
-                    time.sleep(_retry_after_or_backoff_seconds(resp=resp, attempt=attempt, base_backoff_s=float(ALPACA_RETRY_BACKOFF_SECONDS)))
-                    continue
-            resp.raise_for_status()
-            payload = resp.json()
-            last_err = None
-            break
-        except Exception as e:
-            last_err = e
-            status = None
-            try:
-                status = int(getattr(getattr(e, "response", None), "status_code", None))
-            except Exception:
-                status = None
-            is_transient = (
-                status in (429, 500, 502, 503, 504)
-                or isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
-            )
-            if is_transient and attempt < attempts - 1:
-                time.sleep(_retry_after_or_backoff_seconds(resp=getattr(e, "response", None), attempt=attempt, base_backoff_s=float(ALPACA_RETRY_BACKOFF_SECONDS)))
-                continue
-            break
-
-    if last_err is not None:
-        status = None
-        try:
-            status = int(getattr(getattr(last_err, "response", None), "status_code", None))
-        except Exception:
-            status = None
-        _log_tradfi_error_throttled(provider="alpaca", ticker=ticker, err=last_err, status=status)
-        return None
-
-    bars = payload.get("bars") if isinstance(payload, dict) else None
-    if not isinstance(bars, list):
-        return False
-    return bool(bars)
-
-
-def _discover_alpaca_earliest_day(
-    *,
-    ticker: str,
-    end_date: date,
-    api_key: str,
-    api_secret: str,
-    timeout_s: float,
-) -> date | None:
-    if not api_key or not api_secret:
-        return None
-
-    window = int(max(3, TRADFI_DISCOVERY_WINDOW_DAYS))
-    initial_probe = _alpaca_has_data_in_window(
-        ticker=ticker,
-        start_date=max(date(1970, 1, 1), end_date - timedelta(days=window)),
-        end_date=end_date,
-        api_key=api_key,
-        api_secret=api_secret,
-        timeout_s=float(timeout_s),
-    )
-    if initial_probe is None:
-        return None
-    if not initial_probe:
-        return None
-
-    max_lookback = int(max(365, TRADFI_DISCOVERY_MAX_LOOKBACK_DAYS))
-    has_bound = end_date
-    no_bound: date | None = None
-
-    step = 365
-    while step <= max_lookback:
-        probe_start = end_date - timedelta(days=step)
-        probe_end = min(end_date, probe_start + timedelta(days=window - 1))
-        has_data = _alpaca_has_data_in_window(
-            ticker=ticker,
-            start_date=probe_start,
-            end_date=probe_end,
-            api_key=api_key,
-            api_secret=api_secret,
-            timeout_s=float(timeout_s),
-        )
-        if has_data is None:
-            break
-        if has_data:
-            has_bound = probe_start
-            step *= 2
-            continue
-        no_bound = probe_start
-        break
-
-    if no_bound is None:
-        return has_bound
-
-    low = no_bound
-    high = has_bound
-    while (high - low).days > int(window):
-        mid = low + timedelta(days=((high - low).days // 2))
-        mid_end = min(end_date, mid + timedelta(days=window - 1))
-        has_data = _alpaca_has_data_in_window(
-            ticker=ticker,
-            start_date=mid,
-            end_date=mid_end,
-            api_key=api_key,
-            api_secret=api_secret,
-            timeout_s=float(timeout_s),
-        )
-        if has_data is None:
-            break
-        if has_data:
-            high = mid
-        else:
-            low = mid
-
-    return high
-
-
 def _determine_stock_perp_improve_start(
     *,
     coin_u: str,
     coin_dir: str,
     d_end: date,
     earliest_candidates: list[date],
+    refetch: bool = False,
     timeout_s: float = 30.0,
 ) -> date:
-    if earliest_candidates:
-        fallback_start = min(earliest_candidates)
-    else:
-        fallback_start = d_end - timedelta(days=int(TRADFI_IMPROVE_DEFAULT_LOOKBACK_DAYS))
-
-    persisted_earliest = _load_tradfi_earliest_marker(coin_dir=coin_dir)
-
-    oldest_other = get_oldest_day_with_source_code(
-        exchange="hyperliquid",
-        coin=coin_dir,
-        code=SOURCE_CODE_OTHER,
-    )
-    oldest_other_date: date | None = None
-    if oldest_other:
-        try:
-            oldest_other_date = datetime.strptime(oldest_other, "%Y%m%d").date()
-        except Exception:
-            oldest_other_date = None
+    if not refetch:
+        oldest_other = get_oldest_day_with_source_code(
+            exchange="hyperliquid",
+            coin=coin_dir,
+            code=SOURCE_CODE_OTHER,
+        )
+        oldest_other_date: date | None = None
+        if oldest_other:
+            try:
+                oldest_other_date = datetime.strptime(oldest_other, "%Y%m%d").date()
+            except Exception:
+                oldest_other_date = None
+        if oldest_other_date is not None:
+            return oldest_other_date
 
     profiles = _load_tradfi_profiles_from_ini()
-    alpaca_key = str((profiles.get("alpaca") or {}).get("api_key") or "").strip()
-    alpaca_secret = str((profiles.get("alpaca") or {}).get("api_secret") or "").strip()
-    ticker = _tradfi_ticker_from_hyperliquid_coin(coin_u)
+    has_tiingo = bool(str((profiles.get("tiingo") or {}).get("api_key") or "").strip())
 
-    # Migration rule:
-    # - If SOURCE_CODE_OTHER already exists: continue from that marker and skip rediscovery.
-    # - Still validate persisted marker (if present) and correct obviously stale values.
-    if oldest_other_date is not None:
-        if persisted_earliest is not None and ticker and alpaca_key and alpaca_secret:
-            marker_end = persisted_earliest + timedelta(days=max(1, int(TRADFI_DISCOVERY_WINDOW_DAYS) - 1))
-            marker_ok = _alpaca_has_data_in_window(
-                ticker=ticker,
-                start_date=persisted_earliest,
-                end_date=min(d_end, marker_end),
-                api_key=alpaca_key,
-                api_secret=alpaca_secret,
-                timeout_s=float(timeout_s),
-            )
-            if marker_ok is False:
-                try:
-                    _save_tradfi_earliest_marker(coin_dir=coin_dir, day=oldest_other_date)
-                    append_exchange_download_log(
-                        "hyperliquid",
-                        f"[hl_best_1m] {coin_u} tradfi_earliest_marker_corrected={oldest_other_date.strftime('%Y%m%d')} (from stale {persisted_earliest.strftime('%Y%m%d')})",
-                    )
-                except Exception:
-                    pass
-        return oldest_other_date
+    if has_tiingo:
+        return _IEX_FLOOR_DATE
 
-    # Guard against stale/wrong persisted markers: keep only if it still returns data.
-    if persisted_earliest is not None and ticker and alpaca_key and alpaca_secret:
-        marker_end = persisted_earliest + timedelta(days=max(1, int(TRADFI_DISCOVERY_WINDOW_DAYS) - 1))
-        marker_ok = _alpaca_has_data_in_window(
-            ticker=ticker,
-            start_date=persisted_earliest,
-            end_date=min(d_end, marker_end),
-            api_key=alpaca_key,
-            api_secret=alpaca_secret,
-            timeout_s=float(timeout_s),
-        )
-        if marker_ok is False:
-            append_exchange_download_log(
-                "hyperliquid",
-                f"[hl_best_1m] {coin_u} tradfi_earliest_marker_invalid={persisted_earliest.strftime('%Y%m%d')} -> rediscover",
-            )
-            persisted_earliest = None
-
-    discovered_date: date | None = None
-    if ticker and alpaca_key and alpaca_secret:
-        discovered_date = _discover_alpaca_earliest_day(
-            ticker=ticker,
-            end_date=d_end,
-            api_key=alpaca_key,
-            api_secret=alpaca_secret,
-            timeout_s=float(timeout_s),
-        )
-    effective_earliest: date | None = persisted_earliest
-    if discovered_date is not None:
-        effective_earliest = discovered_date if effective_earliest is None else min(effective_earliest, discovered_date)
-
-    if effective_earliest is not None:
-        if persisted_earliest is None or effective_earliest < persisted_earliest:
-            try:
-                _save_tradfi_earliest_marker(coin_dir=coin_dir, day=effective_earliest)
-            except Exception:
-                pass
-        append_exchange_download_log(
-            "hyperliquid",
-            f"[hl_best_1m] {coin_u} tradfi_earliest_discovered={effective_earliest.strftime('%Y%m%d')}",
-        )
-        return effective_earliest
-
-    return fallback_start
-
-
-def _polygon_fetch_1m(
-    *,
-    ticker: str,
-    start_ms: int,
-    end_ms: int,
-    api_key: str,
-    timeout_s: float,
-) -> list[dict[str, Any]]:
-    if not api_key:
-        return []
-    url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/minute/{int(start_ms)}/{int(end_ms)}"
-    params = {
-        "adjusted": "true",
-        "sort": "asc",
-        "limit": 50000,
-        "apiKey": api_key,
-    }
-    attempts = int(max(1, POLYGON_RETRY_ATTEMPTS))
-    last_err: Exception | None = None
-    data: dict[str, Any] | None = None
-    for attempt in range(attempts):
-        try:
-            resp = requests.get(url, params=params, timeout=float(timeout_s))
-            status = int(resp.status_code)
-            if status in (403, 422):
-                return []
-            if status in (429, 500, 502, 503, 504):
-                if attempt < attempts - 1:
-                    retry_after = 0.0
-                    try:
-                        retry_after = float(str(resp.headers.get("Retry-After") or "0").strip() or 0)
-                    except Exception:
-                        retry_after = 0.0
-                    if retry_after <= 0.0:
-                        retry_after = float(POLYGON_RETRY_BACKOFF_SECONDS) * float(2 ** attempt)
-                    time.sleep(max(0.0, retry_after))
-                    continue
-            resp.raise_for_status()
-            payload = resp.json()
-            data = payload if isinstance(payload, dict) else {}
-            last_err = None
-            break
-        except Exception as e:
-            last_err = e
-            transient = False
-            status = None
-            try:
-                status = int(getattr(getattr(e, "response", None), "status_code", None))
-            except Exception:
-                status = None
-            if status in (429, 500, 502, 503, 504):
-                transient = True
-            if transient and attempt < attempts - 1:
-                wait_s = float(POLYGON_RETRY_BACKOFF_SECONDS) * float(2 ** attempt)
-                time.sleep(max(0.0, wait_s))
-                continue
-            break
-
-    if last_err is not None:
-        status = None
-        try:
-            status = int(getattr(getattr(last_err, "response", None), "status_code", None))
-        except Exception:
-            status = None
-        _log_tradfi_error_throttled(provider="polygon", ticker=ticker, err=last_err, status=status)
-        return []
-
-    rows = data.get("results") if isinstance(data, dict) else None
-    if not isinstance(rows, list):
-        return []
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        try:
-            ts_ms = int(row.get("t"))
-            if ts_ms < start_ms or ts_ms > end_ms:
-                continue
-            out.append(
-                {
-                    "t": ts_ms,
-                    "o": float(row.get("o")),
-                    "h": float(row.get("h")),
-                    "l": float(row.get("l")),
-                    "c": float(row.get("c")),
-                    "v": float(row.get("v", 0.0)),
-                }
-            )
-        except Exception:
-            continue
-    return out
-
-
-def _polygon_detect_access_mode(*, ticker: str, api_key: str, timeout_s: float) -> str:
-    # Returns one of: "extended", "free", "unknown"
-    key_id = f"{str(api_key)[:12]}:{str(ticker).upper()}"
-    cached = str(_POLYGON_ACCESS_MODE_CACHE.get(key_id) or "").strip().lower()
-    if cached in ("extended", "free", "unknown"):
-        return cached
-
-    probe_day = (date.today() - timedelta(days=int(POLYGON_FREE_MAX_LOOKBACK_DAYS + 30)))
-    while int(probe_day.weekday()) >= 5:
-        probe_day += timedelta(days=1)
-
-    utc_start = datetime(probe_day.year, probe_day.month, probe_day.day, 14, 30, tzinfo=timezone.utc)
-    utc_end = datetime(probe_day.year, probe_day.month, probe_day.day, 20, 59, tzinfo=timezone.utc)
-    url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/minute/{int(utc_start.timestamp() * 1000)}/{int(utc_end.timestamp() * 1000)}"
-    params = {
-        "adjusted": "true",
-        "sort": "asc",
-        "limit": 1,
-        "apiKey": api_key,
-    }
-    try:
-        resp = requests.get(url, params=params, timeout=float(timeout_s))
-        status = int(resp.status_code)
-        if status == 200:
-            mode = "extended"
-        elif status in (401, 403, 422):
-            mode = "free"
-        else:
-            mode = "unknown"
-    except Exception:
-        mode = "unknown"
-
-    _POLYGON_ACCESS_MODE_CACHE[key_id] = mode
-    return mode
-
-
-def _polygon_can_fill_day(*, day: date, ticker: str, api_key: str, timeout_s: float) -> bool:
-    age_days = int((date.today() - day).days)
-    if age_days <= int(POLYGON_FREE_MAX_LOOKBACK_DAYS):
-        return True
-    mode = _polygon_detect_access_mode(ticker=ticker, api_key=api_key, timeout_s=float(timeout_s))
-    return mode == "extended"
+    if earliest_candidates:
+        return min(earliest_candidates)
+    return d_end - timedelta(days=int(TRADFI_IMPROVE_DEFAULT_LOOKBACK_DAYS))
 
 
 def _parse_day_from_filename(name: str) -> str | None:
@@ -1414,47 +1662,59 @@ def _fill_missing_from_tradfi_1m(
     timeout_s: float = 30.0,
     sleep_s: float = 0.0,
     stats_out: dict[str, int] | None = None,
-) -> tuple[int, int]:
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+) -> int:
     coin_u = normalize_hyperliquid_coin(coin)
     coin_dir = normalize_market_data_coin_dir("hyperliquid", coin)
     if not coin_dir:
         raise ValueError("coin is empty")
 
-    ticker = _tradfi_ticker_from_hyperliquid_coin(coin_u)
-    if not ticker:
-        return (0, 0)
+    # Resolve ticker via tradfi_symbol_map.json (3-tier: map → no_provider → missing+WARNING)
+    xyz_coin_name = _tradfi_ticker_from_hyperliquid_coin(coin_u)
+    tiingo_ticker, tiingo_fx_ticker, tiingo_fx_invert, tiingo_start_date = resolve_tradfi_symbol(xyz_coin_name)
+    ticker = None
+    source_kind = None
+    if tiingo_ticker:
+        ticker = str(tiingo_ticker).upper()
+        source_kind = "iex"
+    elif tiingo_fx_ticker:
+        ticker = str(tiingo_fx_ticker).lower()
+        source_kind = "fx"
+    else:
+        return 0
 
     profiles = _load_tradfi_profiles_from_ini()
-    alpaca_key = str((profiles.get("alpaca") or {}).get("api_key") or "").strip()
-    alpaca_secret = str((profiles.get("alpaca") or {}).get("api_secret") or "").strip()
-    polygon_key = str((profiles.get("polygon") or {}).get("api_key") or "").strip()
+    tiingo_key = str((profiles.get("tiingo") or {}).get("api_key") or "").strip()
+    has_tiingo = bool(tiingo_key)
 
-    if not (alpaca_key and alpaca_secret) and not polygon_key:
+    if not has_tiingo:
         append_exchange_download_log(
             "hyperliquid",
-            f"[hl_best_1m] {coin_u} tradfi_1m SKIP no tradfi credentials in pbgui.ini [tradfi_profiles]",
+            f"[hl_best_1m] {coin_u} tradfi_1m SKIP no tiingo api_key in pbgui.ini [tradfi_profiles]",
         )
-        return (0, 0)
+        return 0
 
-    sessions = _alpaca_fetch_trading_sessions(
-        start_date=start_date,
-        end_date=end_date,
-        api_key=alpaca_key,
-        api_secret=alpaca_secret,
-        timeout_s=float(timeout_s),
-    ) if (alpaca_key and alpaca_secret) else {}
+    tiingo_minutes_filled = 0
+    tiingo_month_requests_used = 0
+    last_tiingo_day_bars = 0
+    last_fx_chunk_fetched = False
+    last_fx_chunk_has_any_bars = False
 
-    alpaca_minutes_filled = 0
-    polygon_minutes_filled = 0
-    polygon_days: dict[str, dict[str, Any]] = {}
+    # IEX floor applies only to equity. FX runs without guessed listing floor.
+    if source_kind == "fx":
+        fx_floor = tiingo_start_date if tiingo_start_date is not None else start_date
+        effective_start = max(start_date, fx_floor)
+    else:
+        iex_floor = _IEX_FLOOR_DATE
+        if tiingo_start_date:
+            iex_floor = max(iex_floor, tiingo_start_date)
+        effective_start = max(start_date, iex_floor)
 
-    for d in _iter_dates_inclusive(start_date, end_date):
+    for d in _iter_dates_inclusive(effective_start, end_date):
         day_s = d.strftime("%Y%m%d")
         day_tag = _day_tag(day_s)
 
-        session = sessions.get(day_s)
-        if not session:
-            session = _default_us_equity_session_utc(d)
+        session = _default_us_equity_session_utc(d)
         if not session:
             continue
 
@@ -1468,6 +1728,7 @@ def _fill_missing_from_tradfi_1m(
         day_path = _best_day_path(coin=coin_u, day=day_tag)
         existing = _read_day_npz(day_path, day=day_tag) if day_path.exists() else {}
         source_codes = get_source_codes_for_day(exchange="hyperliquid", coin=coin_dir, day=day_s)
+        existing_before = set(int(k) for k in existing.keys())
 
         def _allow_write(minute_idx: int) -> bool:
             if source_codes is None:
@@ -1476,174 +1737,113 @@ def _fill_missing_from_tradfi_1m(
                 return True
             return int(source_codes[minute_idx]) in (0, int(SOURCE_CODE_OTHER))
 
-        alpaca_bars = _alpaca_fetch_1m_iex(
-            ticker=ticker,
-            start_ms=session_start_ms,
-            end_ms=session_end_ms,
-            api_key=alpaca_key,
-            api_secret=alpaca_secret,
-            timeout_s=float(timeout_s),
-        ) if (alpaca_key and alpaca_secret) else []
-
-        alpaca_added_idx: list[int] = []
-        for bar in alpaca_bars:
-            if not isinstance(bar, dict):
-                continue
-            try:
-                idx = _minute_index(int(bar.get("t")), day_start_ms)
-                if idx < start_idx or idx > end_idx:
-                    continue
-                if idx in existing:
-                    continue
-                if not _allow_write(idx):
-                    continue
-                existing[idx] = {
-                    "t": int(bar.get("t")),
-                    "o": float(bar.get("o")),
-                    "h": float(bar.get("h")),
-                    "l": float(bar.get("l")),
-                    "c": float(bar.get("c")),
-                    "v": float(bar.get("v", 0.0)),
-                }
-                alpaca_added_idx.append(idx)
-            except Exception:
-                continue
-
-        if alpaca_added_idx:
-            _write_day_npz(day_path, existing)
-            update_source_index_for_day(
-                exchange="hyperliquid",
-                coin=coin_dir,
-                day=day_s,
-                minute_indices=alpaca_added_idx,
-                code=SOURCE_CODE_OTHER,
-            )
-            alpaca_minutes_filled += len(alpaca_added_idx)
-
-        # Policy:
-        # - Priority source is Alpaca.
-        # - Polygon is used for remaining missing minutes inside the same
-        #   trading session window (never outside session).
-        remaining_missing = [
-            mi for mi in range(start_idx, end_idx + 1)
-            if mi not in existing and _allow_write(mi)
-        ]
-        if remaining_missing and polygon_key:
-            if not _polygon_can_fill_day(day=d, ticker=ticker, api_key=polygon_key, timeout_s=float(timeout_s)):
-                append_exchange_download_log(
-                    "hyperliquid",
-                    f"[hl_best_1m] {coin_u} polygon_skip_old_day_no_extended_access day={day_s}",
-                )
-                if isinstance(stats_out, dict):
-                    stats_out["polygon_old_days_skipped"] = int(stats_out.get("polygon_old_days_skipped") or 0) + 1
-                if sleep_s:
-                    time.sleep(float(sleep_s))
-                continue
-            polygon_days[day_s] = {
-                "day": d,
-                "day_tag": day_tag,
-                "day_start_ms": int(day_start_ms),
-                "session_start_ms": int(session_start_ms),
-                "session_end_ms": int(session_end_ms),
-                "missing_set": set(int(mi) for mi in remaining_missing),
-                "existing": existing,
-                "added_idx": [],
-            }
-
-        if sleep_s:
-            time.sleep(float(sleep_s))
-
-    if polygon_key and polygon_days:
-        sessions = sorted(
-            [
-                (int(meta["session_start_ms"]), int(meta["session_end_ms"]), str(day_s))
-                for day_s, meta in polygon_days.items()
-            ],
-            key=lambda x: x[0],
-        )
-
-        max_span_ms = int(max(1, int(POLYGON_MAX_RANGE_MINUTES_PER_CALL)) * 60_000)
-        polygon_ranges: list[tuple[int, int]] = []
-        cur_start: int | None = None
-        cur_end: int | None = None
-        for s_ms, e_ms, _day_s in sessions:
-            if cur_start is None:
-                cur_start, cur_end = int(s_ms), int(e_ms)
-                continue
-            candidate_end = max(int(cur_end), int(e_ms))
-            if int(candidate_end) - int(cur_start) <= int(max_span_ms):
-                cur_end = int(candidate_end)
-            else:
-                polygon_ranges.append((int(cur_start), int(cur_end)))
-                cur_start, cur_end = int(s_ms), int(e_ms)
-        if cur_start is not None and cur_end is not None:
-            polygon_ranges.append((int(cur_start), int(cur_end)))
-
-        for range_start_ms, range_end_ms in polygon_ranges:
-            polygon_bars = _polygon_fetch_1m(
-                ticker=ticker,
-                start_ms=int(range_start_ms),
-                end_ms=int(range_end_ms),
-                api_key=polygon_key,
-                timeout_s=float(timeout_s),
-            )
-            for bar in polygon_bars:
+        def _merge_bars(bars: list[dict[str, Any]]) -> int:
+            added = 0
+            for bar in bars:
                 if not isinstance(bar, dict):
                     continue
                 try:
-                    ts_ms = int(bar.get("t"))
-                    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
-                    day_s = dt.strftime("%Y%m%d")
-                    meta = polygon_days.get(day_s)
-                    if not meta:
-                        continue
-                    day_start_ms = int(meta["day_start_ms"])
-                    idx = _minute_index(ts_ms, day_start_ms)
-                    missing_set = meta.get("missing_set")
-                    if not isinstance(missing_set, set) or idx not in missing_set:
-                        continue
-                    existing = meta.get("existing")
-                    if not isinstance(existing, dict):
+                    idx = _minute_index(int(bar.get("t")), day_start_ms)
+                    if idx < start_idx or idx > end_idx:
                         continue
                     if idx in existing:
                         continue
+                    if not _allow_write(idx):
+                        continue
                     existing[idx] = {
-                        "t": ts_ms,
+                        "t": int(bar.get("t")),
                         "o": float(bar.get("o")),
                         "h": float(bar.get("h")),
                         "l": float(bar.get("l")),
                         "c": float(bar.get("c")),
                         "v": float(bar.get("v", 0.0)),
                     }
-                    added_idx = meta.get("added_idx")
-                    if isinstance(added_idx, list):
-                        added_idx.append(int(idx))
+                    added += 1
                 except Exception:
                     continue
+            return added
 
+        initial_missing = [
+            mi for mi in range(start_idx, end_idx + 1)
+            if mi not in existing and _allow_write(mi)
+        ]
+        if not initial_missing:
             if sleep_s:
                 time.sleep(float(sleep_s))
+            continue
 
-        for day_s, meta in polygon_days.items():
-            added_idx = meta.get("added_idx")
-            if not isinstance(added_idx, list) or not added_idx:
-                continue
-            day_tag = str(meta.get("day_tag") or _day_tag(day_s))
-            day_path = _best_day_path(coin=coin_u, day=day_tag)
-            existing = meta.get("existing")
-            if not isinstance(existing, dict):
-                continue
+        def _tiingo_status_cb(evt: dict[str, Any]) -> None:
+            if progress_cb is None or not isinstance(evt, dict):
+                return
+            try:
+                payload = {
+                    "stage": "tiingo_wait",
+                    "day": day_s,
+                    "month_key": d.strftime("%Y-%m"),
+                    "ticker": str(evt.get("ticker") or ticker),
+                    "tiingo_wait_s": int(evt.get("tiingo_wait_s") or 0),
+                    "tiingo_wait_reason": str(evt.get("tiingo_wait_reason") or ""),
+                    "tiingo_wait_kind": str(evt.get("tiingo_wait_kind") or ""),
+                }
+                progress_cb(payload)
+            except Exception:
+                pass
+
+        fx_chunk_has_any_bars = False
+        fx_chunk_fetched = False
+        if source_kind == "fx":
+            tiingo_bars, tiingo_month_fetch, fx_chunk_has_any_bars = _tiingo_fetch_1m_fx_day_from_month_cache(
+                ticker=ticker,
+                day=d,
+                session_start_ms=session_start_ms,
+                session_end_ms=session_end_ms,
+                api_key=tiingo_key,
+                timeout_s=float(timeout_s),
+                invert=bool(tiingo_fx_invert),
+                status_cb=_tiingo_status_cb,
+            )
+            fx_chunk_fetched = bool(tiingo_month_fetch)
+        else:
+            tiingo_bars, tiingo_month_fetch = _tiingo_fetch_1m_iex_day_from_month_cache(
+                ticker=ticker,
+                day=d,
+                session_start_ms=session_start_ms,
+                session_end_ms=session_end_ms,
+                api_key=tiingo_key,
+                timeout_s=float(timeout_s),
+                status_cb=_tiingo_status_cb,
+            )
+        last_tiingo_day_bars = int(len(tiingo_bars)) if isinstance(tiingo_bars, list) else 0
+        last_fx_chunk_fetched = bool(fx_chunk_fetched)
+        last_fx_chunk_has_any_bars = bool(fx_chunk_has_any_bars)
+        if tiingo_month_fetch:
+            tiingo_month_requests_used += 1
+        tiingo_minutes_filled += int(_merge_bars(tiingo_bars))
+
+        new_indices = sorted(set(int(k) for k in existing.keys()) - existing_before)
+        if new_indices:
             _write_day_npz(day_path, existing)
             update_source_index_for_day(
                 exchange="hyperliquid",
                 coin=coin_dir,
                 day=day_s,
-                minute_indices=sorted(set(int(x) for x in added_idx)),
+                minute_indices=new_indices,
                 code=SOURCE_CODE_OTHER,
             )
-            polygon_minutes_filled += len(set(int(x) for x in added_idx))
 
-    return (int(alpaca_minutes_filled), int(polygon_minutes_filled))
+        if sleep_s:
+            time.sleep(float(sleep_s))
+
+    if isinstance(stats_out, dict):
+        stats_out["tiingo_minutes_filled"] = int(tiingo_minutes_filled)
+        stats_out["tiingo_month_requests_used"] = int(tiingo_month_requests_used)
+        stats_out["tiingo_day_bars"] = int(last_tiingo_day_bars)
+        stats_out["tiingo_fx_chunk_fetched"] = 1 if bool(last_fx_chunk_fetched) else 0
+        stats_out["tiingo_fx_chunk_has_data"] = 1 if bool(last_fx_chunk_has_any_bars) else 0
+
+    return int(tiingo_minutes_filled)
+
+
 
 
 def _iter_dates_inclusive(start: date, end: date):
@@ -1778,9 +1978,8 @@ class ImproveBest1mResult:
     l2book_minutes_added: int
     binance_minutes_filled: int
     bybit_minutes_filled: int
-    alpaca_minutes_filled: int = 0
-    polygon_minutes_filled: int = 0
-    polygon_old_days_skipped: int = 0
+    tiingo_minutes_filled: int = 0
+    tiingo_month_requests_used: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1790,9 +1989,8 @@ class ImproveBest1mResult:
             "l2book_minutes_added": int(self.l2book_minutes_added),
             "binance_minutes_filled": int(self.binance_minutes_filled),
             "bybit_minutes_filled": int(self.bybit_minutes_filled),
-            "alpaca_minutes_filled": int(self.alpaca_minutes_filled),
-            "polygon_minutes_filled": int(self.polygon_minutes_filled),
-            "polygon_old_days_skipped": int(self.polygon_old_days_skipped),
+            "tiingo_minutes_filled": int(self.tiingo_minutes_filled),
+            "tiingo_month_requests_used": int(self.tiingo_month_requests_used),
         }
 
 
@@ -1959,7 +2157,9 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     *,
     coin: str,
     end_date: date | str | None = None,
+    start_date_override: date | str | None = None,
     dry_run: bool = False,
+    refetch: bool = False,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> ImproveBest1mResult:
     coin_u = normalize_hyperliquid_coin(coin)
@@ -1970,7 +2170,30 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     if isinstance(d_end, str):
         d_end = datetime.strptime(d_end.strip(), "%Y-%m-%d").date() if "-" in d_end else datetime.strptime(d_end.strip(), "%Y%m%d").date()
 
+    d_start_override: date | None = None
+    if start_date_override is not None and str(start_date_override).strip() != "":
+        if isinstance(start_date_override, date):
+            d_start_override = start_date_override
+        elif isinstance(start_date_override, str):
+            s = str(start_date_override).strip()
+            try:
+                d_start_override = datetime.strptime(s, "%Y-%m-%d").date() if "-" in s else datetime.strptime(s, "%Y%m%d").date()
+            except Exception:
+                d_start_override = None
+    if d_start_override is not None and d_start_override > d_end:
+        d_start_override = d_end
+
     is_stock_perp = _is_stock_perp_coin(coin_u)
+    tradfi_source_kind: str | None = None
+    if is_stock_perp:
+        xyz_coin_name = _tradfi_ticker_from_hyperliquid_coin(coin_u)
+        tiingo_ticker, tiingo_fx_ticker, _, _ = resolve_tradfi_symbol(xyz_coin_name)
+        if tiingo_ticker:
+            tradfi_source_kind = "iex"
+        elif tiingo_fx_ticker:
+            tradfi_source_kind = "fx"
+    fx_backfill_mode = bool(is_stock_perp and tradfi_source_kind == "fx")
+
     earliest_candidates: list[date] = []
     l2_rng = get_local_l2book_day_range(coin=coin_u)
     if l2_rng is not None:
@@ -1982,17 +2205,53 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     if best_days:
         earliest_candidates.append(min(best_days))
 
-    if is_stock_perp:
-        start_day = _determine_stock_perp_improve_start(
-            coin_u=coin_u,
-            coin_dir=coin_dir,
-            d_end=d_end,
-            earliest_candidates=earliest_candidates,
-            timeout_s=30.0,
-        )
+    if is_stock_perp and tradfi_source_kind == "fx":
+        oldest_other = None
+        if not refetch:
+            oldest_other = get_oldest_day_with_source_code(
+                exchange="hyperliquid",
+                coin=coin_dir,
+                code=SOURCE_CODE_OTHER,
+            )
+
+        oldest_other_date: date | None = None
+        if oldest_other:
+            try:
+                oldest_other_date = datetime.strptime(oldest_other, "%Y%m%d").date()
+            except Exception:
+                oldest_other_date = None
+
+        if refetch or oldest_other_date is None:
+            cursor_start = d_end
+        else:
+            cursor_start = min(d_end, oldest_other_date - timedelta(days=1))
+
+        lower_bound = d_end - timedelta(days=int(TRADFI_DISCOVERY_MAX_LOOKBACK_DAYS))
+        if d_start_override is not None:
+            lower_bound = max(lower_bound, d_start_override)
+        days = []
+        cur = cursor_start
+        while cur >= lower_bound:
+            days.append(cur)
+            cur -= timedelta(days=1)
+    elif is_stock_perp:
+        if d_start_override is not None:
+            start_day = d_start_override
+        else:
+            start_day = _determine_stock_perp_improve_start(
+                coin_u=coin_u,
+                coin_dir=coin_dir,
+                d_end=d_end,
+                earliest_candidates=earliest_candidates,
+                refetch=refetch,
+                timeout_s=30.0,
+            )
         days = [d for d in _iter_dates_inclusive(start_day, d_end)]
     else:
-        if not earliest_candidates:
+        if d_start_override is not None:
+            start_day = d_start_override
+            days = [d for d in _iter_dates_inclusive(start_day, d_end)]
+        elif not earliest_candidates:
             days = []
         else:
             start_day = min(earliest_candidates)
@@ -2001,15 +2260,28 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     l2book_minutes_added = 0
     binance_minutes_filled = 0
     bybit_minutes_filled = 0
-    alpaca_minutes_filled = 0
-    polygon_minutes_filled = 0
-    polygon_old_days_skipped = 0
+    tiingo_minutes_filled = 0
+    tiingo_month_requests_used = 0
+    month_totals: dict[str, int] = {}
+    month_seen: dict[str, int] = {}
+    month_progress_by_day: dict[str, tuple[str, int, int]] = {}
+    for d in days:
+        mk = d.strftime("%Y-%m")
+        month_totals[mk] = int(month_totals.get(mk, 0)) + 1
+    for d in days:
+        day_s_local = d.strftime("%Y%m%d")
+        mk = d.strftime("%Y-%m")
+        seen = int(month_seen.get(mk, 0)) + 1
+        month_seen[mk] = seen
+        month_progress_by_day[day_s_local] = (mk, seen, int(month_totals.get(mk, seen)))
 
     if progress_cb is not None:
         try:
             progress_cb({"stage": "improve", "planned": len(days), "done": 0})
         except Exception:
             pass
+
+    fx_empty_chunk_streak = 0
 
     for i, d in enumerate(days, start=1):
         day_start_time = time.time()
@@ -2033,6 +2305,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
             days_checked += 1
             if progress_cb is not None:
                 try:
+                    month_key, month_day_index, month_day_total = month_progress_by_day.get(day_s, ("", 0, 0))
                     progress_cb({
                         "stage": "improve",
                         "planned": len(days),
@@ -2042,6 +2315,16 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                         "l2book_minutes_added": int(l2book_minutes_added),
                         "binance_minutes_filled": int(binance_minutes_filled),
                         "bybit_minutes_filled": int(bybit_minutes_filled),
+                        "month_key": str(month_key),
+                        "month_day_index": int(month_day_index),
+                        "month_day_total": int(month_day_total),
+                        "tiingo_wait_s": 0,
+                        "tiingo_wait_reason": "",
+                        "tiingo_wait_kind": "",
+                        "tradfi_source_kind": str(tradfi_source_kind or ""),
+                        "fx_backfill_mode": bool(fx_backfill_mode),
+                        "fx_backfill_direction": "newest_to_oldest" if fx_backfill_mode else "",
+                        "fx_empty_chunk_streak": int(fx_empty_chunk_streak),
                     })
                 except Exception:
                     pass
@@ -2135,18 +2418,49 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         if not dry_run and len(existing) < 1440:
             if is_stock_perp:
                 t0 = time.time()
-                tradfi_fill_stats = {"polygon_old_days_skipped": int(polygon_old_days_skipped)}
-                alpaca_added, polygon_added = _fill_missing_from_tradfi_1m(
-                    coin=coin_u,
-                    start_date=d,
-                    end_date=d,
-                    timeout_s=30.0,
-                    sleep_s=0.0,
-                    stats_out=tradfi_fill_stats,
-                )
-                alpaca_minutes_filled += int(alpaca_added)
-                polygon_minutes_filled += int(polygon_added)
-                polygon_old_days_skipped = int(tradfi_fill_stats.get("polygon_old_days_skipped") or polygon_old_days_skipped)
+                tradfi_fill_stats: dict[str, int] = {}
+
+                # Explicit guard: skip TradFi fetch when target session minutes are already covered
+                # by best/API data for this day.
+                needs_tradfi_fetch = False
+                session = _default_us_equity_session_utc(d)
+                if session:
+                    session_start_ms, session_end_ms = int(session[0]), int(session[1])
+                    day_start_ms = _day_start_ms(d)
+                    start_idx = max(0, _minute_index(session_start_ms, day_start_ms))
+                    end_idx = min(1439, _minute_index(session_end_ms, day_start_ms))
+                    if end_idx >= start_idx:
+                        for minute_idx in range(start_idx, end_idx + 1):
+                            if minute_idx in existing:
+                                continue
+                            if source_codes is not None and minute_idx < len(source_codes):
+                                if int(source_codes[minute_idx]) not in (0, int(SOURCE_CODE_OTHER)):
+                                    continue
+                            needs_tradfi_fetch = True
+                            break
+
+                if needs_tradfi_fetch:
+                    tiingo_added = _fill_missing_from_tradfi_1m(
+                        coin=coin_u,
+                        start_date=d,
+                        end_date=d,
+                        timeout_s=30.0,
+                        sleep_s=0.0,
+                        stats_out=tradfi_fill_stats,
+                        progress_cb=progress_cb,
+                    )
+                else:
+                    tiingo_added = 0
+
+                tiingo_minutes_filled += int(tiingo_added)
+                tiingo_month_requests_used += int(tradfi_fill_stats.get("tiingo_month_requests_used") or 0)
+
+                if tradfi_source_kind == "fx":
+                    if int(tradfi_fill_stats.get("tiingo_fx_chunk_fetched") or 0) > 0:
+                        if int(tradfi_fill_stats.get("tiingo_fx_chunk_has_data") or 0) > 0:
+                            fx_empty_chunk_streak = 0
+                        else:
+                            fx_empty_chunk_streak += 1
                 t_binance = time.time() - t0
                 t_bybit = 0.0
             else:
@@ -2217,6 +2531,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         days_checked += 1
         if progress_cb is not None:
             try:
+                month_key, month_day_index, month_day_total = month_progress_by_day.get(day_s, ("", 0, 0))
                 progress_cb(
                     {
                         "stage": "improve",
@@ -2227,13 +2542,34 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                         "l2book_minutes_added": int(l2book_minutes_added),
                         "binance_minutes_filled": int(binance_minutes_filled),
                         "bybit_minutes_filled": int(bybit_minutes_filled),
-                        "alpaca_minutes_filled": int(alpaca_minutes_filled),
-                        "polygon_minutes_filled": int(polygon_minutes_filled),
-                        "polygon_old_days_skipped": int(polygon_old_days_skipped),
+                        "tiingo_minutes_filled": int(tiingo_minutes_filled),
+                        "tiingo_month_requests_used": int(tiingo_month_requests_used),
+                        "month_key": str(month_key),
+                        "month_day_index": int(month_day_index),
+                        "month_day_total": int(month_day_total),
+                        "tiingo_wait_s": 0,
+                        "tiingo_wait_reason": "",
+                        "tiingo_wait_kind": "",
+                        "tradfi_source_kind": str(tradfi_source_kind or ""),
+                        "fx_backfill_mode": bool(fx_backfill_mode),
+                        "fx_backfill_direction": "newest_to_oldest" if fx_backfill_mode else "",
+                        "fx_empty_chunk_streak": int(fx_empty_chunk_streak),
                     }
                 )
             except Exception:
                 pass
+
+        if (
+            is_stock_perp
+            and tradfi_source_kind == "fx"
+            and int(fx_empty_chunk_streak) >= int(TRADFI_FX_EMPTY_CHUNKS_STOP)
+        ):
+            append_exchange_download_log(
+                "hyperliquid",
+                f"[hl_best_1m] {coin_u} tradfi_1m FX stop: {fx_empty_chunk_streak} consecutive empty chunks (newest→oldest)",
+                level="INFO",
+            )
+            break
 
     return ImproveBest1mResult(
         coin=coin_u,
@@ -2242,9 +2578,8 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         l2book_minutes_added=int(l2book_minutes_added),
         binance_minutes_filled=int(binance_minutes_filled),
         bybit_minutes_filled=int(bybit_minutes_filled),
-        alpaca_minutes_filled=int(alpaca_minutes_filled),
-        polygon_minutes_filled=int(polygon_minutes_filled),
-        polygon_old_days_skipped=int(polygon_old_days_skipped),
+        tiingo_minutes_filled=int(tiingo_minutes_filled),
+        tiingo_month_requests_used=int(tiingo_month_requests_used),
     )
 
 

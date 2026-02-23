@@ -57,7 +57,6 @@ The API-Keys page also has **TradFi Data Provider** settings:
 - **Extended provider** (optional, for older history)
   - Providers: `alpaca`, `polygon`, `finnhub`, `alphavantage`
   - API key is required.
-  - API secret is required for `alpaca`.
   - Includes **Test Connection**, **Save TradFi Config**, and **Clear TradFi Config**.
 
 ### TradFi runtime behavior (single source of truth)
@@ -76,11 +75,11 @@ Notes below are practical PBGui/PB7 guidance and can change with provider plans.
   - In PBGui workflow used as default for the most recent ~7 days.
 - `alpaca`
   - Free API key available.
-  - Good historical 1m intraday coverage (typically multiple years, often 5+ years).
-  - **Recommended default extended provider** for backtests older than 7 days.
+  - Recommended provider in the API-Keys UI.
+  - Free tier can provide multi-year 1m history for this workflow.
 - `polygon`
-  - Free tier/plan is account-dependent.
-  - Intraday history depth varies by plan; may return little or no usable 1m data.
+  - Coverage is plan-dependent.
+  - Free plans can return `0 candles` for 1m intraday requests.
 - `finnhub`
   - Free tier does not provide practical 1m intraday history for this workflow.
   - Not recommended for PBGui stock-perp backtesting.
@@ -93,18 +92,15 @@ Notes below are practical PBGui/PB7 guidance and can change with provider plans.
 | Provider | API key needed | Practical 1m depth for PBGui/PB7 | Free-tier limits (practical) | Recommendation |
 |---|---:|---|---|---|
 | `yfinance` | No | Recent window (PBGui default workflow: last ~7 days) | No dedicated key, external source behavior may vary | Keep enabled for recent candles |
-| `alpaca` | Yes (`key` + `secret`) | Multi-year 1m history (commonly 5+ years) | Free feed is delayed, but fine for backtests | **Best default extended provider** |
-| `polygon` | Yes (`key`) | **PB7 current assumption:** up to ~2 years 1m history on free access | **PB7 current assumption:** ~5 calls/min and 50k bars/request; account/plan dependent | Use only after test confirms your plan/data access |
+| `alpaca` | Yes (`key` + `secret`) | Multi-year 1m history (good practical coverage) | Requires market-data enabled account credentials | **Recommended extended provider** |
+| `polygon` | Yes (`key`) | Plan-dependent for 1m intraday history | Free plan can be insufficient for backfills | Optional, verify your plan |
 | `finnhub` | Yes (`key`) | Not practical for 1m backtest history | Free tier generally unsuitable for this workflow | Not recommended |
 | `alphavantage` | Yes (`key`) | Often too shallow/slow for larger 1m ranges | Strong daily rate limits on free usage | Only for small ad-hoc checks |
-
-Polygon note: capabilities changed over time (Polygon → Massive branding). Always validate by running **Test Connection** and checking returned candle count for your target range.
 
 ### Recommendation
 
 - Keep `yfinance` for the recent window (automatic in PBGui).
-- Configure **`alpaca`** as your extended provider for months/years of 1m backtests.
-- Use `polygon` only if your plan explicitly includes the required intraday history.
+- Configure **`alpaca`** as your extended provider for stock-perp (HIP-3) 1m backtests.
 
 ### TradFi test behavior
 
