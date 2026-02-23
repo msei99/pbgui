@@ -25,6 +25,8 @@
 ## Merkliste aus Chat
 
 - Future `Merke Dir:` entries must be appended here as short bullet points.
+- **NIEMALS eigenmächtige grosse Design-Änderungen**: Kein Modul-Rewrite, Datei löschen, Architektur-Umbau oder Löschen/Ersetzen von bestehendem Code ohne explizite User-Bestätigung. Erst Vorschlag formulieren, fragen, auf „Ja" warten — dann implementieren.
+- GUI-Sprache ist durchgehend Englisch; nur Guides/Tutorials werden in Englisch und Deutsch angeboten.
 
 ## Repo boundaries (important)
 
