@@ -243,10 +243,42 @@ def _uses_us_holiday_calendar(canonical_type: str) -> bool:
     return str(canonical_type or "").strip().lower() in {"equity_us", "etf", "commodity_etf", "index_etf"}
 
 
+def _is_fx_market_holiday(day: _date) -> bool:
+    # FX weekend handling is modeled via expected-session windows, not holiday labels.
+    return False
+
+
+def _is_tradfi_market_holiday(day: _date, canonical_type: str) -> bool:
+    ctype = str(canonical_type or "").strip().lower()
+    if ctype == "fx":
+        return False
+    if _uses_us_holiday_calendar(ctype):
+        return _is_us_market_holiday(day)
+    return int(day.weekday()) >= 5
+
+
+def _fx_expected_minute_indices(day: _date) -> set[int]:
+    wd = int(day.weekday())
+    # UTC session model:
+    # - Fri closes at 22:00 UTC
+    # - Sun opens at 22:00 UTC
+    # => closed window: Fri 22:00 UTC -> Sun 22:00 UTC
+    if wd == 5:  # Saturday
+        return set()
+    if wd == 4:  # Friday 00:00-21:59
+        return set(range(0, 22 * 60))
+    if wd == 6:  # Sunday 22:00-23:59
+        return set(range(22 * 60, 1440))
+    return set(range(1440))
+
+
 def _tradfi_expected_indices_for_type(day: _date, canonical_type: str) -> set[int]:
-    if _uses_us_holiday_calendar(canonical_type):
-        if _is_us_market_holiday(day):
-            return set()
+    ctype = str(canonical_type or "").strip().lower()
+    if ctype == "fx":
+        return _fx_expected_minute_indices(day)
+    if _is_tradfi_market_holiday(day, ctype):
+        return set()
+    if _uses_us_holiday_calendar(ctype):
         if _is_us_market_early_close(day):
             # 09:30-13:00 ET
             return _tradfi_expected_minute_indices_custom_close(day, close_hour=13, close_minute=0)
@@ -2061,7 +2093,7 @@ def view_market_data():
                 else:
                     build_coins = [c for c in build_coin_sel if c in eligible_build_coins]
 
-                c_build, c_start, c_refetch = st.columns([0.20, 0.24, 0.56], vertical_alignment="bottom")
+                c_build, c_start, c_end, c_refetch = st.columns([0.18, 0.22, 0.22, 0.38], vertical_alignment="bottom")
                 with c_build:
                     run_improve = st.button("Build best 1m", key="market_data_hl_best_1m_run_improve", use_container_width=True)
                 with c_start:
@@ -2073,6 +2105,16 @@ def view_market_data():
                             "Optional lower bound for Build best 1m. "
                             "If set: FX backfill runs newest→oldest only down to this date; "
                             "other symbols use this as start date even if older data exists."
+                        ),
+                    )
+                with c_end:
+                    build_end_date = st.date_input(
+                        "End date (optional)",
+                        value=None,
+                        key="market_data_hl_best_1m_end_date",
+                        help=(
+                            "Optional upper bound for Build best 1m. "
+                            "If empty: today is used."
                         ),
                     )
                 with c_refetch:
@@ -2089,11 +2131,16 @@ def view_market_data():
                         if not build_coins:
                             raise ValueError("No eligible coins selected")
 
+                        if build_start_date and build_end_date and build_start_date > build_end_date:
+                            raise ValueError("Start date must be on or before End date")
+
+                        effective_end_day = build_end_date.strftime("%Y%m%d") if build_end_date else _date.today().strftime("%Y%m%d")
+
                         job = enqueue_job(
                             job_type="hl_best_1m",
                             payload={
                                 "coins": list(build_coins),
-                                "end_day": _date.today().strftime("%Y%m%d"),
+                                "end_day": effective_end_day,
                                 "start_day": build_start_date.strftime("%Y%m%d") if build_start_date else "",
                                 "refetch": bool(refetch_tradfi),
                             },
@@ -4079,7 +4126,7 @@ def view_market_data():
                                                 oth = int(counts.get("other_exchange") or 0)
                                                 miss = int(counts.get("missing") or 0)
                                                 if is_stock_perp_1m:
-                                                    is_holiday = _uses_us_holiday_calendar(tradfi_type) and _is_us_market_holiday(cur_day)
+                                                    is_holiday = _is_tradfi_market_holiday(cur_day, tradfi_type)
                                                     sess = tradfi_sessions.get(day_s)
                                                     if sess is not None:
                                                         expected_minutes = len(
@@ -4300,11 +4347,11 @@ def view_market_data():
                                 hours_map = hours_map if isinstance(hours_map, dict) else {}
                                 expected_indices = None
                                 if is_stock_perp_1m:
-                                    holiday_session_indices = _tradfi_expected_minute_indices(d)
-                                    is_market_holiday = bool(
-                                        _uses_us_holiday_calendar(tradfi_type)
-                                        and _is_us_market_holiday(d)
-                                    )
+                                    if str(tradfi_type or "").strip().lower() == "fx":
+                                        holiday_session_indices = set(range(1440))
+                                    else:
+                                        holiday_session_indices = _tradfi_expected_minute_indices(d)
+                                    is_market_holiday = _is_tradfi_market_holiday(d, tradfi_type)
                                     sess_map, sess_present = ({}, False)
                                     sess = (sess_map or {}).get(day_s)
                                     if sess is not None:
@@ -4332,18 +4379,21 @@ def view_market_data():
                                         mins_map = mins_map if isinstance(mins_map, dict) else {}
                                         for minute in range(60):
                                             minute_idx = (h * 60) + int(minute)
-                                            if is_market_holiday and minute_idx in holiday_session_indices:
-                                                row.append(-2)
-                                                hhmm = f"{h:02d}:{minute:02d}"
-                                                row_text.append(f"{day_s} {hhmm} (market holiday)")
-                                                continue
-                                            if is_stock_perp_1m and expected_indices is not None and minute_idx not in expected_indices:
-                                                row.append(-1)
-                                                hhmm = f"{h:02d}:{minute:02d}"
-                                                row_text.append(f"{day_s} {hhmm} (expected out-of-session gap)")
-                                                continue
                                             src = mins_map.get(minute)
                                             code = int(src_code.get(str(src), src_code.get(src, 0)))
+                                            # Preserve real source data colors even outside expected session.
+                                            # Out-of-session markers are only for truly missing minutes.
+                                            if code == 0:
+                                                if is_market_holiday and minute_idx in holiday_session_indices:
+                                                    row.append(-2)
+                                                    hhmm = f"{h:02d}:{minute:02d}"
+                                                    row_text.append(f"{day_s} {hhmm} (market holiday)")
+                                                    continue
+                                                if is_stock_perp_1m and expected_indices is not None and minute_idx not in expected_indices:
+                                                    row.append(-1)
+                                                    hhmm = f"{h:02d}:{minute:02d}"
+                                                    row_text.append(f"{day_s} {hhmm} (expected out-of-session gap)")
+                                                    continue
                                             row.append(code)
                                             # hover text per minute
                                             hhmm = f"{h:02d}:{minute:02d}"

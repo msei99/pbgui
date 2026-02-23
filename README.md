@@ -329,6 +329,11 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Improved: Tiingo quota wait status now updates as a live countdown in job progress instead of a static wait value
 - Fix: US market holiday/early-close session handling added to TradFi 1m fill logic to avoid unnecessary requests and false gaps on closed periods
 - Fix: Market Data `missing_minutes` / `coverage_pct` for TradFi 1m now use expected in-session minutes (holiday/early-close + current-day cutoff), preventing false missing counts
+- Improved: `Build best 1m` now includes optional `End date` (in addition to optional `Start date`) to run bounded backfills (e.g. one month only)
+- Improved: TradFi stock-perp backfill cursor now anchors on existing `other_exchange` history (same behavior pattern for FX and equities), while `refetch` still forces rebuild from the selected end
+- Improved: FX weekend handling now uses explicit UTC session boundaries (Fri close/Sun reopen) and marks closed windows as expected out-of-session gaps in heatmaps
+- Improved: Minute heatmap now preserves real source colors (`api`/`other_exchange`/etc.) even outside expected session; out-of-session/holiday markers apply only to truly missing minutes
+- Improved: Equity (IEX) TradFi write path now uses raw-first ingestion (write all minutes returned by Tiingo) without additional market-hours clipping
 - Improved: Market Data `TradFi Symbol Mappings` table now supports filter controls for symbol, type, and status (ordered as symbol → type → status)
 - Improved: Market Data `Already have` tabs (`1m`, `1m_api`, `l2Book`) now include coin/type filters, summary cards (`coins/files/size`), and hide redundant context columns (`exchange`, `dataset`)
 - Improved: Market Data `PB7 cache` table now includes coin/type filters, hides redundant `exchange`, and keeps stable row selection after filtering
