@@ -131,6 +131,12 @@ Für FX-gemappte Stock-Perps (`tiingo_fx_ticker`):
 - Nutzt bestehende `other_exchange`-Historie als Anker, wenn kein Refetch aktiv ist
   - Start-Cursor = ältester vorhandener `other_exchange`-Tag minus 1 Tag
 - `Refetch` startet am gewählten/End-Tag und baut rückwärts im erlaubten Bereich neu auf
+- Weekend-Sessiongrenze folgt dem beobachteten Feed-Verhalten:
+  - Freitag-Close = 17:00 New York Lokalzeit (DST-aware in UTC)
+  - Sonntag-Reopen ≈ 22:00 UTC (fix)
+- Bekannte reduzierte FX-Feiertagssessions:
+  - `12-24` und `12-31`: frühes Close um ca. 22:00 UTC
+  - `12-25` und `01-01`: spätes Reopen um ca. 23:00 UTC
 
 Für Equity-gemappte Stock-Perps (`tiingo_ticker`):
 - Nutzt Tiingo IEX 1m
