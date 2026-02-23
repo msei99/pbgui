@@ -37,6 +37,11 @@ Angezeigte Spalten u. a.:
 - Pyth-Link
 - Verification und Notes
 
+Tabellen-Filter:
+- Filter by status
+- Filter by symbol (matcht XYZ-Symbol und Tiingo-Symbol/Ticker)
+- Filter by type (canonical type, z. B. `equity_us`, `fx`)
+
 Startdate-Semantik:
 - Start Date: Provider-Metadatum (`tiingo_start_date`)
 - Fetch Start: effektives frühestes Fetch-Datum

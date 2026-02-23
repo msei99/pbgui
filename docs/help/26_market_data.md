@@ -37,6 +37,11 @@ Displayed columns include:
 - Pyth link
 - Verification and notes
 
+Table filters:
+- Filter by status
+- Filter by symbol (matches XYZ symbol and Tiingo symbol/ticker)
+- Filter by type (canonical type, e.g. `equity_us`, `fx`)
+
 Start-date semantics:
 - Start Date: provider metadata (`tiingo_start_date`)
 - Fetch Start: effective earliest fetch date
