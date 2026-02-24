@@ -18,6 +18,7 @@ Highlights:
 - Read-only inventory for PBGui and PB7 cache data
 - Source-code based coverage views
 - Job progress with day/month context for stock-perp builds
+- In stock-perp minute view, overlay highlights for `market holiday` and `expected out-of-session gap` can be toggled off to inspect raw missing gaps directly
 
 ## TradFi Symbol Mappings
 
