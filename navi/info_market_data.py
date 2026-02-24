@@ -4298,6 +4298,27 @@ def view_market_data():
                                         start_day = f"{_sm_year:04d}{_sm_mon:02d}01"
                                         end_day = f"{_sm_year:04d}{_sm_mon:02d}{_last_day:02d}"
 
+                            show_market_holiday_overlay = True
+                            show_out_of_session_overlay = True
+                            if is_stock_perp_1m:
+                                c_holiday, c_oos, _ = st.columns([0.28, 0.34, 0.38], vertical_alignment="bottom")
+                                with c_holiday:
+                                    show_market_holiday_overlay = bool(
+                                        st.checkbox(
+                                            "Highlight market holidays",
+                                            value=bool(st.session_state.get("market_data_show_market_holiday_overlay", True)),
+                                            key="market_data_show_market_holiday_overlay",
+                                        )
+                                    )
+                                with c_oos:
+                                    show_out_of_session_overlay = bool(
+                                        st.checkbox(
+                                            "Highlight expected out-of-session gaps",
+                                            value=bool(st.session_state.get("market_data_show_out_of_session_overlay", True)),
+                                            key="market_data_show_out_of_session_overlay",
+                                        )
+                                    )
+
                             hp = get_minute_presence_for_dataset(
                                 ex,
                                 ds,
@@ -4414,12 +4435,21 @@ def view_market_data():
                                             # Preserve real source data colors even outside expected session.
                                             # Out-of-session markers are only for truly missing minutes.
                                             if code == 0:
-                                                if is_market_holiday and minute_idx in holiday_session_indices:
+                                                if (
+                                                    show_market_holiday_overlay
+                                                    and is_market_holiday
+                                                    and minute_idx in holiday_session_indices
+                                                ):
                                                     row.append(-2)
                                                     hhmm = f"{h:02d}:{minute:02d}"
                                                     row_text.append(f"{day_s} {hhmm} (market holiday)")
                                                     continue
-                                                if is_stock_perp_1m and expected_indices is not None and minute_idx not in expected_indices:
+                                                if (
+                                                    show_out_of_session_overlay
+                                                    and is_stock_perp_1m
+                                                    and expected_indices is not None
+                                                    and minute_idx not in expected_indices
+                                                ):
                                                     row.append(-1)
                                                     hhmm = f"{h:02d}:{minute:02d}"
                                                     row_text.append(f"{day_s} {hhmm} (expected out-of-session gap)")
@@ -4459,9 +4489,20 @@ def view_market_data():
                                 yaxis=dict(autorange="reversed", showgrid=False),
                             )
                             if is_stock_perp_1m:
-                                st.markdown(
+                                holiday_legend = (
                                     "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
+                                    if show_market_holiday_overlay
+                                    else ""
+                                )
+                                oos_legend = (
                                     "<span style='display:inline-block;padding:6px;border-radius:4px;background:#4e4e4e;color:#fff;margin-right:8px;'>expected out-of-session gap</span>"
+                                    if show_out_of_session_overlay
+                                    else ""
+                                )
+                                st.markdown(
+                                    holiday_legend
+                                    + oos_legend
+                                    +
                                     "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
                                     "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
                                     "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"

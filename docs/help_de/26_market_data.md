@@ -18,6 +18,7 @@ Highlights:
 - Read-only Inventar für PBGui- und PB7-Cache-Daten
 - Source-Code-basierte Coverage-Ansichten
 - Job-Fortschritt mit Tages-/Monatskontext bei Stock-Perp-Builds
+- In der Stock-Perp-Minute-Ansicht können die Overlays `market holiday` und `expected out-of-session gap` ausgeschaltet werden, um rohe Missing-Gaps direkt zu sehen
 
 ## TradFi Symbol Mappings
 
