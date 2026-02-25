@@ -19,6 +19,11 @@ Highlights:
 - Source-code based coverage views
 - Job progress with day/month context for stock-perp builds
 - In stock-perp minute view, overlay highlights for `market holiday` and `expected out-of-session gap` can be toggled off to inspect raw missing gaps directly
+- Minute view includes an optional `OHLCV chart` expander with interactive Plotly candlesticks and volume bars for fast visual validation
+- The chart uses lazy zoom: fully zoomed out it shows coarse candles (typically `1d`) and automatically recalculates finer timeframes when zooming in — no manual timeframe selection needed
+- The coin name is shown as a label in the top-left corner of the chart
+- For equity stock-perps, historical stock split dates are shown as vertical dashed orange lines with annotations (e.g. "Split 20:1"); OHLCV data is automatically adjusted for splits
+- Split factor data is stored per exchange in `data/coindata/hyperliquid/split_factors.json` (fetched from Tiingo Daily API)
 
 ## TradFi Symbol Mappings
 

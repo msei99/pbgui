@@ -1,5 +1,6 @@
 import streamlit as st
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import calendar
 
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
@@ -360,6 +361,256 @@ def _format_unix_ts(ts: object) -> str:
     except Exception:
         return str(ts or "")
 
+def _parse_day_from_npz_filename(name: str) -> str:
+    s = str(name or "").strip()
+    if s.lower().endswith(".npz"):
+        s = s[:-4]
+    if len(s) == 8 and s.isdigit():
+        return s
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        raw = f"{s[0:4]}{s[5:7]}{s[8:10]}"
+        if len(raw) == 8 and raw.isdigit():
+            return raw
+    return ""
+
+def _load_ohlcv_from_npz_range(
+    *,
+    exchange: str,
+    dataset: str,
+    coin: str,
+    start_day: str,
+    end_day: str,
+):
+    import numpy as np
+    import pandas as pd
+
+    base = get_exchange_raw_root_dir(exchange) / str(dataset) / str(coin)
+    if not base.is_dir():
+        return pd.DataFrame(columns=["ts", "o", "h", "l", "c", "v"])
+
+    frames: list[pd.DataFrame] = []
+    for p in sorted(base.glob("*.npz")):
+        day_s = _parse_day_from_npz_filename(p.name)
+        if not day_s:
+            continue
+        if start_day and day_s < start_day:
+            continue
+        if end_day and day_s > end_day:
+            continue
+        try:
+            with np.load(p) as data:
+                arr = data["candles"] if "candles" in data else (data[data.files[0]] if data.files else None)
+            if arr is None or len(arr) == 0:
+                continue
+            names = list(getattr(arr, "dtype", object()).names or [])
+
+            ts_key = "ts" if "ts" in names else ("t" if "t" in names else None)
+            o_key = "o" if "o" in names else ("open" if "open" in names else None)
+            h_key = "h" if "h" in names else ("high" if "high" in names else None)
+            l_key = "l" if "l" in names else ("low" if "low" in names else None)
+            c_key = "c" if "c" in names else ("close" if "close" in names else None)
+            v_key = (
+                "v"
+                if "v" in names
+                else ("bv" if "bv" in names else ("volume" if "volume" in names else None))
+            )
+
+            if ts_key and o_key and h_key and l_key and c_key:
+                df = pd.DataFrame(
+                    {
+                        "ts": arr[ts_key].astype("int64", copy=False),
+                        "o": arr[o_key].astype("float64", copy=False),
+                        "h": arr[h_key].astype("float64", copy=False),
+                        "l": arr[l_key].astype("float64", copy=False),
+                        "c": arr[c_key].astype("float64", copy=False),
+                        "v": arr[v_key].astype("float64", copy=False) if v_key else 0.0,
+                    }
+                )
+            else:
+                arr2 = np.asarray(arr)
+                if arr2.ndim != 2 or arr2.shape[1] < 5:
+                    continue
+                df = pd.DataFrame(
+                    {
+                        "ts": arr2[:, 0].astype("int64", copy=False),
+                        "o": arr2[:, 1].astype("float64", copy=False),
+                        "h": arr2[:, 2].astype("float64", copy=False),
+                        "l": arr2[:, 3].astype("float64", copy=False),
+                        "c": arr2[:, 4].astype("float64", copy=False),
+                        "v": arr2[:, 5].astype("float64", copy=False) if arr2.shape[1] > 5 else 0.0,
+                    }
+                )
+            frames.append(df)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame(columns=["ts", "o", "h", "l", "c", "v"])
+
+    out = pd.concat(frames, ignore_index=True)
+    out = out.dropna(subset=["ts", "o", "h", "l", "c"])
+    out["ts"] = out["ts"].astype("int64", copy=False)
+    out = out.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+    return out
+
+def _resample_ohlcv(df, rule: str):
+    import pandas as pd
+
+    if df is None or df.empty or not rule or str(rule).strip() == "1min":
+        return df
+    x = df.copy()
+    x["dt"] = pd.to_datetime(x["ts"], unit="ms", utc=True)
+    x = x.set_index("dt").sort_index()
+    agg = x.resample(str(rule)).agg({"o": "first", "h": "max", "l": "min", "c": "last", "v": "sum"}).dropna(subset=["o", "h", "l", "c"])
+    if agg.empty:
+        return df
+    agg = agg.reset_index()
+    agg["ts"] = (agg["dt"].view("int64") // 1_000_000).astype("int64")
+    return agg[["ts", "o", "h", "l", "c", "v"]]
+
+
+def _df_to_columnar(df) -> dict:
+    """Convert OHLCV DataFrame to columnar dict of plain Python lists."""
+    if df is None or df.empty:
+        return {"ts": [], "o": [], "h": [], "l": [], "c": [], "v": []}
+    return {
+        "ts": [int(x) for x in df["ts"]],
+        "o": [round(float(x), 8) for x in df["o"]],
+        "h": [round(float(x), 8) for x in df["h"]],
+        "l": [round(float(x), 8) for x in df["l"]],
+        "c": [round(float(x), 8) for x in df["c"]],
+        "v": [round(float(x), 4) for x in df["v"]],
+    }
+
+
+def _build_ohlcv_pyramid(ohlcv_df, total_span_min: float) -> dict:
+    """Build multi-resolution candle pyramid.  Only layers appropriate for
+    the data span are computed so the resulting JSON stays small enough to
+    embed in the browser.
+
+    Full range (years): 1d + 1h  (~2 MB JSON, <1s to compute)
+    Selected month:     + 15m, 5m, 1m  (~3 MB total)
+    """
+    pyramid: dict[str, dict] = {}
+    pyramid["1d"] = _df_to_columnar(_resample_ohlcv(ohlcv_df, "1D"))
+    pyramid["1h"] = _df_to_columnar(_resample_ohlcv(ohlcv_df, "1h"))
+    # 15m and 5m are always included – even for years of data these are
+    # compact (e.g. 3 years ≈ 105 K / 315 K rows → ~3 / 10 MB JSON).
+    pyramid["15m"] = _df_to_columnar(_resample_ohlcv(ohlcv_df, "15min"))
+    pyramid["5m"] = _df_to_columnar(_resample_ohlcv(ohlcv_df, "5min"))
+    # 1m raw data can be huge for long ranges (1.5 M rows / 3 years),
+    # so only include it for spans ≤ 90 days.
+    if total_span_min <= 90 * 24 * 60:
+        pyramid["1m"] = _df_to_columnar(ohlcv_df)
+    return pyramid
+
+
+_OHLCV_CHART_TEMPLATE = r"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
+#wrap{position:relative;width:100%;}
+#chart{width:100%;}
+#tf-ind{position:absolute;top:6px;right:12px;background:rgba(40,40,50,0.85);
+  color:#aaa;padding:3px 10px;border-radius:4px;font:13px/1.4 sans-serif;
+  z-index:10;pointer-events:none;}
+#loading{text-align:center;padding:60px;color:#888;font:14px sans-serif;}
+</style></head>
+<body>
+<div id="loading">Loading chart&#8230;</div>
+<div id="wrap" style="display:none;">
+  <div id="tf-ind"></div>
+  <div id="chart"></div>
+</div>
+<script>
+(function(){
+  "use strict";
+  var L=/*__DATA__*/null;
+  var SVOL=/*__SHOW_VOL__*/false;
+  var HV=/*__HEIGHT_VOL__*/620;
+  var HN=/*__HEIGHT_NO_VOL__*/460;
+  var TFO=["1d","1h","15m","5m","1m"];
+  var TFT={"1d":365*864e5,"1h":45*864e5,"15m":10*864e5,"5m":2*864e5,"1m":0};
+  var cur=null,sw=false;
+
+  function pick(ms){
+    for(var i=0;i<TFO.length;i++){var t=TFO[i];if(L[t]&&ms>=TFT[t])return t;}
+    for(var i=TFO.length-1;i>=0;i--)if(L[TFO[i]])return TFO[i];
+    return"1d";
+  }
+  function iso(t){return new Date(t).toISOString();}
+
+  function mkTraces(tf){
+    var d=L[tf],x=d.ts.map(iso);
+    var tr=[{type:"candlestick",x:x,open:d.o,high:d.h,low:d.l,close:d.c,
+      name:"OHLC "+tf,
+      increasing:{line:{color:"#26a69a"}},decreasing:{line:{color:"#ef5350"}}}];
+    if(SVOL){
+      var vc=[];for(var i=0;i<d.o.length;i++)vc.push(d.c[i]>=d.o[i]?"#26a69a":"#ef5350");
+      tr.push({type:"bar",x:x,y:d.v,name:"Vol",
+        marker:{color:vc},opacity:0.6,showlegend:false,yaxis:"y2"});
+    }
+    return tr;
+  }
+
+  function mkLayout(xr){
+    var o={paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"#0e1117",
+      font:{color:"#ccc",size:11},margin:{l:55,r:10,t:10,b:30},
+      xaxis:{rangeslider:{visible:false},gridcolor:"#222",type:"date"},
+      yaxis:{title:"Price",gridcolor:"#222",fixedrange:false},
+      legend:{orientation:"h",x:0,y:-0.05,font:{size:11}}};
+    if(xr)o.xaxis.range=xr;
+    if(SVOL){o.height=HV;o.yaxis.domain=[0.25,1.0];
+      o.yaxis2={title:"Volume",gridcolor:"#222",domain:[0,0.2],
+        rangemode:"tozero",fixedrange:false};o.bargap=0;
+    }else{o.height=HN;}
+    return o;
+  }
+
+  /* initial render with coarsest TF */
+  var itf=pick(Infinity);cur=itf;
+  document.getElementById("loading").style.display="none";
+  document.getElementById("wrap").style.display="block";
+  document.getElementById("tf-ind").textContent=itf;
+  var el=document.getElementById("chart");
+  Plotly.newPlot(el,mkTraces(itf),mkLayout(null),
+    {scrollZoom:true,displayModeBar:true,responsive:true});
+
+  /* on zoom: auto-switch TF */
+  var dbt=null;
+  el.on("plotly_relayout",function(){
+    if(sw)return;clearTimeout(dbt);
+    dbt=setTimeout(function(){
+      var xr=el.layout.xaxis.range;if(!xr||xr.length<2)return;
+      var a=new Date(xr[0]).getTime(),b=new Date(xr[1]).getTime();
+      if(!isFinite(a)||!isFinite(b))return;
+      var s=Math.abs(b-a),nf=pick(s);
+      if(nf!==cur){cur=nf;
+        document.getElementById("tf-ind").textContent=nf;
+        sw=true;
+        Plotly.react(el,mkTraces(nf),mkLayout(xr),
+          {scrollZoom:true,displayModeBar:true,responsive:true}
+        ).then(function(){sw=false;});
+      }
+    },150);
+  });
+})();
+</script></body></html>"""
+
+
+def _build_ohlcv_chart_html(pyramid: dict, show_volume: bool,
+                            height_vol: int = 620, height_no_vol: int = 460) -> str:
+    """Build self-contained HTML with Plotly.js multi-resolution OHLCV chart."""
+    import json as _json
+    data_json = _json.dumps(pyramid, separators=(',', ':'))
+    html = _OHLCV_CHART_TEMPLATE
+    html = html.replace('/*__DATA__*/null', data_json)
+    html = html.replace('/*__SHOW_VOL__*/false', 'true' if show_volume else 'false')
+    html = html.replace('/*__HEIGHT_VOL__*/620', str(height_vol))
+    html = html.replace('/*__HEIGHT_NO_VOL__*/460', str(height_no_vol))
+    return html
+
 
 def _load_market_data_status() -> dict:
     path = Path(__file__).resolve().parents[1] / "data" / "logs" / "market_data_status.json"
@@ -442,6 +693,10 @@ def _supports_fragment_run_every() -> bool:
         return "run_every" in inspect.signature(st.fragment).parameters
     except Exception:
         return False
+
+
+def _is_background_refresh_paused() -> bool:
+    return False
 
 
 def _fmt_bytes(n: int | float | None) -> str:
@@ -1648,6 +1903,7 @@ def _coin_options_for_exchange(exchange: str) -> list[str]:
 
 def view_market_data():
     preserve_selection_once = bool(st.session_state.pop("market_data_preserve_selection_once", False))
+    # (pause_background_refresh removed – bidirectional component preserves chart state across reruns)
 
     def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
         ex_name = str(exchange_name or "").strip().lower()
@@ -2197,7 +2453,7 @@ def view_market_data():
                         st.error(str(e))
 
                 jobs_active_best = _has_active_jobs(["hl_best_1m"])
-                if jobs_active_best and _supports_fragment_run_every():
+                if jobs_active_best and _supports_fragment_run_every() and not _is_background_refresh_paused():
                     @st.fragment(run_every=2)
                     def _best_jobs_fragment():
                         _render_jobs_panel(
@@ -2303,7 +2559,7 @@ def view_market_data():
 
                     with st.expander("Last build job", expanded=False):
                         jobs_active_last = _has_active_jobs(["hl_best_1m"])
-                        if jobs_active_last and _supports_fragment_run_every():
+                        if jobs_active_last and _supports_fragment_run_every() and not _is_background_refresh_paused():
                             @st.fragment(run_every=2)
                             def _last_build_fragment():
                                 # Stop auto-refresh when no jobs remain
@@ -2840,7 +3096,7 @@ def view_market_data():
                 region = str(st.session_state.get("market_data_hl_aws_region") or region_default).strip()
 
                 jobs_active = _has_active_jobs(["hl_aws_l2book_auto"])
-                if jobs_active and _supports_fragment_run_every():
+                if jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
                     @st.fragment(run_every=2)
                     def _jobs_fragment():
                         _render_jobs_panel(
@@ -3139,7 +3395,7 @@ def view_market_data():
 
                     with st.expander("Last download job", expanded=False):
                         jobs_active_last = _has_active_jobs(["hl_aws_l2book_auto"])
-                        if jobs_active_last and _supports_fragment_run_every():
+                        if jobs_active_last and _supports_fragment_run_every() and not _is_background_refresh_paused():
                             @st.fragment(run_every=2)
                             def _last_download_fragment():
                                 try:
@@ -4250,6 +4506,8 @@ def view_market_data():
                                     st.plotly_chart(fig, use_container_width=True)
 
                                     # Build month list from date range
+                                    chart_full_start_day = str(start_day or "")
+                                    chart_full_end_day = str(end_day or "")
                                     month_list: list[str] = []
                                     if dt0 and dt1:
                                         cur_m = dt0.replace(day=1)
@@ -4263,6 +4521,8 @@ def view_market_data():
                                                 cur_m = cur_m.replace(month=cur_m.month + 1)
                                     if not month_list:
                                         month_list = [dt0.strftime("%Y-%m")] if dt0 else []
+                                    chart_full_start_day = dt0.strftime("%Y%m%d") if dt0 else str(start_day or "")
+                                    chart_full_end_day = dt1.strftime("%Y%m%d") if dt1 else str(end_day or "")
                                     sel_key = f"market_data_1m_month_{cn}"
                                     if month_list and sel_key not in st.session_state:
                                         st.session_state[sel_key] = month_list[-1]
@@ -4520,6 +4780,140 @@ def view_market_data():
                                     unsafe_allow_html=True,
                                 )
                             st.plotly_chart(fig, use_container_width=True)
+
+                            with st.expander("OHLCV chart", expanded=False):
+                                show_volume = True
+                                chart_start_day = str(chart_full_start_day or "")
+                                chart_end_day = str(chart_full_end_day or "")
+                                ohlcv_df = _load_ohlcv_from_npz_range(
+                                    exchange=ex,
+                                    dataset=ds,
+                                    coin=cn,
+                                    start_day=chart_start_day,
+                                    end_day=chart_end_day,
+                                )
+                                if ohlcv_df.empty:
+                                    st.info("No OHLCV candles found for selected range.")
+                                else:
+                                    import pandas as pd
+
+                                    full_min_ts = int(ohlcv_df["ts"].iloc[0])
+                                    full_max_ts = int(ohlcv_df["ts"].iloc[-1])
+
+                                    # ── Lazy multi-resolution: bidirectional component ──
+                                    from ohlcv_component import ohlcv_chart as _ohlcv_chart
+
+                                    # Cache keys (per symbol) – prefix with _c_ to avoid collision
+                                    # with the component widget key (ohlcv_zoom_{ex}_{cn})
+                                    _pyr_key = f"_c_ohlcv_pyr_{ex}_{cn}"
+                                    _zoom_key = f"_c_ohlcv_zr_{ex}_{cn}"
+                                    _fp_key = f"_c_ohlcv_fp_{ex}_{cn}"
+
+                                    # Invalidate cache when data changes
+                                    _fp = f"{full_min_ts}_{full_max_ts}_{len(ohlcv_df)}"
+                                    if st.session_state.get(_fp_key) != _fp:
+                                        st.session_state[_fp_key] = _fp
+                                        st.session_state.pop(_pyr_key, None)
+                                        st.session_state.pop(_zoom_key, None)
+
+                                    # Base layers: only 1d + 1h (always fast)
+                                    pyramid = {
+                                        "1d": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1D")),
+                                        "1h": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1h")),
+                                    }
+
+                                    # Merge cached fine layers from previous zoom
+                                    _cached_fine = st.session_state.get(_pyr_key, {})
+                                    pyramid.update(_cached_fine)
+
+                                    chart_h = 630
+                                    _cached_zoom = st.session_state.get(_zoom_key)
+
+                                    # Derive display name for coin
+                                    _coin_display = str(cn or "")
+                                    if _coin_display.upper().startswith("XYZ-"):
+                                        _coin_display = _coin_display[4:]
+                                    for _sfx in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT", "/USDC:USDC", "/USDT:USDT"):
+                                        if _coin_display.upper().endswith(_sfx):
+                                            _coin_display = _coin_display[: -len(_sfx)]
+                                            break
+
+                                    # Load stock-split dates for TradFi coins
+                                    _split_dates_for_chart: list[dict] = []
+                                    _cn_upper = str(cn or "").upper()
+                                    if _cn_upper.startswith("XYZ:") or _cn_upper.startswith("XYZ-"):
+                                        try:
+                                            from hyperliquid_best_1m import (
+                                                _load_split_factors_from_cache as _lsfc,
+                                            )
+                                            # Extract bare ticker: XYZ-GOOGL_USDC:USDC → GOOGL
+                                            _tail = _cn_upper[4:].strip()
+                                            for _sfx in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT", "/USDC:USDC", "/USDT:USDT"):
+                                                if _tail.endswith(_sfx):
+                                                    _tail = _tail[: -len(_sfx)]
+                                                    break
+                                            _ticker = _tail.strip(" _:-")
+                                            if _ticker:
+                                                _splits = _lsfc(_ticker)
+                                                if _splits:
+                                                    # Only include splits within actual OHLCV data range
+                                                    _earliest_date = ""
+                                                    _1d = pyramid.get("1d")
+                                                    if _1d and _1d.get("ts"):
+                                                        _earliest_ts = min(_1d["ts"])
+                                                        from datetime import datetime as _dt, timezone as _tz
+                                                        _earliest_date = _dt.fromtimestamp(_earliest_ts / 1000, tz=_tz.utc).strftime("%Y-%m-%d")
+                                                    _split_dates_for_chart = [
+                                                        {"date": str(d), "factor": f}
+                                                        for d, f in _splits
+                                                        if not _earliest_date or str(d) >= _earliest_date
+                                                    ]
+                                        except Exception:
+                                            pass
+
+                                    _zoom_result = _ohlcv_chart(
+                                        layers=pyramid,
+                                        zoom_range=_cached_zoom,
+                                        show_volume=show_volume,
+                                        height=chart_h,
+                                        split_dates=_split_dates_for_chart or None,
+                                        coin_name=_coin_display,
+                                        key=f"ohlcv_zoom_{ex}_{cn}",
+                                    )
+
+                                    # Handle zoom request from JS
+                                    if _zoom_result and isinstance(_zoom_result, dict) and _zoom_result.get("need_tf"):
+                                        _needed = _zoom_result["need_tf"]
+                                        if _needed not in _cached_fine:
+                                            import pandas as _pd
+                                            # Parse requested window and add 3× padding
+                                            _rs = _pd.Timestamp(_zoom_result["range_start"])
+                                            _re = _pd.Timestamp(_zoom_result["range_end"])
+                                            _span_ms = (_re - _rs).total_seconds() * 1000
+                                            _center_ms = (_rs.timestamp() + _re.timestamp()) / 2 * 1000
+                                            _half_win = max(_span_ms * 1.5, 30 * 86400_000)  # min 30 days
+                                            _half_win = min(_half_win, 90 * 86400_000)        # max 90 days
+                                            _ws = _center_ms - _half_win
+                                            _we = _center_ms + _half_win
+                                            _win_df = ohlcv_df[(ohlcv_df["ts"] >= _ws) & (ohlcv_df["ts"] <= _we)]
+                                            if _win_df.empty:
+                                                _win_df = ohlcv_df  # fallback to full data
+
+                                            _fine: dict = {}
+                                            for _ftf, _frule in [("15m", "15min"), ("5m", "5min"), ("1m", None)]:
+                                                if _ftf not in pyramid:
+                                                    if _frule is None:
+                                                        _fine[_ftf] = _df_to_columnar(_win_df)
+                                                    else:
+                                                        _fine[_ftf] = _df_to_columnar(_resample_ohlcv(_win_df, _frule))
+
+                                            if _fine:
+                                                st.session_state[_pyr_key] = {**_cached_fine, **_fine}
+                                                st.session_state[_zoom_key] = [
+                                                    _zoom_result["range_start"],
+                                                    _zoom_result["range_end"],
+                                                ]
+                                                st.rerun()
                             return
 
 
@@ -4612,7 +5006,7 @@ def view_market_data():
                 except Exception:
                     gaps_active = False
 
-                if gaps_active and _supports_fragment_run_every():
+                if gaps_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
                     @st.fragment(run_every=5)
                     def _gap_fragment():
                         # Stop auto-refresh when no jobs remain
