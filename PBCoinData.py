@@ -2559,16 +2559,29 @@ class CoinData:
             _log('PBCoinData', 'Mapping update complete', level='INFO')
             self._run_tradfi_sync()
 
+    @staticmethod
+    def _is_master() -> bool:
+        """Return True if pbgui.ini role == master."""
+        try:
+            pb_config = configparser.ConfigParser()
+            pb_config.read('pbgui.ini')
+            return pb_config.get('main', 'role', fallback='slave').strip().lower() == 'master'
+        except Exception:
+            return False
+
     def _run_tradfi_sync(self):
         """Sync TradFi symbol map + XYZ spec after a mapping update cycle.
 
-        Order matters: fetch_xyz_spec first (descriptions + canonical_type),
-        then sync_tradfi_spec so new entries get enriched metadata.
+        fetch_xyz_spec (web-scraping docs.trade.xyz) only runs on master —
+        it needs bs4 and is only useful for the Market Data UI.
+        sync_tradfi_spec runs on all nodes (master + slave).
         """
         try:
-            from tradfi_sync import sync_tradfi_spec, fetch_xyz_spec
-            instruments = fetch_xyz_spec(pbgui_dir=Path.cwd())
-            _log('PBCoinData', f'XYZ spec refreshed: {len(instruments)} instruments', level='INFO')
+            from tradfi_sync import sync_tradfi_spec
+            if self._is_master():
+                from tradfi_sync import fetch_xyz_spec
+                instruments = fetch_xyz_spec(pbgui_dir=Path.cwd())
+                _log('PBCoinData', f'XYZ spec refreshed: {len(instruments)} instruments', level='INFO')
             summary = sync_tradfi_spec(pbgui_dir=Path.cwd())
             _log(
                 'PBCoinData',
