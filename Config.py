@@ -7889,7 +7889,15 @@ class BalanceCalculator:
             st.markdown("You can edit the configuration in the left text area and click on 'Calculate' to see the results.")
             st.selectbox("Exchange", V7.list(), key="bc_exchange_id")
             if st.button("Calculate"):
-                coins = set(self.config.live.approved_coins.long + self.config.live.approved_coins.short)
+                # Normalize XYZ coins: PB7 uses "xyz:AAPL", mapping uses "XYZ-AAPL"
+                def _norm_coin(c: str) -> str:
+                    u = c.strip().upper()
+                    if u.startswith("XYZ:") and len(u) > 4:
+                        return "XYZ-" + u[4:]
+                    return u
+                coins = set(_norm_coin(c) for c in self.config.live.approved_coins.long + self.config.live.approved_coins.short)
+                coins_long = set(_norm_coin(c) for c in self.config.live.approved_coins.long)
+                coins_short = set(_norm_coin(c) for c in self.config.live.approved_coins.short)
                 self.coin_infos = []
                 self.balance_long = []
                 self.balance_short = []
@@ -7942,7 +7950,7 @@ class BalanceCalculator:
                                 "min_order_price": min_order_price,
                                 "max lev": lev
                             })
-                            if coin in self.config.live.approved_coins.long:
+                            if coin in coins_long:
                                 if self.config.bot.long.n_positions > 0 and self.config.bot.long.total_wallet_exposure_limit > 0:
                                     we = self.config.bot.long.total_wallet_exposure_limit / self.config.bot.long.n_positions
                                     balance = min_order_price / (we * self.config.bot.long.entry_initial_qty_pct)
@@ -7950,7 +7958,7 @@ class BalanceCalculator:
                                         "coin": coin,
                                         "balance": balance
                                     })
-                            if coin in self.config.live.approved_coins.short:
+                            if coin in coins_short:
                                 if self.config.bot.short.n_positions > 0 and self.config.bot.short.total_wallet_exposure_limit > 0:
                                     we = self.config.bot.short.total_wallet_exposure_limit / self.config.bot.short.n_positions
                                     balance = min_order_price / (we * self.config.bot.short.entry_initial_qty_pct)

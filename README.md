@@ -326,6 +326,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 ## v1.60 (25-02-2026)
 - Fix: OHLCV chart no longer shows stock split lines outside the actual data range (e.g. AMZN splits from 1998 without OHLCV data)
 - Fix: Market Data "Already have" 1m tab now shows all coins (removed hard limit of 200 that cut off alphabetically later entries like NVDA, ORCL)
+- Fix: TradFi XYZ spec fetch now only runs on master (skipped on slave VPS nodes to avoid bs4 dependency warning)
+- Fix: Balance Calculator now works for XYZ stock-perp coins (normalized coin format mismatch between PB7 config `xyz:AAPL` and mapping `XYZ-AAPL`)
 
 ## v1.59 (25-02-2026)
 - New: Interactive OHLCV chart in Market Data minute view — built as a bidirectional Streamlit component with Plotly.js for fast visual data validation and spotting gaps or anomalies in 1m builds
