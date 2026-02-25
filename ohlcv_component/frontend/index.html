@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:transparent;}
+#wrap{position:relative;width:100%;}
+#chart{width:100%;}
+#tf-ind{position:absolute;top:6px;left:50%;transform:translateX(-50%);background:rgba(40,40,50,0.85);
+  color:#aaa;padding:3px 10px;border-radius:4px;font:13px/1.4 sans-serif;
+  z-index:10;pointer-events:none;}
+#coin-label{position:absolute;top:6px;left:8px;background:rgba(40,40,50,0.85);
+  color:#e0e0e0;padding:3px 10px;border-radius:4px;font:bold 13px/1.4 sans-serif;
+  z-index:10;pointer-events:none;}
+#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(14,17,23,0.92);color:#ddd;padding:14px 28px;
+  border-radius:8px;font:14px sans-serif;z-index:20;display:none;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="coin-label"></div>
+  <div id="tf-ind">--</div>
+  <div id="loading">Loading…</div>
+  <div id="chart"></div>
+</div>
+<script>
+(function(){
+  "use strict";
+
+  /* ── Streamlit Component Protocol (vanilla JS) ── */
+  function sendMsg(type,data){
+    var m={isStreamlitMessage:true,type:type};
+    if(data)for(var k in data)m[k]=data[k];
+    window.parent.postMessage(m,"*");
+  }
+  function setVal(v){sendMsg("streamlit:setComponentValue",{value:v});}
+  function setH(h){sendMsg("streamlit:setFrameHeight",{height:h});}
+
+  /* ── TF definitions ── */
+  var TFO=["1d","1h","15m","5m","1m"];
+  var TFT={"1d":365*864e5,"1h":45*864e5,"15m":10*864e5,"5m":2*864e5,"1m":0};
+
+  /* Pick the best TF that we actually HAVE data for & has coverage */
+  function pickTF(spanMs,startMs,endMs){
+    for(var i=0;i<TFO.length;i++){
+      var t=TFO[i];
+      if(spanMs>=TFT[t]&&hasCov(t,startMs,endMs))return t;
+    }
+    for(var i=TFO.length-1;i>=0;i--)if(hasCov(TFO[i],startMs,endMs))return TFO[i];
+    /* absolute fallback: first available TF */
+    for(var i=0;i<TFO.length;i++)if(L[TFO[i]])return TFO[i];
+    return"1d";
+  }
+  /* What TF we WANT regardless of data availability */
+  function wantTF(spanMs){
+    for(var i=0;i<TFO.length;i++)if(spanMs>=TFT[TFO[i]])return TFO[i];
+    return"1m";
+  }
+  /* Does layer have >=30 % overlap with visible range? */
+  function hasCov(tf,sMs,eMs){
+    if(!L||!L[tf]||!L[tf].ts||L[tf].ts.length<2)return false;
+    var ts=L[tf].ts,ds=ts[0],de=ts[ts.length-1];
+    var ol=Math.min(de,eMs)-Math.max(ds,sMs);
+    return ol>=0.3*(eMs-sMs);
+  }
+
+  /* ── Chart state ── */
+  var el=document.getElementById("chart");
+  var tfInd=document.getElementById("tf-ind");
+  var coinLabel=document.getElementById("coin-label");
+  var loadDiv=document.getElementById("loading");
+  var L=null,SVOL=false,cur=null,inited=false,guard=false;
+  var pendingRequest=null;  /* TF we already requested from server */
+  var SPLITS=[];  /* [{date:"2020-08-31", factor:4}, ...] */
+
+  function iso(t){return new Date(t).toISOString();}
+
+  /* Compute price (and optionally volume) Y-range for visible x-window */
+  function yRange(tf,startMs,endMs){
+    var d=L[tf];if(!d||!d.ts.length)return null;
+    var mn=Infinity,mx=-Infinity,vmn=0,vmx=0;
+    for(var i=0;i<d.ts.length;i++){
+      if(d.ts[i]<startMs||d.ts[i]>endMs)continue;
+      if(d.l[i]<mn)mn=d.l[i];
+      if(d.h[i]>mx)mx=d.h[i];
+      if(SVOL&&d.v[i]>vmx)vmx=d.v[i];
+    }
+    if(!isFinite(mn)||!isFinite(mx))return null;
+    var pad=(mx-mn)*0.10||mx*0.02;
+    return {price:[mn-pad,mx+pad],vol:[0,vmx*1.10]};
+  }
+
+  function mkTraces(tf){
+    var d=L[tf],x=d.ts.map(iso);
+    var tr=[{type:"candlestick",x:x,open:d.o,high:d.h,low:d.l,close:d.c,
+      name:"OHLC",showlegend:false,
+      increasing:{line:{color:"#26a69a"}},decreasing:{line:{color:"#ef5350"}}}];
+    if(SVOL){
+      var vc=[];for(var i=0;i<d.o.length;i++)vc.push(d.c[i]>=d.o[i]?"#26a69a":"#ef5350");
+      tr.push({type:"bar",x:x,y:d.v,name:"Vol",
+        marker:{color:vc},opacity:0.6,showlegend:false,yaxis:"y2"});
+    }
+    return tr;
+  }
+
+  /* Build shapes + annotations for stock split vertical lines */
+  function splitShapes(){
+    if(!SPLITS||!SPLITS.length)return {shapes:[],annotations:[]};
+    var sh=[],an=[];
+    for(var i=0;i<SPLITS.length;i++){
+      var s=SPLITS[i];
+      var xv=s.date+"T00:00:00";
+      sh.push({type:"line",x0:xv,x1:xv,y0:0,y1:1,yref:"paper",
+        line:{color:"#ff9800",width:1.5,dash:"dash"},layer:"below"});
+      var f=s.factor;
+      var lbl=f>=1?(f+":1"):("1:"+Math.round(1/f));
+      an.push({x:xv,y:1,yref:"paper",yanchor:"bottom",
+        text:"Split "+lbl,font:{size:10,color:"#ff9800"},
+        showarrow:false,xshift:4,yshift:2,textangle:0,
+        bgcolor:"rgba(14,17,23,0.7)",borderpad:2});
+    }
+    return {shapes:sh,annotations:an};
+  }
+
+  function mkLayout(xr,yr){
+    var sp=splitShapes();
+    var o={paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"#0e1117",
+      font:{color:"#ccc",size:11},margin:{l:55,r:10,t:40,b:30},
+      xaxis:{rangeslider:{visible:false},gridcolor:"#222",type:"date"},
+      yaxis:{title:"Price",gridcolor:"#222",fixedrange:true},
+      showlegend:false,
+      shapes:sp.shapes,annotations:sp.annotations};
+    if(xr)o.xaxis.range=[xr[0],xr[1]];
+    if(yr&&yr.price){o.yaxis.range=yr.price;o.yaxis.autorange=false;}
+    else{o.yaxis.autorange=true;}
+    if(SVOL){o.height=620;o.yaxis.domain=[0.25,1.0];
+      o.yaxis2={title:"Volume",gridcolor:"#222",domain:[0,0.2],
+        rangemode:"tozero",fixedrange:true};o.bargap=0;
+      if(yr&&yr.vol)o.yaxis2.range=yr.vol;
+    }else{o.height=460;}
+    return o;
+  }
+
+  var CFG={scrollZoom:true,displayModeBar:true,responsive:true};
+
+  /* ── Zoom handler ── */
+  var dbt=null,lastXKey="";
+  function onZoom(){
+    if(guard)return;
+    clearTimeout(dbt);
+    dbt=setTimeout(function(){
+      var xr=el.layout.xaxis.range;
+      if(!xr||xr.length<2)return;
+      var a=new Date(xr[0]).getTime(),b=new Date(xr[1]).getTime();
+      if(!isFinite(a)||!isFinite(b))return;
+      /* Skip if X hasn't actually changed (Y-only relayout) */
+      var xk=Math.round(a/1000)+":"+Math.round(b/1000);
+      if(xk===lastXKey)return;
+      lastXKey=xk;
+      var sMs=Math.min(a,b),eMs=Math.max(a,b);
+      var span=eMs-sMs,want=wantTF(span),best=pickTF(span,sMs,eMs);
+
+      if(want!==best&&!hasCov(want,sMs,eMs)){
+        /* need finer data from Python */
+        if(pendingRequest===want)return; /* already requested */
+        pendingRequest=want;
+        loadDiv.textContent="Loading "+want+" candles\u2026";
+        loadDiv.style.display="block";
+        setVal({need_tf:want,range_start:xr[0],range_end:xr[1]});
+        return;
+      }
+      if(best!==cur){
+        cur=best;tfInd.textContent=best;
+        guard=true;
+        var yr=yRange(best,sMs,eMs);
+        Plotly.react(el,mkTraces(best),mkLayout(xr,yr),CFG)
+          .then(function(){setTimeout(function(){guard=false;},300);});
+      }else{
+        /* same TF but X zoom changed: auto-fit Y to visible candles */
+        var yr=yRange(cur,sMs,eMs);
+        if(yr){
+          guard=true;
+          var upd={'yaxis.range':yr.price,'yaxis.autorange':false};
+          if(SVOL)upd['yaxis2.range']=yr.vol;
+          Plotly.relayout(el,upd)
+            .then(function(){setTimeout(function(){guard=false;},200);});
+        }
+      }
+    },200);
+  }
+
+  /* ── Streamlit render handler ── */
+  window.addEventListener("message",function(ev){
+    if(!ev.data||ev.data.type!=="streamlit:render")return;
+    var a=ev.data.args;
+    L=JSON.parse(a.layers_json);
+    SVOL=!!a.show_volume;
+    SPLITS=a.split_dates||[];
+    coinLabel.textContent=a.coin_name||"";
+    var zr=a.zoom_range||null;
+    var h=a.height||620;
+
+    setH(h);
+    loadDiv.style.display="none";
+    pendingRequest=null;
+
+    /* decide initial TF */
+    var span=Infinity,sMs=-Infinity,eMs=Infinity;
+    if(zr){
+      var ta=new Date(zr[0]).getTime(),tb=new Date(zr[1]).getTime();
+      sMs=Math.min(ta,tb);eMs=Math.max(ta,tb);span=eMs-sMs;
+    }else{
+      /* full range: use 1d timestamps */
+      var fd=L["1d"]||L["1h"];
+      if(fd&&fd.ts.length>=2){sMs=fd.ts[0];eMs=fd.ts[fd.ts.length-1];span=eMs-sMs;}
+    }
+    var tf=pickTF(span,sMs,eMs);
+    cur=tf;tfInd.textContent=tf;
+
+    guard=true;
+    if(!inited){
+      var yr0=yRange(tf,sMs,eMs);
+      Plotly.newPlot(el,mkTraces(tf),mkLayout(zr,yr0),CFG).then(function(){
+        el.on("plotly_relayout",onZoom);
+        inited=true;
+        setTimeout(function(){guard=false;},500);
+      });
+    }else{
+      var yr0=yRange(tf,sMs,eMs);
+      Plotly.react(el,mkTraces(tf),mkLayout(zr,yr0),CFG).then(function(){
+        setTimeout(function(){guard=false;},500);
+      });
+    }
+  });
+
+  /* signal ready */
+  sendMsg("streamlit:componentReady",{apiVersion:1});
+})();
+</script>
+</body></html>
