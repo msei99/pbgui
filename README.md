@@ -323,9 +323,14 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.59 (24-02-2026)
+## v1.59 (25-02-2026)
+- New: Interactive OHLCV chart in Market Data minute view — built as a bidirectional Streamlit component with Plotly.js for fast visual data validation and spotting gaps or anomalies in 1m builds
+- The chart uses lazy auto-zoom: starts with daily candles when fully zoomed out and automatically switches to finer timeframes (1h → 15m → 5m → 1m) as you zoom in — no manual controls needed
+- Coin name displayed in the top-left corner, volume bars always shown
+- For equity stock-perps: historical stock split dates shown as vertical dashed orange lines with annotations (e.g. "Split 20:1"); OHLCV data automatically adjusted for splits using Tiingo Daily API
+- Split factor data stored per exchange in `data/coindata/hyperliquid/split_factors.json`
 - New: Market Data stock-perp minute view now includes toggles to disable `market holiday` and `expected out-of-session gap` overlays, so raw missing gaps can be inspected directly
-- Docs: Market Data guides updated (EN/DE) to document the new minute-view overlay toggles
+- Docs: Market Data guides updated (EN/DE)
 
 ## v1.58 (23-02-2026)
 - Improved: TradFi Build best 1m backfill now runs newest→oldest for both FX (weekly chunks) and equities (monthly chunks), with stop after consecutive empty periods to reduce Tiingo credit usage

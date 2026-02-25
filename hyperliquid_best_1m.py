@@ -463,6 +463,195 @@ def _tiingo_wait_until_quota_allows_call(
                 _emit_wait_status(remaining)
 
 
+# ── Split-factor storage & adjustment ───────────────────────────────────
+# Backward-adjustment: all OHLCV before a split date get divided by the
+# cumulative split factor; volume gets multiplied.  This makes the entire
+# time-series consistent with today's price level.
+#
+# Stored in: data/coindata/hyperliquid/split_factors.json
+#   {"tickers": {"AAPL": {"splits": [...], "fetched_utc": "..."}, ...}}
+
+_SPLIT_FACTORS_PATH = (
+    Path(__file__).resolve().parent
+    / "data" / "coindata" / "hyperliquid" / "split_factors.json"
+)
+
+# In-memory cache: ticker -> list of (date, factor)
+_SPLIT_FACTOR_MEM: dict[str, list[tuple[date, float]]] = {}
+# Guard to avoid re-reading the JSON on every call
+_SPLIT_FILE_LOADED = False
+
+
+def _ensure_split_file_loaded() -> dict:
+    """Load the full split_factors.json into memory (once)."""
+    global _SPLIT_FILE_LOADED
+    if _SPLIT_FILE_LOADED:
+        return {}  # already populated _SPLIT_FACTOR_MEM
+    _SPLIT_FILE_LOADED = True
+    if not _SPLIT_FACTORS_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(_SPLIT_FACTORS_PATH.read_text(encoding="utf-8"))
+        tickers = raw.get("tickers", {})
+        for tk_key, tk_data in tickers.items():
+            tk_upper = tk_key.upper()
+            if tk_upper not in _SPLIT_FACTOR_MEM:
+                splits = [
+                    (date.fromisoformat(s["date"]), float(s["factor"]))
+                    for s in tk_data.get("splits", [])
+                ]
+                _SPLIT_FACTOR_MEM[tk_upper] = splits
+        return tickers
+    except Exception:
+        return {}
+
+
+def _load_split_factors_from_cache(ticker: str) -> list[tuple[date, float]] | None:
+    """Load cached split factors for a ticker. Returns None if unknown."""
+    tk = ticker.upper()
+    if tk in _SPLIT_FACTOR_MEM:
+        return _SPLIT_FACTOR_MEM[tk]
+    _ensure_split_file_loaded()
+    return _SPLIT_FACTOR_MEM.get(tk)
+
+
+def _save_split_factors_to_cache(ticker: str, splits: list[tuple[date, float]]) -> None:
+    """Persist split factors for one ticker into the shared JSON file."""
+    tk = ticker.upper()
+    _SPLIT_FACTOR_MEM[tk] = splits
+
+    # Read existing file
+    existing: dict = {}
+    if _SPLIT_FACTORS_PATH.exists():
+        try:
+            existing = json.loads(_SPLIT_FACTORS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {}
+
+    tickers_data = existing.get("tickers", {})
+    tickers_data[tk] = {
+        "splits": [{"date": str(d), "factor": f} for d, f in splits],
+        "fetched_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    existing["tickers"] = tickers_data
+
+    _SPLIT_FACTORS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _SPLIT_FACTORS_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    os.replace(tmp, _SPLIT_FACTORS_PATH)
+
+
+def fetch_tiingo_split_factors(
+    ticker: str,
+    api_key: str,
+    timeout_s: float = 30.0,
+    force_refresh: bool = False,
+) -> list[tuple[date, float]]:
+    """Fetch split factors from Tiingo Daily API.
+
+    Returns list of ``(split_date, split_factor)`` where ``split_factor > 1``
+    means prices before that date must be divided by the cumulative product
+    of all factors from that point forward.
+
+    Results are stored in ``data/coindata/hyperliquid/split_factors.json``.
+    """
+    tk = ticker.upper()
+    if not force_refresh:
+        cached = _load_split_factors_from_cache(tk)
+        if cached is not None:
+            return cached
+
+    token = str(api_key or "").strip()
+    if not token:
+        return []
+
+    # Tiingo Daily endpoint returns daily bars with splitFactor column
+    url = f"https://api.tiingo.com/tiingo/daily/{tk}/prices"
+    params: dict[str, Any] = {
+        "startDate": "1990-01-01",
+        "columns": "splitFactor",
+        "token": token,
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=float(timeout_s))
+        if resp.status_code in (401, 403, 404, 422):
+            _save_split_factors_to_cache(tk, [])
+            return []
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        return _load_split_factors_from_cache(tk) or []
+
+    if not isinstance(payload, list):
+        _save_split_factors_to_cache(tk, [])
+        return []
+
+    splits: list[tuple[date, float]] = []
+    for row in payload:
+        sf = float(row.get("splitFactor", 1.0))
+        if sf != 1.0:
+            raw_date = str(row.get("date", ""))[:10]
+            try:
+                d = date.fromisoformat(raw_date)
+            except Exception:
+                continue
+            splits.append((d, sf))
+
+    splits.sort(key=lambda x: x[0])
+    _save_split_factors_to_cache(tk, splits)
+    return splits
+
+
+def compute_cumulative_split_adjustment(
+    splits: list[tuple[date, float]],
+    target_date: date,
+) -> float:
+    """Compute the cumulative backward-adjustment factor for a given date.
+
+    All splits *after* ``target_date`` contribute to the cumulative factor.
+    For the most recent data (after all splits), this returns 1.0.
+
+    Example: AAPL 4:1 split on 2020-08-31
+      - target_date = 2020-08-30 → factor = 4.0  (divide OHLC by 4, multiply vol by 4)
+      - target_date = 2020-08-31 → factor = 1.0  (no adjustment)
+    """
+    factor = 1.0
+    for split_date, split_factor in splits:
+        if target_date < split_date:
+            factor *= split_factor
+    return factor
+
+
+def apply_split_adjustment_to_bars(
+    bars: list[dict[str, Any]],
+    splits: list[tuple[date, float]],
+) -> list[dict[str, Any]]:
+    """Apply backward split-adjustment to a list of 1m bar dicts in-place.
+
+    Each bar has keys ``t`` (ms timestamp), ``o``, ``h``, ``l``, ``c``, ``v``.
+    OHLC are divided by the cumulative factor; volume is multiplied.
+    """
+    if not splits or not bars:
+        return bars
+
+    # Pre-compute factor per unique day for efficiency
+    _day_factor_cache: dict[date, float] = {}
+
+    for bar in bars:
+        ts_ms = int(bar.get("t", 0))
+        d = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).date()
+        if d not in _day_factor_cache:
+            _day_factor_cache[d] = compute_cumulative_split_adjustment(splits, d)
+        f = _day_factor_cache[d]
+        if f != 1.0:
+            bar["o"] = float(bar["o"]) / f
+            bar["h"] = float(bar["h"]) / f
+            bar["l"] = float(bar["l"]) / f
+            bar["c"] = float(bar["c"]) / f
+            bar["v"] = float(bar["v"]) * f
+    return bars
+
+
 def _tiingo_fetch_1m_iex(
     *,
     ticker: str,
@@ -1857,6 +2046,11 @@ def _fill_missing_from_tradfi_1m(
     last_iex_month_fetched = False
     last_iex_month_has_any_bars = False
 
+    # ── Split-factor: fetch once for IEX equities ──────────────────────
+    split_factors: list[tuple[date, float]] = []
+    if source_kind == "iex" and ticker:
+        split_factors = fetch_tiingo_split_factors(ticker, tiingo_key, timeout_s=float(timeout_s))
+
     # IEX floor applies only to equity. FX runs without guessed listing floor.
     if source_kind == "fx":
         fx_floor = tiingo_start_date if tiingo_start_date is not None else start_date
@@ -1975,6 +2169,9 @@ def _fill_missing_from_tradfi_1m(
             )
             last_iex_month_fetched = bool(tiingo_month_fetch)
             last_iex_month_has_any_bars = bool(iex_month_has_any_bars)
+            # Apply backward split-adjustment to IEX bars
+            if split_factors and tiingo_bars:
+                apply_split_adjustment_to_bars(tiingo_bars, split_factors)
         last_tiingo_day_bars = int(len(tiingo_bars)) if isinstance(tiingo_bars, list) else 0
         last_fx_chunk_fetched = bool(fx_chunk_fetched)
         last_fx_chunk_has_any_bars = bool(fx_chunk_has_any_bars)

@@ -318,7 +318,7 @@ def set_enabled_coins(exchange: str, coins: list[str]) -> MarketDataConfig:
 def summarize_raw_inventory(
     exchange: str,
     *,
-    limit: int = 200,
+    limit: int = 0,
     skip_coverage: bool = False,
     datasets_filter: list[str] | None = None,
 ) -> list[dict[str, Any]]:
