@@ -267,6 +267,35 @@ pbmon = """
     Run "crontab -e" and add the @reboot with your path
     ```"""
 
+pbmaster = """
+    ```
+    PBMaster is the SSH-based VPS management service.
+    It maintains persistent SSH connections to all registered VPS servers,
+    monitors PBRun, PBRemote and PBCoinData services, and auto-restarts
+    them if they go down. It also sends Telegram alerts on connection
+    loss or service failures.
+
+    Requirements:
+    - SSH keys must be installed on VPS (via VPS Manager)
+    - VPS must be registered in VPS Manager
+    - Telegram config (shared with PBMon) for alerts
+
+    Only relevant on the Master node.
+    ```"""
+
+pbmaster_auto_restart = """
+    ```
+    When enabled, PBMaster will automatically restart services
+    (PBRun, PBRemote, PBCoinData) that are detected as down.
+    Rate limited to 3 restarts per service per hour.
+    ```"""
+
+pbmaster_monitor_interval = """
+    ```
+    How often PBMaster checks connections and services (in seconds).
+    Default: 15 seconds. Minimum: 5 seconds.
+    ```"""
+
 pbstat = """
     ```
     This is the Data Scrapper from PBGUI.

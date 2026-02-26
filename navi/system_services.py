@@ -160,6 +160,18 @@ def pbcoindata_overview(key_suffix=""):
         pbcoindata.stop()
     st.metric(label="PBCoinData", value='✅' if desired else '❌')
 
+def pbmaster_overview(key_suffix=""):
+    pbmaster = st.session_state.pbmaster
+    _key = f"service_pbmaster{key_suffix}"
+    is_running = pbmaster.is_running()
+    desired = st.session_state.get(_key, is_running)
+    st.toggle("PBMaster", value=is_running, key=_key, help=pbgui_help.pbmaster)
+    if desired and not is_running:
+        pbmaster.run()
+    elif not desired and is_running:
+        pbmaster.stop()
+    st.metric(label="PBMaster", value='✅' if desired else '❌')
+
 def overview():
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
@@ -175,6 +187,9 @@ def overview():
         pbdata_overview(key_suffix="_ov")
     with col_6:
         pbcoindata_overview(key_suffix="_ov")
+    col_7, col_8, col_9 = st.columns(3)
+    with col_7:
+        pbmaster_overview(key_suffix="_ov")
 
 def pbrun_details():
     view_log_filtered("PBRun")
@@ -1041,6 +1056,70 @@ def pbcoindata_details():
             st.error(_api_cache["error"] or "Unknown API error", icon="🚨")
     view_log_filtered("PBCoinData")
 
+def pbmaster_details():
+    pbmaster = st.session_state.pbmaster
+
+    with st.expander(":material/settings: Settings", expanded=False):
+        # Auto-restart toggle
+        if "pbmaster_auto_restart" not in st.session_state:
+            st.session_state.pbmaster_auto_restart = pbmaster.auto_restart
+
+        st.toggle(
+            "Auto-restart services",
+            key="pbmaster_auto_restart",
+            help=pbgui_help.pbmaster_auto_restart,
+        )
+
+        # Monitor interval
+        if "pbmaster_monitor_interval" not in st.session_state:
+            st.session_state.pbmaster_monitor_interval = pbmaster.monitor_interval
+
+        st.number_input(
+            "Monitor interval (seconds)",
+            min_value=5, max_value=300, step=5,
+            key="pbmaster_monitor_interval",
+            help=pbgui_help.pbmaster_monitor_interval,
+        )
+
+        _pbmaster_dirty = (
+            st.session_state.get("pbmaster_auto_restart", pbmaster.auto_restart) != pbmaster.auto_restart or
+            st.session_state.get("pbmaster_monitor_interval", pbmaster.monitor_interval) != pbmaster.monitor_interval
+        )
+        if st.button(":material/save:", key="pbmaster_save_config",
+                     type="primary" if _pbmaster_dirty else "secondary"):
+            pbmaster.auto_restart = st.session_state.pbmaster_auto_restart
+            pbmaster.monitor_interval = st.session_state.pbmaster_monitor_interval
+            st.rerun()
+
+    # Connection status
+    if pbmaster.is_running() and pbmaster.pool:
+        st.subheader("SSH Connections")
+        summary = pbmaster.pool.get_status_summary()
+        _conn_cols = st.columns(3)
+        with _conn_cols[0]:
+            st.metric("Total VPS", summary["total"])
+        with _conn_cols[1]:
+            st.metric("Connected", summary["connected"])
+        with _conn_cols[2]:
+            st.metric("Disconnected", summary["disconnected"] + summary["auth_failed"])
+
+        if summary["connections"]:
+            for hostname, info in sorted(summary["connections"].items()):
+                status = info["status"]
+                if status == "connected":
+                    st.success(f"**{hostname}** ({info['ip']})", icon="✅")
+                elif status == "auth_failed":
+                    st.error(f"**{hostname}** ({info['ip']}): Auth failed", icon="🔒")
+                else:
+                    st.warning(
+                        f"**{hostname}** ({info['ip']}): {info.get('last_error', 'disconnected')}",
+                        icon="⚠️"
+                    )
+    else:
+        st.info("Start PBMaster to see SSH connection status and service monitoring.")
+
+    view_log_filtered("PBMaster")
+
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
     st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
@@ -1053,7 +1132,7 @@ c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
 with c_title:
     st.title("PBGUI Services")
 
-_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData"]
+_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "PBMaster"]
 active_tab = st.segmented_control("", _TABS, key="services_active_tab", default="Overview")
 if active_tab is None:
     active_tab = "Overview"
@@ -1113,3 +1192,11 @@ elif active_tab == "PBCoinData":
         if st.button("📖", key="guide_btn_pbcoindata", help="Open PBCoinData help"):
             _help_modal("PBCoinData")
     pbcoindata_details()
+
+elif active_tab == "PBMaster":
+    with st.sidebar:
+        pbmaster_overview(key_suffix="_det")
+    with c_help:
+        if st.button("📖", key="guide_btn_pbmaster", help="Open PBMaster help"):
+            _help_modal("PBMaster")
+    pbmaster_details()
