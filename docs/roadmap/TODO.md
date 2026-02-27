@@ -123,6 +123,35 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - Convert USDT <-> USDC
 - Save sort in bt
 
+### IniWatcher überall einbauen
+**Ziel**
+- Alle Daemons (PBCoinData, PBData, PBRun, PBRemote, PBMon) sollen sofort auf `pbgui.ini`-Änderungen reagieren, statt erst beim nächsten Loop-Zyklus.
+
+**Umfang**
+- `IniWatcher` (bereits als `ini_watcher.py` vorhanden) in jeden Daemon integrieren.
+- Bisherige `sleep()`-Aufrufe in Main-Loops durch `watcher.changed.wait(timeout=...)` ersetzen.
+- Pro Daemon: Config-Reload-Logik in eigene Methode auslagern (analog `PBMaster._apply_config_changes()`).
+
+**Done wenn**
+- Alle Daemons nutzen `IniWatcher`.
+- Konfigurationsänderungen (z.B. API-Keys, Intervalle, Feature-Flags) werden sofort übernommen ohne Daemon-Neustart.
+- Keine redundanten `load_ini()`-Aufrufe pro Loop mehr.
+
+### VPS Disk-Verbrauch optimieren
+**Ziel**
+- Speicherverbrauch auf den VPS-Servern reduzieren (Logs, Caches, alte Daten).
+
+**Umfang**
+- Analyse: welche Dateien/Verzeichnisse den meisten Platz verbrauchen (`passivbot.log`, `caches/`, alte Backtests, `__pycache__`).
+- Log-Rotation: automatisches Begrenzen/Rotieren von `passivbot.log` und Dienst-Logs.
+- Cache-Bereinigung: alte/unbenutzte OHLCV-Caches, Parquet-Dateien, Lock-Dateien aufräumen.
+- Optional: PBMaster-Befehl für Remote-Cleanup (z.B. „Bereinige VPS X").
+
+**Done wenn**
+- Logs werden automatisch rotiert und auf sinnvolle Maximalgrößen begrenzt.
+- Alte Caches werden periodisch oder auf Befehl bereinigt.
+- Disk-Verbrauch pro VPS ist nachvollziehbar im VPS Monitor sichtbar.
+
 ---
 
 ## Arbeitsmodus (ab jetzt)

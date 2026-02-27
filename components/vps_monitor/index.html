@@ -1,0 +1,1930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VPS Monitor</title>
+<style>
+/* ─── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+:root {
+  --bg:       #0e1117;
+  --bg2:      #1a1d24;
+  --bg3:      #262730;
+  --border:   #333640;
+  --text:     #fafafa;
+  --text-dim: #a0a4ab;
+  --green:    #21c354;
+  --orange:   #ff8c00;
+  --red:      #ff4b4b;
+  --blue:     #1f77ff;
+  --accent:   #4da6ff;
+  --font:     'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  background: transparent;
+  color: var(--text);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Connection Banner ────────────────────────────────────── */
+#conn-banner {
+  padding: 8px 16px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.3s;
+}
+.conn-ok      { background: var(--green); color: #000; display: none; }
+.conn-lost    { background: var(--red);   color: #fff; }
+.conn-waiting { background: var(--orange); color: #000; }
+
+/* ─── Tab Bar ──────────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+  background: var(--bg2);
+}
+.tab-btn {
+  padding: 10px 24px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-family: var(--font);
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  margin-bottom: -2px;
+}
+.tab-btn:hover { color: var(--text); background: var(--bg3); }
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-content { display: none; padding: 16px; flex: 1; overflow-y: auto; min-height: 0; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+/* ─── Compact Toggle ───────────────────────────────────────── */
+.toolbar-toggles {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+}
+.toolbar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.toolbar-toggle input { cursor: pointer; accent-color: var(--accent); }
+
+/* ─── Compact Mode Overrides ───────────────────────────────── */
+body.compact .vps-card         { margin-bottom: 2px; border-radius: 4px; }
+body.compact .vps-header       { padding: 4px 12px; }
+body.compact .vps-title        { font-size: 13px; min-width: 290px; width: 290px; flex-shrink: 0; overflow: hidden; }
+body.compact .vps-body         { padding: 0 12px 8px; }
+body.compact .metrics-grid     { gap: 6px; }
+body.compact .metric-card      { padding: 6px 8px; }
+body.compact .metric-label     { font-size: 10px; margin-bottom: 2px; }
+body.compact .metric-value     { font-size: 16px; margin-bottom: 2px; }
+body.compact .metric-sub       { font-size: 10px; }
+body.compact .progress-bar     { height: 4px; margin-top: 3px; }
+body.compact .summary-bar      { padding: 6px 0; margin-bottom: 6px; font-size: 12px; }
+body.compact .tab-content      { padding: 8px 12px; }
+
+/* Compact inline metrics in header row — sits between vps-title and arrow */
+.compact-metrics {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  margin-left: 16px;
+  font-size: 12px;
+  font-weight: 600;
+  align-items: center;
+}
+.compact-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 175px;
+  flex-shrink: 0;
+}
+.compact-metric .cm-label {
+  width: 34px;
+  text-align: right;
+  color: var(--text-dim);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.compact-metric .cm-value {
+  width: 72px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.compact-bar {
+  width: 50px;
+  height: 6px;
+  background: var(--bg3);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.compact-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+/* ─── Cards / Expanders ────────────────────────────────────── */
+.vps-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+.vps-card.connected { border-left: 3px solid var(--green); }
+.vps-card.disconnected { border-left: 3px solid var(--red); }
+.vps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.vps-header:hover { background: var(--bg3); }
+.vps-title {
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vps-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.badge-green { background: var(--green); color: #000; }
+.badge-red   { background: var(--red);   color: #fff; }
+.badge-orange { background: var(--orange); color: #000; }
+.vps-body { padding: 0 16px 16px; }
+.vps-body.collapsed { display: none; }
+
+/* ─── Metrics Grid ─────────────────────────────────────────── */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.metric-card {
+  background: var(--bg3);
+  border-radius: 6px;
+  padding: 12px;
+  text-align: center;
+}
+.metric-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.metric-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ─── Progress Bar ─────────────────────────────────────────── */
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease, background 0.3s;
+}
+
+/* ─── Instances Table ──────────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.filter-bar select, .filter-bar input {
+  padding: 6px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+}
+.filter-bar label {
+  font-size: 13px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th {
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--bg3);
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  position: sticky;
+  top: 0;
+  cursor: pointer;
+  user-select: none;
+}
+th:hover { color: var(--text); }
+th .sort-arrow { font-size: 10px; margin-left: 2px; }
+td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+tr:hover td { background: var(--bg3); }
+.pnl-pos { color: var(--green); }
+.pnl-neg { color: var(--red); }
+.pnl-zero { color: var(--orange); }
+.err-none { color: var(--green); }
+.err-low  { color: var(--orange); }
+.err-high { color: var(--red); }
+
+/* ─── Services ─────────────────────────────────────────────── */
+.svc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.svc-card {
+  background: var(--bg3);
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-align: center;
+}
+.svc-name { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+.svc-status { font-size: 11px; margin-bottom: 4px; }
+.svc-btn {
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg2);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 11px;
+  transition: all 0.2s;
+}
+.svc-btn:hover { background: var(--accent); color: #000; border-color: var(--accent); }
+.svc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.svc-btn.restarting { background: var(--orange); color: #000; border-color: var(--orange); }
+
+/* Services: expandable cards with inline dots (always used) */
+.svc-host-card { margin-bottom: 2px; border-radius: 4px; }
+.svc-host-header { padding: 4px 12px; display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.svc-host-title { font-size: 13px; font-weight: 600; min-width: 160px; }
+.svc-inline { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; flex: 1; }
+.svc-inline-item {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 12px; padding: 2px 8px;
+  background: var(--bg3); border-radius: 4px;
+}
+.svc-inline-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.svc-inline-name { font-weight: 500; }
+.svc-host-body { padding: 4px 14px 10px; }
+.svc-host-body.collapsed { display: none; }
+.svc-host-arrow { font-size: 16px; margin-left: auto; }
+
+/* ─── Live Logs ────────────────────────────────────────────── */
+.log-controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.log-controls select, .log-controls button {
+  padding: 6px 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+}
+.log-controls button:hover { background: var(--accent); color: #000; }
+.log-controls button.active { background: var(--green); color: #000; border-color: var(--green); }
+.log-terminal {
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #b0b0b0;
+}
+.log-terminal.show-line-nums > div { padding-left: 52px; position: relative; }
+.log-terminal.show-line-nums > div::before {
+  content: attr(data-ln);
+  position: absolute; left: 0; top: 0; width: 44px;
+  text-align: right; color: #555; font-size: 11px;
+  user-select: none; pointer-events: none;
+}
+.log-terminal.show-line-nums > div.log-separator::before { content: ''; }
+.log-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.log-search input[type="text"] {
+  padding: 5px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  width: 220px;
+}
+.log-search label { font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+.log-search .log-match-count { font-size: 11px; color: #888; min-width: 60px; }
+.log-terminal .log-error { color: var(--red); }
+.log-terminal .log-warning { color: var(--orange); }
+.log-terminal .log-info { color: var(--green); }
+.log-terminal .log-hidden { display: none; }
+.log-terminal .log-highlight { background: rgba(255,200,0,0.25); }
+.log-terminal .log-highlight mark { background: #e8a620; color: #000; border-radius: 2px; padding: 0 1px; }
+.log-terminal .log-highlight.log-current-match { background: rgba(255,160,0,0.45); outline: 1px solid #e8a620; }
+.log-nav-btn { background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 2px 6px; line-height: 1; }
+.log-nav-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.log-terminal .log-context { opacity: 0.5; }
+.log-terminal .log-separator { text-align: center; color: var(--text-dim); font-size: 11px; padding: 2px 0; user-select: none; border-top: 1px dotted var(--border); border-bottom: 1px dotted var(--border); margin: 2px 0; }
+.log-terminal .log-group-first { cursor: pointer; padding-left: 20px; position: relative; }
+.log-terminal .log-group-first .grp-arrow { position: absolute; left: 2px; top: 0; color: #fff; font-size: 11px; text-shadow: 0 0 2px rgba(0,0,0,0.8); pointer-events: none; }
+.log-terminal.show-line-nums .log-group-first { padding-left: 72px; }
+.log-terminal.show-line-nums .log-group-first .grp-arrow { left: 52px; }
+.log-group-first .grp-count { font-size: 10px; color: var(--text-dim); margin-left: 8px; }
+
+/* ─── Summary bar ──────────────────────────────────────────── */
+.summary-bar {
+  display: flex;
+  gap: 24px;
+  padding: 10px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.summary-item { display: flex; align-items: center; gap: 6px; }
+.summary-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block;
+}
+
+/* ─── Instance Detail Panel ────────────────────────────────── */
+/* ─── Instance action icons ───────────────────────────── */
+.inst-action {
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  padding: 0 3px;
+}
+.inst-action:hover { opacity: 1; }
+.inst-actions { white-space: nowrap; }
+
+/* ─── Responsive ──────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+  .tab-btn { padding: 8px 12px; font-size: 13px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Connection Banner -->
+<div id="conn-banner" class="conn-waiting">Connecting to PBMaster...</div>
+
+<!-- Tab Bar -->
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+  <button class="tab-btn" data-tab="instances">Instances</button>
+  <button class="tab-btn" data-tab="services">Services</button>
+  <button class="tab-btn" data-tab="logs">Live Logs</button>
+  <div class="toolbar-toggles">
+    <label class="toolbar-toggle" title="Hide IP addresses">
+      <input type="checkbox" id="hideip-check"> Hide IP
+    </label>
+    <label class="toolbar-toggle" title="Reduce card size for many servers">
+      <input type="checkbox" id="compact-check"> Compact
+    </label>
+  </div>
+</div>
+
+<!-- Dashboard Tab -->
+<div id="tab-dashboard" class="tab-content active">
+  <div class="summary-bar" id="dash-summary"></div>
+  <div id="dash-cards" style="flex:1;overflow-y:auto;min-height:0;"></div>
+</div>
+
+<!-- Instances Tab -->
+<div id="tab-instances" class="tab-content">
+  <div class="filter-bar" id="inst-filters"></div>
+  <div id="inst-count" style="font-size:13px;color:var(--text-dim);margin-bottom:8px;"></div>
+  <div style="flex:1;overflow-y:auto;min-height:0;">
+    <table id="inst-table">
+      <thead><tr id="inst-thead"></tr></thead>
+      <tbody id="inst-tbody"></tbody>
+    </table>
+  </div>
+  <div id="inst-detail"></div>
+</div>
+
+<!-- Services Tab -->
+<div id="tab-services" class="tab-content">
+  <div id="svc-container" style="flex:1;overflow-y:auto;min-height:0;"></div>
+</div>
+
+<!-- Live Logs Tab -->
+<div id="tab-logs" class="tab-content" style="overflow:hidden">
+  <div class="log-controls" id="log-controls"></div>
+  <div class="log-search" id="log-search">
+    <select id="log-preset" onchange="onLogPresetChange()" style="padding:5px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px">
+      <option value="">— Preset —</option>
+      <option value="error|traceback|exception">Errors</option>
+      <option value="warning|warn">Warnings</option>
+      <option value="error|warning|traceback">Errors + Warnings</option>
+      <option value="order|fill|entry|close">Orders / Fills</option>
+      <option value="balance|pnl|profit|loss|equity">Balance / PnL</option>
+      <option value="position|pos_size|wallet">Positions</option>
+      <option value="start|running|initialized|listening">Startup</option>
+      <option value="connect|disconnect|timeout|reconnect">Connection</option>
+      <option value="restart|kill|stop|shutdown">Restart / Stop</option>
+      <option value="traceback|exception|raise">Traceback</option>
+    </select>
+    <input id="log-search-input" type="text" placeholder="Search logs..." oninput="onLogSearchInput()" onkeydown="onLogSearchKeydown(event)">
+    <label style="display:inline-flex;align-items:center;gap:4px;color:#fafafa;font-size:12px;cursor:pointer;white-space:nowrap;margin:0"><input type="checkbox" id="log-filter-toggle" onchange="onLogFilterToggle()" checked><span>Filter</span></label>
+    <select id="log-context-lines" onchange="onLogContextChange()" style="padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;display:none">
+      <option value="3">±3 lines</option>
+      <option value="5" selected>±5 lines</option>
+      <option value="10">±10 lines</option>
+      <option value="20">±20 lines</option>
+    </select>
+    <span id="log-group-actions" style="display:none;font-size:11px">
+      <a href="#" onclick="toggleAllGroups(true);return false" style="color:var(--text-dim);text-decoration:underline">Expand all</a>
+      <a href="#" onclick="toggleAllGroups(false);return false" style="color:var(--text-dim);text-decoration:underline;margin-left:6px">Collapse all</a>
+    </span>
+    <span id="log-nav-buttons" style="display:none">
+      <button class="log-nav-btn" onclick="logSearchNav(-1)" title="Previous match (Shift+Enter)">&#9650;</button>
+      <button class="log-nav-btn" onclick="logSearchNav(1)" title="Next match (Enter)">&#9660;</button>
+    </span>
+    <span class="log-match-count" id="log-match-count"></span>
+  </div>
+  <div class="log-terminal" id="log-terminal"></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   VPS Monitor — WebSocket-powered real-time dashboard
+   ═══════════════════════════════════════════════════════════════ */
+
+// ── State ──────────────────────────────────────────────────
+let ws = null;
+let state = null;      // Latest full state from daemon
+let reconnectTimer = null;
+let wsPort = __WS_PORT__;  // Injected by Python
+
+// Instance tab state
+let instSort = { col: 'Name', asc: true };
+let compactMode = false;
+let compactInitialized = false;  // true after first state message applied
+let compactToggled = {};  // hosts manually toggled open/closed in compact mode
+let svcCompactToggled = {};  // services tab: hosts toggled open/closed in compact mode
+let hideIP = false;
+let instFilterServer = 'All';
+let instFilterVersion = 'All';
+let instFilterErrors = false;
+
+// Logs tab state
+let logHost = '';
+let logService = '';
+let logStreaming = false;
+let logLines = [];
+let logPendingLines = [];  // Buffer for incremental append
+let logRafPending = false; // requestAnimationFrame guard
+let logFileSize = null;    // File size in bytes
+let logHistoryLines = 200; // Configurable history lines (0=all)
+let logSearchTerm = '';    // Current search text
+let logSearchIsRegex = false; // true when preset is active (term has | alternation)
+let logFilterMode = true; // true = hide non-matching lines (default: on)
+let logSearchAbortId = 0;   // Incremented to cancel in-progress chunked search
+let logSearchDebounce = null; // Timer id for search input debounce
+let logContextLines = 5;   // Context lines before/after matches in filter+group mode
+let logBlocksCollapsed = true; // true when "Collapse all" was last used (default: collapsed)
+let logSearchMatchEls = [];  // Cached .log-highlight elements for nav
+let logSearchMatchIdx = -1;  // Current match index (-1 = none)
+let logRenderAbortId = 0;    // Incremented to cancel in-progress chunked render
+let logLineBase = 0;         // Offset for real line numbering (lines trimmed from front)
+let logSessionId = 0;        // Incremented on every fetch/subscribe to ignore stale responses
+const MAX_LOG_LINES = 5000;
+const SEARCH_CHUNK_SIZE = 400; // DOM nodes processed per animation frame
+const RENDER_CHUNK_SIZE = 500; // DOM nodes created per animation frame during render
+
+// ── WebSocket ──────────────────────────────────────────────
+function connect() {
+  const host = window.location.hostname || '127.0.0.1';
+  const url = `ws://${host}:${wsPort}`;
+  
+  ws = new WebSocket(url);
+  
+  ws.onopen = () => {
+    setBanner('ok');
+    if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+  };
+  
+  ws.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      handleMessage(msg);
+    } catch (e) { console.error('WS parse error:', e); }
+  };
+  
+  ws.onclose = () => {
+    setBanner('lost');
+    scheduleReconnect();
+  };
+  
+  ws.onerror = () => {
+    setBanner('lost');
+  };
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setInterval(() => {
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      connect();
+    }
+  }, 3000);
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+function setBanner(status) {
+  const b = document.getElementById('conn-banner');
+  b.className = 'conn-' + (status === 'ok' ? 'ok' : status === 'lost' ? 'conn-lost' : 'conn-waiting');
+  if (status === 'ok') { b.style.display = 'none'; }
+  else {
+    b.style.display = 'block';
+    b.textContent = status === 'lost' ? 'Connection lost — reconnecting...' : 'Connecting to PBMaster...';
+  }
+}
+
+// ── Message Handling ───────────────────────────────────────
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'state':
+      state = msg.data;
+      // Apply persisted UI settings on first state message
+      if (!compactInitialized && state.ui_settings) {
+        compactInitialized = true;
+        if (state.ui_settings.compact === 'true') {
+          compactMode = true;
+          const cb = document.getElementById('compact-check');
+          if (cb) cb.checked = true;
+          document.body.classList.add('compact');
+        }
+      }
+      renderActiveTab();
+      break;
+    case 'logs':
+      if (msg.sid !== undefined && msg.sid !== logSessionId) break; // stale response
+      logLines = msg.lines || [];
+      logLineBase = 0;
+      if (msg.streaming) logStreaming = true;
+      renderLogs();
+      break;
+    case 'log_lines':
+      if (msg.sid !== undefined && msg.sid !== logSessionId) break; // stale response
+      logLines.push(...(msg.lines || []));
+      if (logLines.length > MAX_LOG_LINES) {
+        const trimmed = logLines.length - MAX_LOG_LINES;
+        logLines = logLines.slice(-MAX_LOG_LINES);
+        logLineBase += trimmed;
+      }
+      appendLogLines(msg.lines || []);
+      break;
+    case 'log_info':
+      logFileSize = msg.size;
+      updateLogFileSize();
+      break;
+    case 'result':
+      handleResult(msg);
+      break;
+    case 'error':
+      console.error('Server error:', msg.error);
+      break;
+  }
+}
+
+function handleResult(msg) {
+  const logBtn = document.getElementById('log-restart-btn');
+  if (msg.cmd === 'restart_service') {
+    // Update service button state
+    const btn = document.querySelector(`[data-restart="${msg.host}:${msg.service}"]`);
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('restarting');
+      btn.textContent = msg.success ? '✅ Restarted' : '❌ Failed';
+      setTimeout(() => { btn.textContent = 'Restart'; }, 3000);
+    }
+    // Update log restart button if it matches
+    if (logBtn && msg.host === logHost && msg.service === logService) {
+      logBtn.disabled = false;
+      logBtn.textContent = msg.success ? '✅ Restarted' : '❌ Failed';
+      setTimeout(() => { logBtn.textContent = '🔄 Restart'; }, 3000);
+    }
+  }
+  if (msg.cmd === 'kill_instance') {
+    if (!msg.success) {
+      console.warn('kill_instance failed for', msg.name, 'on', msg.host);
+    }
+    // Update log restart button if it matches
+    if (logBtn && msg.host === logHost && logService.startsWith('Bot:') && logService.substring(4).startsWith(msg.name + ':')) {
+      logBtn.disabled = false;
+      logBtn.textContent = msg.success ? '✅ Killed' : '❌ Failed';
+      setTimeout(() => { logBtn.textContent = '🔄 Restart'; }, 3000);
+    }
+  }
+}
+
+// ── Tab Navigation ─────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    renderActiveTab();
+  });
+});
+
+// ── Compact Mode Toggle ────────────────────────────────────
+const compactCheck = document.getElementById('compact-check');
+compactCheck.addEventListener('change', () => {
+  compactMode = compactCheck.checked;
+  compactToggled = {};  // Reset manual toggles on mode switch
+  svcCompactToggled = {};  // Reset services toggles too
+  document.body.classList.toggle('compact', compactMode);
+  // Persist to INI
+  send({ cmd: 'set_setting', key: 'compact', value: compactMode ? 'true' : 'false' });
+  // Re-render to apply new layout
+  renderDashboard();
+});
+
+// ── Hide IP Toggle ─────────────────────────────────────────
+const hideipCheck = document.getElementById('hideip-check');
+hideipCheck.addEventListener('change', () => {
+  hideIP = hideipCheck.checked;
+  renderActiveTab();
+});
+
+function activeTab() {
+  const btn = document.querySelector('.tab-btn.active');
+  return btn ? btn.dataset.tab : 'dashboard';
+}
+
+function renderActiveTab() {
+  if (!state) return;
+  switch (activeTab()) {
+    case 'dashboard': renderDashboard(); break;
+    case 'instances': renderInstances(); break;
+    case 'services':  renderServices(); break;
+    case 'logs':      renderLogControls(); break;
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────
+function fmtBytes(b) {
+  if (!b || b <= 0) return '0 B';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return b.toFixed(1) + ' ' + u[i];
+}
+
+function pctColor(pct) {
+  if (pct < 60) return 'var(--green)';
+  if (pct < 85) return 'var(--orange)';
+  return 'var(--red)';
+}
+
+function ageStr(ts) {
+  if (!ts || ts <= 0) return 'no data';
+  const age = (Date.now() / 1000) - ts;
+  if (age < 0) return 'future?';
+  if (age < 60) return Math.round(age) + 's ago';
+  return (age / 60).toFixed(1) + 'm ago';
+}
+
+// ── Dashboard ──────────────────────────────────────────────
+function renderDashboard() {
+  if (!state) return;
+  const conns = state.connections?.connections || {};
+  const sys = state.system || {};
+  const streams = state.streams || {};
+
+  // Summary bar
+  const total = Object.keys(conns).length;
+  const connected = Object.values(conns).filter(c => c.status === 'connected').length;
+  const summaryEl = document.getElementById('dash-summary');
+  summaryEl.innerHTML = `
+    <span class="summary-item"><span class="summary-dot" style="background:var(--green)"></span> ${connected} connected</span>
+    <span class="summary-item"><span class="summary-dot" style="background:var(--red)"></span> ${total - connected} disconnected</span>
+    <span class="summary-item" style="color:var(--text-dim)">Updated: ${ageStr(state.timestamp)}</span>
+  `;
+
+  // VPS cards
+  const sorted = Object.keys(conns).sort((a, b) => {
+    const ac = conns[a].status === 'connected' ? 0 : 1;
+    const bc = conns[b].status === 'connected' ? 0 : 1;
+    return ac - bc || a.localeCompare(b);
+  });
+
+  const cardsEl = document.getElementById('dash-cards');
+
+  let html = '';
+  for (const host of sorted) {
+    const info = conns[host];
+    const isConn = info.status === 'connected';
+    const metrics = sys[host];
+    const stream = streams[host] || {};
+    // compactToggled tracks manual open/close; reset on mode switch
+    const isCollapsed = compactToggled[host] !== undefined
+      ? compactToggled[host]
+      : (compactMode ? true : !isConn);  // compact: default closed, normal: default open if connected
+
+    html += `<div class="vps-card ${isConn ? 'connected' : 'disconnected'}" data-host="${host}">`;
+    html += `<div class="vps-header" onclick="toggleCard(this)">`;
+    html += `<span class="vps-title">${isConn ? '✅' : '❌'} ${host}`;
+    html += ` <span class="vps-badge ${isConn ? 'badge-green' : 'badge-red'}"${hideIP ? ' style="display:none"' : ''}>${info.ip || '?'}</span>`;
+    if (stream.alive) {
+      const m = metrics;
+      const lastUpdate = stream.last_update || (m ? m.timestamp : 0);
+      const streamAge = lastUpdate ? (Date.now()/1000 - lastUpdate) : -1;
+      const ageColor = streamAge < 5 ? 'green' : streamAge < 15 ? 'orange' : 'red';
+      html += ` <span class="vps-badge badge-${ageColor}" style="font-size:10px">${ageStr(lastUpdate)}</span>`;
+    }
+    html += `</span>`;
+    // Inline metrics in header (always shown for connected hosts)
+    if (isConn && metrics) {
+      html += `<span class="compact-metrics">`;
+      html += compactMetric('CPU', metrics.cpu.toFixed(0) + '%', metrics.cpu);
+      html += compactMetric('RAM', fmtBytes(metrics.mem_used), metrics.mem_percent);
+      html += compactMetric('Disk', fmtBytes(metrics.disk_used), metrics.disk_percent);
+      if (metrics.swap_total > 0) {
+        html += compactMetric('Swap', fmtBytes(metrics.swap_used), metrics.swap_percent);
+      }
+      html += `</span>`;
+    }
+    html += `<span style="font-size:18px">${isCollapsed ? '▸' : '▾'}</span>`;
+    html += `</div>`;
+    html += `<div class="vps-body ${isCollapsed ? 'collapsed' : ''}">`;
+
+    if (!isConn) {
+      const err = info.error || '';
+      html += `<div style="color:var(--red);padding:8px 0">Disconnected${err ? ': ' + esc(err) : ''}</div>`;
+    } else if (!metrics) {
+      html += `<div style="color:var(--text-dim);padding:8px 0">Waiting for system metrics...</div>`;
+    } else {
+      html += `<div class="metrics-grid">`;
+      html += metricCard('CPU', metrics.cpu.toFixed(1) + '%', '', metrics.cpu);
+      html += metricCard('RAM', fmtBytes(metrics.mem_used),
+        fmtBytes(metrics.mem_total), metrics.mem_percent);
+      html += metricCard('Disk', fmtBytes(metrics.disk_used),
+        fmtBytes(metrics.disk_total), metrics.disk_percent);
+      if (metrics.swap_total > 0) {
+        html += metricCard('Swap', fmtBytes(metrics.swap_used),
+          fmtBytes(metrics.swap_total), metrics.swap_percent);
+      }
+      html += `</div>`;
+    }
+
+    html += `</div></div>`;
+  }
+
+  if (!sorted.length) {
+    html = '<div style="padding:24px;text-align:center;color:var(--text-dim)">No VPS servers configured.</div>';
+  }
+  cardsEl.innerHTML = html;
+}
+
+function metricCard(label, value, sub, pct) {
+  const color = pctColor(pct);
+  return `
+    <div class="metric-card">
+      <div class="metric-label">${label}</div>
+      <div class="metric-value" style="color:${color}">${value}</div>
+      ${sub ? `<div class="metric-sub">${sub}</div>` : ''}
+      <div class="progress-bar">
+        <div class="progress-fill" style="width:${Math.min(pct, 100)}%;background:${color}"></div>
+      </div>
+    </div>`;
+}
+
+function compactMetric(label, value, pct) {
+  const color = pctColor(pct);
+  return `<span class="compact-metric">
+    <span class="cm-label">${label}</span>
+    <span class="cm-value" style="color:${color}">${value}</span>
+    <span class="compact-bar"><span class="compact-bar-fill" style="width:${Math.min(pct, 100)}%;background:${color}"></span></span>
+  </span>`;
+}
+
+function toggleCard(header) {
+  const body = header.nextElementSibling;
+  const arrow = header.querySelector('span:last-child');
+  body.classList.toggle('collapsed');
+  const isNowCollapsed = body.classList.contains('collapsed');
+  arrow.textContent = isNowCollapsed ? '▸' : '▾';
+  // Remember toggle state so renderDashboard() preserves it across re-renders
+  const card = header.closest('.vps-card');
+  if (card) compactToggled[card.dataset.host] = isNowCollapsed;
+}
+
+// ── Instances ──────────────────────────────────────────────
+function renderInstances() {
+  if (!state) return;
+  const allInst = state.instances || {};
+
+  // Build flat list
+  const rows = [];
+  for (const [host, instances] of Object.entries(allInst)) {
+    for (const inst of instances) {
+      const vmap = {'7': 'V7', '6': 'Multi', 's': 'Single'};
+      const version = vmap[inst.p] || inst.p || '?';
+      const memList = inst.m || [];
+      const memMB = memList[0] ? (memList[0] / 1048576).toFixed(1) : '0';
+      const startTs = inst.st || 0;
+      const startStr = startTs ? new Date(startTs * 1000).toISOString().slice(0,16).replace('T',' ') : '?';
+
+      rows.push({
+        host, version, name: inst.u || '?', start: startStr,
+        pbVersion: inst.p || '?',
+        memMB: parseFloat(memMB), cpu: inst.c || 0,
+        pnlToday: inst.pt || 0, fillsToday: inst.ct || 0,
+        pnlYesterday: inst.py || 0, fillsYesterday: inst.cy || 0,
+        errorsToday: inst.et || 0, errorsYesd: inst.ey || 0,
+        tbsToday: inst.tt || 0, tbsYesd: inst.ty || 0,
+        lastError: inst.e || '', lastTB: inst.t || '', lastInfo: inst.i || '',
+      });
+    }
+  }
+
+  // Filters
+  const servers = ['All', ...new Set(rows.map(r => r.host))].sort();
+  const versions = ['All', ...new Set(rows.map(r => r.version))].sort();
+
+  const filtersEl = document.getElementById('inst-filters');
+  // Only rebuild filters if they changed
+  if (!filtersEl.dataset.built) {
+    filtersEl.innerHTML = `
+      <label>Server: <select id="f-server">${servers.map(s => `<option${s===instFilterServer?' selected':''}>${s}</option>`).join('')}</select></label>
+      <label>Version: <select id="f-version">${versions.map(v => `<option${v===instFilterVersion?' selected':''}>${v}</option>`).join('')}</select></label>
+      <label><input type="checkbox" id="f-errors" ${instFilterErrors?'checked':''}> Only with errors</label>
+    `;
+    filtersEl.dataset.built = '1';
+    document.getElementById('f-server').onchange = (e) => { instFilterServer = e.target.value; renderInstances(); };
+    document.getElementById('f-version').onchange = (e) => { instFilterVersion = e.target.value; renderInstances(); };
+    document.getElementById('f-errors').onchange = (e) => { instFilterErrors = e.target.checked; renderInstances(); };
+  }
+
+  // Apply filters
+  let filtered = rows;
+  if (instFilterServer !== 'All') filtered = filtered.filter(r => r.host === instFilterServer);
+  if (instFilterVersion !== 'All') filtered = filtered.filter(r => r.version === instFilterVersion);
+  if (instFilterErrors) filtered = filtered.filter(r => r.errorsToday > 0 || r.tbsToday > 0);
+
+  // Sort
+  const col = instSort.col;
+  filtered.sort((a, b) => {
+    let va = a[col], vb = b[col];
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+    let cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return instSort.asc ? cmp : -cmp;
+  });
+
+  document.getElementById('inst-count').textContent = `${filtered.length} of ${rows.length} instances`;
+
+  // Table header
+  const cols = [
+    {key:'host',label:'Server'},{key:'version',label:'Version'},{key:'name',label:'Name'},
+    {key:'start',label:'Start'},{key:'memMB',label:'Mem (MB)'},{key:'cpu',label:'CPU %'},
+    {key:'pnlToday',label:'PnL Today'},{key:'fillsToday',label:'Fills'},
+    {key:'pnlYesterday',label:'PnL Yesd'},{key:'fillsYesterday',label:'Fills Y'},
+    {key:'errorsToday',label:'Err Today'},{key:'errorsYesd',label:'Err Y'},
+    {key:'tbsToday',label:'TBs Today'},{key:'tbsYesd',label:'TBs Y'},
+    {key:'_actions',label:''},
+  ];
+
+  const thead = document.getElementById('inst-thead');
+  thead.innerHTML = cols.map(c => {
+    if (c.key === '_actions') return `<th></th>`;
+    const arrow = instSort.col === c.key ? (instSort.asc ? ' ▲' : ' ▼') : '';
+    return `<th data-sort="${c.key}">${c.label}<span class="sort-arrow">${arrow}</span></th>`;
+  }).join('');
+
+  thead.querySelectorAll('th').forEach(th => {
+    th.onclick = () => {
+      const key = th.dataset.sort;
+      if (instSort.col === key) instSort.asc = !instSort.asc;
+      else { instSort.col = key; instSort.asc = true; }
+      renderInstances();
+    };
+  });
+
+  // Table body
+  const tbody = document.getElementById('inst-tbody');
+  tbody.innerHTML = filtered.map((r, i) => `
+    <tr>
+      <td>${esc(r.host)}</td>
+      <td>${esc(r.version)}</td>
+      <td>${esc(r.name)}</td>
+      <td>${esc(r.start)}</td>
+      <td>${r.memMB.toFixed(1)}</td>
+      <td>${r.cpu.toFixed(1)}</td>
+      <td class="${pnlClass(r.pnlToday)}">${r.pnlToday.toFixed(2)}</td>
+      <td>${r.fillsToday}</td>
+      <td class="${pnlClass(r.pnlYesterday)}">${r.pnlYesterday.toFixed(2)}</td>
+      <td>${r.fillsYesterday}</td>
+      <td class="${errClass(r.errorsToday)}">${r.errorsToday}</td>
+      <td class="${errClass(r.errorsYesd)}">${r.errorsYesd}</td>
+      <td class="${errClass(r.tbsToday)}">${r.tbsToday}</td>
+      <td class="${errClass(r.tbsYesd)}">${r.tbsYesd}</td>
+      <td class="inst-actions">
+        <span class="inst-action" title="View Log" onclick="event.stopPropagation();viewInstanceLog('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}')">📋</span>
+        <span class="inst-action" title="Restart (kill)" onclick="event.stopPropagation();killInstance('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}',this)">🔄</span>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function selectInstance(idx) {
+  // no-op, kept for compatibility
+}
+
+// ── Instance Log & Restart ─────────────────────────────────
+function viewInstanceLog(host, name, pbVersion) {
+  // Switch to Live Logs tab
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  const logsTabBtn = document.querySelector('.tab-btn[data-tab="logs"]');
+  if (logsTabBtn) logsTabBtn.classList.add('active');
+  document.getElementById('tab-logs').classList.add('active');
+
+  // Stop any existing stream
+  if (logStreaming) {
+    send({ cmd: 'unsubscribe_logs' });
+    logStreaming = false;
+  }
+
+  // Build service identifier for bot log
+  const botService = 'Bot:' + name + ':' + pbVersion;
+  logHost = host;
+  logService = botService;
+  logLines = [];
+  logLineBase = 0;
+
+  // Force rebuild of log controls to include this bot service entry
+  const ctrl = document.getElementById('log-controls');
+  ctrl.dataset.built = '';
+  renderLogControls();
+
+  // Set dropdowns to correct values
+  const hostSel = document.getElementById('log-host');
+  if (hostSel) hostSel.value = host;
+  const svcSel = document.getElementById('log-svc');
+  if (svcSel) svcSel.value = botService;
+
+  // Start streaming immediately
+  const sid = ++logSessionId;
+  send({ cmd: 'subscribe_logs', host: host, service: botService, sid: sid });
+  logStreaming = true;
+  renderLogControls();
+}
+
+function killInstance(host, name, pbVersion, el) {
+  if (el) {
+    el.style.opacity = '1';
+    el.textContent = '⏳';
+    el.title = 'Killing...';
+  }
+  send({ cmd: 'kill_instance', host: host, name: name, pb_version: pbVersion });
+}
+
+function pnlClass(v) { return v > 0 ? 'pnl-pos' : v < 0 ? 'pnl-neg' : 'pnl-zero'; }
+function errClass(v) { return v === 0 ? 'err-none' : v < 10 ? 'err-low' : 'err-high'; }
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Services ───────────────────────────────────────────────
+function renderServices() {
+  if (!state) return;
+  const conns = state.connections?.connections || {};
+  const services = state.services || {};
+
+  const connected = Object.entries(conns)
+    .filter(([h, c]) => c.status === 'connected')
+    .map(([h]) => h)
+    .sort();
+
+  if (!connected.length) {
+    document.getElementById('svc-container').innerHTML =
+      '<div style="padding:24px;text-align:center;color:var(--text-dim)">No VPS servers connected.</div>';
+    return;
+  }
+
+  let html = '';
+
+  // Unified layout: expandable cards with inline dots + detail body
+  // Compact mode: default collapsed; Normal mode: default expanded
+  for (const host of connected) {
+    const isExpanded = svcCompactToggled[host] !== undefined
+      ? svcCompactToggled[host]
+      : !compactMode;  // default: expanded in normal, collapsed in compact
+    html += `<div class="vps-card connected svc-host-card" data-svc-host="${esc(host)}">`;
+    html += `<div class="svc-host-header" onclick="toggleSvcCard(this)">`;
+    html += `<span class="svc-host-title">🖥️ ${esc(host)}</span>`;
+    const hostSvc = services[host];
+    if (hostSvc && Object.keys(hostSvc).length) {
+      html += `<div class="svc-inline">`;
+      for (const [svcName, check] of Object.entries(hostSvc)) {
+        const st = check.status || 'unknown';
+        let dotColor;
+        if (st === 'running') dotColor = 'var(--green)';
+        else if (st === 'stopped') dotColor = 'var(--red)';
+        else if (st === 'restarting') dotColor = 'var(--orange)';
+        else dotColor = 'var(--text-dim)';
+        html += `<span class="svc-inline-item" title="${esc(svcName)}: ${st}${check.pid ? ' (PID:'+check.pid+')' : ''}">`;
+        html += `<span class="svc-inline-dot" style="background:${dotColor}"></span>`;
+        html += `<span class="svc-inline-name">${esc(svcName)}</span>`;
+        html += `</span>`;
+      }
+      html += `</div>`;
+    } else {
+      html += `<span style="color:var(--text-dim);font-size:12px">waiting...</span>`;
+    }
+    html += `<span class="svc-host-arrow">${isExpanded ? '▾' : '▸'}</span>`;
+    html += `</div>`;
+
+    // Expandable detail body with full service cards
+    html += `<div class="svc-host-body${isExpanded ? '' : ' collapsed'}">`;
+    if (hostSvc && Object.keys(hostSvc).length) {
+      html += `<div class="svc-grid">`;
+      for (const [svcName, check] of Object.entries(hostSvc)) {
+        const st = check.status || 'unknown';
+        let icon, color;
+        if (st === 'running') { icon = '✅'; color = 'var(--green)'; }
+        else if (st === 'stopped') { icon = '❌'; color = 'var(--red)'; }
+        else if (st === 'restarting') { icon = '🔄'; color = 'var(--orange)'; }
+        else { icon = '❓'; color = 'var(--text-dim)'; }
+        html += `<div class="svc-card">`;
+        html += `<div class="svc-name">${icon} ${esc(svcName)}</div>`;
+        html += `<div class="svc-status" style="color:${color}">${st}${check.pid ? ' (PID: ' + check.pid + ')' : ''}</div>`;
+        if (check.error) html += `<div style="font-size:10px;color:var(--red);margin-bottom:4px">${esc(check.error)}</div>`;
+        html += `<button class="svc-btn" data-restart="${host}:${svcName}" onclick="restartService('${esc(host)}','${esc(svcName)}',this)">Restart</button>`;
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  document.getElementById('svc-container').innerHTML = html;
+}
+
+function restartService(host, service, btn) {
+  btn.disabled = true;
+  btn.classList.add('restarting');
+  btn.textContent = 'Restarting...';
+  send({ cmd: 'restart_service', host, service });
+}
+
+function restartServiceCompact(host, service, el) {
+  const dot = el.querySelector('.svc-inline-dot');
+  if (dot) dot.style.background = 'var(--orange)';
+  const nameEl = el.querySelector('.svc-inline-name');
+  if (nameEl) { nameEl.dataset.orig = nameEl.textContent; nameEl.textContent = '...'; }
+  send({ cmd: 'restart_service', host, service });
+}
+
+function toggleSvcCard(header) {
+  const body = header.nextElementSibling;
+  const arrow = header.querySelector('.svc-host-arrow');
+  body.classList.toggle('collapsed');
+  const isNowCollapsed = body.classList.contains('collapsed');
+  if (arrow) arrow.textContent = isNowCollapsed ? '▸' : '▾';
+  const card = header.closest('[data-svc-host]');
+  if (card) svcCompactToggled[card.dataset.svcHost] = !isNowCollapsed;
+}
+
+// ── Live Logs ──────────────────────────────────────────────
+function getLogServices() {
+  // Base system services
+  const services = ['PBRun', 'PBRemote', 'PBCoinData'];
+  // Add bot instances for the selected host
+  if (state && logHost) {
+    const instances = state.instances || {};
+    const hostInstances = instances[logHost] || [];
+    for (const inst of hostInstances) {
+      const name = inst.u || '?';
+      const pv = inst.p || '7';
+      services.push('Bot:' + name + ':' + pv);
+    }
+  }
+  return services;
+}
+
+function svcLabel(s) {
+  if (s.startsWith('Bot:')) {
+    const parts = s.substring(4).split(':');
+    return '🤖 ' + parts[0];
+  }
+  return s;
+}
+
+function renderLogControls() {
+  if (!state) return;
+  const conns = state.connections?.connections || {};
+  const connected = Object.entries(conns)
+    .filter(([h, c]) => c.status === 'connected')
+    .map(([h]) => h)
+    .sort();
+
+  const services = getLogServices();
+  const ctrl = document.getElementById('log-controls');
+
+  if (!ctrl.dataset.built) {
+    const histOpts = [{v:100,l:'100'},{v:200,l:'200'},{v:500,l:'500'},{v:1000,l:'1000'},{v:5000,l:'5000'},{v:0,l:'All'}];
+    ctrl.innerHTML = `
+      <label>Host: <select id="log-host" onchange="onLogHostChange()">${connected.map(h => `<option value="${h}"${h===logHost?' selected':''}>${h}</option>`).join('')}</select></label>
+      <label>Service: <select id="log-svc" onchange="onLogServiceChange()">${services.map(s => `<option value="${s}"${s===logService?' selected':''}>${svcLabel(s)}</option>`).join('')}</select></label>
+      <label>Lines: <select id="log-history" onchange="onLogHistoryChange()">${histOpts.map(o => `<option value="${o.v}"${o.v===logHistoryLines?' selected':''}>${o.l}</option>`).join('')}</select></label>
+      <span id="log-file-size" style="font-size:11px;color:#888;min-width:70px"></span>
+      <button id="log-fetch" onclick="fetchLogs()">Fetch</button>
+      <button id="log-stream-btn" onclick="toggleLogStream()">▶ Stream</button>
+      <button onclick="clearLogs()">Clear</button>
+      <button id="log-download-btn" onclick="downloadLog()" title="Download log content">💾 Download</button>
+      <button id="log-restart-btn" onclick="restartLogService()" title="Restart the selected service/bot">🔄 Restart</button>
+      <button id="log-linenum-btn" onclick="toggleLineNums()" title="Toggle line numbers">#</button>
+    `;
+    ctrl.dataset.built = '1';
+    if (!logHost && connected.length) logHost = connected[0];
+    if (!logService) logService = 'PBRun';
+    requestLogInfo();
+  }
+
+  // Update host select options
+  const hostSel = document.getElementById('log-host');
+  if (hostSel) {
+    const currentOpts = Array.from(hostSel.options).map(o => o.value);
+    if (JSON.stringify(currentOpts) !== JSON.stringify(connected)) {
+      hostSel.innerHTML = connected.map(h => `<option value="${h}"${h===logHost?' selected':''}>${h}</option>`).join('');
+    }
+  }
+
+  // Update service select options (includes bot instances for selected host)
+  const svcSel = document.getElementById('log-svc');
+  if (svcSel) {
+    const currentSvcOpts = Array.from(svcSel.options).map(o => o.value);
+    if (JSON.stringify(currentSvcOpts) !== JSON.stringify(services)) {
+      svcSel.innerHTML = services.map(s => `<option value="${s}"${s===logService?' selected':''}>${svcLabel(s)}</option>`).join('');
+    }
+  }
+
+  // Update stream button state
+  const streamBtn = document.getElementById('log-stream-btn');
+  if (streamBtn) {
+    streamBtn.textContent = logStreaming ? '⏹ Stop' : '▶ Stream';
+    streamBtn.className = logStreaming ? 'svc-btn active' : '';
+  }
+}
+
+function fetchLogs() {
+  logHost = document.getElementById('log-host')?.value || '';
+  logService = document.getElementById('log-svc')?.value || '';
+  if (!logHost || !logService) return;
+  logLines = [];
+  logLineBase = 0;
+  ++logRenderAbortId; // cancel any in-progress chunked render
+  const sid = ++logSessionId;
+  send({ cmd: 'get_logs', host: logHost, service: logService, lines: logHistoryLines, sid: sid });
+}
+
+function onLogHistoryChange() {
+  logHistoryLines = parseInt(document.getElementById('log-history')?.value || '200', 10);
+  fetchLogs();
+}
+
+function updateLogFileSize() {
+  const el = document.getElementById('log-file-size');
+  if (!el) return;
+  if (logFileSize === null || logFileSize === undefined) {
+    el.textContent = '';
+  } else {
+    el.textContent = formatFileSize(logFileSize);
+  }
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function requestLogInfo() {
+  if (logHost && logService) {
+    send({ cmd: 'get_log_info', host: logHost, service: logService });
+  }
+}
+
+function downloadLog() {
+  if (!logLines.length) return;
+  const text = logLines.join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const svcName = logService.startsWith('Bot:') ? logService.substring(4).split(':')[0] : logService;
+  a.href = url;
+  a.download = `${logHost}_${svcName}.log`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function toggleLogStream() {
+  if (logStreaming) {
+    send({ cmd: 'unsubscribe_logs' });
+    logStreaming = false;
+  } else {
+    logHost = document.getElementById('log-host')?.value || '';
+    logService = document.getElementById('log-svc')?.value || '';
+    if (!logHost || !logService) return;
+    logLines = [];
+    logLineBase = 0;
+    const sid = ++logSessionId;
+    send({ cmd: 'subscribe_logs', host: logHost, service: logService, sid: sid });
+  }
+  renderLogControls();
+}
+
+function clearLogs() {
+  logLines = [];
+  logLineBase = 0;
+  logPendingLines = [];
+  logRafPending = false;
+  ++logRenderAbortId; // cancel any in-progress chunked render
+  const terminal = document.getElementById('log-terminal');
+  if (terminal) terminal.innerHTML = '';
+  const ctxSel = document.getElementById('log-context-lines');
+  const grpActions = document.getElementById('log-group-actions');
+  if (ctxSel) ctxSel.style.display = 'none';
+  if (grpActions) grpActions.style.display = 'none';
+}
+
+function toggleLineNums() {
+  const terminal = document.getElementById('log-terminal');
+  if (!terminal) return;
+  const btn = document.getElementById('log-linenum-btn');
+  // Hide terminal during toggle to avoid incremental relayout per element
+  terminal.style.display = 'none';
+  terminal.classList.toggle('show-line-nums');
+  // Force single reflow then show
+  terminal.offsetHeight; // trigger reflow while hidden
+  terminal.style.display = '';
+  if (btn) btn.className = terminal.classList.contains('show-line-nums') ? 'svc-btn active' : '';
+}
+
+function restartLogService() {
+  if (!logHost || !logService) return;
+  const btn = document.getElementById('log-restart-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Restarting...'; }
+
+  if (logService.startsWith('Bot:')) {
+    // Bot instance: kill it (PBRun auto-restarts)
+    const parts = logService.substring(4).split(':');
+    const name = parts[0];
+    const pbVersion = parts[1] || '7';
+    send({ cmd: 'kill_instance', host: logHost, name: name, pb_version: pbVersion });
+  } else {
+    // System service: restart via service_monitor
+    send({ cmd: 'restart_service', host: logHost, service: logService });
+  }
+  // Reset button after 4s (result handler also resets)
+  setTimeout(() => {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Restart'; }
+  }, 4000);
+}
+
+function onLogHostChange() {
+  logHost = document.getElementById('log-host')?.value || '';
+  // Rebuild service dropdown for new host (includes its bot instances)
+  const svcSel = document.getElementById('log-svc');
+  if (svcSel) {
+    const services = getLogServices();
+    svcSel.innerHTML = services.map(s => `<option value="${s}">${svcLabel(s)}</option>`).join('');
+    logService = svcSel.value;
+  }
+  requestLogInfo();
+  if (logStreaming) {
+    send({ cmd: 'unsubscribe_logs' });
+    logLines = [];
+    logLineBase = 0;
+    const sid = ++logSessionId;
+    send({ cmd: 'subscribe_logs', host: logHost, service: logService, sid: sid });
+    renderLogs();
+  } else {
+    fetchLogs();
+  }
+}
+
+function onLogServiceChange() {
+  logService = document.getElementById('log-svc')?.value || '';
+  requestLogInfo();
+  if (logStreaming) {
+    send({ cmd: 'unsubscribe_logs' });
+    logLines = [];
+    logLineBase = 0;
+    const sid = ++logSessionId;
+    send({ cmd: 'subscribe_logs', host: logHost, service: logService, sid: sid });
+    renderLogs();
+  } else {
+    fetchLogs();
+  }
+}
+
+function classifyLine(line) {
+  const lower = line.toLowerCase();
+  if (lower.includes('error') || lower.includes('traceback')) return 'log-error';
+  if (lower.includes('warning')) return 'log-warning';
+  if (lower.includes('start') || lower.includes('success')) return 'log-info';
+  return 'log-line';
+}
+
+function getSearchRegex() {
+  if (!logSearchTerm) return null;
+  try {
+    if (logSearchIsRegex) {
+      return new RegExp('(' + logSearchTerm + ')', 'gi');
+    } else {
+      return new RegExp('(' + logSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    }
+  } catch (e) { return null; }
+}
+
+function testSearchMatch(text) {
+  const re = getSearchRegex();
+  if (!re) return false;
+  return re.test(text);
+}
+
+function buildLogDiv(line, lineNum) {
+  const div = document.createElement('div');
+  if (lineNum != null) div.dataset.ln = lineNum;
+  div.dataset.text = line; // preserve original text for search re-apply
+  let cls = classifyLine(line);
+  const term = logSearchTerm;
+  const matches = term && testSearchMatch(line);
+  if (term) {
+    if (matches) {
+      cls += ' log-highlight';
+      const re = getSearchRegex();
+      div.innerHTML = re ? esc(line).replace(re, '<mark>$1</mark>') : esc(line);
+    } else {
+      div.textContent = line;
+      if (logFilterMode) cls += ' log-hidden';
+    }
+  } else {
+    div.textContent = line;
+  }
+  div.className = cls;
+  return div;
+}
+
+function renderLogs() {
+  const terminal = document.getElementById('log-terminal');
+  logPendingLines = [];
+  logRafPending = false;
+  terminal.innerHTML = '';
+
+  const total = logLines.length;
+  if (total === 0) return;
+
+  // Small log: render synchronously
+  if (total <= RENDER_CHUNK_SIZE) {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < total; i++) frag.appendChild(buildLogDiv(logLines[i], logLineBase + i + 1));
+    terminal.appendChild(frag);
+    terminal.scrollTop = terminal.scrollHeight;
+    if (logFilterMode && logSearchTerm) {
+      setTimeout(applyLogSearch, 0);
+    } else if (logSearchTerm) {
+      setTimeout(applyLogSearch, 0);
+    } else {
+      updateMatchCount(0);
+    }
+    return;
+  }
+
+  // Large log: chunked rendering with progress
+  const renderId = ++logRenderAbortId;
+  let idx = 0;
+  const statusDiv = document.createElement('div');
+  statusDiv.style.cssText = 'color:#888;padding:8px;font-size:12px';
+  statusDiv.textContent = 'Rendering\u2026 0%';
+  terminal.appendChild(statusDiv);
+
+  function renderChunk() {
+    if (renderId !== logRenderAbortId) return;
+    const end = Math.min(idx + RENDER_CHUNK_SIZE, total);
+    const frag = document.createDocumentFragment();
+    for (; idx < end; idx++) {
+      frag.appendChild(buildLogDiv(logLines[idx], logLineBase + idx + 1));
+    }
+    // Remove status on first chunk, insert before it otherwise
+    if (idx >= total) {
+      statusDiv.remove();
+      terminal.appendChild(frag);
+      terminal.scrollTop = terminal.scrollHeight;
+      if ((logFilterMode || !logFilterMode) && logSearchTerm) {
+        setTimeout(applyLogSearch, 0);
+      } else {
+        updateMatchCount(0);
+      }
+    } else {
+      terminal.insertBefore(frag, statusDiv);
+      const pct = Math.round((idx / total) * 100);
+      statusDiv.textContent = 'Rendering\u2026 ' + pct + '% (' + idx + '/' + total + ' lines)';
+      requestAnimationFrame(renderChunk);
+    }
+  }
+  requestAnimationFrame(renderChunk);
+}
+
+function appendLogLines(newLines) {
+  if (!newLines.length) return;
+  // Compute real line numbers for appended lines
+  const startNum = logLineBase + logLines.length - newLines.length + 1;
+  for (let i = 0; i < newLines.length; i++) {
+    logPendingLines.push({ line: newLines[i], num: startNum + i });
+  }
+  if (logRafPending) return;
+  logRafPending = true;
+  requestAnimationFrame(() => {
+    const terminal = document.getElementById('log-terminal');
+    const wasAtBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 20;
+    const frag = document.createDocumentFragment();
+    for (const item of logPendingLines) {
+      frag.appendChild(buildLogDiv(item.line, item.num));
+    }
+    logPendingLines = [];
+    logRafPending = false;
+    terminal.appendChild(frag);
+    // Trim excess DOM nodes if over limit
+    while (terminal.childElementCount > MAX_LOG_LINES) {
+      terminal.removeChild(terminal.firstChild);
+    }
+    if (wasAtBottom) terminal.scrollTop = terminal.scrollHeight;
+    updateMatchCount();
+  });
+}
+
+function onLogPresetChange() {
+  const sel = document.getElementById('log-preset');
+  const val = sel?.value || '';
+  const input = document.getElementById('log-search-input');
+  if (val) {
+    logSearchTerm = val;
+    logSearchIsRegex = true;
+    if (input) input.value = val;
+  } else {
+    logSearchTerm = '';
+    logSearchIsRegex = false;
+    if (input) input.value = '';
+  }
+  // Defer search so dropdown visually updates first
+  setTimeout(applyLogSearch, 0);
+}
+
+function onLogSearchInput() {
+  logSearchTerm = (document.getElementById('log-search-input')?.value || '').trim();
+  logSearchIsRegex = false;
+  // Reset preset dropdown since user typed manually
+  const sel = document.getElementById('log-preset');
+  if (sel) sel.value = '';
+  // Debounce: wait 300ms after last keystroke before searching
+  if (logSearchDebounce) clearTimeout(logSearchDebounce);
+  logSearchDebounce = setTimeout(applyLogSearch, 300);
+}
+
+function onLogFilterToggle() {
+  logFilterMode = document.getElementById('log-filter-toggle')?.checked || false;
+  // Defer search so checkbox visually updates first
+  setTimeout(applyLogSearch, 0);
+}
+
+function onLogSearchKeydown(e) {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  logSearchNav(e.shiftKey ? -1 : 1);
+}
+
+function logSearchNav(dir) {
+  if (logFilterMode || logSearchMatchEls.length === 0) return;
+  // Remove current-match highlight from previous
+  if (logSearchMatchIdx >= 0 && logSearchMatchIdx < logSearchMatchEls.length) {
+    logSearchMatchEls[logSearchMatchIdx].classList.remove('log-current-match');
+  }
+  // Advance index
+  logSearchMatchIdx += dir;
+  if (logSearchMatchIdx >= logSearchMatchEls.length) logSearchMatchIdx = 0;
+  if (logSearchMatchIdx < 0) logSearchMatchIdx = logSearchMatchEls.length - 1;
+  // Highlight + scroll within terminal only
+  const el = logSearchMatchEls[logSearchMatchIdx];
+  el.classList.add('log-current-match');
+  const terminal = document.getElementById('log-terminal');
+  const elTop = el.offsetTop - terminal.offsetTop;
+  const elH = el.offsetHeight;
+  const tH = terminal.clientHeight;
+  terminal.scrollTop = elTop - (tH / 2) + (elH / 2);
+  // Update counter
+  updateMatchCount(0);
+}
+
+function onLogContextChange() {
+  logContextLines = parseInt(document.getElementById('log-context-lines')?.value || '5');
+  setTimeout(applyLogSearch, 0);
+}
+
+// ── Block-based grouping ────────────────────────────────────
+// A "block" is a contiguous range of visible lines (matches + their ±N context).
+// When matches are close together, their context merges into one block.
+// Each block has ONE toggle on its first match → expands/collapses the block.
+
+function cleanupGroups(terminal) {
+  terminal.querySelectorAll('.log-separator').forEach(s => s.remove());
+  for (const div of terminal.children) {
+    div.className = div.className.replace(/ log-context| log-group-first| log-grp-detail| collapsed| log-current-match/g, '');
+    if (div.dataset.text !== undefined) div.textContent = div.dataset.text;
+    delete div.dataset.blk;
+    div.style.display = '';
+  }
+}
+
+function computeBlocks(isMatch, total, contextLines) {
+  // Mark visible lines (match or within ±N of a match)
+  const isVisible = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    if (isMatch[i]) {
+      isVisible[i] = 1;
+      for (let d = 1; d <= contextLines; d++) {
+        if (i - d >= 0) isVisible[i - d] = 1;
+        if (i + d < total) isVisible[i + d] = 1;
+      }
+    }
+  }
+
+  // Find contiguous blocks of visible lines
+  const blocks = []; // [{start, end, firstMatch, matchCount}]
+  let bs = -1, fm = -1, mc = 0;
+  for (let i = 0; i < total; i++) {
+    if (isVisible[i]) {
+      if (bs === -1) { bs = i; fm = -1; mc = 0; }
+      if (isMatch[i]) { if (fm === -1) fm = i; mc++; }
+    } else {
+      if (bs !== -1) { blocks.push({start: bs, end: i - 1, firstMatch: fm, matchCount: mc}); bs = -1; }
+    }
+  }
+  if (bs !== -1) blocks.push({start: bs, end: total - 1, firstMatch: fm, matchCount: mc});
+
+  // Assign block index to each visible line
+  const blockOf = new Int16Array(total).fill(-1);
+  for (let b = 0; b < blocks.length; b++) {
+    for (let i = blocks[b].start; i <= blocks[b].end; i++) blockOf[i] = b;
+  }
+
+  return { blocks, blockOf, isVisible };
+}
+
+function insertBlockSeparators(terminal, children, blocks) {
+  for (let b = 0; b < blocks.length - 1; b++) {
+    const endDiv = children[blocks[b].end];
+    if (endDiv) {
+      // Find the next DOM sibling (skip any existing separators)
+      let next = endDiv.nextSibling;
+      if (next) {
+        const sep = document.createElement('div');
+        sep.className = 'log-separator';
+        sep.textContent = '\u00b7\u00b7\u00b7';
+        terminal.insertBefore(sep, next);
+      }
+    }
+  }
+}
+
+function toggleAllGroups(expand) {
+  logBlocksCollapsed = !expand;
+  const terminal = document.getElementById('log-terminal');
+  terminal.querySelectorAll('.log-group-first').forEach(el => {
+    if (expand) el.classList.remove('collapsed');
+    else el.classList.add('collapsed');
+    const arrow = el.querySelector('.grp-arrow');
+    if (arrow) arrow.textContent = expand ? '\u25bc ' : '\u25b6 ';
+  });
+  terminal.querySelectorAll('.log-grp-detail').forEach(el => {
+    el.style.display = expand ? '' : 'none';
+  });
+  terminal.querySelectorAll('.log-separator').forEach(sep => {
+    sep.style.display = expand ? '' : 'none';
+  });
+}
+
+// ── Main search/filter engine ───────────────────────────────
+
+function applyLogSearch() {
+  const terminal = document.getElementById('log-terminal');
+  const el = document.getElementById('log-match-count');
+  const term = logSearchTerm;
+  const ctxSel = document.getElementById('log-context-lines');
+  const grpActions = document.getElementById('log-group-actions');
+
+  cleanupGroups(terminal);
+
+  const children = Array.from(terminal.children);
+  const total = children.length;
+
+  const navBtns = document.getElementById('log-nav-buttons');
+
+  if (!term) {
+    for (const div of children) {
+      if (div.dataset.text !== undefined) div.textContent = div.dataset.text;
+      div.className = div.className.replace(/ log-highlight| log-hidden| log-current-match/g, '');
+    }
+    if (el) el.textContent = '';
+    if (ctxSel) ctxSel.style.display = 'none';
+    if (grpActions) grpActions.style.display = 'none';
+    if (navBtns) navBtns.style.display = 'none';
+    logSearchMatchEls = []; logSearchMatchIdx = -1;
+    return;
+  }
+
+  const isMatch = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    isMatch[i] = testSearchMatch(children[i].dataset.text || children[i].textContent || '') ? 1 : 0;
+  }
+
+  const re = getSearchRegex();
+
+  if (!logFilterMode) {
+    if (ctxSel) ctxSel.style.display = 'none';
+    if (grpActions) grpActions.style.display = 'none';
+    applyHighlightsOnly(children, isMatch, total, el, re);
+    return;
+  }
+
+  // Filter + context mode
+  if (ctxSel) ctxSel.style.display = '';
+  if (grpActions) grpActions.style.display = '';
+
+  const { blocks, blockOf, isVisible } = computeBlocks(isMatch, total, logContextLines);
+  const searchId = ++logSearchAbortId;
+
+  if (total <= SEARCH_CHUNK_SIZE) {
+    for (let i = 0; i < total; i++) {
+      applyBlockDiv(children[i], i, isMatch, isVisible, blockOf, blocks, re);
+    }
+    insertBlockSeparators(terminal, children, blocks);
+    if (logBlocksCollapsed) toggleAllGroups(false);
+    updateMatchCount(blocks.length);
+    return;
+  }
+
+  // Hide all lines before chunked processing so user doesn't see ungrouped mess
+  for (let i = 0; i < total; i++) children[i].style.display = 'none';
+
+  let idx = 0;
+  if (el) el.textContent = 'Filtering\u2026';
+
+  function processChunk() {
+    if (searchId !== logSearchAbortId) return;
+    const end = Math.min(idx + SEARCH_CHUNK_SIZE, total);
+    for (; idx < end; idx++) {
+      applyBlockDiv(children[idx], idx, isMatch, isVisible, blockOf, blocks, re);
+    }
+    if (idx < total) {
+      const pct = Math.round((idx / total) * 100);
+      if (el) el.textContent = 'Filtering\u2026 ' + pct + '%';
+      requestAnimationFrame(processChunk);
+    } else {
+      insertBlockSeparators(terminal, children, blocks);
+      if (logBlocksCollapsed) toggleAllGroups(false);
+      updateMatchCount(blocks.length);
+    }
+  }
+  requestAnimationFrame(processChunk);
+}
+
+function cacheNavMatches() {
+  logSearchMatchEls = Array.from(document.getElementById('log-terminal').querySelectorAll('.log-highlight'));
+  logSearchMatchIdx = -1;
+  const navBtns = document.getElementById('log-nav-buttons');
+  if (navBtns) navBtns.style.display = (!logFilterMode && logSearchMatchEls.length > 0) ? '' : 'none';
+}
+
+function applyHighlightsOnly(children, isMatch, total, el, re) {
+  const searchId = ++logSearchAbortId;
+
+  if (total <= SEARCH_CHUNK_SIZE) {
+    for (let i = 0; i < total; i++) applyHighlightDiv(children[i], isMatch[i], re);
+    cacheNavMatches();
+    updateMatchCount(0);
+    return;
+  }
+
+  let idx = 0;
+  if (el) el.textContent = 'Filtering\u2026';
+
+  function processChunk() {
+    if (searchId !== logSearchAbortId) return;
+    const end = Math.min(idx + SEARCH_CHUNK_SIZE, total);
+    for (; idx < end; idx++) applyHighlightDiv(children[idx], isMatch[idx], re);
+    if (idx < total) {
+      const pct = Math.round((idx / total) * 100);
+      if (el) el.textContent = 'Filtering\u2026 ' + pct + '%';
+      requestAnimationFrame(processChunk);
+    } else {
+      cacheNavMatches();
+      updateMatchCount(0);
+    }
+  }
+  requestAnimationFrame(processChunk);
+}
+
+function applyHighlightDiv(div, match, re) {
+  const text = div.dataset.text || div.textContent || '';
+  let cls = div.className.replace(/ log-highlight| log-hidden| log-current-match/g, '');
+  if (match) {
+    cls += ' log-highlight';
+    div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
+  } else {
+    div.textContent = text;
+  }
+  div.className = cls;
+}
+
+function applyBlockDiv(div, idx, isMatch, isVisible, blockOf, blocks, re) {
+  const text = div.dataset.text || div.textContent || '';
+  let cls = div.className.replace(/ log-highlight| log-hidden| log-context| log-group-first| log-grp-detail| log-current-match/g, '');
+  div.style.display = '';
+
+  if (!isVisible[idx]) {
+    cls += ' log-hidden';
+    div.textContent = text;
+    div.className = cls;
+    return;
+  }
+
+  const b = blockOf[idx];
+  div.dataset.blk = b;
+
+  if (isMatch[idx] && idx === blocks[b].firstMatch) {
+    // First match of the block = collapsible header
+    cls += ' log-highlight log-group-first';
+    // Insert arrow span
+    const arrow = document.createElement('span');
+    arrow.className = 'grp-arrow';
+    arrow.textContent = '▼ ';
+    div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
+    div.insertBefore(arrow, div.firstChild);
+    const detailLines = (blocks[b].end - blocks[b].start); // lines besides header
+    if (detailLines > 0) {
+      const span = document.createElement('span');
+      span.className = 'grp-count';
+      span.textContent = ' (+' + detailLines + ' lines)';
+      div.appendChild(span);
+    }
+  } else if (isMatch[idx]) {
+    // Other matches in block = highlighted detail
+    cls += ' log-highlight log-grp-detail';
+    div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
+  } else {
+    // Context line = dimmed detail
+    cls += ' log-context log-grp-detail';
+    div.textContent = text;
+  }
+
+  div.className = cls;
+}
+
+// ── Match count ─────────────────────────────────────────────
+
+function updateMatchCount(blockCount) {
+  const el = document.getElementById('log-match-count');
+  if (!el) return;
+  if (!logSearchTerm) { el.textContent = ''; return; }
+  const terminal = document.getElementById('log-terminal');
+  const count = terminal.querySelectorAll('.log-highlight').length;
+  if (logFilterMode && blockCount > 0) {
+    el.textContent = count + ' matches in ' + blockCount + ' blocks';
+  } else if (!logFilterMode && logSearchMatchIdx >= 0) {
+    el.textContent = (logSearchMatchIdx + 1) + ' / ' + count;
+  } else {
+    el.textContent = count + ' / ' + terminal.childElementCount;
+  }
+}
+
+// ── Dynamic height ─────────────────────────────────────────
+// No-op: height is controlled by parent CSS (100vh-based)
+
+// ── Block toggle event delegation ───────────────────────────
+document.getElementById('log-terminal').addEventListener('click', function(e) {
+  const first = e.target.closest('.log-group-first');
+  if (!first) return;
+  e.preventDefault();
+  const blk = first.dataset.blk;
+  if (blk === undefined) return;
+
+  first.classList.toggle('collapsed');
+  const show = !first.classList.contains('collapsed');
+  // Update arrow text
+  const arrow = first.querySelector('.grp-arrow');
+  if (arrow) arrow.textContent = show ? '▼ ' : '▶ ';
+
+  // Toggle ALL detail lines in this block
+  this.querySelectorAll('.log-grp-detail[data-blk="' + blk + '"]').forEach(d => {
+    d.style.display = show ? '' : 'none';
+  });
+});
+
+// ── Init ───────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>

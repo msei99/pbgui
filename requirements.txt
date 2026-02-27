@@ -1,4 +1,4 @@
-streamlit==1.52.2
+streamlit==1.54.0
 streamlit-scrollable-textbox==0.0.3
 streamlit-autorefresh==1.0.1
 streamlit-bokeh==3.8.1
@@ -27,6 +27,11 @@ passlib==1.7.4
 python-telegram-bot==22.5 ; python_version >= "3.11"
 python-telegram-bot==21.10 ; python_version < "3.11"
 paramiko==4.0.0
+websockets==16.0
+pandas==2.3.3 ; python_version >= "3.11"
+requests==2.32.5
+python-dateutil==2.9.0.post0
+toml==0.10.2
 boto3>=1.28.0,<2.0.0
 lz4>=4.4.3,<5.0.0
 orjson>=3.9.0,<4.0.0
