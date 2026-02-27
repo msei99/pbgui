@@ -176,7 +176,8 @@ def set_page_config(page : str = "Start"):
         }
     )
     # Check VPS Errors
-    has_vps_errors()
+    if str(page) != "VPS Monitor":
+        has_vps_errors()
     
     with st.sidebar:
         st.write(f"### {page} Options")
