@@ -616,15 +616,23 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                     }
             update_progress(**kw)
 
-        res = improve_best_hyperliquid_1m_archive_for_coin(
-            coin=coin,
-            end_date=end_day,
-            start_date_override=start_day or None,
-            dry_run=False,
-            refetch=refetch,
-            progress_cb=progress_cb,
-            stop_check=lambda: _STOP,
-        )
+        def _job_stop_check() -> bool:
+            return bool(_STOP or _is_cancel_requested(job_path))
+
+        try:
+            res = improve_best_hyperliquid_1m_archive_for_coin(
+                coin=coin,
+                end_date=end_day,
+                start_date_override=start_day or None,
+                dry_run=False,
+                refetch=refetch,
+                progress_cb=progress_cb,
+                stop_check=_job_stop_check,
+            )
+        except RuntimeError as e:
+            if _is_cancel_requested(job_path):
+                raise RuntimeError("cancelled") from e
+            raise
         out = res.to_dict()
         if isinstance(out, dict):
             out["duration_s"] = int(max(0, time.time() - started_ts))
@@ -673,6 +681,26 @@ def main() -> int:
                 try:
                     _run_job(job_run)
                 except Exception as e:
+                    # Graceful worker stop (e.g. service stop/restart):
+                    # do not fail the active job, requeue it so it can resume
+                    # when the worker comes back.
+                    if _STOP and job_run.exists() and not _is_cancel_requested(job_run):
+                        try:
+                            update_job_file(
+                                job_run,
+                                mutate=lambda o: o.update(
+                                    {
+                                        "status": "pending",
+                                        "error": "worker stopped; requeued",
+                                    }
+                                ),
+                            )
+                            move_job_file(job_run, "pending")
+                            _job_log(f"worker stopping; requeued job {job_run.name}", level="WARNING")
+                            continue
+                        except Exception:
+                            pass
+
                     _job_log(f"fatal in job runner: {e}")
                     # if still in running, mark failed best-effort
                     try:

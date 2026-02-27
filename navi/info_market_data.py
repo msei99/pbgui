@@ -82,7 +82,8 @@ from task_queue import (
     read_worker_pid,
     is_pid_running,
     request_cancel_job,
-    force_fail_job,
+    retry_failed_job,
+    delete_jobs_by_ids,
     clear_worker_pid,
 )
 from tradfi_sync import load_xyz_spec, fetch_xyz_spec, auto_map_tradfi, fetch_tiingo_meta
@@ -745,45 +746,100 @@ def _render_jobs_panel(
     try:
         jobs = list_jobs(states=["pending", "running"], limit=20)
         jobs = _filter_jobs_by_type(jobs, job_types)
-        st.caption("Queued/running jobs")
+        pending_jobs = list_jobs(states=["pending"], limit=200)
+        pending_jobs = _filter_jobs_by_type(pending_jobs, job_types)
+        done_jobs = list_jobs(states=["done"], limit=200)
+        done_jobs = _filter_jobs_by_type(done_jobs, job_types)
+        failed_jobs = list_jobs(states=["failed"], limit=200)
+        failed_jobs = _filter_jobs_by_type(failed_jobs, job_types)
+        # --- Summary line (always visible) ---
+        st.caption(
+            f"Queued/running jobs: {len(jobs)} · Pending: {len(pending_jobs)} · Done: {len(done_jobs)} · Failed: {len(failed_jobs)}"
+        )
         if not jobs:
             st.write("No active jobs.")
-            if auto_refresh_key:
-                st.session_state[auto_refresh_key] = False
-                st.rerun()
-            return
 
         # Auto-restart: if there are active jobs but the worker process is dead,
         # restart it automatically so jobs don't get stuck forever.
-        _wp = read_worker_pid()
-        if not (_wp and is_pid_running(int(_wp))):
+        if jobs:
+            _wp = read_worker_pid()
+            if not (_wp and is_pid_running(int(_wp))):
+                try:
+                    clear_worker_pid()
+                    subprocess.Popen(
+                        [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        close_fds=True,
+                    )
+                    append_exchange_download_log(
+                        "hyperliquid",
+                        "[worker] auto-restart: worker dead but active jobs found",
+                        level="WARNING",
+                    )
+                except Exception:
+                    pass
+
+        # --- Progress rows (always visible, above Running expander) ---
+        if jobs:
+            h1, h2, h3, h4, h5, h6, h7, h9 = st.columns([0.16, 0.13, 0.09, 0.06, 0.17, 0.16, 0.08, 0.05])
+            h1.write("id")
+            h2.write("type")
+            h3.write("status")
+            h4.write("coin")
+            h5.write("chunk")
+            h6.write("progress")
+            h7.write("updated_ts")
+            h9.write("stop")
+
+        for j in jobs:
+            jid = str(j.get("id") or "").strip()
+            pr = j.get("progress") if isinstance(j.get("progress"), dict) else {}
+            coin = str((pr or {}).get("coin") or "")
+            chunk = f"{(pr or {}).get('chunk_start')}→{(pr or {}).get('chunk_end')}" if (pr or {}).get("chunk_start") else ""
+
+            step_i = (pr or {}).get("step")
+            total_i = (pr or {}).get("total")
+            chunk_done = (pr or {}).get("chunk_done")
+            chunk_total = (pr or {}).get("chunk_total")
+            pct = 0.0
             try:
-                clear_worker_pid()
-                subprocess.Popen(
-                    [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    close_fds=True,
-                )
-                append_exchange_download_log(
-                    "hyperliquid",
-                    "[worker] auto-restart: worker dead but active jobs found",
-                    level="WARNING",
-                )
+                if total_i:
+                    if chunk_total and step_i:
+                        frac = float(chunk_done or 0) / float(chunk_total)
+                        pct = float(max(0, int(step_i) - 1) + frac) / float(total_i)
+                    else:
+                        pct = float(step_i or 0) / float(total_i)
             except Exception:
-                pass
+                pct = 0.0
+            pct = max(0.0, min(1.0, pct))
 
-        h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([0.16, 0.13, 0.09, 0.06, 0.17, 0.16, 0.08, 0.07, 0.08])
-        h1.write("id")
-        h2.write("type")
-        h3.write("status")
-        h4.write("coin")
-        h5.write("chunk")
-        h6.write("progress")
-        h7.write("updated_ts")
-        h8.write(":material/expand_more:")
-        h9.write("stop")
+            dl_t = (pr or {}).get("downloaded_total")
+            sk_t = (pr or {}).get("skipped_existing_total")
+            fl_t = (pr or {}).get("failed_total")
 
+            dl_b = (pr or {}).get("downloaded_bytes_total")
+            sk_b = (pr or {}).get("skipped_existing_bytes_total")
+            fl_b = (pr or {}).get("failed_bytes_total")
+
+            c1, c2, c3, c4, c5, c6, c7, c9 = st.columns([0.16, 0.13, 0.09, 0.06, 0.17, 0.16, 0.08, 0.05])
+            c1.write(jid)
+            c2.write(str(j.get("type") or ""))
+            c3.write(str(j.get("status") or ""))
+            c4.write(coin)
+            c5.write(chunk)
+            c6.progress(pct)
+            c7.write(str(j.get("updated_ts") or ""))
+            with c9:
+                if st.button("Stop", key=f"{panel_key}_stop_{jid}"):
+                    try:
+                        ok2 = request_cancel_job(jid, reason="user stop")
+                        if not ok2:
+                            st.warning("Job not found.")
+                    except Exception as e:
+                        st.error(str(e))
+
+        # --- Running expander: detailed job info (download stats, substatus etc.) ---
         def _render_job_details(match: dict) -> None:
             pr = match.get("progress") if isinstance(match.get("progress"), dict) else {}
             coin_local = str((pr or {}).get("coin") or "").strip().upper()
@@ -882,116 +938,294 @@ def _render_jobs_panel(
                 st.caption("recent_keys:")
                 st.code("\n".join(str(x) for x in recent_keys[:12]))
 
-        for j in jobs:
-            jid = str(j.get("id") or "").strip()
-            pr = j.get("progress") if isinstance(j.get("progress"), dict) else {}
-            coin = str((pr or {}).get("coin") or "")
-            chunk = f"{(pr or {}).get('chunk_start')}→{(pr or {}).get('chunk_end')}" if (pr or {}).get("chunk_start") else ""
+        if jobs:
+            with st.expander("Running", expanded=False):
+                for j in jobs:
+                    jid_r = str(j.get("id") or "").strip()
+                    status_r = str(j.get("status") or "")
+                    upd_ts_r = _format_unix_ts(j.get("updated_ts"))
+                    err_r = str(j.get("error") or "")
+                    payload_r = j.get("payload") if isinstance(j.get("payload"), dict) else {}
+                    coins_r = payload_r.get("coins") if isinstance(payload_r, dict) else None
+                    coins_r = coins_r if isinstance(coins_r, list) else []
+                    coins_preview = ", ".join(str(c) for c in coins_r[:12])
+                    if coins_preview and len(coins_r) > 12:
+                        coins_preview += " …"
+                    pr_r = j.get("progress") if isinstance(j.get("progress"), dict) else {}
+                    lr_r = (pr_r or {}).get("last_result") if isinstance(pr_r, dict) else {}
 
-            step_i = (pr or {}).get("step")
-            total_i = (pr or {}).get("total")
-            chunk_done = (pr or {}).get("chunk_done")
-            chunk_total = (pr or {}).get("chunk_total")
-            pct = 0.0
-            try:
-                if total_i:
-                    if chunk_total and step_i:
-                        frac = float(chunk_done or 0) / float(chunk_total)
-                        pct = float(max(0, int(step_i) - 1) + frac) / float(total_i)
+                    # Status line
+                    st.write(
+                        f"**{jid_r}** status={status_r}"
+                        + (f" updated={upd_ts_r}" if upd_ts_r else "")
+                        + (f" error={err_r}" if err_r else "")
+                    )
+                    if coins_preview:
+                        st.caption(f"coins: {coins_preview}")
+
+                    # FX backfill info
+                    if isinstance(pr_r, dict) and bool(pr_r.get("fx_backfill_mode")):
+                        st.caption(
+                            "fx_backfill: "
+                            f"direction={pr_r.get('fx_backfill_direction') or 'newest_to_oldest'} "
+                            f"empty_chunk_streak={int(pr_r.get('fx_empty_chunk_streak') or 0)} "
+                            f"source={pr_r.get('tradfi_source_kind') or 'fx'}"
+                        )
+
+                    # Detailed live progress
+                    _render_job_details(j)
+
+                    # Last result summary (improve stats + duration)
+                    if isinstance(lr_r, dict) and lr_r:
+                        dur_s = None
+                        try:
+                            if lr_r.get("duration_s") is not None:
+                                dur_s = int(float(lr_r.get("duration_s") or 0))
+                        except Exception:
+                            dur_s = None
+                        dur_txt = ""
+                        if dur_s is not None:
+                            h = dur_s // 3600
+                            m = (dur_s % 3600) // 60
+                            s = dur_s % 60
+                            if h > 0:
+                                dur_txt = f" duration={h}h {m:02d}m {s:02d}s"
+                            elif m > 0:
+                                dur_txt = f" duration={m}m {s:02d}s"
+                            else:
+                                dur_txt = f" duration={s}s"
+                        if all(k in lr_r for k in ("days_checked", "l2book_minutes_added", "binance_minutes_filled")):
+                            st.caption(
+                                "improve: "
+                                f"days={lr_r.get('days_checked')} "
+                                f"l2book_added={lr_r.get('l2book_minutes_added')} "
+                                f"binance_filled={lr_r.get('binance_minutes_filled')} "
+                                f"bybit_filled={lr_r.get('bybit_minutes_filled', 0)}"
+                                f"{dur_txt}"
+                            )
+                        elif all(k in lr_r for k in ("days_checked", "tiingo_minutes_filled")):
+                            st.caption(
+                                "improve: "
+                                f"days={lr_r.get('days_checked')} "
+                                f"tiingo_filled={lr_r.get('tiingo_minutes_filled', 0)} "
+                                f"tiingo_month_requests={lr_r.get('tiingo_month_requests_used', 0)}"
+                                f"{dur_txt}"
+                            )
+                        else:
+                            st.caption(f"result: {lr_r}")
+
+                    # Details button – show raw JSON
+                    if st.button("Details", key=f"{panel_key}_running_details_{jid_r}"):
+                        _job_details_dialog(j)
+
+                    if len(jobs) > 1:
+                        st.divider()
+
+        active_expander_key = f"{panel_key}_active_state_expander"
+
+        def _render_state_expander(title: str, state_key: str, state_jobs: list[dict], allow_retry: bool = False) -> None:
+            with st.expander(
+                f"{title} ({len(state_jobs)})",
+                expanded=str(st.session_state.get(active_expander_key) or "") == state_key,
+            ):
+                if not state_jobs:
+                    st.caption(f"No {title.lower()}.")
+                    return
+
+                confirm_key = f"{panel_key}_{state_key}_confirm_delete_all"
+                if st.session_state.get(confirm_key, False):
+                    st.warning(f"Delete all {title.lower()} on this page filter? Click again to confirm.")
+
+                table_nonce_key = f"{panel_key}_{state_key}_table_nonce"
+                if table_nonce_key not in st.session_state:
+                    st.session_state[table_nonce_key] = 0
+                page_jobs = state_jobs
+                rows: list[dict] = []
+                jobs_by_id: dict[str, dict] = {}
+                for j in page_jobs:
+                    jid = str(j.get("id") or "").strip()
+                    jobs_by_id[jid] = j
+                    payload = j.get("payload") if isinstance(j.get("payload"), dict) else {}
+                    payload_coins = payload.get("coins") if isinstance(payload, dict) else None
+                    payload_coins = payload_coins if isinstance(payload_coins, list) else []
+                    payload_coins_clean = [str(c).strip().upper() for c in payload_coins if str(c).strip()]
+
+                    pr = j.get("progress") if isinstance(j.get("progress"), dict) else {}
+                    single_coin = str((pr or {}).get("coin") or "").strip().upper()
+                    if payload_coins_clean:
+                        coins_txt = ", ".join(payload_coins_clean)
                     else:
-                        pct = float(step_i or 0) / float(total_i)
-            except Exception:
-                pct = 0.0
-            pct = max(0.0, min(1.0, pct))
-            step_txt = f"{step_i}/{total_i}" if total_i else ""
+                        coins_txt = single_coin
 
-            dl_t = (pr or {}).get("downloaded_total")
-            sk_t = (pr or {}).get("skipped_existing_total")
-            fl_t = (pr or {}).get("failed_total")
-            totals_txt = ""
-            if dl_t is not None or sk_t is not None or fl_t is not None:
-                totals_txt = f"d={dl_t or 0} s={sk_t or 0} f={fl_t or 0}"
+                    err = str(j.get("error") or "")
+                    err_short = (err[:157] + "...") if len(err) > 160 else err
 
-            dl_b = (pr or {}).get("downloaded_bytes_total")
-            sk_b = (pr or {}).get("skipped_existing_bytes_total")
-            fl_b = (pr or {}).get("failed_bytes_total")
-            bytes_txt = ""
-            if dl_b is not None or sk_b is not None or fl_b is not None:
-                bytes_txt = f"bytes: d={_fmt_bytes(dl_b)} s={_fmt_bytes(sk_b)} f={_fmt_bytes(fl_b)}"
+                    rows.append(
+                        {
+                            "id": jid,
+                            "type": str(j.get("type") or ""),
+                            "coins": coins_txt,
+                            "updated": _format_unix_ts(j.get("updated_ts")),
+                            "error": err_short,
+                        }
+                    )
 
-            c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([0.16, 0.13, 0.09, 0.06, 0.17, 0.16, 0.08, 0.07, 0.08])
-            c1.write(jid)
-            c2.write(str(j.get("type") or ""))
-            c3.write(str(j.get("status") or ""))
-            c4.write(coin)
-            c5.write(chunk)
-            c6.progress(pct)
-            coin_upper = str(coin or "").strip().upper()
-            is_stock_perp = coin_upper.startswith("XYZ:") or coin_upper.startswith("XYZ-")
-            sub_day = (pr or {}).get("day")
-            sub_hour = (pr or {}).get("hour")
-            last_binance_day = (pr or {}).get("last_binance_fill_day")
-            if sub_day or sub_hour is not None:
-                try:
-                    hour_txt = f"{int(sub_hour):02d}" if sub_hour is not None else ""
-                except Exception:
-                    hour_txt = str(sub_hour)
-                if sub_day and hour_txt:
-                    if is_stock_perp:
-                        c6.caption(f"tradfi {sub_day} {hour_txt}:00")
-                    else:
-                        c6.caption(f"l2book {sub_day} {hour_txt}:00")
-                elif sub_day:
-                    if is_stock_perp:
-                        c6.caption(f"tradfi {sub_day}")
-                    else:
-                        c6.caption(f"l2book {sub_day}")
-                elif hour_txt:
-                    if is_stock_perp:
-                        c6.caption(f"tradfi hour {hour_txt}")
-                    else:
-                        c6.caption(f"l2book hour {hour_txt}")
-            if is_stock_perp:
-                month_key = str((pr or {}).get("month_key") or "").strip()
-                month_day_index = int((pr or {}).get("month_day_index") or 0)
-                month_day_total = int((pr or {}).get("month_day_total") or 0)
-                tiingo_wait_s = int((pr or {}).get("tiingo_wait_s") or 0)
-                tiingo_wait_reason = str((pr or {}).get("tiingo_wait_reason") or "").strip()
-                last_result = (pr or {}).get("last_result") if isinstance((pr or {}).get("last_result"), dict) else {}
-                tiingo_month_requests_used = int((last_result or {}).get("tiingo_month_requests_used") or 0)
-                if month_key and month_day_total > 0:
-                    c6.caption(f"month {month_key} day {month_day_index}/{month_day_total}")
-                c6.caption(f"tiingo month reqs {tiingo_month_requests_used}")
-                if tiingo_wait_s > 0:
-                    reason_txt = tiingo_wait_reason or "rate_limit"
-                    c6.caption(f"⚠️ tiingo wait {tiingo_wait_s}s ({reason_txt})")
-            if last_binance_day and not is_stock_perp:
-                c6.caption(f"binance_fill day={last_binance_day}")
-            c7.write(str(j.get("updated_ts") or ""))
-            with c8:
-                is_open = str(st.session_state.get(details_key) or "").strip() == jid
-                icon = ":material/expand_less:" if is_open else ":material/expand_more:"
-                help_txt = "Hide details" if is_open else "Show details"
-                if st.button(icon, key=f"{panel_key}_details_{jid}", help=help_txt):
-                    st.session_state[details_key] = "" if is_open else jid
-            with c9:
-                if st.button("Stop", key=f"{panel_key}_stop_{jid}"):
-                    try:
-                        request_cancel_job(jid, reason="user stop")
+                table_height = min(560, max(220, 36 * (len(rows) + 2)))
+                import pandas as pd
 
-                        pid2 = read_worker_pid()
-                        if pid2 and is_pid_running(int(pid2)):
-                            os.kill(int(pid2), signal.SIGKILL)
-                            clear_worker_pid()
+                df_rows = pd.DataFrame(rows)
+                event = st.dataframe(
+                    df_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=int(table_height),
+                    on_select="rerun",
+                    selection_mode="multi-row",
+                    key=f"{panel_key}_{state_key}_table_{int(st.session_state.get(table_nonce_key, 0))}",
+                )
 
-                        ok2 = force_fail_job(jid, error="cancelled")
-                        if not ok2:
-                            st.warning("Job not found.")
-                    except Exception as e:
-                        st.error(str(e))
+                sel_indices = event.selection.rows if event and event.selection else []
+                selected_ids: list[str] = []
+                if sel_indices:
+                    st.session_state[active_expander_key] = state_key
+                    for idx_raw in sel_indices:
+                        try:
+                            idx = int(idx_raw)
+                        except Exception:
+                            continue
+                        if 0 <= idx < len(rows):
+                            jid = str(rows[idx].get("id") or "")
+                            if jid:
+                                selected_ids.append(jid)
+                selected_jobs = [jobs_by_id[sid] for sid in selected_ids if sid in jobs_by_id]
+
+                if not selected_ids:
+                    st.caption("Select one or more rows in the table to use actions.")
+                else:
+                    st.caption(f"Selected: {len(selected_ids)}")
+
+                if allow_retry:
+                    a1, a2, a3, a4 = st.columns([1, 1, 1, 1])
+                    if a1.button("Retry", key=f"{panel_key}_retry_selected_{state_key}", disabled=not bool(selected_ids)):
+                        try:
+                            retried_n = 0
+                            for sid in selected_ids:
+                                if retry_failed_job(str(sid)):
+                                    retried_n += 1
+                            if retried_n > 0:
+                                pid2 = read_worker_pid()
+                                if not (pid2 and is_pid_running(int(pid2))):
+                                    clear_worker_pid()
+                                    subprocess.Popen(
+                                        [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                                        stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL,
+                                        close_fds=True,
+                                    )
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Retried {retried_n}/{len(selected_ids)} jobs")
+                                st.rerun()
+                            else:
+                                st.warning("Retry failed: job not found.")
+                        except Exception as e:
+                            st.error(str(e))
+                    if a2.button("Details", key=f"{panel_key}_details_selected_{state_key}", disabled=not bool(selected_ids)):
+                        _job_details_dialog(list(selected_jobs))
+                    if a3.button("Delete", key=f"{panel_key}_delete_selected_{state_key}", disabled=not bool(selected_ids)):
+                        try:
+                            deleted_n = delete_jobs_by_ids(selected_ids, states=["failed"])
+                            if deleted_n > 0:
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Deleted {deleted_n}/{len(selected_ids)} jobs")
+                                st.rerun()
+                            else:
+                                st.warning("Delete failed: job not found.")
+                        except Exception as e:
+                            st.error(str(e))
+                    if a4.button("Delete all", key=f"{panel_key}_{state_key}_delete_all"):
+                        if not st.session_state.get(confirm_key, False):
+                            st.session_state[confirm_key] = True
+                            st.session_state[active_expander_key] = state_key
+                            st.rerun()
+                        else:
+                            try:
+                                ids = [str(j.get("id") or "").strip() for j in state_jobs if str(j.get("id") or "").strip()]
+                                deleted_n = delete_jobs_by_ids(ids, states=[state_key])
+                                st.session_state[confirm_key] = False
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Deleted {deleted_n}/{len(ids)} jobs")
+                                st.rerun()
+                            except Exception as e:
+                                st.session_state[confirm_key] = False
+                                st.error(str(e))
+                else:
+                    b1, b2, b3 = st.columns([1, 1, 1])
+                    if b1.button("Details", key=f"{panel_key}_details_selected_{state_key}", disabled=not bool(selected_ids)):
+                        _job_details_dialog(list(selected_jobs))
+                    if b2.button("Delete", key=f"{panel_key}_delete_selected_{state_key}", disabled=not bool(selected_ids)):
+                        try:
+                            deleted_n = delete_jobs_by_ids(selected_ids, states=[state_key])
+                            if deleted_n > 0:
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Deleted {deleted_n}/{len(selected_ids)} jobs")
+                                st.rerun()
+                            else:
+                                st.warning("Delete failed: job not found.")
+                        except Exception as e:
+                            st.error(str(e))
+                    if b3.button("Delete all", key=f"{panel_key}_{state_key}_delete_all"):
+                        if not st.session_state.get(confirm_key, False):
+                            st.session_state[confirm_key] = True
+                            st.session_state[active_expander_key] = state_key
+                            st.rerun()
+                        else:
+                            try:
+                                ids = [str(j.get("id") or "").strip() for j in state_jobs if str(j.get("id") or "").strip()]
+                                deleted_n = delete_jobs_by_ids(ids, states=[state_key])
+                                st.session_state[confirm_key] = False
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Deleted {deleted_n}/{len(ids)} jobs")
+                                st.rerun()
+                            except Exception as e:
+                                st.session_state[confirm_key] = False
+                                st.error(str(e))
+
+        _render_state_expander("Pending jobs", "pending", pending_jobs, allow_retry=False)
+        _render_state_expander("Failed jobs", "failed", failed_jobs, allow_retry=True)
+        _render_state_expander("Done jobs", "done", done_jobs, allow_retry=False)
+
+        if auto_refresh_key and not jobs:
+            st.session_state[auto_refresh_key] = False
+            st.rerun()
 
     except Exception as e:
         st.error(str(e))
+
+
+@st.dialog("Job details", width="large")
+def _job_details_dialog(job: dict | list[dict]) -> None:
+    if isinstance(job, list):
+        st.caption(f"Selected jobs: {len(job)}")
+        for idx, item in enumerate(job, start=1):
+            jid = str((item or {}).get("id") or "").strip()
+            jtype = str((item or {}).get("type") or "").strip()
+            status = str((item or {}).get("status") or "").strip()
+            st.markdown(f"**{idx}.** id={jid} · type={jtype} · status={status}")
+            st.json(item)
+            if idx < len(job):
+                st.divider()
+        return
+
+    jid = str((job or {}).get("id") or "").strip()
+    jtype = str((job or {}).get("type") or "").strip()
+    status = str((job or {}).get("status") or "").strip()
+    st.caption(f"id={jid} · type={jtype} · status={status}")
+    st.json(job)
 
 
 @st.dialog("Help & Tutorials", width="large")
@@ -2494,108 +2728,6 @@ def view_market_data():
                         )
 
                 _best_jobs_fragment()
-
-                # Last build job summary (auto-refresh while jobs are active)
-                try:
-                    def _render_last_build_job() -> None:
-                        jobs_any = list_jobs(states=["running", "done", "failed"], limit=50)
-                        jobs_any = [j for j in jobs_any if str(j.get("type") or "") == "hl_best_1m"]
-                        try:
-                            jobs_any = sorted(
-                                jobs_any,
-                                key=lambda j: int(float(j.get("updated_ts") or 0)),
-                                reverse=True,
-                            )
-                        except Exception:
-                            pass
-
-                        if jobs_any:
-                            last = jobs_any[0]
-                            status = str(last.get("status") or "")
-                            upd_ts_raw = last.get("updated_ts")
-                            upd_ts = _format_unix_ts(upd_ts_raw)
-                            err = str(last.get("error") or "")
-                            payload = last.get("payload") if isinstance(last.get("payload"), dict) else {}
-                            coins = payload.get("coins") if isinstance(payload, dict) else None
-                            coins = coins if isinstance(coins, list) else []
-                            coins_preview = ", ".join(str(c) for c in coins[:12])
-                            if coins_preview and len(coins) > 12:
-                                coins_preview += " …"
-                            pr = last.get("progress") if isinstance(last.get("progress"), dict) else {}
-                            lr = (pr or {}).get("last_result") if isinstance(pr, dict) else {}
-                            st.write(
-                                f"status={status}"
-                                + (f" updated={upd_ts}" if upd_ts else "")
-                                + (f" error={err}" if err else "")
-                            )
-                            if coins_preview:
-                                st.caption(f"coins: {coins_preview}")
-                            if isinstance(pr, dict) and bool(pr.get("fx_backfill_mode")):
-                                st.caption(
-                                    "fx_backfill: "
-                                    f"direction={pr.get('fx_backfill_direction') or 'newest_to_oldest'} "
-                                    f"empty_chunk_streak={int(pr.get('fx_empty_chunk_streak') or 0)} "
-                                    f"source={pr.get('tradfi_source_kind') or 'fx'}"
-                                )
-                            if isinstance(lr, dict) and lr:
-                                dur_s = None
-                                try:
-                                    if lr.get("duration_s") is not None:
-                                        dur_s = int(float(lr.get("duration_s") or 0))
-                                except Exception:
-                                    dur_s = None
-                                dur_txt = ""
-                                if dur_s is not None:
-                                    h = dur_s // 3600
-                                    m = (dur_s % 3600) // 60
-                                    s = dur_s % 60
-                                    if h > 0:
-                                        dur_txt = f" duration={h}h {m:02d}m {s:02d}s"
-                                    elif m > 0:
-                                        dur_txt = f" duration={m}m {s:02d}s"
-                                    else:
-                                        dur_txt = f" duration={s}s"
-                                if all(k in lr for k in ("days_checked", "l2book_minutes_added", "binance_minutes_filled")):
-                                    st.caption(
-                                        "improve: "
-                                        f"days={lr.get('days_checked')} "
-                                        f"l2book_added={lr.get('l2book_minutes_added')} "
-                                        f"binance_filled={lr.get('binance_minutes_filled')} "
-                                        f"bybit_filled={lr.get('bybit_minutes_filled', 0)}"
-                                        f"{dur_txt}"
-                                    )
-                                elif all(k in lr for k in ("days_checked", "tiingo_minutes_filled")):
-                                    st.caption(
-                                        "improve: "
-                                        f"days={lr.get('days_checked')} "
-                                        f"tiingo_filled={lr.get('tiingo_minutes_filled', 0)} "
-                                        f"tiingo_month_requests={lr.get('tiingo_month_requests_used', 0)}"
-                                        f"{dur_txt}"
-                                    )
-                                else:
-                                    st.caption(f"result: {lr}")
-                        else:
-                            st.write("No build jobs yet.")
-
-                    with st.expander("Last build job", expanded=False):
-                        jobs_active_last = _has_active_jobs(["hl_best_1m"])
-                        if jobs_active_last and _supports_fragment_run_every() and not _is_background_refresh_paused():
-                            @st.fragment(run_every=2)
-                            def _last_build_fragment():
-                                # Stop auto-refresh when no jobs remain
-                                try:
-                                    if not bool(list_jobs(states=["pending", "running"], limit=1)):
-                                        st.rerun()
-                                except Exception:
-                                    pass
-                                _render_last_build_job()
-                        else:
-                            @st.fragment
-                            def _last_build_fragment():
-                                _render_last_build_job()
-                        _last_build_fragment()
-                except Exception:
-                    pass
 
             with tradfi_anchor.expander("TradFi Symbol Mappings", expanded=False):
                 # Table is built live from mapping.json merged with tradfi_symbol_map.json.

@@ -150,6 +150,77 @@ def force_fail_job(job_id: str, *, error: str = "cancelled") -> bool:
     return False
 
 
+def retry_failed_job(job_id: str) -> bool:
+    """Move a failed job back to pending for retry.
+
+    Returns True if a failed job with the given id was found and moved.
+    """
+
+    jid = str(job_id or "").strip()
+    if not jid:
+        return False
+
+    for p in _iter_job_paths(["failed"]):
+        if p.stem != jid:
+            continue
+
+        def mut(o: dict[str, Any]) -> None:
+            o["status"] = "pending"
+            o["error"] = ""
+            o["cancel_requested"] = False
+            o["progress"] = {}
+
+        update_job_file(p, mutate=mut)
+        try:
+            move_job_file(p, "pending")
+        except Exception:
+            return False
+        return True
+    return False
+
+
+def delete_job(job_id: str, *, states: list[str] | None = None) -> bool:
+    """Delete a job file from selected states.
+
+    By default, only non-running states are searched.
+    Returns True if the job file was found and removed.
+    """
+
+    jid = str(job_id or "").strip()
+    if not jid:
+        return False
+
+    search_states = states or ["pending", "done", "failed"]
+    for p in _iter_job_paths(search_states):
+        if p.stem != jid:
+            continue
+        try:
+            p.unlink(missing_ok=True)  # type: ignore[arg-type]
+            return True
+        except Exception:
+            try:
+                if p.exists():
+                    p.unlink()
+                    return True
+            except Exception:
+                return False
+    return False
+
+
+def delete_jobs_by_ids(job_ids: list[str], *, states: list[str] | None = None) -> int:
+    """Delete multiple jobs and return number of successfully deleted files."""
+
+    ids = [str(x).strip() for x in (job_ids or []) if str(x).strip()]
+    if not ids:
+        return 0
+
+    deleted = 0
+    for jid in ids:
+        if delete_job(jid, states=states):
+            deleted += 1
+    return deleted
+
+
 def move_job_file(src: Path, dst_state: str) -> Path:
     ensure_task_dirs()
     dst = get_task_state_dir(dst_state) / src.name

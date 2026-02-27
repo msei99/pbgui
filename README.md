@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.61
+# v1.62
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,14 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.62 (27-02-2026)
+- Improved: Market Data jobs panel restructured — progress rows always visible above Running expander, detailed job info (status, coins, FX backfill, substatus, last result) inside Running expander
+- New: Job management actions — retry failed jobs (requeue to pending), delete individual or bulk jobs from Pending/Failed/Done lists
+- New: Job details dialog button inside Running expander for raw JSON inspection
+- Improved: Task worker requeues active job on graceful stop instead of marking it failed
+- Improved: Task worker per-job cancel check during build best 1m execution
+- New: Pending/Failed/Done job lists with selectable table rows and bulk actions (delete selected / delete all)
 
 ## v1.61 (27-02-2026)
 - New: PBMaster SSH-based VPS management service — persistent SSH connections to all configured VPS nodes with centralized command execution, service monitoring, and real-time log streaming
