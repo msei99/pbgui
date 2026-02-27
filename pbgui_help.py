@@ -296,6 +296,28 @@ pbmaster_monitor_interval = """
     Default: 15 seconds. Minimum: 5 seconds.
     ```"""
 
+pbmaster_enabled_hosts = """
+    ```
+    Enable or disable monitoring for this VPS host.
+    Only enabled hosts will be connected via SSH and monitored.
+    Default: all hosts are disabled. Enable them individually
+    or use "Enable All" to activate all at once.
+    Changes take effect after saving and restarting PBMaster.
+    ```"""
+
+vps_monitor = """
+    ```
+    VPS Monitor provides real-time monitoring of all VPS servers
+    via PBMaster's persistent SSH connections.
+    
+    Dashboard: Live system metrics (CPU, RAM, Disk, Swap) with ~1-3s latency.
+    Instances: All bot instances across all VPS with PnL, errors, tracebacks.
+    Services: PBRun, PBRemote, PBCoinData status per VPS with restart buttons.
+    Live Logs: Real-time log streaming (tail -f) for services and bots.
+    
+    Requires PBMaster to be running (start from Services → PBMaster).
+    ```"""
+
 pbstat = """
     ```
     This is the Data Scrapper from PBGUI.

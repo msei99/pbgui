@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.60
+# v1.61
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -27,7 +27,7 @@ It has the following functions:
 ### Requirements
 - Python 3.12 (default)
 - Python 3.10 (only required if you use PB6)
-- Streamlit 1.52.0
+- Streamlit 1.54.0
 - Linux
 
 ### Migration (Python 3.10 -> 3.12)
@@ -322,6 +322,19 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.61 (27-02-2026)
+- New: PBMaster SSH-based VPS management service — persistent SSH connections to all configured VPS nodes with centralized command execution, service monitoring, and real-time log streaming
+- New: VPS Monitor real-time dashboard — WebSocket-powered HTML component with live host status, service restart, and interactive log viewer
+- New: VPS Monitor log viewer features: real file line numbers, block collapse/expand, full-text search with highlighting, auto-scroll, live streaming mode, and compact display option
+- New: PBMaster integrated in Services UI with toggle, settings, and connection status indicator
+- Improved: PBMaster worker crash resilience — auto-restart on failure, stop_check pattern, robust main loop
+- Improved: Session ID tracking prevents duplicate log lines on rapid host/service switching
+- Improved: Compact mode display setting persisted in pbgui.ini
+- Fix: Removed spurious console warning about obsolete limit metric `equity_balance_diff_mean`
+- Fix: Streamlit empty label warning in Services page segmented control
+- Improved: Build best 1m worker stability — robust main loop with auto-restart on crash, graceful stop via `stop_check` through entire Tiingo pipeline (rate-limit waits, IEX, FX), dead worker auto-detection in UI
+- Updated: Streamlit 1.54.0, websockets 16.0, paramiko 4.0.0
 
 ## v1.60 (25-02-2026)
 - Fix: OHLCV chart no longer shows stock split lines outside the actual data range (e.g. AMZN splits from 1998 without OHLCV data)

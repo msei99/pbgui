@@ -181,34 +181,43 @@ class ServiceMonitor:
 
         _log(SERVICE, f"[service] Restarting {service_name} on {hostname}")
 
-        # First, kill the old process if PID file exists
-        pid_path = f"{REMOTE_PBGUI_DIR}/{svc.pid_file}"
-        pid = self._executor.read_pid_file(hostname, pid_path)
-        if pid:
-            self._executor.execute(hostname, f"kill {pid} 2>/dev/null", timeout=5)
-            # Wait briefly for process to die
-            self._executor.execute(hostname, "sleep 1", timeout=5)
+        # Use starter.py -r (same as Ansible playbooks and start.sh).
+        # The venv is at ~/software/venv_pbgui (project convention).
+        # Fallback: ~/software/pbgui/.venv, then system python3.
+        venv_activate = "software/venv_pbgui/bin/activate"
+        venv_alt = f"{REMOTE_PBGUI_DIR}/.venv/bin/activate"
 
-        # Start the service as a background process
-        # Use the same pattern as the local run() methods:
-        # python -u Script.py, detached, with nohup
-        venv_python = f"{REMOTE_PBGUI_DIR}/.venv/bin/python"
-        system_python = "python3"
-
-        # Check which python is available
+        # Detect which venv exists
         check_result = self._executor.execute(
             hostname,
-            f'test -f ~/{venv_python} && echo "venv" || echo "system"',
+            f'test -f ~/{venv_activate} && echo "venv_pbgui" '
+            f'|| (test -f ~/{venv_alt} && echo "dotvenv" || echo "system")',
             timeout=5
         )
-        python_cmd = f"~/{venv_python}" if check_result.stdout.strip() == "venv" else system_python
+        venv_type = check_result.stdout.strip()
 
-        start_cmd = (
-            f"cd ~/{REMOTE_PBGUI_DIR} && "
-            f"nohup {python_cmd} -u {svc.script_file} "
-            f"> /dev/null 2>&1 &"
-        )
-        result = self._executor.execute(hostname, start_cmd, timeout=10)
+        if venv_type == "venv_pbgui":
+            start_cmd = (
+                f"cd ~/{REMOTE_PBGUI_DIR} && "
+                f"source ~/{venv_activate} && "
+                f"nohup python -u starter.py -r {service_name} "
+                f"> /dev/null 2>&1 &"
+            )
+        elif venv_type == "dotvenv":
+            start_cmd = (
+                f"cd ~/{REMOTE_PBGUI_DIR} && "
+                f"source ~/{venv_alt} && "
+                f"nohup python -u starter.py -r {service_name} "
+                f"> /dev/null 2>&1 &"
+            )
+        else:
+            start_cmd = (
+                f"cd ~/{REMOTE_PBGUI_DIR} && "
+                f"nohup python3 -u starter.py -r {service_name} "
+                f"> /dev/null 2>&1 &"
+            )
+
+        result = self._executor.execute(hostname, start_cmd, timeout=15)
 
         if result.success:
             self._record_restart(hostname, service_name)

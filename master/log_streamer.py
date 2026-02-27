@@ -91,8 +91,11 @@ class LogStreamer:
             return None
 
         try:
-            cmd = f"tail -n {lines} {full_path} 2>/dev/null"
-            stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+            if lines == 0:
+                cmd = f"cat {full_path} 2>/dev/null"
+            else:
+                cmd = f"tail -n {lines} {full_path} 2>/dev/null"
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=30)
             output = stdout.read().decode('utf-8', errors='replace')
             exit_code = stdout.channel.recv_exit_status()
 
@@ -110,16 +113,39 @@ class LogStreamer:
             return None
 
     def get_bot_log(self, hostname: str, instance_name: str,
-                    lines: int = 100) -> Optional[str]:
+                    lines: int = 100, pb_version: str = None) -> Optional[str]:
         """
         Fetch recent log lines for a specific bot instance.
         Searches common log locations on the VPS.
+
+        Args:
+            hostname: VPS hostname
+            instance_name: Bot instance name (directory name)
+            lines: Number of lines to fetch
+            pb_version: "7", "6", or "s" — used to optimize search order
         """
-        # V7 instances typically log to data/logs/ or the instance directory
-        possible_paths = [
-            f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
-            f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
-        ]
+        # Build search paths based on version
+        if pb_version == "7":
+            possible_paths = [
+                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
+                f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
+            ]
+        elif pb_version == "6":
+            possible_paths = [
+                f"~/{REMOTE_PBGUI_DIR}/data/multi/{instance_name}/passivbot.log",
+            ]
+        elif pb_version == "s":
+            possible_paths = [
+                f"~/{REMOTE_PBGUI_DIR}/data/instances/{instance_name}/passivbot.log",
+            ]
+        else:
+            # Unknown version — search all locations
+            possible_paths = [
+                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
+                f"~/{REMOTE_PBGUI_DIR}/data/multi/{instance_name}/passivbot.log",
+                f"~/{REMOTE_PBGUI_DIR}/data/instances/{instance_name}/passivbot.log",
+                f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
+            ]
 
         client = self._pool.get_or_reconnect(hostname)
         if not client:
@@ -127,8 +153,11 @@ class LogStreamer:
 
         for path in possible_paths:
             try:
-                cmd = f"test -f {path} && tail -n {lines} {path} 2>/dev/null"
-                stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+                if lines == 0:
+                    cmd = f"test -f {path} && cat {path} 2>/dev/null"
+                else:
+                    cmd = f"test -f {path} && tail -n {lines} {path} 2>/dev/null"
+                stdin, stdout, stderr = client.exec_command(cmd, timeout=30)
                 output = stdout.read().decode('utf-8', errors='replace')
                 if output.strip():
                     return output
@@ -294,7 +323,7 @@ class LogStreamer:
             while stream.active:
                 try:
                     if channel.recv_ready():
-                        data = channel.recv(4096).decode('utf-8', errors='replace')
+                        data = channel.recv(16384).decode('utf-8', errors='replace')
                         if data:
                             for line in data.splitlines():
                                 stream.buffer.append(line)
@@ -305,7 +334,7 @@ class LogStreamer:
                                         pass
                             stream.last_activity = datetime.now()
                     else:
-                        time.sleep(0.1)
+                        time.sleep(0.05)
 
                     # Check if channel is still open
                     if channel.exit_status_ready():
@@ -334,8 +363,59 @@ class LogStreamer:
             stream.active = False
             _log(SERVICE, f"[log] Stream worker ended for {stream.stream_id}")
 
+    def get_log_info(self, hostname: str, service_or_path: str,
+                     pb_version: str = None) -> Optional[dict]:
+        """
+        Get log file info (size in bytes) from a VPS.
+
+        Args:
+            hostname: VPS hostname
+            service_or_path: Service name or "Bot:name:version"
+            pb_version: Used for bot log path resolution
+
+        Returns:
+            dict with 'size' key, or None on error
+        """
+        if service_or_path.startswith("Bot:"):
+            parts = service_or_path[4:].strip().split(":")
+            bot_name = parts[0]
+            pv = parts[1] if len(parts) > 1 else pb_version
+            log_path = self.resolve_bot_log_path(bot_name, pv or "7")
+        else:
+            log_path = self._resolve_log_path(service_or_path)
+        full_path = f"~/{REMOTE_PBGUI_DIR}/{log_path}"
+
+        client = self._pool.get_or_reconnect(hostname)
+        if not client:
+            return None
+
+        try:
+            cmd = f"stat -c '%s' {full_path} 2>/dev/null"
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+            output = stdout.read().decode('utf-8', errors='replace').strip()
+            exit_code = stdout.channel.recv_exit_status()
+            if exit_code == 0 and output.isdigit():
+                return {"size": int(output)}
+            return None
+        except Exception as e:
+            _log(SERVICE, f"[log] Failed to get log info from {hostname}: {e}",
+                 level="ERROR")
+            return None
+
     def _resolve_log_path(self, service_or_path: str) -> str:
         """Resolve a service name to a log file path, or return as-is."""
         if service_or_path in self.SERVICE_LOGS:
             return self.SERVICE_LOGS[service_or_path]
         return service_or_path
+
+    @staticmethod
+    def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
+        """Resolve a bot instance to its relative log file path."""
+        if pb_version == "7":
+            return f"data/run_v7/{instance_name}/passivbot.log"
+        elif pb_version == "6":
+            return f"data/multi/{instance_name}/passivbot.log"
+        elif pb_version == "s":
+            return f"data/instances/{instance_name}/passivbot.log"
+        else:
+            return f"data/run_v7/{instance_name}/passivbot.log"

@@ -165,8 +165,8 @@ def is_debug_enabled(service: str) -> bool:
 
 
 def _now_isoz():
-    # UTC ISO with milliseconds
-    return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+    # Local time ISO with milliseconds (consistent with other services)
+    return datetime.now().isoformat(timespec='milliseconds')
 
 
 def _extract_leading_brackets(s: str):

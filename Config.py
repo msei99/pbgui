@@ -3399,7 +3399,6 @@ class Optimize:
             
             # Validate metric - skip if not in valid metrics list
             if metric not in ALL_VALID_METRICS:
-                print(f"Warning: Skipping invalid/obsolete limit metric '{key}' -> '{metric}'")
                 continue
             
             try:

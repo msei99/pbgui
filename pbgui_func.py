@@ -172,7 +172,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.60 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': "Passivbot GUI v1.61 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Check VPS Errors
@@ -189,6 +189,7 @@ def get_navi_paths():
         "SYSTEM_API_KEYS":     os.path.join(NAVI_BASE_DIR, "system_api_keys.py"),
         "SYSTEM_SERVICES":     os.path.join(NAVI_BASE_DIR, "system_services.py"),
         "SYSTEM_VPS_MANAGER":  os.path.join(NAVI_BASE_DIR, "system_vps_manager.py"),
+        "SYSTEM_VPS_MONITOR":  os.path.join(NAVI_BASE_DIR, "system_vps_monitor.py"),
         "SYSTEM_LOGGING":      os.path.join(NAVI_BASE_DIR, "system_logging.py"),
         "SYSTEM_DEBUGLOG":     os.path.join(NAVI_BASE_DIR, "system_debuglog.py"),
 
@@ -223,6 +224,7 @@ def build_navigation():
     pM2 = st.Page(paths["SYSTEM_API_KEYS"], title="API-Keys", icon=":material/key:")
     pM3 = st.Page(paths["SYSTEM_SERVICES"], title="PBGUI Services", icon=":material/build:")
     pM4 = st.Page(paths["SYSTEM_VPS_MANAGER"], title="VPS Manager", icon=":material/computer:")
+    pM4b = st.Page(paths["SYSTEM_VPS_MONITOR"], title="VPS Monitor", icon=":material/monitor_heart:")
     pM5 = st.Page(paths["SYSTEM_LOGGING"], title="Logging", icon=":material/article:")
     # Debuglog page removed
 
@@ -249,7 +251,7 @@ def build_navigation():
     p77 = st.Page(paths["V7_LIVE_VS_BACKTEST"], title="Live vs Backtest", icon=":material/swap_horiz:")
        
     # Page Groups
-    SystemPages = [pM1, pM2, pM3, pM4, pM5]
+    SystemPages = [pM1, pM2, pM3, pM4, pM4b, pM5]
     
     # Do not include DEBUGLOG page; centralized debuglog removed
                 

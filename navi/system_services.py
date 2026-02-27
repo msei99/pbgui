@@ -1081,14 +1081,77 @@ def pbmaster_details():
             help=pbgui_help.pbmaster_monitor_interval,
         )
 
+        # WebSocket port
+        if "pbmaster_ws_port" not in st.session_state:
+            st.session_state.pbmaster_ws_port = pbmaster.ws_port
+
+        st.number_input(
+            "WebSocket port",
+            min_value=1024, max_value=65535, step=1,
+            key="pbmaster_ws_port",
+            help="Port for the real-time WebSocket server (default: 8765). "
+                 "Requires daemon restart to take effect.",
+        )
+
+        st.divider()
+
+        # ── VPS Host Selection ──
+        st.markdown("**Monitored VPS Hosts**")
+        st.caption("Select which VPS servers PBMaster should monitor. "
+                   "Default: all off.")
+
+        available = pbmaster.available_hosts()
+        current_enabled = pbmaster.enabled_hosts
+
+        if not available:
+            st.info("No VPS configured. Add VPS in **VPS Manager** first.")
+        else:
+            # Enable All / Disable All buttons
+            _btn_cols = st.columns([0.2, 0.2, 0.6])
+            with _btn_cols[0]:
+                if st.button("Enable All", key="pbmaster_enable_all",
+                             use_container_width=True):
+                    for h in available:
+                        st.session_state[f"pbmaster_host_{h}"] = True
+                    st.rerun()
+            with _btn_cols[1]:
+                if st.button("Disable All", key="pbmaster_disable_all",
+                             use_container_width=True):
+                    for h in available:
+                        st.session_state[f"pbmaster_host_{h}"] = False
+                    st.rerun()
+
+            # Individual host toggles
+            for hostname in available:
+                _hkey = f"pbmaster_host_{hostname}"
+                if _hkey not in st.session_state:
+                    st.session_state[_hkey] = hostname in current_enabled
+                st.toggle(
+                    f":material/computer: {hostname}",
+                    key=_hkey,
+                    help=pbgui_help.pbmaster_enabled_hosts,
+                )
+
+        st.divider()
+
+        # ── Save button ──
+        _new_enabled = {
+            h for h in available
+            if st.session_state.get(f"pbmaster_host_{h}", False)
+        } if available else set()
+
         _pbmaster_dirty = (
             st.session_state.get("pbmaster_auto_restart", pbmaster.auto_restart) != pbmaster.auto_restart or
-            st.session_state.get("pbmaster_monitor_interval", pbmaster.monitor_interval) != pbmaster.monitor_interval
+            st.session_state.get("pbmaster_monitor_interval", pbmaster.monitor_interval) != pbmaster.monitor_interval or
+            st.session_state.get("pbmaster_ws_port", pbmaster.ws_port) != pbmaster.ws_port or
+            _new_enabled != current_enabled
         )
         if st.button(":material/save:", key="pbmaster_save_config",
                      type="primary" if _pbmaster_dirty else "secondary"):
             pbmaster.auto_restart = st.session_state.pbmaster_auto_restart
             pbmaster.monitor_interval = st.session_state.pbmaster_monitor_interval
+            pbmaster.ws_port = st.session_state.pbmaster_ws_port
+            pbmaster.enabled_hosts = _new_enabled
             st.rerun()
 
     # Connection status
@@ -1133,7 +1196,7 @@ with c_title:
     st.title("PBGUI Services")
 
 _TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "PBMaster"]
-active_tab = st.segmented_control("", _TABS, key="services_active_tab", default="Overview")
+active_tab = st.segmented_control("Tabs", _TABS, key="services_active_tab", default="Overview", label_visibility="collapsed")
 if active_tab is None:
     active_tab = "Overview"
 

@@ -162,10 +162,10 @@ class CommandExecutor:
             process_name: Optional process name to verify (e.g., "PBRun.py")
         """
         if process_name:
-            # Check PID exists AND command matches
+            # Check PID exists AND command matches (case-insensitive)
             result = self.execute(
                 hostname,
-                f'ps -p {pid} -o cmd= 2>/dev/null | grep -q "{process_name}" && echo "yes" || echo "no"',
+                f'ps -p {pid} -o cmd= 2>/dev/null | grep -qi "{process_name}" && echo "yes" || echo "no"',
                 timeout=10
             )
         else:
