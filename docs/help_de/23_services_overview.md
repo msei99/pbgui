@@ -4,7 +4,7 @@ Die Services-Seite zeigt und steuert alle PBGui-Hintergrunddienste an einem Ort.
 
 ## Service-Übersicht
 
-Die Seite zeigt sechs Service-Spalten, jede mit:
+Die Seite zeigt Service-Spalten, jede mit:
 
 - Einem Toggle zum Starten/Stoppen des Dienstes
 - Einem Status-Indikator (✅ läuft / ❌ gestoppt)
@@ -18,6 +18,7 @@ Die Seite zeigt sechs Service-Spalten, jede mit:
 | **PBStat** | Sammelt Spot-Handelsstatistiken – nur für den alten v6 Single Bot |
 | **PBData** | Ruft Echtzeit-Marktdaten (OHLCV, Orders, Positionen) von Exchanges ab |
 | **PBCoinData** | Ruft CoinMarketCap-Daten ab und erstellt Exchange-Symbol-Mappings für dynamische Filter |
+| **PBMaster** | Hält persistente SSH-Verbindungen zu VPS-Hosts und versorgt den VPS Monitor mit Live-Daten |
 
 ## Services ein-/ausschalten
 
@@ -41,8 +42,9 @@ Ein stabiles Setup startet die Dienste üblicherweise in dieser Reihenfolge:
 2. **PBRun** — startet Bot-Prozesse (nutzt Mappings von PBCoinData)
 3. **PBData** — liefert Live-Marktdaten
 4. **PBStat** — sammelt Spot-Handelsstatistiken (nur v6 Single Bot)
-5. **PBRemote** — verbindet mit Remote-VPS (wenn genutzt)
-6. **PBMon** — aktiviert Monitoring und Alarme (wenn genutzt)
+5. **PBMaster** — aktiviert persistente VPS-Verbindungen und Live-Monitoring (wenn genutzt)
+6. **PBRemote** — verbindet mit Remote-VPS (wenn genutzt)
+7. **PBMon** — aktiviert Monitoring und Alarme (wenn genutzt)
 
 ## Schnelle Fehlersuche
 
