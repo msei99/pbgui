@@ -406,6 +406,7 @@ def _tiingo_wait_until_quota_allows_call(
     api_key: str,
     ticker: str = "",
     status_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> None:
     while True:
         usage = get_tiingo_runtime_usage(api_key=api_key)
@@ -456,7 +457,9 @@ def _tiingo_wait_until_quota_allows_call(
 
         remaining = int(wait_s)
         while remaining > 0:
-            sleep_chunk = int(min(remaining, 1))
+            if stop_check is not None and stop_check():
+                raise RuntimeError("Worker stopping (during tiingo rate-limit wait)")
+            sleep_chunk = int(min(remaining, 2))
             time.sleep(float(sleep_chunk))
             remaining -= sleep_chunk
             if remaining > 0:
@@ -661,11 +664,12 @@ def _tiingo_fetch_1m_iex(
     timeout_s: float,
     allow_rate_limit_hour_retry: bool = True,
     status_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     token = str(api_key or "").strip()
     if not token:
         return []
-    _tiingo_wait_until_quota_allows_call(api_key=token, ticker=ticker, status_cb=status_cb)
+    _tiingo_wait_until_quota_allows_call(api_key=token, ticker=ticker, status_cb=status_cb, stop_check=stop_check)
 
     url = f"https://api.tiingo.com/iex/{ticker}/prices"
     params: dict[str, Any] = {
@@ -755,6 +759,7 @@ def _tiingo_fetch_1m_iex(
                 timeout_s=float(timeout_s),
                 allow_rate_limit_hour_retry=False,
                 status_cb=status_cb,
+                stop_check=stop_check,
             )
         _log_tradfi_error_throttled(provider="tiingo", ticker=ticker, err=last_err, status=status)
         return []
@@ -795,6 +800,7 @@ def _tiingo_fetch_1m_fx(
     timeout_s: float,
     allow_rate_limit_hour_retry: bool = True,
     status_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     token = str(api_key or "").strip()
     if not token:
@@ -803,7 +809,7 @@ def _tiingo_fetch_1m_fx(
     if not t_u:
         return []
 
-    _tiingo_wait_until_quota_allows_call(api_key=token, ticker=t_u, status_cb=status_cb)
+    _tiingo_wait_until_quota_allows_call(api_key=token, ticker=t_u, status_cb=status_cb, stop_check=stop_check)
 
     url = f"https://api.tiingo.com/tiingo/fx/{t_u}/prices"
     params: dict[str, Any] = {
@@ -892,6 +898,7 @@ def _tiingo_fetch_1m_fx(
                 timeout_s=float(timeout_s),
                 allow_rate_limit_hour_retry=False,
                 status_cb=status_cb,
+                stop_check=stop_check,
             )
         _log_tradfi_error_throttled(provider="tiingo_fx", ticker=t_u, err=last_err, status=status)
         return []
@@ -962,6 +969,7 @@ def _tiingo_fetch_1m_iex_day_from_month_cache(
     api_key: str,
     timeout_s: float,
     status_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], bool, bool]:
     token = str(api_key or "").strip()
     if not token:
@@ -987,6 +995,7 @@ def _tiingo_fetch_1m_iex_day_from_month_cache(
             api_key=token,
             timeout_s=float(timeout_s),
             status_cb=status_cb,
+            stop_check=stop_check,
         )
         grouped: dict[str, list[dict[str, Any]]] = {}
         for bar in month_bars:
@@ -1025,6 +1034,7 @@ def _tiingo_fetch_1m_fx_day_from_month_cache(
     timeout_s: float,
     invert: bool = False,
     status_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], bool, bool]:
     token = str(api_key or "").strip()
     if not token:
@@ -1056,6 +1066,7 @@ def _tiingo_fetch_1m_fx_day_from_month_cache(
             api_key=token,
             timeout_s=float(timeout_s),
             status_cb=status_cb,
+            stop_check=stop_check,
         )
         grouped: dict[str, list[dict[str, Any]]] = {}
         for bar in chunk_bars:
@@ -2007,6 +2018,7 @@ def _fill_missing_from_tradfi_1m(
     sleep_s: float = 0.0,
     stats_out: dict[str, int] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> int:
     coin_u = normalize_hyperliquid_coin(coin)
     coin_dir = normalize_market_data_coin_dir("hyperliquid", coin)
@@ -2155,6 +2167,7 @@ def _fill_missing_from_tradfi_1m(
                 timeout_s=float(timeout_s),
                 invert=bool(tiingo_fx_invert),
                 status_cb=_tiingo_status_cb,
+                stop_check=stop_check,
             )
             fx_chunk_fetched = bool(tiingo_month_fetch)
         else:
@@ -2166,6 +2179,7 @@ def _fill_missing_from_tradfi_1m(
                 api_key=tiingo_key,
                 timeout_s=float(timeout_s),
                 status_cb=_tiingo_status_cb,
+                stop_check=stop_check,
             )
             last_iex_month_fetched = bool(tiingo_month_fetch)
             last_iex_month_has_any_bars = bool(iex_month_has_any_bars)
@@ -2522,6 +2536,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     dry_run: bool = False,
     refetch: bool = False,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> ImproveBest1mResult:
     coin_u = normalize_hyperliquid_coin(coin)
     coin_dir = normalize_market_data_coin_dir("hyperliquid", coin_u)
@@ -2649,6 +2664,8 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     tradfi_empty_period_streak = 0
 
     for i, d in enumerate(days, start=1):
+        if stop_check is not None and stop_check():
+            break
         day_start_time = time.time()
         day_s = d.strftime("%Y%m%d")
         day_tag = d.strftime("%Y-%m-%d")
@@ -2816,6 +2833,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                         sleep_s=0.0,
                         stats_out=tradfi_fill_stats,
                         progress_cb=progress_cb,
+                        stop_check=stop_check,
                     )
                 else:
                     tiingo_added = 0

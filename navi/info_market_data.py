@@ -753,6 +753,26 @@ def _render_jobs_panel(
                 st.rerun()
             return
 
+        # Auto-restart: if there are active jobs but the worker process is dead,
+        # restart it automatically so jobs don't get stuck forever.
+        _wp = read_worker_pid()
+        if not (_wp and is_pid_running(int(_wp))):
+            try:
+                clear_worker_pid()
+                subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                )
+                append_exchange_download_log(
+                    "hyperliquid",
+                    "[worker] auto-restart: worker dead but active jobs found",
+                    level="WARNING",
+                )
+            except Exception:
+                pass
+
         h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([0.16, 0.13, 0.09, 0.06, 0.17, 0.16, 0.08, 0.07, 0.08])
         h1.write("id")
         h2.write("type")

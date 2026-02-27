@@ -623,6 +623,7 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
             dry_run=False,
             refetch=refetch,
             progress_cb=progress_cb,
+            stop_check=lambda: _STOP,
         )
         out = res.to_dict()
         if isinstance(out, dict):
@@ -648,29 +649,48 @@ def main() -> int:
     try:
         _requeue_stale_running_jobs(max_age_s=3600)
 
+        consecutive_errors = 0
         while not _STOP:
-            pending_dir = get_task_state_dir("pending")
-            running_dir = get_task_state_dir("running")
-
-            jobs = sorted(pending_dir.glob("*.json"), key=lambda p: p.name)
-            if not jobs:
-                time.sleep(2.0)
-                continue
-
-            job_src = jobs[0]
-            # move to running atomically
-            job_run = move_job_file(job_src, "running")
             try:
-                _run_job(job_run)
-            except Exception as e:
-                _job_log(f"fatal in job runner: {e}")
-                # if still in running, mark failed best-effort
+                # Refresh PID file periodically so the UI can detect a live worker
+                # even if the OS reuses our PID after a long sleep.
                 try:
-                    if job_run.exists():
-                        update_job_file(job_run, mutate=lambda o: o.update({"status": "failed", "error": str(e)}))
-                        move_job_file(job_run, "failed")
+                    write_worker_pid(os.getpid())
                 except Exception:
                     pass
+
+                pending_dir = get_task_state_dir("pending")
+
+                jobs = sorted(pending_dir.glob("*.json"), key=lambda p: p.name)
+                if not jobs:
+                    time.sleep(2.0)
+                    consecutive_errors = 0
+                    continue
+
+                job_src = jobs[0]
+                # move to running atomically
+                job_run = move_job_file(job_src, "running")
+                try:
+                    _run_job(job_run)
+                except Exception as e:
+                    _job_log(f"fatal in job runner: {e}")
+                    # if still in running, mark failed best-effort
+                    try:
+                        if job_run.exists():
+                            update_job_file(job_run, mutate=lambda o: o.update({"status": "failed", "error": str(e)}))
+                            move_job_file(job_run, "failed")
+                    except Exception:
+                        pass
+
+                consecutive_errors = 0
+
+            except Exception as loop_err:
+                consecutive_errors += 1
+                _job_log(f"unexpected error in main loop (#{consecutive_errors}): {loop_err}")
+                if consecutive_errors >= 10:
+                    _job_log("too many consecutive errors, worker exiting")
+                    return 1
+                time.sleep(min(5.0 * consecutive_errors, 30.0))
 
         _job_log("worker stopping")
         return 0
