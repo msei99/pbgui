@@ -121,7 +121,16 @@ class ServiceMonitor:
         pid_path = f"{REMOTE_PBGUI_DIR}/{svc.pid_file}"
 
         # Step 1: Read PID file
-        pid = self._executor.read_pid_file(hostname, pid_path)
+        pid, connection_ok = self._executor.read_pid_file(hostname, pid_path)
+        if not connection_ok:
+            # SSH / network error — cannot determine service state
+            result.status = ServiceStatus.UNKNOWN
+            result.error = "SSH connection error while reading PID file"
+            _log(SERVICE,
+                 f"[service] {service_name} on {hostname}: SSH error during check, "
+                 f"status set to UNKNOWN (not STOPPED)",
+                 level="WARNING")
+            return result
         if pid is None:
             result.status = ServiceStatus.STOPPED
             result.error = "No PID file or invalid PID"
@@ -130,7 +139,21 @@ class ServiceMonitor:
         result.pid = pid
 
         # Step 2: Check if process is actually running with matching name
-        if self._executor.is_process_running(hostname, pid, svc.process_match):
+        proc_result = self._executor.execute(
+            hostname,
+            f'ps -p {pid} -o cmd= 2>/dev/null | grep -qi "{svc.process_match}" && echo "yes" || echo "no"',
+            timeout=10
+        )
+        if proc_result.error:
+            # SSH error on step 2 — also UNKNOWN
+            result.status = ServiceStatus.UNKNOWN
+            result.error = "SSH connection error while checking process"
+            _log(SERVICE,
+                 f"[service] {service_name} on {hostname}: SSH error during ps check, "
+                 f"status set to UNKNOWN",
+                 level="WARNING")
+            return result
+        if proc_result.success and proc_result.stdout.strip() == "yes":
             result.status = ServiceStatus.RUNNING
         else:
             result.status = ServiceStatus.STOPPED
