@@ -312,6 +312,7 @@ class Monitor():
                         or "starting execution loop" in line
                         or "done initiating bot" in line
                         or "watching" in line
+                        or "[fills] initialized" in line
                     ):
                         self.init_found = False
                     if self.init_found:
