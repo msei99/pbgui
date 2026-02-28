@@ -32,6 +32,7 @@ from pbgui_func import (
     get_navi_paths,
     load_symbols_from_ini,
     render_header_with_guide,
+    PBGDIR,
 )
 from logging_view import view_log_filtered
 
@@ -453,6 +454,74 @@ def _load_ohlcv_from_npz_range(
     out["ts"] = out["ts"].astype("int64", copy=False)
     out = out.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
     return out
+
+def _load_ohlcv_from_pb7_cache(
+    *,
+    exchange: str,
+    timeframe: str,
+    coin: str,
+    start_day: str,
+    end_day: str,
+):
+    """Load OHLCV data from PB7 cache .npy files into a DataFrame."""
+    import numpy as np
+    import pandas as pd
+    from market_data import _get_pb7_root_dir, _parse_pb7_cache_day_from_name
+
+    root = _get_pb7_root_dir()
+    if root is None:
+        return pd.DataFrame(columns=["ts", "o", "h", "l", "c", "v"])
+
+    tf = str(timeframe or "1m").strip() or "1m"
+    base = root / "caches" / "ohlcv" / str(exchange) / tf / str(coin)
+    if not base.is_dir():
+        return pd.DataFrame(columns=["ts", "o", "h", "l", "c", "v"])
+
+    frames: list[pd.DataFrame] = []
+    for p in sorted(base.glob("*.npy")):
+        day_s = _parse_pb7_cache_day_from_name(p.name)
+        if not day_s:
+            continue
+        if start_day and day_s < start_day:
+            continue
+        if end_day and day_s > end_day:
+            continue
+        try:
+            arr = np.load(p)
+            if len(arr) == 0:
+                continue
+            names = list(getattr(arr, "dtype", object()).names or [])
+            ts_key = "ts" if "ts" in names else None
+            o_key = "o" if "o" in names else None
+            h_key = "h" if "h" in names else None
+            l_key = "l" if "l" in names else None
+            c_key = "c" if "c" in names else None
+            v_key = "bv" if "bv" in names else ("v" if "v" in names else None)
+            if not (ts_key and o_key and h_key and l_key and c_key):
+                continue
+            df = pd.DataFrame(
+                {
+                    "ts": arr[ts_key].astype("int64", copy=False),
+                    "o": arr[o_key].astype("float64", copy=False),
+                    "h": arr[h_key].astype("float64", copy=False),
+                    "l": arr[l_key].astype("float64", copy=False),
+                    "c": arr[c_key].astype("float64", copy=False),
+                    "v": arr[v_key].astype("float64", copy=False) if v_key else 0.0,
+                }
+            )
+            frames.append(df)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame(columns=["ts", "o", "h", "l", "c", "v"])
+
+    out = pd.concat(frames, ignore_index=True)
+    out = out.dropna(subset=["ts", "o", "h", "l", "c"])
+    out["ts"] = out["ts"].astype("int64", copy=False)
+    out = out.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+    return out
+
 
 def _resample_ohlcv(df, rule: str):
     import pandas as pd
@@ -886,11 +955,14 @@ def _render_jobs_panel(
             sub_day = (pr or {}).get("day")
             sub_hour = (pr or {}).get("hour")
             last_binance_day = (pr or {}).get("last_binance_fill_day")
-            if stage == "binance_fill" and sub_day:
+            if mode == "binance_best_1m":
+                if sub_day:
+                    st.caption(f"substatus: {stage} day={sub_day}")
+            elif stage == "binance_fill" and sub_day:
                 st.caption(f"substatus: binance_fill day={sub_day}")
             elif last_binance_day and not is_stock_perp:
                 st.caption(f"substatus: binance_fill day={last_binance_day}")
-            if (sub_day or sub_hour is not None) and stage != "binance_fill":
+            if (sub_day or sub_hour is not None) and stage != "binance_fill" and mode != "binance_best_1m":
                 try:
                     hour_txt = f"{int(sub_hour):02d}" if sub_hour is not None else ""
                 except Exception:
@@ -2212,6 +2284,16 @@ def view_market_data():
         with st.expander("Settings (Latest 1m Auto-Refresh)", expanded=False):
             st.caption("Configure automatic 1m candle refresh settings. Changes are saved to pbgui.ini and applied automatically in the next cycle (no restart needed).")
 
+            # Apply select/clear action BEFORE multiselect is instantiated
+            _hl_action_key = f"hl_coins_action_{enabled_key}"
+            _hl_action = st.session_state.pop(_hl_action_key, None)
+            if _hl_action == "all":
+                st.session_state.pop(enabled_key, None)
+                enabled_default = list(coin_options)
+            elif _hl_action == "clear":
+                st.session_state.pop(enabled_key, None)
+                enabled_default = []
+
             enabled_in_settings = st.multiselect(
                 "Enabled coins",
                 options=coin_options,
@@ -2223,7 +2305,19 @@ def view_market_data():
                     "Ignored missing saved coins (not in current options): " + ", ".join(dropped_defaults),
                     icon="⚠️",
                 )
-            st.caption(f"Enabled: {len(enabled_in_settings)}")
+            _c_sel, _c_clr, _c_cap = st.columns([1, 1, 8])
+            with _c_sel:
+                if st.button("Select all", key=f"hl_sel_all_{enabled_key}"):
+                    st.session_state[_hl_action_key] = "all"
+                    st.rerun()
+            with _c_clr:
+                if st.button("Clear all", key=f"hl_clr_all_{enabled_key}"):
+                    st.session_state[_hl_action_key] = "clear"
+                    st.rerun()
+            with _c_cap:
+                st.caption(f"Enabled: {len(enabled_in_settings)} / {len(coin_options)}")
+            with _c_cap:
+                st.caption(f"Enabled: {len(enabled_in_settings)} / {len(coin_options)}")
 
             def _read_int_ini(section: str, key: str, default: int) -> int:
                 try:
@@ -2245,7 +2339,7 @@ def view_market_data():
                 except Exception:
                     return default
 
-            interval_val = _read_int_ini('pbdata', 'latest_1m_interval_seconds', 120)
+            interval_val = _read_int_ini('pbdata', 'latest_1m_interval_seconds', 1800)
             coin_pause_val = _read_float_ini('pbdata', 'latest_1m_coin_pause_seconds', 0.5)
             timeout_val = _read_float_ini('pbdata', 'latest_1m_api_timeout_seconds', 30.0)
             min_lb_val = _read_int_ini('pbdata', 'latest_1m_min_lookback_days', 2)
@@ -2441,7 +2535,7 @@ def view_market_data():
             if st.button('Save', key='md_save_settings_btn'):
                 try:
                     set_enabled_coins(exchange, enabled_in_settings)
-                    save_ini('pbdata', 'latest_1m_interval_seconds', str(int(st.session_state.get('md_setting_interval', 120))))
+                    save_ini('pbdata', 'latest_1m_interval_seconds', str(int(st.session_state.get('md_setting_interval', 1800))))
                     save_ini('pbdata', 'latest_1m_coin_pause_seconds', str(float(st.session_state.get('md_setting_coin_pause', 0.5))))
                     save_ini('pbdata', 'latest_1m_api_timeout_seconds', str(float(st.session_state.get('md_setting_timeout', 30.0))))
                     save_ini('pbdata', 'latest_1m_min_lookback_days', str(int(st.session_state.get('md_setting_min_lb', 2))))
@@ -2462,6 +2556,117 @@ def view_market_data():
                 except Exception as e:
                     st.error(f'Failed to save settings: {e}')
 
+    elif str(exchange).lower() == "binance":
+        with st.expander("Settings (Binance USDM Latest 1m Auto-Refresh)", expanded=False):
+            st.caption(
+                "Configure automatic 1m candle refresh settings for Binance USDM. "
+                "Changes are saved to pbgui.ini and applied automatically in the next cycle (no restart needed)."
+            )
+
+            # Apply select/clear action BEFORE multiselect is instantiated
+            _bnc_action_key = f"bnc_coins_action_{enabled_key}"
+            _bnc_action = st.session_state.pop(_bnc_action_key, None)
+            if _bnc_action == "all":
+                st.session_state.pop(enabled_key, None)
+                enabled_default = list(coin_options)
+            elif _bnc_action == "clear":
+                st.session_state.pop(enabled_key, None)
+                enabled_default = []
+
+            enabled_in_settings_bnc = st.multiselect(
+                "Enabled coins",
+                options=coin_options,
+                default=enabled_default,
+                key=enabled_key,
+            )
+            if dropped_defaults:
+                st.warning(
+                    "Ignored missing saved coins (not in current options): " + ", ".join(dropped_defaults),
+                    icon="⚠️",
+                )
+            _bnc_c_sel, _bnc_c_clr, _bnc_c_cap = st.columns([1, 1, 8])
+            with _bnc_c_sel:
+                if st.button("Select all", key=f"bnc_sel_all_{enabled_key}"):
+                    st.session_state[_bnc_action_key] = "all"
+                    st.rerun()
+            with _bnc_c_clr:
+                if st.button("Clear all", key=f"bnc_clr_all_{enabled_key}"):
+                    st.session_state[_bnc_action_key] = "clear"
+                    st.rerun()
+            with _bnc_c_cap:
+                st.caption(f"Enabled: {len(enabled_in_settings_bnc)} / {len(coin_options)}")
+
+            def _bnc_read_int_ini(section: str, key: str, default: int) -> int:
+                try:
+                    v = load_ini(section, key)
+                    s = str(v).strip() if v is not None else ''
+                    return default if s == '' else int(float(s))
+                except Exception:
+                    return default
+
+            def _bnc_read_float_ini(section: str, key: str, default: float) -> float:
+                try:
+                    v = load_ini(section, key)
+                    s = str(v).strip() if v is not None else ''
+                    return default if s == '' else float(s)
+                except Exception:
+                    return default
+
+            bnc_interval_val = _bnc_read_int_ini('binance_data', 'latest_1m_interval_seconds', 3600)
+            bnc_coin_pause_val = _bnc_read_float_ini('binance_data', 'latest_1m_coin_pause_seconds', 0.5)
+            bnc_timeout_val = _bnc_read_float_ini('binance_data', 'latest_1m_api_timeout_seconds', 30.0)
+            bnc_min_lb_val = _bnc_read_int_ini('binance_data', 'latest_1m_min_lookback_days', 2)
+            bnc_max_lb_val = _bnc_read_int_ini('binance_data', 'latest_1m_max_lookback_days', 7)
+
+            bc1, bc2, bc3, bc4, bc5 = st.columns(5)
+            with bc1:
+                st.number_input(
+                    'Cycle interval (s)',
+                    min_value=60, max_value=3600, value=int(bnc_interval_val),
+                    step=30, key='bnc_md_setting_interval',
+                    help='How often to refresh all enabled coins (default: 120s).',
+                )
+            with bc2:
+                st.number_input(
+                    'Pause between coins (s)',
+                    min_value=0.0, max_value=10.0, value=float(bnc_coin_pause_val),
+                    step=0.1, key='bnc_md_setting_coin_pause',
+                    help='Pause after each coin to avoid rate limits (default: 0.5s).',
+                )
+            with bc3:
+                st.number_input(
+                    'API timeout per coin (s)',
+                    min_value=10.0, max_value=120.0, value=float(bnc_timeout_val),
+                    step=5.0, key='bnc_md_setting_timeout',
+                    help='Timeout for CCXT request per coin (default: 30s).',
+                )
+            with bc4:
+                st.number_input(
+                    'Min lookback days',
+                    min_value=1, max_value=10, value=int(bnc_min_lb_val),
+                    step=1, key='bnc_md_setting_min_lb',
+                    help='Minimum lookback window for API fetch (default: 2 days).',
+                )
+            with bc5:
+                st.number_input(
+                    'Max lookback days',
+                    min_value=1, max_value=30, value=int(bnc_max_lb_val),
+                    step=1, key='bnc_md_setting_max_lb',
+                    help='Maximum lookback window for API fetch (default: 7 days).',
+                )
+
+            if st.button('Save', key='bnc_save_settings_btn'):
+                try:
+                    set_enabled_coins(exchange, enabled_in_settings_bnc)
+                    save_ini('binance_data', 'latest_1m_interval_seconds', str(int(st.session_state.get('bnc_md_setting_interval', 3600))))
+                    save_ini('binance_data', 'latest_1m_coin_pause_seconds', str(float(st.session_state.get('bnc_md_setting_coin_pause', 0.5))))
+                    save_ini('binance_data', 'latest_1m_api_timeout_seconds', str(float(st.session_state.get('bnc_md_setting_timeout', 30.0))))
+                    save_ini('binance_data', 'latest_1m_min_lookback_days', str(int(st.session_state.get('bnc_md_setting_min_lb', 2))))
+                    save_ini('binance_data', 'latest_1m_max_lookback_days', str(int(st.session_state.get('bnc_md_setting_max_lb', 7))))
+                    st.success('✅ Settings saved. Applied automatically in the next Binance refresh cycle.')
+                except Exception as e:
+                    st.error(f'Failed to save settings: {e}')
+
     main_view = st.segmented_control(
         "",
         options=["Actions", "Already have", "Activity log"],
@@ -2470,50 +2675,263 @@ def view_market_data():
     )
 
     if main_view == "Actions":
-        if str(exchange).lower() != "hyperliquid":
-            st.info("Market Data actions are currently implemented for Hyperliquid.")
-        else:
-            coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
+        if str(exchange).lower() == "binance":
+            bnc_coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
 
-            with st.expander("Market Data status", expanded=False):
-                status = _load_market_data_status()
-                if not status:
-                    st.info("No status yet. Start PBData to populate market data status.")
-                else:
-                    latest = status.get("latest_1m") if isinstance(status, dict) else {}
-                    latest_coins = latest.get("coins") if isinstance(latest, dict) else {}
-                    interval_s = int(latest.get("interval_seconds") or 0) if isinstance(latest, dict) else 0
-                    
-                    if isinstance(latest_coins, dict) and latest_coins:
-                        rows = []
-                        now = _datetime.now()
-                        ex_key = f"{str(exchange).lower()}.swap" if "." not in str(exchange) else str(exchange).lower()
-                        for coin, cst in sorted(latest_coins.items()):
-                            last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
-                            next_run = ""
-                            if interval_s and last_fetch:
+            @st.fragment(run_every=5)
+            def _bnc_status_fragment():
+                _bnc_flag_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
+                _bnc_stop_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_stop.flag")
+                bnc_status_all = _load_market_data_status()
+                bnc_status = bnc_status_all.get("binance_latest_1m") if isinstance(bnc_status_all, dict) else {}
+                _bnc_queued = _bnc_flag_path.exists()
+                _bnc_running = bool(bnc_status.get("running")) if bnc_status else False
+                with st.expander("Market Data status (Binance USDM Latest 1m)", expanded=False):
+                    _c1, _c2 = st.columns([1, 1])
+                    with _c1:
+                        if not _bnc_queued:
+                            if st.button("⏩ Refresh now", key="bnc_run_now_btn", help="Skip wait and trigger next Binance refresh cycle immediately", use_container_width=True):
                                 try:
-                                    last_dt = _datetime.fromisoformat(last_fetch)
-                                    next_run = max(0, int(interval_s - (now - last_dt).total_seconds()))
-                                except Exception:
-                                    next_run = ""
-                            coin_display = _display_market_data_status_coin(
-                                exchange=str(exchange),
-                                coin=coin,
-                            )
-                            rows.append(
-                                {
-                                    "coin": coin_display,
+                                    _bnc_flag_path.touch()
+                                    st.toast("Refresh triggered — cycle will start within seconds.")
+                                except Exception as _e:
+                                    st.error(f"Failed: {_e}")
+                        else:
+                            if st.button("⏹ Cancel queued refresh", key="bnc_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", use_container_width=True):
+                                try:
+                                    _bnc_flag_path.unlink(missing_ok=True)
+                                    st.toast("Queued refresh cancelled.")
+                                except Exception as _e:
+                                    st.error(f"Failed: {_e}")
+                    with _c2:
+                        if _bnc_running:
+                            if st.button("⏹ Stop current run", key="bnc_stop_btn", type="primary", help="Stop after the current coin finishes", use_container_width=True):
+                                try:
+                                    _bnc_stop_path.touch()
+                                    st.toast("Stop signal sent — run will abort after current coin.")
+                                except Exception as _e:
+                                    st.error(f"Failed: {_e}")
+                    if not bnc_status:
+                        st.info("No Binance status yet. Start PBData with Binance enabled to populate status.")
+                    else:
+                        if bnc_status.get("running"):
+                            _done = int(bnc_status.get("coins_done") or 0)
+                            _total = int(bnc_status.get("coins_total") or 0)
+                            _cur = bnc_status.get("current_coin") or "..."
+                            if _total > 0:
+                                st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
+                            else:
+                                st.info("Running...")
+                        bnc_coins_st = bnc_status.get("coins") if isinstance(bnc_status, dict) else {}
+                        bnc_interval_s = int(bnc_status.get("interval_seconds") or 0) if isinstance(bnc_status, dict) else 0
+                        if isinstance(bnc_coins_st, dict) and bnc_coins_st:
+                            bnc_status_rows = []
+                            now_bnc = _datetime.now()
+                            for coin, cst in sorted(bnc_coins_st.items()):
+                                last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
+                                next_run = ""
+                                if bnc_interval_s and last_fetch:
+                                    try:
+                                        last_dt = _datetime.fromisoformat(last_fetch)
+                                        next_run = max(0, int(bnc_interval_s - (now_bnc - last_dt).total_seconds()))
+                                    except Exception:
+                                        pass
+                                api_res = cst.get("api_result") if isinstance(cst, dict) else {}
+                                bnc_status_rows.append({
+                                    "coin": coin,
                                     "last_fetch": last_fetch,
                                     "result": (cst.get("result") if isinstance(cst, dict) else ""),
                                     "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
-                                    "newest_day": (cst.get("newest_day") if isinstance(cst, dict) else ""),
+                                    "minutes_written": (api_res.get("minutes_written") if isinstance(api_res, dict) else ""),
                                     "next_run_in_s": next_run,
-                                }
+                                    "note": (cst.get("note") or cst.get("error") or "") if isinstance(cst, dict) else "",
+                                })
+                            st.dataframe(bnc_status_rows, use_container_width=True)
+                        else:
+                            st.info("No Binance latest 1m status available yet.")
+            _bnc_status_fragment()
+
+            with st.expander("Build best 1m OHLCV (Binance USDM)", expanded=False):
+                st.caption(
+                    "Downloads full 1m OHLCV history from the Binance archive (monthly/daily ZIPs) "
+                    "and backfills any gap via CCXT. Runs as a background job."
+                )
+
+                bnc_eligible_coins = bnc_coin_list[:]
+                if not bnc_eligible_coins:
+                    st.warning("No enabled coins. Add coins in Settings above first.")
+
+                bnc_build_options = ["All"] + bnc_eligible_coins if bnc_eligible_coins else []
+                bnc_build_sel = st.multiselect(
+                    "Coins for build",
+                    options=bnc_build_options,
+                    default=["All"] if bnc_eligible_coins else [],
+                    key="market_data_bnc_best_1m_coins",
+                )
+                if "All" in bnc_build_sel or not bnc_build_sel:
+                    bnc_build_coins = list(bnc_eligible_coins)
+                else:
+                    bnc_build_coins = [c for c in bnc_build_sel if c in bnc_eligible_coins]
+
+                bnc_c_build, bnc_c_start, bnc_c_end, bnc_c_refetch = st.columns(
+                    [0.18, 0.22, 0.22, 0.38], vertical_alignment="bottom"
+                )
+                with bnc_c_build:
+                    bnc_run = st.button("Build best 1m", key="market_data_bnc_best_1m_run", use_container_width=True)
+                with bnc_c_start:
+                    bnc_start_date = st.date_input(
+                        "Start date (optional)", value=None,
+                        key="market_data_bnc_best_1m_start_date",
+                        help="Optional lower bound. If empty: earliest available data (CCXT inception or 2019-01-01).",
+                    )
+                with bnc_c_end:
+                    bnc_end_date = st.date_input(
+                        "End date (optional)", value=None,
+                        key="market_data_bnc_best_1m_end_date",
+                        help="Optional upper bound. If empty: today is used.",
+                    )
+                with bnc_c_refetch:
+                    bnc_refetch = st.checkbox(
+                        "Refetch all days from scratch",
+                        value=False,
+                        key="market_data_bnc_best_1m_refetch",
+                        help="Re-downloads all archive ZIPs and overwrites existing data. Use to fix corrupted days.",
+                    )
+
+                if bnc_run:
+                    try:
+                        if not bnc_build_coins:
+                            raise ValueError("No coins selected")
+                        if bnc_start_date and bnc_end_date and bnc_start_date > bnc_end_date:
+                            raise ValueError("Start date must be on or before End date")
+                        bnc_eff_end = bnc_end_date.strftime("%Y%m%d") if bnc_end_date else _date.today().strftime("%Y%m%d")
+                        job = enqueue_job(
+                            job_type="binance_best_1m",
+                            payload={
+                                "coins": list(bnc_build_coins),
+                                "end_day": bnc_eff_end,
+                                "start_day": bnc_start_date.strftime("%Y%m%d") if bnc_start_date else "",
+                                "refetch": bool(bnc_refetch),
+                            },
+                        )
+                        append_exchange_download_log("binanceusdm", f"[binance_best_1m] queued job_id={job.job_id}")
+                        pid = read_worker_pid()
+                        if not (pid and is_pid_running(int(pid))):
+                            subprocess.Popen(
+                                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                close_fds=True,
                             )
-                        st.dataframe(rows, use_container_width=True)
+                        st.success(f"Queued background build job: {job.job_id}")
+                        st.rerun()
+                    except Exception as e:
+                        append_exchange_download_log("binanceusdm", f"[binance_best_1m] ERROR {e}")
+                        st.error(str(e))
+
+                bnc_jobs_active = _has_active_jobs(["binance_best_1m"])
+                if bnc_jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                    @st.fragment(run_every=2)
+                    def _bnc_best_jobs_fragment():
+                        _render_jobs_panel(
+                            job_types=["binance_best_1m"],
+                            details_key="market_data_bnc_best_job_details",
+                            panel_key="market_data_bnc_best_jobs",
+                            show_worker_controls=True,
+                            auto_refresh_key="market_data_bnc_best_auto_refresh",
+                        )
+                else:
+                    @st.fragment
+                    def _bnc_best_jobs_fragment():
+                        _render_jobs_panel(
+                            job_types=["binance_best_1m"],
+                            details_key="market_data_bnc_best_job_details",
+                            panel_key="market_data_bnc_best_jobs",
+                            show_worker_controls=True,
+                        )
+                _bnc_best_jobs_fragment()
+
+        elif str(exchange).lower() != "hyperliquid":
+            st.info("Market Data actions are currently implemented for Hyperliquid and Binance (USDM).")
+        else:
+            coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
+
+            @st.fragment(run_every=5)
+            def _hl_status_fragment():
+                _hl_flag_path = Path(f"{PBGDIR}/data/logs/hyperliquid_latest_1m_run_now.flag")
+                _hl_stop_path = Path(f"{PBGDIR}/data/logs/hyperliquid_latest_1m_stop.flag")
+                status = _load_market_data_status()
+                _hl_queued = _hl_flag_path.exists()
+                _hl_running = bool((status.get("latest_1m") or {}).get("running")) if status else False
+                with st.expander("Market Data status", expanded=False):
+                    _c1, _c2 = st.columns([1, 1])
+                    with _c1:
+                        if not _hl_queued:
+                            if st.button("⏩ Refresh now", key="hl_run_now_btn", help="Skip wait and trigger next Hyperliquid refresh cycle immediately", use_container_width=True):
+                                try:
+                                    _hl_flag_path.touch()
+                                    st.toast("Refresh triggered — cycle will start within seconds.")
+                                except Exception as _e:
+                                    st.error(f"Failed: {_e}")
+                        else:
+                            if st.button("⏹ Cancel queued refresh", key="hl_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", use_container_width=True):
+                                try:
+                                    _hl_flag_path.unlink(missing_ok=True)
+                                    st.toast("Queued refresh cancelled.")
+                                except Exception as _e:
+                                    st.error(f"Failed: {_e}")
+                    with _c2:
+                        if _hl_running:
+                            if st.button("⏹ Stop current run", key="hl_stop_btn", type="primary", help="Stop after the current coin finishes", use_container_width=True):
+                                try:
+                                    _hl_stop_path.touch()
+                                    st.toast("Stop signal sent — run will abort after current coin.")
+                                except Exception as _e:
+                                    st.error(f"Failed: {_e}")
+                    if not status:
+                        st.info("No status yet. Start PBData to populate market data status.")
                     else:
-                        st.info("No latest 1m status available yet.")
+                        latest = status.get("latest_1m") if isinstance(status, dict) else {}
+                        if latest and latest.get("running"):
+                            _done = int(latest.get("coins_done") or 0)
+                            _total = int(latest.get("coins_total") or 0)
+                            _cur = latest.get("current_coin") or "..."
+                            if _total > 0:
+                                st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
+                            else:
+                                st.info("Running...")
+                        latest_coins = latest.get("coins") if isinstance(latest, dict) else {}
+                        interval_s = int(latest.get("interval_seconds") or 0) if isinstance(latest, dict) else 0
+                        if isinstance(latest_coins, dict) and latest_coins:
+                            rows = []
+                            now = _datetime.now()
+                            for coin, cst in sorted(latest_coins.items()):
+                                last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
+                                next_run = ""
+                                if interval_s and last_fetch:
+                                    try:
+                                        last_dt = _datetime.fromisoformat(last_fetch)
+                                        next_run = max(0, int(interval_s - (now - last_dt).total_seconds()))
+                                    except Exception:
+                                        next_run = ""
+                                coin_display = _display_market_data_status_coin(
+                                    exchange=str(exchange),
+                                    coin=coin,
+                                )
+                                rows.append(
+                                    {
+                                        "coin": coin_display,
+                                        "last_fetch": last_fetch,
+                                        "result": (cst.get("result") if isinstance(cst, dict) else ""),
+                                        "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
+                                        "newest_day": (cst.get("newest_day") if isinstance(cst, dict) else ""),
+                                        "next_run_in_s": next_run,
+                                    }
+                                )
+                            st.dataframe(rows, use_container_width=True)
+                        else:
+                            st.info("No latest 1m status available yet.")
+            _hl_status_fragment()
 
             tradfi_anchor = st.container()
             download_anchor = st.container()
@@ -3566,1619 +3984,1535 @@ def view_market_data():
 
 
     if main_view == "Already have":
+        _have_options = (
+            ["1m", "PB7 cache"]
+            if str(exchange).lower() == "binance"
+            else ["1m", "1m_api", "l2Book", "PB7 cache"]
+        )
         have_view = st.segmented_control(
             "",
-            options=["1m", "1m_api", "l2Book", "PB7 cache"],
+            options=_have_options,
             default="1m",
             key="market_data_have_view",
         )
 
-        dataset_filters = {
-            "1m": ["1m", "candles_1m"],
-            "1m_api": ["1m_api", "candles_1m_api"],
-            "l2Book": ["l2book"],
-        }
+        # Map UI exchange name → storage directory name (e.g. "binance" → "binanceusdm")
+        _storage_exchange_map = {"binance": "binanceusdm"}
+        _storage_ex = _storage_exchange_map.get(str(exchange).lower(), str(exchange).lower())
 
-        rows = []
-        if have_view != "PB7 cache":
-            _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}_{str(have_view).lower()}"
-            if _cache_key not in st.session_state:
-                st.session_state[_cache_key] = summarize_raw_inventory(
-                    str(exchange).lower(),
-                    skip_coverage=False,
-                    datasets_filter=dataset_filters.get(have_view),
+        import pandas as pd
+
+        try:
+            _latest_interval_s = int(str(load_ini("pbdata", "latest_1m_interval_seconds") or "1800").strip())
+        except Exception:
+            _latest_interval_s = 120
+        _missing_lag_minutes = max(0, int((_latest_interval_s + 59) // 60))
+
+        from inventory_cache import get_inventory as _get_inventory
+
+        # Helper function to render table for a specific dataset
+        def _render_dataset_table(dataset_ds: str, tab_key: str) -> tuple:
+            _is_hl = str(_storage_ex) == "hyperliquid"
+            _raw = _get_inventory(
+                _storage_ex,
+                dataset_ds,
+                lag_minutes=_missing_lag_minutes,
+                tradfi_type_fn=_tradfi_canonical_type_for_coin if _is_hl else None,
+                expected_minutes_fn=(
+                    (lambda _tt, _d: _tradfi_expected_indices_for_type(_d, _tt))
+                    if _is_hl else None
+                ),
+            )
+            if not _raw:
+                st.info(f"No {dataset_ds} data found yet.")
+                return None, []
+            _rows = []
+            for r in _raw:
+                _tb = r.get("total_bytes", 0) or 0
+                _rows.append(
+                    {
+                        "exchange": r.get("exchange", ""),
+                        "dataset": r.get("dataset", ""),
+                        "coin": r.get("coin", ""),
+                        "n_files": r.get("n_files", 0),
+                        "total_bytes": int(_tb),
+                        "size": float(_tb) / (1024.0 * 1024.0),
+                        "oldest_day": r.get("oldest_day", ""),
+                        "newest_day": r.get("newest_day", ""),
+                        "n_days": r.get("n_days", 0),
+                        "expected_hours": r.get("expected_hours", 0),
+                        "coverage_pct": r.get("coverage_pct", 0),
+                        "missing_days_count": r.get("missing_days_count", 0),
+                        "missing_days_sample": r.get("missing_days_sample", ""),
+                        "hl_minutes": r.get("hl_minutes", 0) if _is_hl else "",
+                        "other_minutes": r.get("other_minutes", 0) if _is_hl else "",
+                        "missing_minutes": r.get("missing_minutes", 0) if _is_hl else "",
+                    }
                 )
-            rows = st.session_state.get(_cache_key) or []
+            table_rows = _rows
 
-        if have_view != "PB7 cache" and not rows:
-            st.info("No raw files found yet.")
-        else:
-            import pandas as pd
+            df_cached = pd.DataFrame(table_rows)
+            if not df_cached.empty:
+                total_files = int(df_cached["n_files"].sum()) if "n_files" in df_cached.columns else 0
+                total_bytes = int(df_cached["total_bytes"].sum()) if "total_bytes" in df_cached.columns else 0
+                n_coins = int(df_cached["coin"].nunique()) if "coin" in df_cached.columns else 0
 
-            # Split inventory by dataset
-            rows_1m = [r for r in rows if str(r.get("dataset") or "").lower() in ("1m", "candles_1m")]
-            rows_1m_api = [r for r in rows if str(r.get("dataset") or "").lower() in ("1m_api", "candles_1m_api")]
-            rows_l2book = [r for r in rows if str(r.get("dataset") or "").lower() == "l2book"]
+                c1, c2, c3 = st.columns(3)
+                c1.metric("coins", n_coins)
+                c2.metric("files", total_files)
+                c3.metric("size", _fmt_bytes(total_bytes))
 
-            try:
-                _latest_interval_s = int(str(load_ini("pbdata", "latest_1m_interval_seconds") or "120").strip())
-            except Exception:
-                _latest_interval_s = 120
-            _missing_lag_minutes = max(0, int((_latest_interval_s + 59) // 60))
+            df_cached["_src_idx"] = list(range(len(df_cached)))
+            df_view = df_cached.copy()
+            if str(dataset_ds).lower() in ("1m_api", "candles_1m_api", "l2book"):
+                drop_cols = [c for c in ("hl_minutes", "other_minutes", "missing_minutes") if c in df_cached.columns]
+                if drop_cols:
+                    df_view = df_cached.drop(columns=drop_cols)
 
-            _coin_cutoff_cache: dict[str, int | None] = {}
-
-            def _latest_1m_api_cutoff_ts_ms(coin_dir: str) -> int | None:
-                key = str(coin_dir or "").strip().upper()
-                if not key:
-                    return None
-                if key in _coin_cutoff_cache:
-                    return _coin_cutoff_cache.get(key)
-
-                try:
-                    import numpy as np
-                except Exception:
-                    _coin_cutoff_cache[key] = None
-                    return None
-
-                try:
-                    ddir = get_exchange_raw_root_dir("hyperliquid") / "1m_api" / key
-                    files = sorted(ddir.glob("*.npz"))
-                    if not files:
-                        _coin_cutoff_cache[key] = None
-                        return None
-                    latest = files[-1]
-                    with np.load(latest) as data:
-                        arr = data["candles"] if "candles" in data else None
-                    if arr is None or len(arr) == 0:
-                        _coin_cutoff_cache[key] = None
-                        return None
-                    ts = int(arr["ts"][-1])
-                    _coin_cutoff_cache[key] = ts
-                    return ts
-                except Exception:
-                    _coin_cutoff_cache[key] = None
-                    return None
-
-            # Helper function to render table for a specific dataset
-            def _render_dataset_table(dataset_rows: list, dataset_label: str, tab_key: str):
-                if not dataset_rows:
-                    st.info(f"No {dataset_label} data found yet.")
-                    return None
-
-                # ----------------------------------------------------------
-                # Cache computed table_rows so df input is 100% stable
-                # between reruns.  Only recomputed on sidebar refresh
-                # (which clears "market_data_trows_*" keys).
-                # ----------------------------------------------------------
-                _trows_key = f"market_data_trows_{tab_key}"
-                if _trows_key not in st.session_state:
-                    _rows: list[dict] = []
-                    for r in dataset_rows:
-                        ex = str(r.get("exchange", "")).lower()
-                        ds = str(r.get("dataset", "")).lower()
-                        cn = str(r.get("coin", ""))
-                        hl_minutes = ""
-                        other_minutes = ""
-                        missing_minutes = ""
-                        if ex == "hyperliquid" and ds in ("1m", "candles_1m") and cn:
-                            try:
-                                start_day = str(r.get("oldest_day") or "").strip()
-                                end_day = _date.today().strftime("%Y%m%d")
-                                counts = get_daily_source_counts_for_range(
-                                    exchange=ex,
-                                    coin=cn,
-                                    start_day=start_day,
-                                    end_day=end_day,
-                                    lag_minutes=_missing_lag_minutes,
-                                    cutoff_ts_ms=_latest_1m_api_cutoff_ts_ms(cn),
-                                )
-                                if isinstance(counts, dict) and counts:
-                                    hl = 0
-                                    oth = 0
-                                    miss = 0
-                                    for c in counts.values():
-                                        if not isinstance(c, dict):
-                                            continue
-                                        hl += int(c.get("api") or 0) + int(c.get("l2Book_mid") or 0)
-                                        oth += int(c.get("other_exchange") or 0)
-                                        miss += int(c.get("missing") or 0)
-                                    hl_minutes = hl
-                                    other_minutes = oth
-                                    missing_minutes = miss
-
-                                    tradfi_type = _tradfi_canonical_type_for_coin(cn)
-                                    if tradfi_type:
-                                        try:
-                                            d0 = _datetime.strptime(start_day, "%Y%m%d").date() if start_day else None
-                                            d1 = _datetime.strptime(end_day, "%Y%m%d").date() if end_day else None
-                                        except Exception:
-                                            d0 = None
-                                            d1 = None
-
-                                        if d0 is not None and d1 is not None and d1 >= d0:
-                                            try:
-                                                lag_min = max(0, int(_missing_lag_minutes))
-                                            except Exception:
-                                                lag_min = 0
-                                            effective_now_utc: _datetime
-                                            cutoff_ts_ms = _latest_1m_api_cutoff_ts_ms(cn)
-                                            if cutoff_ts_ms is not None:
-                                                try:
-                                                    effective_now_utc = _datetime.utcfromtimestamp(int(cutoff_ts_ms) / 1000.0)
-                                                except Exception:
-                                                    effective_now_utc = _datetime.utcnow()
-                                            else:
-                                                effective_now_utc = _datetime.utcnow()
-                                            if lag_min > 0:
-                                                effective_now_utc = effective_now_utc - _timedelta(minutes=lag_min)
-                                            effective_day_utc = effective_now_utc.date()
-                                            effective_minute_idx = (int(effective_now_utc.hour) * 60) + int(effective_now_utc.minute)
-
-                                            expected_minutes_total = 0
-                                            covered_minutes_total = 0
-                                            missing_days: list[str] = []
-
-                                            cur_day = d0
-                                            while cur_day <= d1:
-                                                expected_indices = _tradfi_expected_indices_for_type(cur_day, tradfi_type)
-                                                if expected_indices:
-                                                    if cur_day > effective_day_utc:
-                                                        expected_indices = set()
-                                                    elif cur_day == effective_day_utc:
-                                                        expected_indices = {mi for mi in expected_indices if int(mi) <= int(effective_minute_idx)}
-                                                expected_cnt = int(len(expected_indices))
-                                                if expected_cnt > 0:
-                                                    expected_minutes_total += expected_cnt
-                                                    day_s = cur_day.strftime("%Y%m%d")
-                                                    day_codes = get_source_codes_for_day(
-                                                        exchange=ex,
-                                                        coin=cn,
-                                                        day=day_s,
-                                                    )
-                                                    covered_cnt = 0
-                                                    if isinstance(day_codes, list) and day_codes:
-                                                        for minute_idx in expected_indices:
-                                                            if minute_idx < len(day_codes) and int(day_codes[minute_idx]) != 0:
-                                                                covered_cnt += 1
-                                                    covered_minutes_total += int(covered_cnt)
-                                                    if covered_cnt < expected_cnt:
-                                                        missing_days.append(day_s)
-                                                cur_day = cur_day + _timedelta(days=1)
-
-                                            missing_expected_minutes = max(0, int(expected_minutes_total) - int(covered_minutes_total))
-                                            missing_minutes = int(missing_expected_minutes)
-                                            r["expected_hours"] = round(float(expected_minutes_total) / 60.0, 2)
-                                            r["coverage_pct"] = (
-                                                round((float(covered_minutes_total) / float(expected_minutes_total)) * 100.0, 2)
-                                                if expected_minutes_total > 0
-                                                else 0.0
-                                            )
-                                            r["missing_days_count"] = int(len(missing_days))
-                                            if missing_days:
-                                                sample = ",".join(missing_days[:10])
-                                                if len(missing_days) > 10:
-                                                    sample += ",..."
-                                                r["missing_days_sample"] = sample
-                                            else:
-                                                r["missing_days_sample"] = ""
-                            except Exception:
-                                pass
-
-                        total_bytes = r.get("total_bytes", 0) or 0
-                        size_mb = float(total_bytes) / (1024.0 * 1024.0)
-                        _rows.append(
-                            {
-                                "exchange": r.get("exchange", ""),
-                                "dataset": r.get("dataset", ""),
-                                "coin": r.get("coin", ""),
-                                "n_files": r.get("n_files", 0),
-                                "total_bytes": int(total_bytes),
-                                "size": float(size_mb),
-                                "oldest_day": r.get("oldest_day", ""),
-                                "newest_day": r.get("newest_day", ""),
-                                "n_days": r.get("n_days", 0),
-                                "expected_hours": r.get("expected_hours", 0),
-                                "coverage_pct": r.get("coverage_pct", 0),
-                                "missing_days_count": r.get("missing_days_count", 0),
-                                "missing_days_sample": r.get("missing_days_sample", ""),
-                                "hl_minutes": hl_minutes,
-                                "other_minutes": other_minutes,
-                                "missing_minutes": missing_minutes,
-                            }
-                        )
-                    st.session_state[_trows_key] = _rows
-
-                table_rows = st.session_state[_trows_key]
-
-                df_cached = pd.DataFrame(table_rows)
-                if not df_cached.empty:
-                    total_files = int(df_cached["n_files"].sum()) if "n_files" in df_cached.columns else 0
-                    total_bytes = int(df_cached["total_bytes"].sum()) if "total_bytes" in df_cached.columns else 0
-                    n_coins = int(df_cached["coin"].nunique()) if "coin" in df_cached.columns else 0
-
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("coins", n_coins)
-                    c2.metric("files", total_files)
-                    c3.metric("size", _fmt_bytes(total_bytes))
-
-                df_cached["_src_idx"] = list(range(len(df_cached)))
-                df_view = df_cached.copy()
-                if str(tab_key).lower() in ("1m_api", "l2book"):
-                    drop_cols = [c for c in ("hl_minutes", "other_minutes", "missing_minutes") if c in df_cached.columns]
-                    if drop_cols:
-                        df_view = df_cached.drop(columns=drop_cols)
-
-                c_coin, c_kind = st.columns([0.7, 0.3])
-                with c_coin:
-                    coin_filter = str(
-                        st.text_input(
-                            "Filter by coin",
-                            value=str(st.session_state.get(f"market_data_have_coin_filter_{tab_key}", "") or ""),
-                            key=f"market_data_have_coin_filter_{tab_key}",
-                            placeholder="e.g. GOOGL or BTC",
-                        )
-                        or ""
-                    ).strip().upper()
-                with c_kind:
-                    kind_filter = st.selectbox(
-                        "Filter by type",
-                        options=["all", "stocks (xyz)", "crypto"],
-                        index=0,
-                        key=f"market_data_have_kind_filter_{tab_key}",
+            c_coin, c_kind = st.columns([0.7, 0.3])
+            with c_coin:
+                coin_filter = str(
+                    st.text_input(
+                        "Filter by coin",
+                        value=str(st.session_state.get(f"market_data_have_coin_filter_{tab_key}", "") or ""),
+                        key=f"market_data_have_coin_filter_{tab_key}",
+                        placeholder="e.g. GOOGL or BTC",
                     )
-
-                if not df_view.empty:
-                    if coin_filter:
-                        df_view = df_view[
-                            df_view["coin"].astype(str).str.upper().str.contains(coin_filter, na=False)
-                        ]
-
-                    if kind_filter != "all":
-                        coin_upper = df_view["coin"].astype(str).str.upper()
-                        is_stock = coin_upper.str.startswith("XYZ:") | coin_upper.str.startswith("XYZ-")
-                        if kind_filter == "stocks (xyz)":
-                            df_view = df_view[is_stock]
-                        else:
-                            df_view = df_view[~is_stock]
-
-                drop_display_cols = [c for c in ("exchange", "dataset", "_src_idx", "total_bytes") if c in df_view.columns]
-                if drop_display_cols:
-                    df_display = df_view.drop(columns=drop_display_cols)
-                else:
-                    df_display = df_view
-
-                # ---- stable st.dataframe with on_select ----
-                column_config = {
-                    "size": st.column_config.NumberColumn(
-                        "size",
-                        format="%.2f MB",
-                    )
-                }
-                event = st.dataframe(
-                    df_display,
-                    use_container_width=True,
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key=f"market_data_have_table_{tab_key}",
-                    column_config=column_config,
+                    or ""
+                ).strip().upper()
+            with c_kind:
+                kind_filter = st.selectbox(
+                    "Filter by type",
+                    options=["all", "stocks (xyz)", "crypto"],
+                    index=0,
+                    key=f"market_data_have_kind_filter_{tab_key}",
                 )
 
-                # Track selection per tab so we can distinguish
-                # "empty because rerun" from "user explicitly deselected".
-                _prev_sel_key = f"market_data_prev_sel_{tab_key}"
-                sel_indices = event.selection.rows if event and event.selection else []
-                prev_sel = st.session_state.get(_prev_sel_key, [])
-                if sel_indices:
-                    # User selected a row
-                    idx = sel_indices[0]
-                    if 0 <= idx < len(df_view):
-                        try:
-                            src_idx = int(df_view.iloc[idx]["_src_idx"])
-                        except Exception:
-                            src_idx = idx
+            if not df_view.empty:
+                if coin_filter:
+                    df_view = df_view[
+                        df_view["coin"].astype(str).str.upper().str.contains(coin_filter, na=False)
+                    ]
+
+                if kind_filter != "all":
+                    coin_upper = df_view["coin"].astype(str).str.upper()
+                    is_stock = coin_upper.str.startswith("XYZ:") | coin_upper.str.startswith("XYZ-")
+                    if kind_filter == "stocks (xyz)":
+                        df_view = df_view[is_stock]
                     else:
-                        src_idx = -1
-                    if 0 <= src_idx < len(dataset_rows):
-                        clicked = (
-                            str(dataset_rows[src_idx].get("dataset") or ""),
-                            str(dataset_rows[src_idx].get("coin") or ""),
-                        )
-                        st.session_state["market_data_heatmap_sel"] = clicked
-                        st.session_state["market_data_heatmap_tab"] = tab_key
-                elif prev_sel and not preserve_selection_once:
-                    # Had a selection before, now empty → user deselected
-                    st.session_state.pop("market_data_heatmap_sel", None)
-                    st.session_state.pop("market_data_heatmap_tab", None)
-                st.session_state[_prev_sel_key] = list(sel_indices)
+                        df_view = df_view[~is_stock]
 
-                # Only show selection if it belongs to this tab
-                sel_row = None
-                hm = st.session_state.get("market_data_heatmap_sel")
-                hm_tab = st.session_state.get("market_data_heatmap_tab")
-                if isinstance(hm, (tuple, list)) and len(hm) == 2 and hm_tab == tab_key:
-                    for r in dataset_rows:
-                        if (str(r.get("dataset") or ""), str(r.get("coin") or "")) == tuple(hm):
-                            sel_row = r
-                            break
+            drop_display_cols = [c for c in ("exchange", "dataset", "_src_idx", "total_bytes") if c in df_view.columns]
+            if drop_display_cols:
+                df_display = df_view.drop(columns=drop_display_cols)
+            else:
+                df_display = df_view
 
-                if sel_row:
-                    st.caption(f"Heatmap: {sel_row.get('dataset')} / {sel_row.get('coin')}")
+            # ---- stable st.dataframe with on_select ----
+            column_config = {
+                "size": st.column_config.NumberColumn(
+                    "size",
+                    format="%.2f MB",
+                )
+            }
+            event = st.dataframe(
+                df_display,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"market_data_have_table_{tab_key}",
+                column_config=column_config,
+            )
+
+            # Track selection per tab so we can distinguish
+            # "empty because rerun" from "user explicitly deselected".
+            _prev_sel_key = f"market_data_prev_sel_{tab_key}"
+            sel_indices = event.selection.rows if event and event.selection else []
+            prev_sel = st.session_state.get(_prev_sel_key, [])
+            if sel_indices:
+                # User selected a row
+                idx = sel_indices[0]
+                if 0 <= idx < len(df_view):
+                    try:
+                        src_idx = int(df_view.iloc[idx]["_src_idx"])
+                    except Exception:
+                        src_idx = idx
                 else:
-                    st.info("Click a row to display the heatmap. Use the sidebar refresh button to reload inventory.")
-
-                return sel_row
-
-            # Helper for deletion operations
-            def _render_deletion_tools(dataset_rows: list, dataset_key: str, dataset_label: str, sel_row: dict | None = None):
-                """Render deletion tools for a specific dataset."""
-                import shutil
-
-                def _remove_source_index_dirs_for_coin(actual_coin: str) -> int:
-                    base = get_exchange_raw_root_dir(str(exchange).lower())
-                    removed_count = 0
-                    src_dir = base / "1m_src" / str(actual_coin).strip()
-                    if src_dir.exists():
-                        shutil.rmtree(src_dir)
-                        removed_count += 1
-                    return removed_count
-
-                def _rebuild_source_index_from_api_for_coin(actual_coin: str) -> tuple[int, int]:
-                    presence = get_minute_presence_for_dataset(
-                        str(exchange).lower(),
-                        "1m_api",
-                        str(actual_coin).strip(),
+                    src_idx = -1
+                if 0 <= src_idx < len(_rows):
+                    clicked = (
+                        str(_rows[src_idx].get("dataset") or ""),
+                        str(_rows[src_idx].get("coin") or ""),
                     )
-                    days = presence.get("days") if isinstance(presence, dict) else {}
-                    if not isinstance(days, dict) or not days:
-                        return (0, 0)
+                    st.session_state["market_data_heatmap_sel"] = clicked
+                    st.session_state["market_data_heatmap_tab"] = tab_key
+            elif prev_sel and not preserve_selection_once:
+                # Had a selection before, now empty → user deselected
+                st.session_state.pop("market_data_heatmap_sel", None)
+                st.session_state.pop("market_data_heatmap_tab", None)
+            st.session_state[_prev_sel_key] = list(sel_indices)
 
-                    days_written = 0
-                    minutes_written = 0
-                    for day_s, hours_map in days.items():
-                        if not isinstance(hours_map, dict):
+            # Only show selection if it belongs to this tab
+            sel_row = None
+            hm = st.session_state.get("market_data_heatmap_sel")
+            hm_tab = st.session_state.get("market_data_heatmap_tab")
+            if isinstance(hm, (tuple, list)) and len(hm) == 2 and hm_tab == tab_key:
+                for r in _rows:
+                    if (str(r.get("dataset") or ""), str(r.get("coin") or "")) == tuple(hm):
+                        sel_row = r
+                        break
+
+            if sel_row:
+                st.caption(f"Heatmap: {sel_row.get('dataset')} / {sel_row.get('coin')}")
+            else:
+                st.info("Click a row to display the heatmap.")
+
+            return sel_row, _rows
+
+        # Helper for deletion operations
+        def _render_deletion_tools(dataset_rows: list, dataset_key: str, dataset_label: str, sel_row: dict | None = None):
+            """Render deletion tools for a specific dataset."""
+            import shutil
+
+            def _remove_source_index_dirs_for_coin(actual_coin: str) -> int:
+                base = get_exchange_raw_root_dir(str(exchange).lower())
+                removed_count = 0
+                src_dir = base / "1m_src" / str(actual_coin).strip()
+                if src_dir.exists():
+                    shutil.rmtree(src_dir)
+                    removed_count += 1
+                return removed_count
+
+            def _rebuild_source_index_from_api_for_coin(actual_coin: str) -> tuple[int, int]:
+                presence = get_minute_presence_for_dataset(
+                    str(exchange).lower(),
+                    "1m_api",
+                    str(actual_coin).strip(),
+                )
+                days = presence.get("days") if isinstance(presence, dict) else {}
+                if not isinstance(days, dict) or not days:
+                    return (0, 0)
+
+                days_written = 0
+                minutes_written = 0
+                for day_s, hours_map in days.items():
+                    if not isinstance(hours_map, dict):
+                        continue
+                    minute_indices: set[int] = set()
+                    for hour_s, mins_map in hours_map.items():
+                        try:
+                            hour_i = int(hour_s)
+                        except Exception:
                             continue
-                        minute_indices: set[int] = set()
-                        for hour_s, mins_map in hours_map.items():
+                        if hour_i < 0 or hour_i > 23:
+                            continue
+                        if not isinstance(mins_map, dict):
+                            continue
+                        for minute_k in mins_map.keys():
                             try:
-                                hour_i = int(hour_s)
+                                minute_i = int(minute_k)
                             except Exception:
                                 continue
-                            if hour_i < 0 or hour_i > 23:
+                            if minute_i < 0 or minute_i > 59:
                                 continue
-                            if not isinstance(mins_map, dict):
-                                continue
-                            for minute_k in mins_map.keys():
-                                try:
-                                    minute_i = int(minute_k)
-                                except Exception:
-                                    continue
-                                if minute_i < 0 or minute_i > 59:
-                                    continue
-                                minute_indices.add((hour_i * 60) + minute_i)
+                            minute_indices.add((hour_i * 60) + minute_i)
 
-                        if minute_indices:
-                            update_source_index_for_day(
-                                exchange=str(exchange).lower(),
-                                coin=str(actual_coin).strip(),
-                                day=str(day_s),
-                                minute_indices=sorted(minute_indices),
-                                code=SOURCE_CODE_API,
-                            )
-                            days_written += 1
-                            minutes_written += len(minute_indices)
+                    if minute_indices:
+                        update_source_index_for_day(
+                            exchange=str(exchange).lower(),
+                            coin=str(actual_coin).strip(),
+                            day=str(day_s),
+                            minute_indices=sorted(minute_indices),
+                            code=SOURCE_CODE_API,
+                        )
+                        days_written += 1
+                        minutes_written += len(minute_indices)
 
-                    return (days_written, minutes_written)
+                return (days_written, minutes_written)
 
-                if not dataset_rows:
-                    return
+            if not dataset_rows:
+                return
 
-                # Get all coins in this dataset
-                available_coins = sorted({str(r.get("coin", "")).strip().upper() for r in dataset_rows if str(r.get("coin", "")).strip()})
+            # Get all coins in this dataset
+            available_coins = sorted({str(r.get("coin", "")).strip().upper() for r in dataset_rows if str(r.get("coin", "")).strip()})
+            
+            if not available_coins:
+                return
+
+            with st.expander("🗑️ Deletion Tools", expanded=False):
+                # Get selected coin from table if available
+                selected_coin_from_table = None
+                if sel_row and isinstance(sel_row, dict):
+                    selected_coin_from_table = str(sel_row.get("coin", "")).strip().upper()
+
+                st.info(f"**{len(available_coins)} coins** in {dataset_label}")
+
+                # 0. Quick delete selected row if available
+                if selected_coin_from_table and selected_coin_from_table in available_coins:
+                    st.subheader("Quick delete: Selected row", divider="red")
+                    st.caption(f"Delete currently selected coin: **{selected_coin_from_table}**")
+                    if st.button(f"🗑️ Delete {selected_coin_from_table}", key=f"market_data_delete_selected_row_{dataset_key}", type="secondary"):
+                        try:
+                            # Use dataset name and coin name EXACTLY as they appear in the row
+                            actual_dataset = str(sel_row.get("dataset", "")).strip()
+                            actual_dataset_lower = actual_dataset.lower()
+                            actual_coin = str(sel_row.get("coin", "")).strip()
+                            
+                            coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
+                            if coin_dir.exists():
+                                shutil.rmtree(coin_dir)
+                                st.success(f"✅ Deleted {actual_coin}")
+                            else:
+                                st.error(f"❌ Directory not found: {coin_dir}")
+                            
+                            # Also reset + rebuild source index from existing 1m_api if deleting 1m dataset
+                            if actual_dataset_lower in ("1m", "candles_1m"):
+                                _remove_source_index_dirs_for_coin(actual_coin)
+                                rebuilt_days, rebuilt_minutes = _rebuild_source_index_from_api_for_coin(actual_coin)
+                                if rebuilt_days > 0:
+                                    st.caption(
+                                        f"Rebuilt source index from 1m_api: {rebuilt_days} days, {rebuilt_minutes} minutes"
+                                    )
+                            
+                            # Clear selection cache
+                            st.session_state.pop("market_data_heatmap_sel", None)
+                            
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error deleting: {e}")
+                    st.divider()
+
+                # 1. Delete selected coins
+                st.subheader("1️⃣ Delete selected coins", divider="red")
+                sel_coins_key = f"market_data_delete_sel_coins_{dataset_key}"
                 
-                if not available_coins:
-                    return
+                # Create options with "ALL" at the top
+                coin_options = ["🔴 DELETE ALL COINS"] + available_coins
+                selected_for_delete = st.multiselect(
+                    f"Select coins to delete:",
+                    options=coin_options,
+                    key=sel_coins_key,
+                    help="Multi-select coins to delete all their data from this dataset. Use '🔴 DELETE ALL COINS' to delete entire dataset."
+                )
+                
+                # Handle "DELETE ALL" option
+                if "🔴 DELETE ALL COINS" in selected_for_delete:
+                    # If "DELETE ALL" is selected, that's the only thing we delete
+                    selected_for_delete = available_coins
+                else:
+                    # Filter out the ALL option if it was there
+                    selected_for_delete = [c for c in selected_for_delete if c != "🔴 DELETE ALL COINS"]
 
-                with st.expander("🗑️ Deletion Tools", expanded=False):
-                    # Get selected coin from table if available
-                    selected_coin_from_table = None
-                    if sel_row and isinstance(sel_row, dict):
-                        selected_coin_from_table = str(sel_row.get("coin", "")).strip().upper()
+                if selected_for_delete:
+                    # Calculate size preview
+                    total_size = 0
+                    total_files = 0
+                    for r in dataset_rows:
+                        if str(r.get("coin", "")).strip().upper() in selected_for_delete:
+                            total_size += int(r.get("total_bytes", 0) or 0)
+                            total_files += int(r.get("n_files", 0) or 0)
 
-                    st.info(f"**{len(available_coins)} coins** in {dataset_label}")
+                    size_str = _fmt_bytes(total_size) if total_size else "0 B"
+                    st.caption(f"📊 Preview: {len(selected_for_delete)} coins, {total_files} files, {size_str}")
 
-                    # 0. Quick delete selected row if available
-                    if selected_coin_from_table and selected_coin_from_table in available_coins:
-                        st.subheader("Quick delete: Selected row", divider="red")
-                        st.caption(f"Delete currently selected coin: **{selected_coin_from_table}**")
-                        if st.button(f"🗑️ Delete {selected_coin_from_table}", key=f"market_data_delete_selected_row_{dataset_key}", type="secondary"):
-                            try:
-                                # Use dataset name and coin name EXACTLY as they appear in the row
-                                actual_dataset = str(sel_row.get("dataset", "")).strip()
-                                actual_dataset_lower = actual_dataset.lower()
-                                actual_coin = str(sel_row.get("coin", "")).strip()
+                    if st.button("🗑️ Delete selected coins", key=f"market_data_delete_selected_btn_{dataset_key}", type="secondary"):
+                        try:
+                            deleted_count = 0
+                            rebuilt_days_total = 0
+                            rebuilt_minutes_total = 0
+                            # Use actual dataset name from first row
+                            actual_dataset = str(dataset_rows[0].get("dataset", "")).strip() if dataset_rows else dataset_key
+                            actual_dataset_lower = actual_dataset.lower()
+                            
+                            for r in dataset_rows:
+                                coin = str(r.get("coin", "")).strip().upper()
+                                if coin not in selected_for_delete:
+                                    continue
                                 
+                                # Use actual coin name (original case) from row
+                                actual_coin = str(r.get("coin", "")).strip()
                                 coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
                                 if coin_dir.exists():
                                     shutil.rmtree(coin_dir)
-                                    st.success(f"✅ Deleted {actual_coin}")
-                                else:
-                                    st.error(f"❌ Directory not found: {coin_dir}")
+                                    deleted_count += 1
                                 
                                 # Also reset + rebuild source index from existing 1m_api if deleting 1m dataset
                                 if actual_dataset_lower in ("1m", "candles_1m"):
                                     _remove_source_index_dirs_for_coin(actual_coin)
                                     rebuilt_days, rebuilt_minutes = _rebuild_source_index_from_api_for_coin(actual_coin)
-                                    if rebuilt_days > 0:
-                                        st.caption(
-                                            f"Rebuilt source index from 1m_api: {rebuilt_days} days, {rebuilt_minutes} minutes"
-                                        )
-                                
-                                # Clear cache
-                                _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}"
-                                st.session_state.pop(_cache_key, None)
-                                _trows_key = f"market_data_trows_{dataset_key}"
-                                st.session_state.pop(_trows_key, None)
-                                st.session_state.pop("market_data_heatmap_sel", None)
-                                
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Error deleting: {e}")
-                        st.divider()
+                                    rebuilt_days_total += int(rebuilt_days)
+                                    rebuilt_minutes_total += int(rebuilt_minutes)
 
-                    # 1. Delete selected coins
-                    st.subheader("1️⃣ Delete selected coins", divider="red")
-                    sel_coins_key = f"market_data_delete_sel_coins_{dataset_key}"
-                    
-                    # Create options with "ALL" at the top
-                    coin_options = ["🔴 DELETE ALL COINS"] + available_coins
-                    selected_for_delete = st.multiselect(
-                        f"Select coins to delete:",
-                        options=coin_options,
-                        key=sel_coins_key,
-                        help="Multi-select coins to delete all their data from this dataset. Use '🔴 DELETE ALL COINS' to delete entire dataset."
-                    )
-                    
-                    # Handle "DELETE ALL" option
-                    if "🔴 DELETE ALL COINS" in selected_for_delete:
-                        # If "DELETE ALL" is selected, that's the only thing we delete
-                        selected_for_delete = available_coins
-                    else:
-                        # Filter out the ALL option if it was there
-                        selected_for_delete = [c for c in selected_for_delete if c != "🔴 DELETE ALL COINS"]
+                            rebuild_msg = ""
+                            if rebuilt_days_total > 0:
+                                rebuild_msg = (
+                                    f" · rebuilt API-only source index ({rebuilt_days_total} days, "
+                                    f"{rebuilt_minutes_total} minutes)"
+                                )
+                            st.success(f"✅ Deleted {deleted_count} coin directories ({size_str}){rebuild_msg}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error deleting: {e}")
 
-                    if selected_for_delete:
-                        # Calculate size preview
-                        total_size = 0
-                        total_files = 0
+                st.divider()
+
+                # 2. Delete older than date
+                st.subheader("2️⃣ Delete data older than date", divider="orange")
+                st.caption("⚠️ Deletes individual files (days) older than the cutoff date, keeps coin directories")
+                
+                cutoff_date = st.date_input(
+                    "Select cutoff date:",
+                    value=None,
+                    key=f"market_data_delete_older_date_{dataset_key}",
+                    help=f"Deletes files dated before this date (e.g., 20241205.npz < 2025-01-01)"
+                )
+
+                if cutoff_date:
+                    cutoff_str = cutoff_date.strftime("%Y%m%d")
+                    
+                    # Determine which coins to check based on selections (combine from both sources!)
+                    coins_to_check = set()
+                    
+                    if selected_coin_from_table:
+                        coins_to_check.add(selected_coin_from_table)
+                    
+                    # Also include selected coins from section 1
+                    if selected_for_delete and "🔴 DELETE ALL COINS" not in selected_for_delete:
+                        coins_to_check.update(selected_for_delete)
+                    
+                    # Initialize variables OUTSIDE the if block
+                    from pathlib import Path
+                    would_delete_files = 0
+                    would_delete_size = 0
+                    affected_coins_info = []
+                    debug_info = []
+                    scope_label = "no coins selected"
+                    
+                    if coins_to_check:
+                        scope_label = f"{len(coins_to_check)} selected coins" if len(coins_to_check) > 1 else f"{list(coins_to_check)[0]}"
+                        
                         for r in dataset_rows:
-                            if str(r.get("coin", "")).strip().upper() in selected_for_delete:
-                                total_size += int(r.get("total_bytes", 0) or 0)
-                                total_files += int(r.get("n_files", 0) or 0)
+                            coin = str(r.get("coin", "")).strip().upper()
+                            if coin not in coins_to_check:
+                                continue
+                            
+                            actual_coin = str(r.get("coin", "")).strip()
+                            actual_dataset = str(r.get("dataset", "")).strip()
+                            coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
+                            
+                            debug_info.append(f"Checking: {coin_dir} (exists={coin_dir.exists()})")
+                            
+                            if not coin_dir.exists():
+                                continue
+                            
+                            coin_old_files = 0
+                            coin_old_size = 0
+                            all_files = []
+                            
+                            # Scan ALL files in coin directory
+                            try:
+                                for file_path in coin_dir.iterdir():
+                                    if file_path.is_file():
+                                        all_files.append(file_path.name)
+                                        # Extract date from filename (try multiple patterns)
+                                        fname = file_path.stem  # Without extension
+                                        
+                                        file_date = None
+                                        
+                                        # Pattern 1: 20241205.npz (8 digits)
+                                        if len(fname) == 8 and fname.isdigit():
+                                            file_date = fname
+                                        # Pattern 2: 20241205-16.lz4 (8 digits + hyphen + hour)
+                                        elif len(fname) >= 8 and fname[:8].isdigit():
+                                            file_date = fname[:8]
+                                        # Pattern 3: 2026-02-05.npz (ISO format YYYY-MM-DD)
+                                        elif len(fname) == 10 and fname[4] == '-' and fname[7] == '-':
+                                            # Convert YYYY-MM-DD to YYYYMMDD
+                                            file_date = fname.replace('-', '')
+                                        
+                                        if file_date and file_date < cutoff_str:
+                                            coin_old_files += 1
+                                            coin_old_size += file_path.stat().st_size
+                            except Exception as e:
+                                debug_info.append(f"Error scanning {coin_dir}: {e}")
+                            
+                            debug_info.append(f"  Files: {len(all_files)}, Old: {coin_old_files}, Sample: {all_files[:3]}")
+                            
+                            if coin_old_files > 0:
+                                would_delete_files += coin_old_files
+                                would_delete_size += coin_old_size
+                                affected_coins_info.append((coin, coin_old_files, coin_old_size))
+                    
+                    # Always show preview
+                    size_str_old = _fmt_bytes(would_delete_size) if would_delete_size else "0 B"
+                    
+                    preview_container = st.container()
+                    with preview_container:
+                        st.info(f"📊 Cutoff: **{cutoff_date.strftime('%Y-%m-%d')}** | Scope: {scope_label}")
+                        st.metric(
+                            label="Files to delete",
+                            value=f"{would_delete_files} files",
+                            delta=f"{size_str_old}"
+                        )
+                    
+                    if would_delete_files > 0:
+                        # Show affected coins directly (no expander)
+                        st.subheader(f"📋 Affected coins ({len(affected_coins_info)})", divider="gray")
+                        for coin, nfiles, size in sorted(affected_coins_info, key=lambda x: -x[2]):
+                            st.caption(f"• {coin}: {nfiles} files, {_fmt_bytes(size)}")
 
-                        size_str = _fmt_bytes(total_size) if total_size else "0 B"
-                        st.caption(f"📊 Preview: {len(selected_for_delete)} coins, {total_files} files, {size_str}")
-
-                        if st.button("🗑️ Delete selected coins", key=f"market_data_delete_selected_btn_{dataset_key}", type="secondary"):
+                        if st.button("🗑️ Delete old files", key=f"market_data_delete_older_btn_{dataset_key}", type="secondary"):
                             try:
                                 deleted_count = 0
-                                rebuilt_days_total = 0
-                                rebuilt_minutes_total = 0
-                                # Use actual dataset name from first row
-                                actual_dataset = str(dataset_rows[0].get("dataset", "")).strip() if dataset_rows else dataset_key
-                                actual_dataset_lower = actual_dataset.lower()
+                                deleted_size = 0
+                                coins_deleted_days: dict[str, set[str]] = {}  # Track deleted days per coin
                                 
                                 for r in dataset_rows:
                                     coin = str(r.get("coin", "")).strip().upper()
-                                    if coin not in selected_for_delete:
+                                    if coin not in coins_to_check:
                                         continue
                                     
-                                    # Use actual coin name (original case) from row
                                     actual_coin = str(r.get("coin", "")).strip()
+                                    actual_dataset = str(r.get("dataset", "")).strip()
+                                    actual_dataset_lower = actual_dataset.lower()
                                     coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
-                                    if coin_dir.exists():
-                                        shutil.rmtree(coin_dir)
-                                        deleted_count += 1
                                     
-                                    # Also reset + rebuild source index from existing 1m_api if deleting 1m dataset
-                                    if actual_dataset_lower in ("1m", "candles_1m"):
-                                        _remove_source_index_dirs_for_coin(actual_coin)
-                                        rebuilt_days, rebuilt_minutes = _rebuild_source_index_from_api_for_coin(actual_coin)
-                                        rebuilt_days_total += int(rebuilt_days)
-                                        rebuilt_minutes_total += int(rebuilt_minutes)
+                                    if not coin_dir.exists():
+                                        continue
+                                    
+                                    # Delete old files (all file types)
+                                    for file_path in coin_dir.iterdir():
+                                        if not file_path.is_file():
+                                            continue
+                                        fname = file_path.stem
+                                        
+                                        file_date = None
+                                        
+                                        # Pattern 1: 20241205 (8 digits)
+                                        if len(fname) == 8 and fname.isdigit():
+                                            file_date = fname
+                                        # Pattern 2: 20241205-16 (8 digits + hyphen + hour)
+                                        elif len(fname) >= 8 and fname[:8].isdigit():
+                                            file_date = fname[:8]
+                                        # Pattern 3: 2026-02-05 (ISO format YYYY-MM-DD)
+                                        elif len(fname) == 10 and fname[4] == '-' and fname[7] == '-':
+                                            file_date = fname.replace('-', '')
+                                        
+                                        if file_date and file_date < cutoff_str:
+                                            file_size = file_path.stat().st_size
+                                            file_path.unlink()
+                                            deleted_count += 1
+                                            deleted_size += file_size
+                                            
+                                            # Track deleted day for index update
+                                            if actual_dataset_lower in ("1m", "candles_1m"):
+                                                if actual_coin not in coins_deleted_days:
+                                                    coins_deleted_days[actual_coin] = set()
+                                                coins_deleted_days[actual_coin].add(file_date)
+                                
+                                # Remove deleted days from 1m_src indexes
+                                updated_count = 0
+                                if coins_deleted_days:
+                                    for coin, deleted_days in coins_deleted_days.items():
+                                        removed = remove_days_from_index(
+                                            exchange=str(exchange).lower(),
+                                            coin=coin,
+                                            days_to_remove=deleted_days
+                                        )
+                                        if removed > 0:
+                                            updated_count += 1
 
-                                # Clear cache to refresh inventory
-                                _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}"
-                                st.session_state.pop(_cache_key, None)
-                                _trows_key = f"market_data_trows_{dataset_key}"
-                                st.session_state.pop(_trows_key, None)
-
-                                rebuild_msg = ""
-                                if rebuilt_days_total > 0:
-                                    rebuild_msg = (
-                                        f" · rebuilt API-only source index ({rebuilt_days_total} days, "
-                                        f"{rebuilt_minutes_total} minutes)"
-                                    )
-                                st.success(f"✅ Deleted {deleted_count} coin directories ({size_str}){rebuild_msg}")
+                                index_msg = f" (updated {updated_count} source indexes)" if updated_count > 0 else ""
+                                st.success(f"✅ Deleted {deleted_count} files ({_fmt_bytes(deleted_size)}){index_msg}")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Error deleting: {e}")
-
-                    st.divider()
-
-                    # 2. Delete older than date
-                    st.subheader("2️⃣ Delete data older than date", divider="orange")
-                    st.caption("⚠️ Deletes individual files (days) older than the cutoff date, keeps coin directories")
-                    
-                    cutoff_date = st.date_input(
-                        "Select cutoff date:",
-                        value=None,
-                        key=f"market_data_delete_older_date_{dataset_key}",
-                        help=f"Deletes files dated before this date (e.g., 20241205.npz < 2025-01-01)"
-                    )
-
-                    if cutoff_date:
-                        cutoff_str = cutoff_date.strftime("%Y%m%d")
-                        
-                        # Determine which coins to check based on selections (combine from both sources!)
-                        coins_to_check = set()
-                        
-                        if selected_coin_from_table:
-                            coins_to_check.add(selected_coin_from_table)
-                        
-                        # Also include selected coins from section 1
-                        if selected_for_delete and "🔴 DELETE ALL COINS" not in selected_for_delete:
-                            coins_to_check.update(selected_for_delete)
-                        
-                        # Initialize variables OUTSIDE the if block
-                        from pathlib import Path
-                        would_delete_files = 0
-                        would_delete_size = 0
-                        affected_coins_info = []
-                        debug_info = []
-                        scope_label = "no coins selected"
-                        
-                        if coins_to_check:
-                            scope_label = f"{len(coins_to_check)} selected coins" if len(coins_to_check) > 1 else f"{list(coins_to_check)[0]}"
-                            
-                            for r in dataset_rows:
-                                coin = str(r.get("coin", "")).strip().upper()
-                                if coin not in coins_to_check:
-                                    continue
-                                
-                                actual_coin = str(r.get("coin", "")).strip()
-                                actual_dataset = str(r.get("dataset", "")).strip()
-                                coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
-                                
-                                debug_info.append(f"Checking: {coin_dir} (exists={coin_dir.exists()})")
-                                
-                                if not coin_dir.exists():
-                                    continue
-                                
-                                coin_old_files = 0
-                                coin_old_size = 0
-                                all_files = []
-                                
-                                # Scan ALL files in coin directory
-                                try:
-                                    for file_path in coin_dir.iterdir():
-                                        if file_path.is_file():
-                                            all_files.append(file_path.name)
-                                            # Extract date from filename (try multiple patterns)
-                                            fname = file_path.stem  # Without extension
-                                            
-                                            file_date = None
-                                            
-                                            # Pattern 1: 20241205.npz (8 digits)
-                                            if len(fname) == 8 and fname.isdigit():
-                                                file_date = fname
-                                            # Pattern 2: 20241205-16.lz4 (8 digits + hyphen + hour)
-                                            elif len(fname) >= 8 and fname[:8].isdigit():
-                                                file_date = fname[:8]
-                                            # Pattern 3: 2026-02-05.npz (ISO format YYYY-MM-DD)
-                                            elif len(fname) == 10 and fname[4] == '-' and fname[7] == '-':
-                                                # Convert YYYY-MM-DD to YYYYMMDD
-                                                file_date = fname.replace('-', '')
-                                            
-                                            if file_date and file_date < cutoff_str:
-                                                coin_old_files += 1
-                                                coin_old_size += file_path.stat().st_size
-                                except Exception as e:
-                                    debug_info.append(f"Error scanning {coin_dir}: {e}")
-                                
-                                debug_info.append(f"  Files: {len(all_files)}, Old: {coin_old_files}, Sample: {all_files[:3]}")
-                                
-                                if coin_old_files > 0:
-                                    would_delete_files += coin_old_files
-                                    would_delete_size += coin_old_size
-                                    affected_coins_info.append((coin, coin_old_files, coin_old_size))
-                        
-                        # Always show preview
-                        size_str_old = _fmt_bytes(would_delete_size) if would_delete_size else "0 B"
-                        
-                        preview_container = st.container()
-                        with preview_container:
-                            st.info(f"📊 Cutoff: **{cutoff_date.strftime('%Y-%m-%d')}** | Scope: {scope_label}")
-                            st.metric(
-                                label="Files to delete",
-                                value=f"{would_delete_files} files",
-                                delta=f"{size_str_old}"
-                            )
-                        
-                        if would_delete_files > 0:
-                            # Show affected coins directly (no expander)
-                            st.subheader(f"📋 Affected coins ({len(affected_coins_info)})", divider="gray")
-                            for coin, nfiles, size in sorted(affected_coins_info, key=lambda x: -x[2]):
-                                st.caption(f"• {coin}: {nfiles} files, {_fmt_bytes(size)}")
-
-                            if st.button("🗑️ Delete old files", key=f"market_data_delete_older_btn_{dataset_key}", type="secondary"):
-                                try:
-                                    deleted_count = 0
-                                    deleted_size = 0
-                                    coins_deleted_days: dict[str, set[str]] = {}  # Track deleted days per coin
-                                    
-                                    for r in dataset_rows:
-                                        coin = str(r.get("coin", "")).strip().upper()
-                                        if coin not in coins_to_check:
-                                            continue
-                                        
-                                        actual_coin = str(r.get("coin", "")).strip()
-                                        actual_dataset = str(r.get("dataset", "")).strip()
-                                        actual_dataset_lower = actual_dataset.lower()
-                                        coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
-                                        
-                                        if not coin_dir.exists():
-                                            continue
-                                        
-                                        # Delete old files (all file types)
-                                        for file_path in coin_dir.iterdir():
-                                            if not file_path.is_file():
-                                                continue
-                                            fname = file_path.stem
-                                            
-                                            file_date = None
-                                            
-                                            # Pattern 1: 20241205 (8 digits)
-                                            if len(fname) == 8 and fname.isdigit():
-                                                file_date = fname
-                                            # Pattern 2: 20241205-16 (8 digits + hyphen + hour)
-                                            elif len(fname) >= 8 and fname[:8].isdigit():
-                                                file_date = fname[:8]
-                                            # Pattern 3: 2026-02-05 (ISO format YYYY-MM-DD)
-                                            elif len(fname) == 10 and fname[4] == '-' and fname[7] == '-':
-                                                file_date = fname.replace('-', '')
-                                            
-                                            if file_date and file_date < cutoff_str:
-                                                file_size = file_path.stat().st_size
-                                                file_path.unlink()
-                                                deleted_count += 1
-                                                deleted_size += file_size
-                                                
-                                                # Track deleted day for index update
-                                                if actual_dataset_lower in ("1m", "candles_1m"):
-                                                    if actual_coin not in coins_deleted_days:
-                                                        coins_deleted_days[actual_coin] = set()
-                                                    coins_deleted_days[actual_coin].add(file_date)
-                                    
-                                    # Remove deleted days from 1m_src indexes
-                                    updated_count = 0
-                                    if coins_deleted_days:
-                                        for coin, deleted_days in coins_deleted_days.items():
-                                            removed = remove_days_from_index(
-                                                exchange=str(exchange).lower(),
-                                                coin=coin,
-                                                days_to_remove=deleted_days
-                                            )
-                                            if removed > 0:
-                                                updated_count += 1
-
-                                    # Clear cache
-                                    _cache_key = f"market_data_have_table_cached_{str(exchange).lower()}"
-                                    st.session_state.pop(_cache_key, None)
-                                    _trows_key = f"market_data_trows_{dataset_key}"
-                                    st.session_state.pop(_trows_key, None)
-
-                                    index_msg = f" (updated {updated_count} source indexes)" if updated_count > 0 else ""
-                                    st.success(f"✅ Deleted {deleted_count} files ({_fmt_bytes(deleted_size)}){index_msg}")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Error deleting: {e}")
-                                    import traceback
-                                    st.code(traceback.format_exc())
-                        else:
-                            st.info(f"✅ No files older than {cutoff_str} in {scope_label}")
-
+                                import traceback
+                                st.code(traceback.format_exc())
                     else:
-                        st.warning("⚠️ Select a coin or use section 1️⃣ to select coins before using date-based deletion")
+                        st.info(f"✅ No files older than {cutoff_str} in {scope_label}")
 
-                    st.divider()
-
-                    # 3. Clear entire dataset (for this specific tab)
-                    st.subheader("3️⃣ Clear entire dataset", divider="red")
-                    st.warning(f"⚠️ This will delete ALL {dataset_label} data. This action cannot be undone!")
-
-                    if st.button(f"🗑️ Clear all {dataset_label}", key=f"market_data_clear_dataset_{dataset_key}", type="secondary"):
-                        try:
-                            dataset_dir = get_exchange_raw_root_dir(str(exchange).lower()) / dataset_key
-                            
-                            # Also clear 1m_src indexes for each coin if clearing 1m dataset
-                            dataset_key_lower = dataset_key.lower()
-                            cleaned_indexes = 0
-                            if dataset_key_lower in ("1m", "candles_1m") and dataset_dir.exists():
-                                # Get list of coins before deleting
-                                coins_in_dataset = [d.name for d in dataset_dir.iterdir() if d.is_dir()]
-                                for coin in coins_in_dataset:
-                                    src_dir = get_exchange_raw_root_dir(str(exchange).lower()) / "1m_src" / coin
-                                    if src_dir.exists():
-                                        shutil.rmtree(src_dir)
-                                        cleaned_indexes += 1
-                            
-                            # Now delete the dataset
-                            if dataset_dir.exists():
-                                shutil.rmtree(dataset_dir)
-                            
-                            st.session_state.pop(f"market_data_have_table_cached_{str(exchange).lower()}", None)
-                            _trows_key = f"market_data_trows_{dataset_key}"
-                            st.session_state.pop(_trows_key, None)
-                            
-                            index_msg = f" (cleaned {cleaned_indexes} source indexes)" if cleaned_indexes > 0 else ""
-                            st.success(f"✅ {dataset_label} dataset cleared{index_msg}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-
-            sel_row_1m = None
-            sel_row_1m_api = None
-            sel_row_l2book = None
-            sel_row_pb7 = None
-
-            # Render selected dataset only (lazy)
-            if have_view == "1m":
-                sel_row_1m = _render_dataset_table(rows_1m, "1m", "1m")
-                _render_deletion_tools(rows_1m, "1m", "1m candles", sel_row_1m)
-
-            elif have_view == "1m_api":
-                sel_row_1m_api = _render_dataset_table(rows_1m_api, "1m_api", "1m_api")
-                _render_deletion_tools(rows_1m_api, "1m_api", "1m API", sel_row_1m_api)
-
-            elif have_view == "l2Book":
-                sel_row_l2book = _render_dataset_table(rows_l2book, "l2Book", "l2book")
-                _render_deletion_tools(rows_l2book, "l2book", "l2Book", sel_row_l2book)
-
-            elif have_view == "PB7 cache":
-                pb7_rows = summarize_pb7_cache_inventory(str(exchange).lower(), limit=2000)
-                if not pb7_rows:
-                    st.info("No PB7 cache files found for this exchange (expected path: pb7/caches/ohlcv/<exchange>/...).")
                 else:
-                    import pandas as pd
-                    df_pb7 = pd.DataFrame(pb7_rows)
-                    df_pb7["_src_idx"] = list(range(len(df_pb7)))
-                    if not df_pb7.empty:
-                        total_files = int(df_pb7["n_files"].sum()) if "n_files" in df_pb7.columns else 0
-                        total_bytes = int(df_pb7["total_bytes"].sum()) if "total_bytes" in df_pb7.columns else 0
-                        n_coins = int(df_pb7["coin"].nunique()) if "coin" in df_pb7.columns else 0
-                        n_tf = int(df_pb7["timeframe"].nunique()) if "timeframe" in df_pb7.columns else 0
+                    st.warning("⚠️ Select a coin or use section 1️⃣ to select coins before using date-based deletion")
 
-                        c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("timeframes", n_tf)
-                        c2.metric("coins", n_coins)
-                        c3.metric("files", total_files)
-                        c4.metric("size", _fmt_bytes(total_bytes))
+                st.divider()
 
-                    if "total_bytes" in df_pb7.columns:
-                        df_pb7["size_mb"] = (df_pb7["total_bytes"].astype(float) / (1024.0 * 1024.0)).round(2)
-                        df_pb7 = df_pb7.drop(columns=["total_bytes"])
+                # 3. Clear entire dataset (for this specific tab)
+                st.subheader("3️⃣ Clear entire dataset", divider="red")
+                st.warning(f"⚠️ This will delete ALL {dataset_label} data. This action cannot be undone!")
 
-                    c_coin, c_kind = st.columns([0.7, 0.3])
-                    with c_coin:
-                        pb7_coin_filter = str(
-                            st.text_input(
-                                "Filter by coin",
-                                value=str(st.session_state.get("market_data_pb7_coin_filter", "") or ""),
-                                key="market_data_pb7_coin_filter",
-                                placeholder="e.g. GOOGL or BTC",
-                            )
-                            or ""
-                        ).strip().upper()
-                    with c_kind:
-                        pb7_kind_filter = st.selectbox(
-                            "Filter by type",
-                            options=["all", "stocks (xyz)", "crypto"],
-                            index=0,
-                            key="market_data_pb7_kind_filter",
+                if st.button(f"🗑️ Clear all {dataset_label}", key=f"market_data_clear_dataset_{dataset_key}", type="secondary"):
+                    try:
+                        dataset_dir = get_exchange_raw_root_dir(str(exchange).lower()) / dataset_key
+                        
+                        # Also clear 1m_src indexes for each coin if clearing 1m dataset
+                        dataset_key_lower = dataset_key.lower()
+                        cleaned_indexes = 0
+                        if dataset_key_lower in ("1m", "candles_1m") and dataset_dir.exists():
+                            # Get list of coins before deleting
+                            coins_in_dataset = [d.name for d in dataset_dir.iterdir() if d.is_dir()]
+                            for coin in coins_in_dataset:
+                                src_dir = get_exchange_raw_root_dir(str(exchange).lower()) / "1m_src" / coin
+                                if src_dir.exists():
+                                    shutil.rmtree(src_dir)
+                                    cleaned_indexes += 1
+                        
+                        # Now delete the dataset
+                        if dataset_dir.exists():
+                            shutil.rmtree(dataset_dir)
+                        
+                        index_msg = f" (cleaned {cleaned_indexes} source indexes)" if cleaned_indexes > 0 else ""
+                        st.success(f"✅ {dataset_label} dataset cleared{index_msg}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+        sel_row_1m = None
+        sel_row_1m_api = None
+        sel_row_l2book = None
+        sel_row_pb7 = None
+
+        # Render selected dataset only (lazy)
+        _ex_key = str(exchange).lower()
+        if have_view == "1m":
+            sel_row_1m, _del_rows = _render_dataset_table("1m", f"{_ex_key}_1m")
+            _render_deletion_tools(_del_rows, f"{_ex_key}_1m", "1m candles", sel_row_1m)
+
+        elif have_view == "1m_api":
+            sel_row_1m_api, _del_rows = _render_dataset_table("1m_api", f"{_ex_key}_1m_api")
+            _render_deletion_tools(_del_rows, f"{_ex_key}_1m_api", "1m API", sel_row_1m_api)
+
+        elif have_view == "l2Book":
+            sel_row_l2book, _del_rows = _render_dataset_table("l2Book", f"{_ex_key}_l2book")
+            _render_deletion_tools(_del_rows, f"{_ex_key}_l2book", "l2Book", sel_row_l2book)
+
+        elif have_view == "PB7 cache":
+            pb7_rows = summarize_pb7_cache_inventory(str(exchange).lower(), limit=2000)
+            if not pb7_rows:
+                st.info("No PB7 cache files found for this exchange (expected path: pb7/caches/ohlcv/<exchange>/...).")
+            else:
+                import pandas as pd
+                df_pb7 = pd.DataFrame(pb7_rows)
+                df_pb7["_src_idx"] = list(range(len(df_pb7)))
+                if not df_pb7.empty:
+                    total_files = int(df_pb7["n_files"].sum()) if "n_files" in df_pb7.columns else 0
+                    total_bytes = int(df_pb7["total_bytes"].sum()) if "total_bytes" in df_pb7.columns else 0
+                    n_coins = int(df_pb7["coin"].nunique()) if "coin" in df_pb7.columns else 0
+                    n_tf = int(df_pb7["timeframe"].nunique()) if "timeframe" in df_pb7.columns else 0
+
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("timeframes", n_tf)
+                    c2.metric("coins", n_coins)
+                    c3.metric("files", total_files)
+                    c4.metric("size", _fmt_bytes(total_bytes))
+
+                if "total_bytes" in df_pb7.columns:
+                    df_pb7["size_mb"] = (df_pb7["total_bytes"].astype(float) / (1024.0 * 1024.0)).round(2)
+                    df_pb7 = df_pb7.drop(columns=["total_bytes"])
+
+                c_coin, c_kind = st.columns([0.7, 0.3])
+                with c_coin:
+                    pb7_coin_filter = str(
+                        st.text_input(
+                            "Filter by coin",
+                            value=str(st.session_state.get("market_data_pb7_coin_filter", "") or ""),
+                            key="market_data_pb7_coin_filter",
+                            placeholder="e.g. GOOGL or BTC",
                         )
-
-                    df_pb7_view = df_pb7.copy()
-                    if pb7_coin_filter:
-                        df_pb7_view = df_pb7_view[
-                            df_pb7_view["coin"].astype(str).str.upper().str.contains(pb7_coin_filter, na=False)
-                        ]
-
-                    if pb7_kind_filter != "all":
-                        coin_upper = df_pb7_view["coin"].astype(str).str.upper()
-                        is_stock = coin_upper.str.startswith("XYZ:") | coin_upper.str.startswith("XYZ-")
-                        if pb7_kind_filter == "stocks (xyz)":
-                            df_pb7_view = df_pb7_view[is_stock]
-                        else:
-                            df_pb7_view = df_pb7_view[~is_stock]
-
-                    drop_display_cols = [c for c in ("exchange", "_src_idx") if c in df_pb7_view.columns]
-                    if drop_display_cols:
-                        df_pb7_display = df_pb7_view.drop(columns=drop_display_cols)
-                    else:
-                        df_pb7_display = df_pb7_view
-
-                    col_cfg = {
-                        "size_mb": st.column_config.NumberColumn("size", format="%.2f MB")
-                    }
-                    event_pb7 = st.dataframe(
-                        df_pb7_display,
-                        use_container_width=True,
-                        hide_index=True,
-                        on_select="rerun",
-                        selection_mode="single-row",
-                        column_config=col_cfg,
-                        key="market_data_pb7_cache_table",
+                        or ""
+                    ).strip().upper()
+                with c_kind:
+                    pb7_kind_filter = st.selectbox(
+                        "Filter by type",
+                        options=["all", "stocks (xyz)", "crypto"],
+                        index=0,
+                        key="market_data_pb7_kind_filter",
                     )
 
-                    _prev_sel_key = "market_data_prev_sel_pb7_cache"
-                    sel_indices = event_pb7.selection.rows if event_pb7 and event_pb7.selection else []
-                    prev_sel = st.session_state.get(_prev_sel_key, [])
-                    if sel_indices:
-                        idx = sel_indices[0]
-                        if 0 <= idx < len(df_pb7_view):
-                            try:
-                                src_idx = int(df_pb7_view.iloc[idx]["_src_idx"])
-                            except Exception:
-                                src_idx = idx
-                        else:
-                            src_idx = -1
-                        if 0 <= src_idx < len(pb7_rows):
-                            row = pb7_rows[src_idx]
-                            tf = str(row.get("timeframe") or "").strip()
-                            coin = str(row.get("coin") or "").strip()
-                            if tf and coin:
-                                st.session_state["market_data_heatmap_sel"] = (f"pb7_cache:{tf}", coin)
-                                st.session_state["market_data_heatmap_tab"] = "pb7_cache"
-                                sel_row_pb7 = {
-                                    "dataset": f"pb7_cache:{tf}",
-                                    "coin": coin,
-                                    "timeframe": tf,
-                                }
-                    elif prev_sel and not preserve_selection_once:
-                        st.session_state.pop("market_data_heatmap_sel", None)
-                        st.session_state.pop("market_data_heatmap_tab", None)
-                    st.session_state[_prev_sel_key] = list(sel_indices)
+                df_pb7_view = df_pb7.copy()
+                if pb7_coin_filter:
+                    df_pb7_view = df_pb7_view[
+                        df_pb7_view["coin"].astype(str).str.upper().str.contains(pb7_coin_filter, na=False)
+                    ]
 
-                    hm = st.session_state.get("market_data_heatmap_sel")
-                    hm_tab = st.session_state.get("market_data_heatmap_tab")
-                    if isinstance(hm, (tuple, list)) and len(hm) == 2 and hm_tab == "pb7_cache":
-                        hm_ds = str(hm[0] or "").strip().lower()
-                        hm_coin = str(hm[1] or "").strip()
-                        hm_tf = hm_ds.split(":", 1)[1] if hm_ds.startswith("pb7_cache:") and ":" in hm_ds else ""
-                        if hm_tf and hm_coin:
-                            for row in pb7_rows:
-                                row_tf = str(row.get("timeframe") or "").strip()
-                                row_coin = str(row.get("coin") or "").strip()
-                                if row_tf == hm_tf and row_coin == hm_coin:
-                                    sel_row_pb7 = {
-                                        "dataset": f"pb7_cache:{row_tf}",
-                                        "coin": row_coin,
-                                        "timeframe": row_tf,
-                                    }
-                                    break
-
-                    if sel_row_pb7:
-                        st.caption(f"Heatmap: PB7 cache {sel_row_pb7.get('timeframe')} / {sel_row_pb7.get('coin')}")
+                if pb7_kind_filter != "all":
+                    coin_upper = df_pb7_view["coin"].astype(str).str.upper()
+                    is_stock = coin_upper.str.startswith("XYZ:") | coin_upper.str.startswith("XYZ-")
+                    if pb7_kind_filter == "stocks (xyz)":
+                        df_pb7_view = df_pb7_view[is_stock]
                     else:
-                        st.info("Click a row to display the heatmap. Use the sidebar refresh button to reload inventory.")
+                        df_pb7_view = df_pb7_view[~is_stock]
 
-                    st.caption("Read-only view of PB7 cache inventory from pb7/caches/ohlcv.")
+                drop_display_cols = [c for c in ("exchange", "_src_idx") if c in df_pb7_view.columns]
+                if drop_display_cols:
+                    df_pb7_display = df_pb7_view.drop(columns=drop_display_cols)
+                else:
+                    df_pb7_display = df_pb7_view
 
-            # Get the selected row from any of the tabs
-            sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book or sel_row_pb7
+                col_cfg = {
+                    "size_mb": st.column_config.NumberColumn("size", format="%.2f MB")
+                }
+                event_pb7 = st.dataframe(
+                    df_pb7_display,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    column_config=col_cfg,
+                    key="market_data_pb7_cache_table",
+                )
 
-            def _render_gap_heatmap() -> None:
-                if sel_row:
-                    r = sel_row
-                    ex = str(exchange).lower()
-                    ds = str(r.get("dataset") or "")
-                    cn = str(r.get("coin") or "")
-                    ds_l = ds.strip().lower()
-                    is_stock_perp_1m = _is_hyperliquid_stock_perp_1m(exchange=ex, dataset=ds, coin=cn)
-                    tradfi_type = _tradfi_canonical_type_for_coin(cn) if is_stock_perp_1m else ""
+                _prev_sel_key = "market_data_prev_sel_pb7_cache"
+                sel_indices = event_pb7.selection.rows if event_pb7 and event_pb7.selection else []
+                prev_sel = st.session_state.get(_prev_sel_key, [])
+                if sel_indices:
+                    idx = sel_indices[0]
+                    if 0 <= idx < len(df_pb7_view):
+                        try:
+                            src_idx = int(df_pb7_view.iloc[idx]["_src_idx"])
+                        except Exception:
+                            src_idx = idx
+                    else:
+                        src_idx = -1
+                    if 0 <= src_idx < len(pb7_rows):
+                        row = pb7_rows[src_idx]
+                        tf = str(row.get("timeframe") or "").strip()
+                        coin = str(row.get("coin") or "").strip()
+                        if tf and coin:
+                            st.session_state["market_data_heatmap_sel"] = (f"pb7_cache:{tf}", coin)
+                            st.session_state["market_data_heatmap_tab"] = "pb7_cache"
+                            sel_row_pb7 = {
+                                "dataset": f"pb7_cache:{tf}",
+                                "coin": coin,
+                                "timeframe": tf,
+                            }
+                elif prev_sel and not preserve_selection_once:
+                    st.session_state.pop("market_data_heatmap_sel", None)
+                    st.session_state.pop("market_data_heatmap_tab", None)
+                st.session_state[_prev_sel_key] = list(sel_indices)
 
-                    # For candles datasets: show only the gap from l2Book->today.
-                    start_day = None
-                    end_day = _date.today().strftime("%Y%m%d")
-                    if ds_l not in ("l2book", "1m", "candles_1m", "1m_api", "candles_1m_api"):
-                        l2 = get_daily_hour_coverage_for_dataset(ex, "l2Book", cn)
-                        l2_newest = str(l2.get("newest_day") or "") if isinstance(l2, dict) else ""
-                        if l2_newest:
-                            start_day = l2_newest
+                hm = st.session_state.get("market_data_heatmap_sel")
+                hm_tab = st.session_state.get("market_data_heatmap_tab")
+                if isinstance(hm, (tuple, list)) and len(hm) == 2 and hm_tab == "pb7_cache":
+                    hm_ds = str(hm[0] or "").strip().lower()
+                    hm_coin = str(hm[1] or "").strip()
+                    hm_tf = hm_ds.split(":", 1)[1] if hm_ds.startswith("pb7_cache:") and ":" in hm_ds else ""
+                    if hm_tf and hm_coin:
+                        for row in pb7_rows:
+                            row_tf = str(row.get("timeframe") or "").strip()
+                            row_coin = str(row.get("coin") or "").strip()
+                            if row_tf == hm_tf and row_coin == hm_coin:
+                                sel_row_pb7 = {
+                                    "dataset": f"pb7_cache:{row_tf}",
+                                    "coin": row_coin,
+                                    "timeframe": row_tf,
+                                }
+                                break
 
+                if sel_row_pb7:
+                    st.caption(f"Heatmap: PB7 cache {sel_row_pb7.get('timeframe')} / {sel_row_pb7.get('coin')}")
+                else:
+                    st.info("Click a row to display the heatmap. Use the sidebar refresh button to reload inventory.")
+
+                st.caption("Read-only view of PB7 cache inventory from pb7/caches/ohlcv.")
+
+        # Get the selected row from any of the tabs
+        sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book or sel_row_pb7
+
+        def _render_gap_heatmap() -> None:
+            if sel_row:
+                r = sel_row
+                ex = str(exchange).lower()
+                # Map UI exchange → storage directory (e.g. "binance" → "binanceusdm")
+                _storage_ex_map = {"binance": "binanceusdm"}
+                _storage_ex = _storage_ex_map.get(ex, ex)
+                ds = str(r.get("dataset") or "")
+                cn = str(r.get("coin") or "")
+                ds_l = ds.strip().lower()
+                is_stock_perp_1m = _is_hyperliquid_stock_perp_1m(exchange=ex, dataset=ds, coin=cn)
+                tradfi_type = _tradfi_canonical_type_for_coin(cn) if is_stock_perp_1m else ""
+
+                # For candles datasets: show only the gap from l2Book->today.
+                start_day = None
+                end_day = _date.today().strftime("%Y%m%d")
+                if ds_l not in ("l2book", "1m", "candles_1m", "1m_api", "candles_1m_api"):
+                    l2 = get_daily_hour_coverage_for_dataset(ex, "l2Book", cn)
+                    l2_newest = str(l2.get("newest_day") or "") if isinstance(l2, dict) else ""
+                    if l2_newest:
+                        start_day = l2_newest
+
+                if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
+                    # Candles view:
+                    # - 1m: 1 row per day, 24 hour cells
+
+                    # Choose presence resolution
                     if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
-                        # Candles view:
-                        # - 1m: 1 row per day, 24 hour cells
-
-                        # Choose presence resolution
-                        if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
-                            day_counts = {}
-                            if ds_l in ("1m", "candles_1m") and ex == "hyperliquid":
-                                day_counts = get_daily_source_counts_for_range(
-                                    exchange=ex,
-                                    coin=cn,
-                                    start_day=start_day,
-                                    end_day=end_day,
-                                    lag_minutes=_missing_lag_minutes,
-                                    cutoff_ts_ms=_latest_1m_api_cutoff_ts_ms(cn),
-                                )
-
-                            if isinstance(day_counts, dict) and day_counts:
-                                try:
-                                    oldest_s = min(day_counts.keys())
-                                    newest_s = max(day_counts.keys())
-                                    dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
-                                    dt1 = _date.today()
-                                    if dt1 < _datetime.strptime(newest_s, "%Y%m%d").date():
-                                        dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
-                                except Exception:
-                                    dt0 = None
-                                    dt1 = None
-
-                                if dt0 and dt1:
-                                    tradfi_sessions: dict[str, tuple[int, int]] = {}
-                                    tradfi_calendar_present = False
-                                    years: list[int] = []
-                                    cur = dt0
-                                    while cur <= dt1:
-                                        y = int(cur.strftime("%Y"))
-                                        if y not in years:
-                                            years.append(y)
-                                        cur = cur + _timedelta(days=1)
-                                    years = sorted(years)
-                                    max_days = 366
-                                    z = []
-                                    text = []
-                                    for y in years:
-                                        days_in_year = 366 if calendar.isleap(int(y)) else 365
-                                        row: list[float | None] = [None] * max_days
-                                        row_text = [""] * max_days
-                                        cur_day = dt0
-                                        while cur_day <= dt1:
-                                            day_s = cur_day.strftime("%Y%m%d")
-                                            if not day_s.startswith(str(y)):
-                                                cur_day = cur_day + _timedelta(days=1)
-                                                continue
-                                            try:
-                                                doy = cur_day.timetuple().tm_yday
-                                            except Exception:
-                                                cur_day = cur_day + _timedelta(days=1)
-                                                continue
-                                            idx = doy - 1
-                                            if 0 <= idx < days_in_year:
-                                                counts = day_counts.get(day_s) or {}
-                                                api = int(counts.get("api") or 0)
-                                                l2b = int(counts.get("l2Book_mid") or 0)
-                                                oth = int(counts.get("other_exchange") or 0)
-                                                miss = int(counts.get("missing") or 0)
-                                                if is_stock_perp_1m:
-                                                    is_holiday = _is_tradfi_market_holiday(cur_day, tradfi_type)
-                                                    sess = tradfi_sessions.get(day_s)
-                                                    if sess is not None:
-                                                        expected_minutes = len(
-                                                            _tradfi_expected_minute_indices_from_session(
-                                                                day=cur_day,
-                                                                session_start_ms=int(sess[0]),
-                                                                session_end_ms=int(sess[1]),
-                                                            )
-                                                        )
-                                                    elif tradfi_calendar_present:
-                                                        expected_minutes = 0
-                                                    else:
-                                                        expected_minutes = len(_tradfi_expected_indices_for_type(cur_day, tradfi_type))
-                                                    if is_holiday:
-                                                        expected_minutes = 0
-                                                    covered_minutes = api + l2b + oth
-                                                    miss = max(0, int(expected_minutes) - int(covered_minutes))
-                                                    if expected_minutes == 0 and covered_minutes == 0:
-                                                        if is_holiday:
-                                                            row[idx] = 0.25
-                                                            row_text[idx] = f"{day_s} | market holiday"
-                                                        else:
-                                                            row[idx] = None
-                                                            row_text[idx] = f"{day_s} | non-trading session"
-                                                        cur_day = cur_day + _timedelta(days=1)
-                                                        continue
-                                                elif not counts:
-                                                    miss = 1440
-                                                if miss > 0:
-                                                    row[idx] = 0.0
-                                                elif oth > 0:
-                                                    row[idx] = 0.75 if oth < 5 else 0.5
-                                                else:
-                                                    row[idx] = 1.0
-                                                row_text[idx] = (
-                                                    f"{day_s} | api={api} l2Book={l2b} other={oth} missing={miss}"
-                                                )
-                                            cur_day = cur_day + _timedelta(days=1)
-                                        z.append(row)
-                                        text.append(row_text)
-
-                                    fig = go.Figure(
-                                        data=go.Heatmap(
-                                            z=z,
-                                            x=list(range(1, max_days + 1)),
-                                            y=[str(y) for y in years],
-                                            text=text,
-                                            hovertemplate="%{text}<extra></extra>",
-                                            colorscale=[
-                                                [0.0, "#b23b3b"],
-                                                [0.24, "#b23b3b"],
-                                                [0.25, "#7e57c2"],
-                                                [0.49, "#7e57c2"],
-                                                [0.5, "#ef6c00"],
-                                                [0.74, "#ef6c00"],
-                                                [0.75, "#7cb342"],
-                                                [0.99, "#7cb342"],
-                                                [1.0, "#2e7d32"],
-                                            ],
-                                            zmin=0,
-                                            zmax=1,
-                                            showscale=False,
-                                            xgap=1,
-                                            ygap=1,
-                                        )
-                                    )
-                                    fig.update_layout(
-                                        height=120 + (len(years) * 26),
-                                        margin=dict(l=10, r=10, t=20, b=20),
-                                        xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
-                                        yaxis=dict(
-                                            autorange="reversed",
-                                            showgrid=False,
-                                            type="category",
-                                            categoryorder="array",
-                                            categoryarray=[str(y) for y in years],
-                                            tickmode="array",
-                                            tickvals=[str(y) for y in years],
-                                            ticktext=[str(y) for y in years],
-                                        ),
-                                    )
-                                    st.markdown(
-                                        "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>HL only</span>"
-                                        "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7cb342;color:#fff;margin-right:8px;'>other_exchange &lt; 5 min</span>"
-                                        "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange ≥ 5 min</span>"
-                                        "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
-                                        "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing minutes</span>",
-                                        unsafe_allow_html=True,
-                                    )
-                                    st.caption("Overview (days). Select a month below to inspect minutes.")
-                                    st.plotly_chart(fig, use_container_width=True)
-
-                                    # Build month list from date range
-                                    chart_full_start_day = str(start_day or "")
-                                    chart_full_end_day = str(end_day or "")
-                                    month_list: list[str] = []
-                                    if dt0 and dt1:
-                                        cur_m = dt0.replace(day=1)
-                                        end_m = dt1.replace(day=1)
-                                        while cur_m <= end_m:
-                                            month_list.append(cur_m.strftime("%Y-%m"))
-                                            # advance to next month
-                                            if cur_m.month == 12:
-                                                cur_m = cur_m.replace(year=cur_m.year + 1, month=1)
-                                            else:
-                                                cur_m = cur_m.replace(month=cur_m.month + 1)
-                                    if not month_list:
-                                        month_list = [dt0.strftime("%Y-%m")] if dt0 else []
-                                    chart_full_start_day = dt0.strftime("%Y%m%d") if dt0 else str(start_day or "")
-                                    chart_full_end_day = dt1.strftime("%Y%m%d") if dt1 else str(end_day or "")
-                                    sel_key = f"market_data_1m_month_{cn}"
-                                    if month_list and sel_key not in st.session_state:
-                                        st.session_state[sel_key] = month_list[-1]
-                                    cur_month = st.session_state.get(sel_key) or (month_list[-1] if month_list else "")
-                                    cur_idx = month_list.index(cur_month) if cur_month in month_list else len(month_list) - 1
-
-                                    def _go_prev(_key=sel_key, _ml=month_list, _ci=cur_idx):
-                                        if _ci > 0:
-                                            st.session_state[_key] = _ml[_ci - 1]
-
-                                    def _go_next(_key=sel_key, _ml=month_list, _ci=cur_idx):
-                                        if _ci < len(_ml) - 1:
-                                            st.session_state[_key] = _ml[_ci + 1]
-
-                                    # Small chevron buttons like Strategy Explorer
-                                    c_prev, c_sel, c_next = st.columns([0.04, 0.92, 0.04], vertical_alignment="bottom")
-                                    with c_prev:
-                                        st.button(":material/chevron_left:", key=f"{sel_key}_prev", disabled=cur_idx <= 0, on_click=_go_prev)
-                                    with c_sel:
-                                        sel_month = st.selectbox(
-                                            "Select month for minute view",
-                                            options=month_list,
-                                            index=cur_idx,
-                                            key=sel_key,
-                                        )
-                                    with c_next:
-                                        st.button(":material/chevron_right:", key=f"{sel_key}_next", disabled=cur_idx >= len(month_list) - 1, on_click=_go_next)
-                                    if sel_month:
-                                        import calendar as _cal
-                                        _sm_year = int(sel_month[:4])
-                                        _sm_mon = int(sel_month[5:7])
-                                        _last_day = _cal.monthrange(_sm_year, _sm_mon)[1]
-                                        start_day = f"{_sm_year:04d}{_sm_mon:02d}01"
-                                        end_day = f"{_sm_year:04d}{_sm_mon:02d}{_last_day:02d}"
-
-                            show_market_holiday_overlay = True
-                            show_out_of_session_overlay = True
-                            if is_stock_perp_1m:
-                                c_holiday, c_oos, _ = st.columns([0.28, 0.34, 0.38], vertical_alignment="bottom")
-                                with c_holiday:
-                                    show_market_holiday_overlay = bool(
-                                        st.checkbox(
-                                            "Highlight market holidays",
-                                            value=bool(st.session_state.get("market_data_show_market_holiday_overlay", True)),
-                                            key="market_data_show_market_holiday_overlay",
-                                        )
-                                    )
-                                with c_oos:
-                                    show_out_of_session_overlay = bool(
-                                        st.checkbox(
-                                            "Highlight expected out-of-session gaps",
-                                            value=bool(st.session_state.get("market_data_show_out_of_session_overlay", True)),
-                                            key="market_data_show_out_of_session_overlay",
-                                        )
-                                    )
-
-                            hp = get_minute_presence_for_dataset(
-                                ex,
-                                ds,
-                                cn,
+                        day_counts = {}
+                        if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binance"):
+                            day_counts = get_daily_source_counts_for_range(
+                                exchange=_storage_ex,
+                                coin=cn,
                                 start_day=start_day,
                                 end_day=end_day,
+                                lag_minutes=_missing_lag_minutes,
+                                cutoff_ts_ms=None,
                             )
-                            present = hp.get("days") if isinstance(hp, dict) else {}
-                            if not isinstance(present, dict) or not present:
-                                st.info("No minute candles found for this selection.")
-                                return
 
-                        oldest_s = str(hp.get("oldest_day") or "")
-                        newest_s = str(hp.get("newest_day") or "")
-                        try:
-                            dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
-                            dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
-                        except Exception:
-                            st.info("No date range found for this selection.")
-                            return
+                        if isinstance(day_counts, dict) and day_counts:
+                            try:
+                                oldest_s = min(day_counts.keys())
+                                newest_s = max(day_counts.keys())
+                                dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
+                                dt1 = _date.today()
+                                if dt1 < _datetime.strptime(newest_s, "%Y%m%d").date():
+                                    dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
+                            except Exception:
+                                dt0 = None
+                                dt1 = None
 
-                        colorscale = [
-                            [0.0, "#b23b3b"],
-                            [1.0, "#2e7d32"],
-                        ]
-
-                        if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
-                            # Days split into two 12-hour rows (00-11, 12-23)
-                            days_list: list[_date] = []
-                            cur = dt0
-                            while cur <= dt1:
-                                days_list.append(cur)
-                                cur = cur + _timedelta(days=1)
-
-                            z = []
-                            text = []
-                            y_labels = []
-
-                            # src -> code mapping (discrete)
-                            src_code = {
-                                None: 0,
-                                "missing": 0,
-                                "api": 2,
-                                "best": 3,
-                                "other_exchange": 4,
-                                "binance_perp_usdt": 4,
-                                "l2Book_mid": 5,
-                            }
-
-                            # colorscale: 0 missing (red), 1 filled (purple), 2 api (green), 3 best (teal), 4 other_exchange (orange), 5 l2book (blue)
-                            if is_stock_perp_1m:
-                                # -2 market holiday, -1 expected out-of-session gap (neutral gray)
-                                colorscale = [
-                                    [0.0, "#7e57c2"],
-                                    [1 / 7, "#4e4e4e"],
-                                    [2 / 7, "#b23b3b"],
-                                    [3 / 7, "#6a1b9a"],
-                                    [4 / 7, "#2e7d32"],
-                                    [5 / 7, "#00897b"],
-                                    [6 / 7, "#ef6c00"],
-                                    [1.0, "#1e88e5"],
-                                ]
-                            else:
-                                colorscale = [
-                                    [0.0, "#b23b3b"],
-                                    [0.2, "#6a1b9a"],
-                                    [0.4, "#2e7d32"],
-                                    [0.6, "#00897b"],
-                                    [0.8, "#ef6c00"],
-                                    [1.0, "#1e88e5"],
-                                ]
-
-                            for d in days_list:
-                                day_s = d.strftime("%Y%m%d")
-                                # present[day_s] is {HH: {MM: src}}
-                                hours_map = present.get(day_s) if isinstance(present.get(day_s), dict) else {}
-                                hours_map = hours_map if isinstance(hours_map, dict) else {}
-                                expected_indices = None
-                                if is_stock_perp_1m:
-                                    if str(tradfi_type or "").strip().lower() == "fx":
-                                        holiday_session_indices = set(range(1440))
-                                    else:
-                                        holiday_session_indices = _tradfi_expected_minute_indices(d)
-                                    is_market_holiday = _is_tradfi_market_holiday(d, tradfi_type)
-                                    sess_map, sess_present = ({}, False)
-                                    sess = (sess_map or {}).get(day_s)
-                                    if sess is not None:
-                                        expected_indices = _tradfi_expected_minute_indices_from_session(
-                                            day=d,
-                                            session_start_ms=int(sess[0]),
-                                            session_end_ms=int(sess[1]),
-                                        )
-                                    elif sess_present:
-                                        expected_indices = set()
-                                    else:
-                                        expected_indices = _tradfi_expected_indices_for_type(d, tradfi_type)
-                                    if is_market_holiday:
-                                        expected_indices = set()
-                                else:
-                                    is_market_holiday = False
-                                    holiday_session_indices = set()
-
-                                for block_start in (0, 12):
-                                    row = []
-                                    row_text = []
-                                    for h in range(block_start, block_start + 12):
-                                        hh = f"{h:02d}"
-                                        mins_map = hours_map.get(hh) or {}
-                                        mins_map = mins_map if isinstance(mins_map, dict) else {}
-                                        for minute in range(60):
-                                            minute_idx = (h * 60) + int(minute)
-                                            src = mins_map.get(minute)
-                                            code = int(src_code.get(str(src), src_code.get(src, 0)))
-                                            # Preserve real source data colors even outside expected session.
-                                            # Out-of-session markers are only for truly missing minutes.
-                                            if code == 0:
-                                                if (
-                                                    show_market_holiday_overlay
-                                                    and is_market_holiday
-                                                    and minute_idx in holiday_session_indices
-                                                ):
-                                                    row.append(-2)
-                                                    hhmm = f"{h:02d}:{minute:02d}"
-                                                    row_text.append(f"{day_s} {hhmm} (market holiday)")
+                            if dt0 and dt1:
+                                tradfi_sessions: dict[str, tuple[int, int]] = {}
+                                tradfi_calendar_present = False
+                                years: list[int] = []
+                                cur = dt0
+                                while cur <= dt1:
+                                    y = int(cur.strftime("%Y"))
+                                    if y not in years:
+                                        years.append(y)
+                                    cur = cur + _timedelta(days=1)
+                                years = sorted(years)
+                                max_days = 366
+                                z = []
+                                text = []
+                                for y in years:
+                                    days_in_year = 366 if calendar.isleap(int(y)) else 365
+                                    row: list[float | None] = [None] * max_days
+                                    row_text = [""] * max_days
+                                    cur_day = dt0
+                                    while cur_day <= dt1:
+                                        day_s = cur_day.strftime("%Y%m%d")
+                                        if not day_s.startswith(str(y)):
+                                            cur_day = cur_day + _timedelta(days=1)
+                                            continue
+                                        try:
+                                            doy = cur_day.timetuple().tm_yday
+                                        except Exception:
+                                            cur_day = cur_day + _timedelta(days=1)
+                                            continue
+                                        idx = doy - 1
+                                        if 0 <= idx < days_in_year:
+                                            counts = day_counts.get(day_s) or {}
+                                            api = int(counts.get("api") or 0)
+                                            l2b = int(counts.get("l2Book_mid") or 0)
+                                            oth = int(counts.get("other_exchange") or 0)
+                                            miss = int(counts.get("missing") or 0)
+                                            if is_stock_perp_1m:
+                                                is_holiday = _is_tradfi_market_holiday(cur_day, tradfi_type)
+                                                sess = tradfi_sessions.get(day_s)
+                                                if sess is not None:
+                                                    expected_minutes = len(
+                                                        _tradfi_expected_minute_indices_from_session(
+                                                            day=cur_day,
+                                                            session_start_ms=int(sess[0]),
+                                                            session_end_ms=int(sess[1]),
+                                                        )
+                                                    )
+                                                elif tradfi_calendar_present:
+                                                    expected_minutes = 0
+                                                else:
+                                                    expected_minutes = len(_tradfi_expected_indices_for_type(cur_day, tradfi_type))
+                                                if is_holiday:
+                                                    expected_minutes = 0
+                                                covered_minutes = api + l2b + oth
+                                                miss = max(0, int(expected_minutes) - int(covered_minutes))
+                                                if expected_minutes == 0 and covered_minutes == 0:
+                                                    if is_holiday:
+                                                        row[idx] = 0.25
+                                                        row_text[idx] = f"{day_s} | market holiday"
+                                                    else:
+                                                        row[idx] = None
+                                                        row_text[idx] = f"{day_s} | non-trading session"
+                                                    cur_day = cur_day + _timedelta(days=1)
                                                     continue
-                                                if (
-                                                    show_out_of_session_overlay
-                                                    and is_stock_perp_1m
-                                                    and expected_indices is not None
-                                                    and minute_idx not in expected_indices
-                                                ):
-                                                    row.append(-1)
-                                                    hhmm = f"{h:02d}:{minute:02d}"
-                                                    row_text.append(f"{day_s} {hhmm} (expected out-of-session gap)")
-                                                    continue
-                                            row.append(code)
-                                            # hover text per minute
-                                            hhmm = f"{h:02d}:{minute:02d}"
-                                            src_label = str(src) if src is not None else "missing"
-                                            row_text.append(f"{day_s} {hhmm} ({src_label})")
+                                            elif not counts:
+                                                miss = 1440
+                                            if miss > 0:
+                                                row[idx] = 0.0
+                                            elif oth > 0:
+                                                row[idx] = 0.75 if oth < 5 else 0.5
+                                            else:
+                                                row[idx] = 1.0
+                                            row_text[idx] = (
+                                                f"{day_s} | api={api} l2Book={l2b} other={oth} missing={miss}"
+                                            )
+                                        cur_day = cur_day + _timedelta(days=1)
                                     z.append(row)
                                     text.append(row_text)
-                                    y_labels.append(f"{day_s} {block_start:02d}-{block_start+11:02d}")
 
-                            if not z:
-                                st.info("No minute presence found for this selection.")
-                                return
-
-                            fig = go.Figure(
-                                data=go.Heatmap(
-                                    z=z,
-                                    x=list(range(720)),
-                                    y=[str(y) for y in y_labels],
-                                    text=text,
-                                    hovertemplate="%{text}<extra></extra>",
-                                    colorscale=colorscale,
-                                    zmin=-2 if is_stock_perp_1m else 0,
-                                    zmax=5,
-                                    showscale=False,
-                                    xgap=1,
-                                    ygap=1,
-                                )
-                            )
-                            fig.update_layout(
-                                height=max(300, 80 + (len(y_labels) * 18)),
-                                margin=dict(l=10, r=10, t=20, b=20),
-                                xaxis=dict(tickmode="array", tickvals=list(range(0, 720, 60)), ticktext=[f"{x:02d}h" for x in range(0, 12)]),
-                                yaxis=dict(autorange="reversed", showgrid=False),
-                            )
-                            if is_stock_perp_1m:
-                                holiday_legend = (
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
-                                    if show_market_holiday_overlay
-                                    else ""
-                                )
-                                oos_legend = (
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#4e4e4e;color:#fff;margin-right:8px;'>expected out-of-session gap</span>"
-                                    if show_out_of_session_overlay
-                                    else ""
-                                )
-                                st.markdown(
-                                    holiday_legend
-                                    + oos_legend
-                                    +
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
-                                    unsafe_allow_html=True,
-                                )
-                            else:
-                                st.markdown(
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
-                                    unsafe_allow_html=True,
-                                )
-                            st.plotly_chart(fig, use_container_width=True)
-
-                            with st.expander("OHLCV chart", expanded=False):
-                                show_volume = True
-                                chart_start_day = str(chart_full_start_day or "")
-                                chart_end_day = str(chart_full_end_day or "")
-                                ohlcv_df = _load_ohlcv_from_npz_range(
-                                    exchange=ex,
-                                    dataset=ds,
-                                    coin=cn,
-                                    start_day=chart_start_day,
-                                    end_day=chart_end_day,
-                                )
-                                if ohlcv_df.empty:
-                                    st.info("No OHLCV candles found for selected range.")
-                                else:
-                                    import pandas as pd
-
-                                    full_min_ts = int(ohlcv_df["ts"].iloc[0])
-                                    full_max_ts = int(ohlcv_df["ts"].iloc[-1])
-
-                                    # ── Lazy multi-resolution: bidirectional component ──
-                                    from ohlcv_component import ohlcv_chart as _ohlcv_chart
-
-                                    # Cache keys (per symbol) – prefix with _c_ to avoid collision
-                                    # with the component widget key (ohlcv_zoom_{ex}_{cn})
-                                    _pyr_key = f"_c_ohlcv_pyr_{ex}_{cn}"
-                                    _zoom_key = f"_c_ohlcv_zr_{ex}_{cn}"
-                                    _fp_key = f"_c_ohlcv_fp_{ex}_{cn}"
-
-                                    # Invalidate cache when data changes
-                                    _fp = f"{full_min_ts}_{full_max_ts}_{len(ohlcv_df)}"
-                                    if st.session_state.get(_fp_key) != _fp:
-                                        st.session_state[_fp_key] = _fp
-                                        st.session_state.pop(_pyr_key, None)
-                                        st.session_state.pop(_zoom_key, None)
-
-                                    # Base layers: only 1d + 1h (always fast)
-                                    pyramid = {
-                                        "1d": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1D")),
-                                        "1h": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1h")),
-                                    }
-
-                                    # Merge cached fine layers from previous zoom
-                                    _cached_fine = st.session_state.get(_pyr_key, {})
-                                    pyramid.update(_cached_fine)
-
-                                    chart_h = 630
-                                    _cached_zoom = st.session_state.get(_zoom_key)
-
-                                    # Derive display name for coin
-                                    _coin_display = str(cn or "")
-                                    if _coin_display.upper().startswith("XYZ-"):
-                                        _coin_display = _coin_display[4:]
-                                    for _sfx in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT", "/USDC:USDC", "/USDT:USDT"):
-                                        if _coin_display.upper().endswith(_sfx):
-                                            _coin_display = _coin_display[: -len(_sfx)]
-                                            break
-
-                                    # Load stock-split dates for TradFi coins
-                                    _split_dates_for_chart: list[dict] = []
-                                    _cn_upper = str(cn or "").upper()
-                                    if _cn_upper.startswith("XYZ:") or _cn_upper.startswith("XYZ-"):
-                                        try:
-                                            from hyperliquid_best_1m import (
-                                                _load_split_factors_from_cache as _lsfc,
-                                            )
-                                            # Extract bare ticker: XYZ-GOOGL_USDC:USDC → GOOGL
-                                            _tail = _cn_upper[4:].strip()
-                                            for _sfx in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT", "/USDC:USDC", "/USDT:USDT"):
-                                                if _tail.endswith(_sfx):
-                                                    _tail = _tail[: -len(_sfx)]
-                                                    break
-                                            _ticker = _tail.strip(" _:-")
-                                            if _ticker:
-                                                _splits = _lsfc(_ticker)
-                                                if _splits:
-                                                    # Only include splits within actual OHLCV data range
-                                                    _earliest_date = ""
-                                                    _1d = pyramid.get("1d")
-                                                    if _1d and _1d.get("ts"):
-                                                        _earliest_ts = min(_1d["ts"])
-                                                        from datetime import datetime as _dt, timezone as _tz
-                                                        _earliest_date = _dt.fromtimestamp(_earliest_ts / 1000, tz=_tz.utc).strftime("%Y-%m-%d")
-                                                    _split_dates_for_chart = [
-                                                        {"date": str(d), "factor": f}
-                                                        for d, f in _splits
-                                                        if not _earliest_date or str(d) >= _earliest_date
-                                                    ]
-                                        except Exception:
-                                            pass
-
-                                    _zoom_result = _ohlcv_chart(
-                                        layers=pyramid,
-                                        zoom_range=_cached_zoom,
-                                        show_volume=show_volume,
-                                        height=chart_h,
-                                        split_dates=_split_dates_for_chart or None,
-                                        coin_name=_coin_display,
-                                        key=f"ohlcv_zoom_{ex}_{cn}",
+                                fig = go.Figure(
+                                    data=go.Heatmap(
+                                        z=z,
+                                        x=list(range(1, max_days + 1)),
+                                        y=[str(y) for y in years],
+                                        text=text,
+                                        hovertemplate="%{text}<extra></extra>",
+                                        colorscale=[
+                                            [0.0, "#b23b3b"],
+                                            [0.24, "#b23b3b"],
+                                            [0.25, "#7e57c2"],
+                                            [0.49, "#7e57c2"],
+                                            [0.5, "#ef6c00"],
+                                            [0.74, "#ef6c00"],
+                                            [0.75, "#7cb342"],
+                                            [0.99, "#7cb342"],
+                                            [1.0, "#2e7d32"],
+                                        ],
+                                        zmin=0,
+                                        zmax=1,
+                                        showscale=False,
+                                        xgap=1,
+                                        ygap=1,
                                     )
+                                )
+                                fig.update_layout(
+                                    height=120 + (len(years) * 26),
+                                    margin=dict(l=10, r=10, t=20, b=20),
+                                    xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
+                                    yaxis=dict(
+                                        autorange="reversed",
+                                        showgrid=False,
+                                        type="category",
+                                        categoryorder="array",
+                                        categoryarray=[str(y) for y in years],
+                                        tickmode="array",
+                                        tickvals=[str(y) for y in years],
+                                        ticktext=[str(y) for y in years],
+                                    ),
+                                )
+                                st.markdown(
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>HL only</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7cb342;color:#fff;margin-right:8px;'>other_exchange &lt; 5 min</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange ≥ 5 min</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
+                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing minutes</span>",
+                                    unsafe_allow_html=True,
+                                )
+                                st.caption("Overview (days). Select a month below to inspect minutes.")
+                                st.plotly_chart(fig, use_container_width=True)
 
-                                    # Handle zoom request from JS
-                                    if _zoom_result and isinstance(_zoom_result, dict) and _zoom_result.get("need_tf"):
-                                        _needed = _zoom_result["need_tf"]
-                                        if _needed not in _cached_fine:
-                                            import pandas as _pd
-                                            # Parse requested window and add 3× padding
-                                            _rs = _pd.Timestamp(_zoom_result["range_start"])
-                                            _re = _pd.Timestamp(_zoom_result["range_end"])
-                                            _span_ms = (_re - _rs).total_seconds() * 1000
-                                            _center_ms = (_rs.timestamp() + _re.timestamp()) / 2 * 1000
-                                            _half_win = max(_span_ms * 1.5, 30 * 86400_000)  # min 30 days
-                                            _half_win = min(_half_win, 90 * 86400_000)        # max 90 days
-                                            _ws = _center_ms - _half_win
-                                            _we = _center_ms + _half_win
-                                            _win_df = ohlcv_df[(ohlcv_df["ts"] >= _ws) & (ohlcv_df["ts"] <= _we)]
-                                            if _win_df.empty:
-                                                _win_df = ohlcv_df  # fallback to full data
+                                # Build month list from date range
+                                chart_full_start_day = str(start_day or "")
+                                chart_full_end_day = str(end_day or "")
+                                month_list: list[str] = []
+                                if dt0 and dt1:
+                                    cur_m = dt0.replace(day=1)
+                                    end_m = dt1.replace(day=1)
+                                    while cur_m <= end_m:
+                                        month_list.append(cur_m.strftime("%Y-%m"))
+                                        # advance to next month
+                                        if cur_m.month == 12:
+                                            cur_m = cur_m.replace(year=cur_m.year + 1, month=1)
+                                        else:
+                                            cur_m = cur_m.replace(month=cur_m.month + 1)
+                                if not month_list:
+                                    month_list = [dt0.strftime("%Y-%m")] if dt0 else []
+                                chart_full_start_day = dt0.strftime("%Y%m%d") if dt0 else str(start_day or "")
+                                chart_full_end_day = dt1.strftime("%Y%m%d") if dt1 else str(end_day or "")
+                                sel_key = f"market_data_1m_month_{cn}"
+                                if month_list and sel_key not in st.session_state:
+                                    st.session_state[sel_key] = month_list[-1]
+                                cur_month = st.session_state.get(sel_key) or (month_list[-1] if month_list else "")
+                                cur_idx = month_list.index(cur_month) if cur_month in month_list else len(month_list) - 1
 
-                                            _fine: dict = {}
-                                            for _ftf, _frule in [("15m", "15min"), ("5m", "5min"), ("1m", None)]:
-                                                if _ftf not in pyramid:
-                                                    if _frule is None:
-                                                        _fine[_ftf] = _df_to_columnar(_win_df)
-                                                    else:
-                                                        _fine[_ftf] = _df_to_columnar(_resample_ohlcv(_win_df, _frule))
+                                def _go_prev(_key=sel_key, _ml=month_list, _ci=cur_idx):
+                                    if _ci > 0:
+                                        st.session_state[_key] = _ml[_ci - 1]
 
-                                            if _fine:
-                                                st.session_state[_pyr_key] = {**_cached_fine, **_fine}
-                                                st.session_state[_zoom_key] = [
-                                                    _zoom_result["range_start"],
-                                                    _zoom_result["range_end"],
-                                                ]
-                                                st.rerun()
-                            return
+                                def _go_next(_key=sel_key, _ml=month_list, _ci=cur_idx):
+                                    if _ci < len(_ml) - 1:
+                                        st.session_state[_key] = _ml[_ci + 1]
 
+                                # Small chevron buttons like Strategy Explorer
+                                c_prev, c_sel, c_next = st.columns([0.04, 0.92, 0.04], vertical_alignment="bottom")
+                                with c_prev:
+                                    st.button(":material/chevron_left:", key=f"{sel_key}_prev", disabled=cur_idx <= 0, on_click=_go_prev)
+                                with c_sel:
+                                    sel_month = st.selectbox(
+                                        "Select month for minute view",
+                                        options=month_list,
+                                        index=cur_idx,
+                                        key=sel_key,
+                                    )
+                                with c_next:
+                                    st.button(":material/chevron_right:", key=f"{sel_key}_next", disabled=cur_idx >= len(month_list) - 1, on_click=_go_next)
+                                if sel_month:
+                                    import calendar as _cal
+                                    _sm_year = int(sel_month[:4])
+                                    _sm_mon = int(sel_month[5:7])
+                                    _last_day = _cal.monthrange(_sm_year, _sm_mon)[1]
+                                    start_day = f"{_sm_year:04d}{_sm_mon:02d}01"
+                                    end_day = f"{_sm_year:04d}{_sm_mon:02d}{_last_day:02d}"
 
-                    # Default view (incl. l2Book): render year rows with day-of-year columns.
-                    if ds_l.startswith("pb7_cache:"):
-                        tf = str(ds.split(":", 1)[1] if ":" in ds else (r.get("timeframe") or "1m")).strip() or "1m"
-                        cov = get_daily_presence_for_pb7_cache(
-                            ex,
-                            tf,
-                            cn,
-                            start_day=start_day,
-                            end_day=end_day,
-                        )
-                    else:
-                        cov = get_daily_hour_coverage_for_dataset(
-                            ex,
+                        show_market_holiday_overlay = True
+                        show_out_of_session_overlay = True
+                        if is_stock_perp_1m:
+                            c_holiday, c_oos, _ = st.columns([0.28, 0.34, 0.38], vertical_alignment="bottom")
+                            with c_holiday:
+                                show_market_holiday_overlay = bool(
+                                    st.checkbox(
+                                        "Highlight market holidays",
+                                        value=bool(st.session_state.get("market_data_show_market_holiday_overlay", True)),
+                                        key="market_data_show_market_holiday_overlay",
+                                    )
+                                )
+                            with c_oos:
+                                show_out_of_session_overlay = bool(
+                                    st.checkbox(
+                                        "Highlight expected out-of-session gaps",
+                                        value=bool(st.session_state.get("market_data_show_out_of_session_overlay", True)),
+                                        key="market_data_show_out_of_session_overlay",
+                                    )
+                                )
+
+                        hp = get_minute_presence_for_dataset(
+                            _storage_ex,
                             ds,
                             cn,
                             start_day=start_day,
                             end_day=end_day,
                         )
-                    days = cov.get("days") if isinstance(cov, dict) else []
-                    if isinstance(days, list) and days:
-                        years: list[int] = []
-                        for d in days:
-                            try:
-                                y = int(str(d.get("day") or "")[0:4])
-                                if y not in years:
-                                    years.append(y)
-                            except Exception:
-                                continue
-                        years = sorted(years)
-                        max_days = 366
+                        present = hp.get("days") if isinstance(hp, dict) else {}
+                        if not isinstance(present, dict) or not present:
+                            st.info("No minute candles found for this selection.")
+                            return
+
+                    oldest_s = str(hp.get("oldest_day") or "")
+                    newest_s = str(hp.get("newest_day") or "")
+                    try:
+                        dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
+                        dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
+                    except Exception:
+                        st.info("No date range found for this selection.")
+                        return
+
+                    colorscale = [
+                        [0.0, "#b23b3b"],
+                        [1.0, "#2e7d32"],
+                    ]
+
+                    if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
+                        # Days split into two 12-hour rows (00-11, 12-23)
+                        days_list: list[_date] = []
+                        cur = dt0
+                        while cur <= dt1:
+                            days_list.append(cur)
+                            cur = cur + _timedelta(days=1)
+
                         z = []
                         text = []
-                        for y in years:
-                            row = [None] * max_days
-                            row_text = [""] * max_days
-                            for d in days:
-                                day_s = str(d.get("day") or "")
-                                if not day_s.startswith(str(y)):
-                                    continue
-                                try:
-                                    dt = _datetime.strptime(day_s, "%Y%m%d").date()
-                                    doy = dt.timetuple().tm_yday
-                                except Exception:
-                                    continue
-                                status = int(d.get("status") or 0)
-                                hrs = int(d.get("hours") or 0)
-                                idx = doy - 1
-                                if 0 <= idx < max_days:
-                                    row[idx] = status
-                                    row_text[idx] = f"{day_s} | hours={hrs}/24"
-                            z.append(row)
-                            text.append(row_text)
+                        y_labels = []
+
+                        # src -> code mapping (discrete)
+                        src_code = {
+                            None: 0,
+                            "missing": 0,
+                            "api": 2,
+                            "best": 3,
+                            "other_exchange": 4,
+                            "binance_perp_usdt": 4,
+                            "l2Book_mid": 5,
+                        }
+
+                        # colorscale: 0 missing (red), 1 filled (purple), 2 api (green), 3 best (teal), 4 other_exchange (orange), 5 l2book (blue)
+                        if is_stock_perp_1m:
+                            # -2 market holiday, -1 expected out-of-session gap (neutral gray)
+                            colorscale = [
+                                [0.0, "#7e57c2"],
+                                [1 / 7, "#4e4e4e"],
+                                [2 / 7, "#b23b3b"],
+                                [3 / 7, "#6a1b9a"],
+                                [4 / 7, "#2e7d32"],
+                                [5 / 7, "#00897b"],
+                                [6 / 7, "#ef6c00"],
+                                [1.0, "#1e88e5"],
+                            ]
+                        else:
+                            colorscale = [
+                                [0.0, "#b23b3b"],
+                                [0.2, "#6a1b9a"],
+                                [0.4, "#2e7d32"],
+                                [0.6, "#00897b"],
+                                [0.8, "#ef6c00"],
+                                [1.0, "#1e88e5"],
+                            ]
+
+                        for d in days_list:
+                            day_s = d.strftime("%Y%m%d")
+                            # present[day_s] is {HH: {MM: src}}
+                            hours_map = present.get(day_s) if isinstance(present.get(day_s), dict) else {}
+                            hours_map = hours_map if isinstance(hours_map, dict) else {}
+                            expected_indices = None
+                            if is_stock_perp_1m:
+                                if str(tradfi_type or "").strip().lower() == "fx":
+                                    holiday_session_indices = set(range(1440))
+                                else:
+                                    holiday_session_indices = _tradfi_expected_minute_indices(d)
+                                is_market_holiday = _is_tradfi_market_holiday(d, tradfi_type)
+                                sess_map, sess_present = ({}, False)
+                                sess = (sess_map or {}).get(day_s)
+                                if sess is not None:
+                                    expected_indices = _tradfi_expected_minute_indices_from_session(
+                                        day=d,
+                                        session_start_ms=int(sess[0]),
+                                        session_end_ms=int(sess[1]),
+                                    )
+                                elif sess_present:
+                                    expected_indices = set()
+                                else:
+                                    expected_indices = _tradfi_expected_indices_for_type(d, tradfi_type)
+                                if is_market_holiday:
+                                    expected_indices = set()
+                            else:
+                                is_market_holiday = False
+                                holiday_session_indices = set()
+
+                            for block_start in (0, 12):
+                                row = []
+                                row_text = []
+                                for h in range(block_start, block_start + 12):
+                                    hh = f"{h:02d}"
+                                    mins_map = hours_map.get(hh) or {}
+                                    mins_map = mins_map if isinstance(mins_map, dict) else {}
+                                    for minute in range(60):
+                                        minute_idx = (h * 60) + int(minute)
+                                        src = mins_map.get(minute)
+                                        code = int(src_code.get(str(src), src_code.get(src, 0)))
+                                        # Preserve real source data colors even outside expected session.
+                                        # Out-of-session markers are only for truly missing minutes.
+                                        if code == 0:
+                                            if (
+                                                show_market_holiday_overlay
+                                                and is_market_holiday
+                                                and minute_idx in holiday_session_indices
+                                            ):
+                                                row.append(-2)
+                                                hhmm = f"{h:02d}:{minute:02d}"
+                                                row_text.append(f"{day_s} {hhmm} (market holiday)")
+                                                continue
+                                            if (
+                                                show_out_of_session_overlay
+                                                and is_stock_perp_1m
+                                                and expected_indices is not None
+                                                and minute_idx not in expected_indices
+                                            ):
+                                                row.append(-1)
+                                                hhmm = f"{h:02d}:{minute:02d}"
+                                                row_text.append(f"{day_s} {hhmm} (expected out-of-session gap)")
+                                                continue
+                                        row.append(code)
+                                        # hover text per minute
+                                        hhmm = f"{h:02d}:{minute:02d}"
+                                        src_label = str(src) if src is not None else "missing"
+                                        row_text.append(f"{day_s} {hhmm} ({src_label})")
+                                z.append(row)
+                                text.append(row_text)
+                                y_labels.append(f"{day_s} {block_start:02d}-{block_start+11:02d}")
+
+                        if not z:
+                            st.info("No minute presence found for this selection.")
+                            return
 
                         fig = go.Figure(
                             data=go.Heatmap(
                                 z=z,
-                                x=list(range(1, max_days + 1)),
-                                y=[str(y) for y in years],
+                                x=list(range(720)),
+                                y=[str(y) for y in y_labels],
                                 text=text,
                                 hovertemplate="%{text}<extra></extra>",
-                                colorscale=[
-                                    [0.0, "#b23b3b"],
-                                    [0.5, "#c9a227"],
-                                    [1.0, "#2e7d32"],
-                                ],
-                                zmin=0,
-                                zmax=2,
+                                colorscale=colorscale,
+                                zmin=-2 if is_stock_perp_1m else 0,
+                                zmax=5,
                                 showscale=False,
                                 xgap=1,
                                 ygap=1,
                             )
                         )
                         fig.update_layout(
-                            height=120 + (len(years) * 26),
+                            height=max(300, 80 + (len(y_labels) * 18)),
                             margin=dict(l=10, r=10, t=20, b=20),
-                            xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
+                            xaxis=dict(tickmode="array", tickvals=list(range(0, 720, 60)), ticktext=[f"{x:02d}h" for x in range(0, 12)]),
                             yaxis=dict(autorange="reversed", showgrid=False),
                         )
+                        if is_stock_perp_1m:
+                            holiday_legend = (
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
+                                if show_market_holiday_overlay
+                                else ""
+                            )
+                            oos_legend = (
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#4e4e4e;color:#fff;margin-right:8px;'>expected out-of-session gap</span>"
+                                if show_out_of_session_overlay
+                                else ""
+                            )
+                            st.markdown(
+                                holiday_legend
+                                + oos_legend
+                                +
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
+                                unsafe_allow_html=True,
+                            )
                         st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("No day range found for this selection.")
 
-            if sel_row:
-                gaps_active = False
-                try:
-                    gaps_active = bool(list_jobs(states=["pending", "running"], limit=1))
-                except Exception:
-                    gaps_active = False
+                        with st.expander("OHLCV chart", expanded=False):
+                            show_volume = True
+                            chart_start_day = str(chart_full_start_day or "")
+                            chart_end_day = str(chart_full_end_day or "")
+                            ohlcv_df = _load_ohlcv_from_npz_range(
+                                exchange=_storage_ex,
+                                dataset=ds,
+                                coin=cn,
+                                start_day=chart_start_day,
+                                end_day=chart_end_day,
+                            )
+                            if ohlcv_df.empty:
+                                st.info("No OHLCV candles found for selected range.")
+                            else:
+                                import pandas as pd
 
-                if gaps_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
-                    @st.fragment(run_every=5)
-                    def _gap_fragment():
-                        # Stop auto-refresh when no jobs remain
-                        try:
-                            still_active = bool(list_jobs(states=["pending", "running"], limit=1))
-                        except Exception:
-                            still_active = False
-                        if not still_active:
-                            # Clear table caches so next full render picks up final state
-                            for _k in list(st.session_state.keys()):
-                                if str(_k).startswith("market_data_have_table_cached_") or str(_k).startswith("market_data_trows_"):
-                                    st.session_state.pop(_k, None)
-                            st.rerun()
-                        _render_gap_heatmap()
+                                full_min_ts = int(ohlcv_df["ts"].iloc[0])
+                                full_max_ts = int(ohlcv_df["ts"].iloc[-1])
+
+                                # ── Lazy multi-resolution: bidirectional component ──
+                                from ohlcv_component import ohlcv_chart as _ohlcv_chart
+
+                                # Cache keys (per symbol) – prefix with _c_ to avoid collision
+                                # with the component widget key (ohlcv_zoom_{ex}_{cn})
+                                _pyr_key = f"_c_ohlcv_pyr_{ex}_{cn}"
+                                _zoom_key = f"_c_ohlcv_zr_{ex}_{cn}"
+                                _fp_key = f"_c_ohlcv_fp_{ex}_{cn}"
+
+                                # Invalidate cache when data changes
+                                _fp = f"{full_min_ts}_{full_max_ts}_{len(ohlcv_df)}"
+                                if st.session_state.get(_fp_key) != _fp:
+                                    st.session_state[_fp_key] = _fp
+                                    st.session_state.pop(_pyr_key, None)
+                                    st.session_state.pop(_zoom_key, None)
+
+                                # Base layers: only 1d + 1h (always fast)
+                                pyramid = {
+                                    "1d": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1D")),
+                                    "1h": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1h")),
+                                }
+
+                                # Merge cached fine layers from previous zoom
+                                _cached_fine = st.session_state.get(_pyr_key, {})
+                                pyramid.update(_cached_fine)
+
+                                chart_h = 630
+                                _cached_zoom = st.session_state.get(_zoom_key)
+
+                                # Derive display name for coin
+                                _coin_display = str(cn or "")
+                                if _coin_display.upper().startswith("XYZ-"):
+                                    _coin_display = _coin_display[4:]
+                                for _sfx in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT", "/USDC:USDC", "/USDT:USDT"):
+                                    if _coin_display.upper().endswith(_sfx):
+                                        _coin_display = _coin_display[: -len(_sfx)]
+                                        break
+
+                                # Load stock-split dates for TradFi coins
+                                _split_dates_for_chart: list[dict] = []
+                                _cn_upper = str(cn or "").upper()
+                                if _cn_upper.startswith("XYZ:") or _cn_upper.startswith("XYZ-"):
+                                    try:
+                                        from hyperliquid_best_1m import (
+                                            _load_split_factors_from_cache as _lsfc,
+                                        )
+                                        # Extract bare ticker: XYZ-GOOGL_USDC:USDC → GOOGL
+                                        _tail = _cn_upper[4:].strip()
+                                        for _sfx in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT", "/USDC:USDC", "/USDT:USDT"):
+                                            if _tail.endswith(_sfx):
+                                                _tail = _tail[: -len(_sfx)]
+                                                break
+                                        _ticker = _tail.strip(" _:-")
+                                        if _ticker:
+                                            _splits = _lsfc(_ticker)
+                                            if _splits:
+                                                # Only include splits within actual OHLCV data range
+                                                _earliest_date = ""
+                                                _1d = pyramid.get("1d")
+                                                if _1d and _1d.get("ts"):
+                                                    _earliest_ts = min(_1d["ts"])
+                                                    from datetime import datetime as _dt, timezone as _tz
+                                                    _earliest_date = _dt.fromtimestamp(_earliest_ts / 1000, tz=_tz.utc).strftime("%Y-%m-%d")
+                                                _split_dates_for_chart = [
+                                                    {"date": str(d), "factor": f}
+                                                    for d, f in _splits
+                                                    if not _earliest_date or str(d) >= _earliest_date
+                                                ]
+                                    except Exception:
+                                        pass
+
+                                _zoom_result = _ohlcv_chart(
+                                    layers=pyramid,
+                                    zoom_range=_cached_zoom,
+                                    show_volume=show_volume,
+                                    height=chart_h,
+                                    split_dates=_split_dates_for_chart or None,
+                                    coin_name=_coin_display,
+                                    key=f"ohlcv_zoom_{ex}_{cn}",
+                                )
+
+                                # Handle zoom request from JS
+                                if _zoom_result and isinstance(_zoom_result, dict) and _zoom_result.get("need_tf"):
+                                    _needed = _zoom_result["need_tf"]
+                                    if _needed not in _cached_fine:
+                                        import pandas as _pd
+                                        # Parse requested window and add 3× padding
+                                        _rs = _pd.Timestamp(_zoom_result["range_start"])
+                                        _re = _pd.Timestamp(_zoom_result["range_end"])
+                                        _span_ms = (_re - _rs).total_seconds() * 1000
+                                        _center_ms = (_rs.timestamp() + _re.timestamp()) / 2 * 1000
+                                        _half_win = max(_span_ms * 1.5, 30 * 86400_000)  # min 30 days
+                                        _half_win = min(_half_win, 90 * 86400_000)        # max 90 days
+                                        _ws = _center_ms - _half_win
+                                        _we = _center_ms + _half_win
+                                        _win_df = ohlcv_df[(ohlcv_df["ts"] >= _ws) & (ohlcv_df["ts"] <= _we)]
+                                        if _win_df.empty:
+                                            _win_df = ohlcv_df  # fallback to full data
+
+                                        _fine: dict = {}
+                                        for _ftf, _frule in [("15m", "15min"), ("5m", "5min"), ("1m", None)]:
+                                            if _ftf not in pyramid:
+                                                if _frule is None:
+                                                    _fine[_ftf] = _df_to_columnar(_win_df)
+                                                else:
+                                                    _fine[_ftf] = _df_to_columnar(_resample_ohlcv(_win_df, _frule))
+
+                                        if _fine:
+                                            st.session_state[_pyr_key] = {**_cached_fine, **_fine}
+                                            st.session_state[_zoom_key] = [
+                                                _zoom_result["range_start"],
+                                                _zoom_result["range_end"],
+                                            ]
+                                            st.rerun()
+                        return
+
+
+                # Default view (incl. l2Book): render year rows with day-of-year columns.
+                if ds_l.startswith("pb7_cache:"):
+                    tf = str(ds.split(":", 1)[1] if ":" in ds else (r.get("timeframe") or "1m")).strip() or "1m"
+                    cov = get_daily_presence_for_pb7_cache(
+                        ex,
+                        tf,
+                        cn,
+                        start_day=start_day,
+                        end_day=end_day,
+                    )
                 else:
-                    @st.fragment
-                    def _gap_fragment():
-                        _render_gap_heatmap()
+                    cov = get_daily_hour_coverage_for_dataset(
+                        ex,
+                        ds,
+                        cn,
+                        start_day=start_day,
+                        end_day=end_day,
+                    )
+                days = cov.get("days") if isinstance(cov, dict) else []
+                if isinstance(days, list) and days:
+                    years: list[int] = []
+                    for d in days:
+                        try:
+                            y = int(str(d.get("day") or "")[0:4])
+                            if y not in years:
+                                years.append(y)
+                        except Exception:
+                            continue
+                    years = sorted(years)
+                    max_days = 366
+                    z = []
+                    text = []
+                    for y in years:
+                        row = [None] * max_days
+                        row_text = [""] * max_days
+                        for d in days:
+                            day_s = str(d.get("day") or "")
+                            if not day_s.startswith(str(y)):
+                                continue
+                            try:
+                                dt = _datetime.strptime(day_s, "%Y%m%d").date()
+                                doy = dt.timetuple().tm_yday
+                            except Exception:
+                                continue
+                            status = int(d.get("status") or 0)
+                            hrs = int(d.get("hours") or 0)
+                            idx = doy - 1
+                            if 0 <= idx < max_days:
+                                row[idx] = status
+                                row_text[idx] = f"{day_s} | hours={hrs}/24"
+                        z.append(row)
+                        text.append(row_text)
 
-                _gap_fragment()
+                    fig = go.Figure(
+                        data=go.Heatmap(
+                            z=z,
+                            x=list(range(1, max_days + 1)),
+                            y=[str(y) for y in years],
+                            text=text,
+                            hovertemplate="%{text}<extra></extra>",
+                            colorscale=[
+                                [0.0, "#b23b3b"],
+                                [0.5, "#c9a227"],
+                                [1.0, "#2e7d32"],
+                            ],
+                            zmin=0,
+                            zmax=2,
+                            showscale=False,
+                            xgap=1,
+                            ygap=1,
+                        )
+                    )
+                    fig.update_layout(
+                        height=120 + (len(years) * 26),
+                        margin=dict(l=10, r=10, t=20, b=20),
+                        xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
+                        yaxis=dict(autorange="reversed", showgrid=False),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    if ds_l.startswith("pb7_cache:"):
+                        with st.expander("OHLCV chart", expanded=False):
+                            _pb7_tf = str(ds.split(":", 1)[1] if ":" in ds else (r.get("timeframe") or "1m")).strip() or "1m"
+                            ohlcv_df = _load_ohlcv_from_pb7_cache(
+                                exchange=ex,
+                                timeframe=_pb7_tf,
+                                coin=cn,
+                                start_day=str(start_day or ""),
+                                end_day=str(end_day or ""),
+                            )
+                            if ohlcv_df.empty:
+                                st.info("No OHLCV candles found for selected range.")
+                            else:
+                                import pandas as pd
+
+                                full_min_ts = int(ohlcv_df["ts"].iloc[0])
+                                full_max_ts = int(ohlcv_df["ts"].iloc[-1])
+
+                                from ohlcv_component import ohlcv_chart as _ohlcv_chart
+
+                                _pyr_key = f"_c_ohlcv_pyr_pb7_{_pb7_tf}_{ex}_{cn}"
+                                _zoom_key = f"_c_ohlcv_zr_pb7_{_pb7_tf}_{ex}_{cn}"
+                                _fp_key = f"_c_ohlcv_fp_pb7_{_pb7_tf}_{ex}_{cn}"
+
+                                _fp = f"{full_min_ts}_{full_max_ts}_{len(ohlcv_df)}"
+                                if st.session_state.get(_fp_key) != _fp:
+                                    st.session_state[_fp_key] = _fp
+                                    st.session_state.pop(_pyr_key, None)
+                                    st.session_state.pop(_zoom_key, None)
+
+                                # Build base pyramid layers
+                                pyramid: dict = {
+                                    "1d": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1D")),
+                                    "1h": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1h")),
+                                }
+                                # Include native timeframe if finer than 1h
+                                _tf_resample_map = {"1m": None, "5m": "5min", "15m": "15min"}
+                                _native_rule = _tf_resample_map.get(_pb7_tf)
+                                if _pb7_tf in _tf_resample_map:
+                                    if _native_rule is None:
+                                        pyramid[_pb7_tf] = _df_to_columnar(ohlcv_df)
+                                    else:
+                                        pyramid[_pb7_tf] = _df_to_columnar(_resample_ohlcv(ohlcv_df, _native_rule))
+
+                                _cached_fine = st.session_state.get(_pyr_key, {})
+                                pyramid.update(_cached_fine)
+
+                                _cached_zoom = st.session_state.get(_zoom_key)
+                                _coin_display = str(cn or "")
+                                for _sfx in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT", "/USDC:USDC", "/USDT:USDT"):
+                                    if _coin_display.upper().endswith(_sfx):
+                                        _coin_display = _coin_display[: -len(_sfx)]
+                                        break
+
+                                _zoom_result = _ohlcv_chart(
+                                    layers=pyramid,
+                                    zoom_range=_cached_zoom,
+                                    show_volume=True,
+                                    height=630,
+                                    coin_name=_coin_display,
+                                    key=f"ohlcv_zoom_pb7_{_pb7_tf}_{ex}_{cn}",
+                                )
+
+                                if _zoom_result and isinstance(_zoom_result, dict) and _zoom_result.get("need_tf"):
+                                    _needed = _zoom_result["need_tf"]
+                                    if _needed not in _cached_fine:
+                                        import pandas as _pd
+                                        _rs = _pd.Timestamp(_zoom_result["range_start"])
+                                        _re = _pd.Timestamp(_zoom_result["range_end"])
+                                        _span_ms = (_re - _rs).total_seconds() * 1000
+                                        _center_ms = (_rs.timestamp() + _re.timestamp()) / 2 * 1000
+                                        _half_win = max(_span_ms * 1.5, 30 * 86400_000)
+                                        _half_win = min(_half_win, 90 * 86400_000)
+                                        _ws = _center_ms - _half_win
+                                        _we = _center_ms + _half_win
+                                        _win_df = ohlcv_df[(ohlcv_df["ts"] >= _ws) & (ohlcv_df["ts"] <= _we)]
+                                        if _win_df.empty:
+                                            _win_df = ohlcv_df
+                                        _fine: dict = {}
+                                        for _ftf, _frule in [("15m", "15min"), ("5m", "5min"), ("1m", None)]:
+                                            if _ftf not in pyramid:
+                                                if _frule is None:
+                                                    _fine[_ftf] = _df_to_columnar(_win_df)
+                                                else:
+                                                    _fine[_ftf] = _df_to_columnar(_resample_ohlcv(_win_df, _frule))
+                                        if _fine:
+                                            st.session_state[_pyr_key] = {**_cached_fine, **_fine}
+                                            st.session_state[_zoom_key] = [
+                                                _zoom_result["range_start"],
+                                                _zoom_result["range_end"],
+                                            ]
+                                            st.rerun()
+
+                else:
+                    st.info("No day range found for this selection.")
+
+        if sel_row:
+            gaps_active = False
+            try:
+                gaps_active = bool(list_jobs(states=["pending", "running"], limit=1))
+            except Exception:
+                gaps_active = False
+
+            if gaps_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                @st.fragment(run_every=5)
+                def _gap_fragment():
+                    # Stop auto-refresh when no jobs remain
+                    try:
+                        still_active = bool(list_jobs(states=["pending", "running"], limit=1))
+                    except Exception:
+                        still_active = False
+                    if not still_active:
+                        st.rerun()
+                    _render_gap_heatmap()
+            else:
+                @st.fragment
+                def _gap_fragment():
+                    _render_gap_heatmap()
+
+            _gap_fragment()
 
     if main_view == "Activity log":
         view_log_filtered("MarketData")
@@ -5200,9 +5534,6 @@ with st.sidebar:
     if st.button(":material/refresh:", help="Reload page"):
         # Preserve active table selection/overview across this refresh rerun.
         st.session_state["market_data_preserve_selection_once"] = True
-        for _k in list(st.session_state.keys()):
-            if str(_k).startswith("market_data_have_table_cached_") or str(_k).startswith("market_data_trows_"):
-                st.session_state.pop(_k, None)
         # Button interaction already triggers a rerun; avoid forcing an extra rerun
         # here so current segmented-control state is preserved.
 
