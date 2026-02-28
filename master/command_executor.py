@@ -145,12 +145,22 @@ class CommandExecutor:
             return result.stdout
         return None
 
-    def read_pid_file(self, hostname: str, pid_file: str) -> Optional[int]:
-        """Read a PID file from a remote VPS. Returns PID or None."""
-        content = self.read_file(hostname, pid_file)
-        if content and content.strip().isdigit():
-            return int(content.strip())
-        return None
+    def read_pid_file(self, hostname: str, pid_file: str) -> tuple[Optional[int], bool]:
+        """Read a PID file from a remote VPS.
+
+        Returns:
+            (pid, connection_ok) — pid is None when file missing/invalid;
+            connection_ok is False when the SSH command itself failed
+            (network error, timeout, no connection), True otherwise.
+        """
+        result = self.execute(hostname, f'cat {pid_file}', timeout=10)
+        if result.error:
+            # SSH / connection error — we cannot tell if the service is up or not
+            return None, False
+        if result.success and result.stdout.strip().isdigit():
+            return int(result.stdout.strip()), True
+        # Command ran fine but file missing or empty → service genuinely stopped
+        return None, True
 
     def is_process_running(self, hostname: str, pid: int, process_name: str = None) -> bool:
         """

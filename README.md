@@ -330,6 +330,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Improved: Task worker requeues active job on graceful stop instead of marking it failed
 - Improved: Task worker per-job cancel check during build best 1m execution
 - New: Pending/Failed/Done job lists with selectable table rows and bulk actions (delete selected / delete all)
+- Fix: PBMaster no longer sends false-positive "service down" alerts on transient SSH errors — connection failures during service checks are now reported as `UNKNOWN` (no alert, no restart) instead of `STOPPED`
 
 ## v1.61 (27-02-2026)
 - New: PBMaster SSH-based VPS management service — persistent SSH connections to all configured VPS nodes with centralized command execution, service monitoring, and real-time log streaming
