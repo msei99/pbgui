@@ -14,6 +14,7 @@ from hyperliquid_aws import (
     get_hyperliquid_archive_day_range_aws,
 )
 from hyperliquid_best_1m import improve_best_hyperliquid_1m_archive_for_coin, _is_stock_perp_coin
+from binance_best_1m import improve_best_binance_1m_for_coin
 from market_data import (
     append_exchange_download_log,
     load_aws_profile_credentials,
@@ -181,6 +182,8 @@ def _run_job(job_path: Path) -> None:
             _run_hl_aws_l2book_auto(job_path, payload)
         elif jtype == "hl_best_1m":
             _run_hl_best_1m(job_path, payload)
+        elif jtype == "binance_best_1m":
+            _run_binance_best_1m(job_path, payload)
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 
@@ -574,9 +577,12 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
             last_chunk_update = now
             planned = snap.get("planned")
             done = snap.get("done")
+            total_days = snap.get("total_days")
             stage = str(snap.get("stage") or "running")
             kw = {"stage": stage}
-            if planned is not None:
+            if total_days is not None:
+                kw["chunk_total"] = int(total_days)
+            elif planned is not None:
                 kw["chunk_total"] = int(planned)
             if done is not None:
                 kw["chunk_done"] = int(done)
@@ -641,6 +647,101 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                 out.pop("binance_minutes_filled", None)
                 out.pop("bybit_minutes_filled", None)
         append_exchange_download_log("hyperliquid", f"[INFO] [hl_best_1m_job] {coin} {out}")
+        update_progress(stage="running", last_result=out)
+
+
+def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
+    started_ts = time.time()
+    coins = payload.get("coins")
+    coins = coins if isinstance(coins, list) else []
+    coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+    if not coins:
+        raise ValueError("No coins in job")
+
+    end_day = str(payload.get("end_day") or "").strip()
+    if not end_day:
+        end_day = datetime.utcnow().strftime("%Y%m%d")
+    start_day = str(payload.get("start_day") or "").strip()
+    refetch = bool(payload.get("refetch") or False)
+
+    total_steps = max(1, len(coins))
+    step_i = 0
+
+    def update_progress(**kw):
+        def mut(o):
+            pr = o.get("progress")
+            pr = pr if isinstance(pr, dict) else {}
+            pr.update(kw)
+            pr["step"] = int(step_i)
+            pr["total"] = int(total_steps)
+            pr["mode"] = "binance_best_1m"
+            o["progress"] = pr
+        update_job_file(job_path, mutate=mut)
+
+    update_progress(stage="starting", last_result={"days_checked": 0, "minutes_written": 0, "duration_s": 0})
+
+    for coin in coins:
+        if _STOP:
+            raise RuntimeError("Worker stopping")
+        if _is_cancel_requested(job_path):
+            raise RuntimeError("cancelled")
+        step_i += 1
+        update_progress(stage="running", coin=coin, chunk_done=0, chunk_total=0,
+                        last_result={"days_checked": 0, "minutes_written": 0,
+                                     "duration_s": int(max(0, time.time() - started_ts))})
+
+        last_chunk_update = 0.0
+
+        def progress_cb(snap: dict[str, Any]) -> None:
+            nonlocal last_chunk_update
+            now = time.time()
+            if now - last_chunk_update < 0.5:
+                return
+            last_chunk_update = now
+            stage = str(snap.get("stage") or "running")
+            kw: dict[str, Any] = {"stage": stage}
+            if snap.get("day"):
+                kw["day"] = str(snap["day"])
+            if snap.get("month_key"):
+                kw["month_key"] = str(snap["month_key"])
+            if snap.get("month_day_index") is not None:
+                kw["month_day_index"] = int(snap["month_day_index"])
+            if snap.get("month_day_total") is not None:
+                kw["month_day_total"] = int(snap["month_day_total"])
+            done = snap.get("done")
+            if done is not None:
+                total_days = snap.get("total_days")
+                kw["chunk_done"] = int(done)
+                kw["chunk_total"] = int(total_days) if total_days else int(total_steps * 100)
+            if any(k in snap for k in ("days_checked", "minutes_written")):
+                kw["last_result"] = {
+                    "days_checked": int(snap.get("days_checked") or 0),
+                    "minutes_written": int(snap.get("minutes_written") or 0),
+                    "duration_s": int(max(0, time.time() - started_ts)),
+                }
+            update_progress(**kw)
+
+        def _job_stop_check() -> bool:
+            return bool(_STOP or _is_cancel_requested(job_path))
+
+        try:
+            res = improve_best_binance_1m_for_coin(
+                coin=coin,
+                end_date=end_day,
+                start_date_override=start_day or None,
+                refetch=refetch,
+                progress_cb=progress_cb,
+                stop_check=_job_stop_check,
+            )
+        except RuntimeError as e:
+            if _is_cancel_requested(job_path):
+                raise RuntimeError("cancelled") from e
+            raise
+        out = res.to_dict()
+        if isinstance(out, dict):
+            out["duration_s"] = int(max(0, time.time() - started_ts))
+        append_exchange_download_log("binanceusdm", f"[INFO] [binance_best_1m_job] {coin} {out}")
         update_progress(stage="running", last_result=out)
 
 

@@ -1067,7 +1067,7 @@ def get_minute_presence_for_dataset(
     s0 = _normalize_day_str(start_day) if start_day else ""
     s1 = _normalize_day_str(end_day) if end_day else ""
 
-    if ds_l in ("1m", "candles_1m") and ex == "hyperliquid":
+    if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binanceusdm"):
         idx_days = get_source_minutes_for_range(
             exchange=ex,
             coin=cn,
@@ -1139,6 +1139,7 @@ def get_minute_presence_for_dataset(
                 if ds_l == "1m_api" or ds_l == "candles_1m_api" or ds_l.endswith("_api"):
                     src = "api"
                 elif ds_l in ("candles_1m", "1m"):
+                    # "best" = NPZ fallback (no sources.idx); sources.idx path yields "api" instead
                     src = "best"
                 else:
                     src = "unknown"
