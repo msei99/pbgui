@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Log Viewer</title>
+<style>
+/* ─── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+:root {
+  --bg:       #0e1117;
+  --bg2:      #1a1d24;
+  --bg3:      #262730;
+  --border:   #333640;
+  --text:     #fafafa;
+  --text-dim: #a0a4ab;
+  --green:    #21c354;
+  --orange:   #ff8c00;
+  --red:      #ff4b4b;
+  --blue:     #1f77ff;
+  --accent:   #4da6ff;
+  --purple:   #b39ddb;
+  --font:     'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  background: transparent;
+  color: var(--text);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Connection Banner ────────────────────────────────────── */
+#conn-banner {
+  padding: 6px 16px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.conn-ok      { background: var(--green); color: #000; display: none !important; }
+.conn-lost    { background: var(--red);   color: #fff; }
+.conn-waiting { background: var(--orange); color: #000; }
+
+/* ─── Main Layout ──────────────────────────────────────────── */
+#main-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ─── Sidebar ──────────────────────────────────────────────── */
+#sidebar {
+  width: 190px;
+  min-width: 140px;
+  max-width: 250px;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+#sidebar-header {
+  padding: 10px 12px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#file-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.file-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s;
+  border-left: 3px solid transparent;
+}
+.file-item:hover { background: var(--bg3); }
+.file-item.active {
+  background: var(--bg3);
+  border-left-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+#sidebar-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ─── Viewer Area ──────────────────────────────────────────── */
+#viewer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  gap: 8px;
+  overflow: hidden;
+}
+
+/* ─── Toolbar ──────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.ctrl-btn {
+  padding: 4px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.ctrl-btn:hover { background: var(--accent); color: #000; border-color: var(--accent); }
+.ctrl-btn.active { background: var(--green); color: #000; border-color: var(--green); }
+.ctrl-btn.stream-on { background: var(--green); color: #000; border-color: var(--green); }
+
+/* Level filter */
+.level-btns { display: flex; gap: 4px; }
+.lvl-btn {
+  padding: 3px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: monospace;
+  transition: all 0.15s;
+  opacity: 0.45;
+}
+.lvl-btn.on { opacity: 1.0; }
+.lvl-btn[data-lvl="DEBUG"]    { color: var(--text-dim); }
+.lvl-btn[data-lvl="DEBUG"].on { background: #3a3f4b; border-color: #555; color: var(--text); }
+.lvl-btn[data-lvl="INFO"].on  { background: #0d3b20; border-color: var(--green); color: var(--green); }
+.lvl-btn[data-lvl="WARNING"].on { background: #3b2700; border-color: var(--orange); color: var(--orange); }
+.lvl-btn[data-lvl="ERROR"].on   { background: #3b0d0d; border-color: var(--red); color: var(--red); }
+.lvl-btn[data-lvl="CRITICAL"].on { background: #2d0040; border-color: var(--purple); color: var(--purple); }
+
+.toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+#log-file-info { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+#stream-status { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
+/* ─── Search Bar ───────────────────────────────────────────── */
+.search-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.search-bar select {
+  padding: 4px 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+.search-bar input[type="text"] {
+  padding: 4px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  width: 240px;
+}
+.search-bar label {
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.match-count { font-size: 11px; color: #888; min-width: 80px; }
+.log-nav-btn {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 2px 6px; line-height: 1;
+}
+.log-nav-btn:hover { color: var(--text); border-color: var(--text-dim); }
+
+/* ─── Log Terminal ─────────────────────────────────────────── */
+.log-terminal {
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #b0b0b0;
+}
+.log-terminal.show-line-nums > div { padding-left: 52px; position: relative; }
+.log-terminal.show-line-nums > div::before {
+  content: attr(data-ln);
+  position: absolute; left: 0; top: 0; width: 44px;
+  text-align: right; color: #555; font-size: 11px;
+  user-select: none; pointer-events: none;
+}
+
+/* Level colour classes */
+.log-debug    { color: #808080; }
+.log-info     { color: #b0b0b0; }
+.log-warning  { color: var(--orange); }
+.log-error    { color: var(--red); }
+.log-critical { color: var(--purple); font-weight: 600; }
+
+.log-hidden { display: none; }
+.log-highlight { background: rgba(255,200,0,0.18); }
+.log-highlight mark { background: #e8a620; color: #000; border-radius: 2px; padding: 0 1px; }
+.log-highlight.log-current-match { background: rgba(255,160,0,0.40); outline: 1px solid #e8a620; }
+
+/* No file selected */
+#no-file-msg {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+</style>
+</head>
+<body>
+
+<!-- Connection Banner -->
+<div id="conn-banner" class="conn-waiting">Connecting to PBMaster...</div>
+
+<!-- Main Layout -->
+<div id="main-layout">
+
+  <!-- Sidebar: Log File List -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span>Log Files</span>
+    </div>
+    <div id="file-list">
+      <div id="sidebar-empty" style="display:none">No log files found.</div>
+    </div>
+  </div>
+
+  <!-- Viewer -->
+  <div id="viewer">
+
+    <!-- Toolbar -->
+    <div class="toolbar" id="toolbar">
+      <!-- Level filter buttons -->
+      <div class="level-btns" id="level-btns">
+        <button class="lvl-btn on" data-lvl="DEBUG"    onclick="toggleLevel('DEBUG')"   >DBG</button>
+        <button class="lvl-btn on" data-lvl="INFO"     onclick="toggleLevel('INFO')"    >INF</button>
+        <button class="lvl-btn on" data-lvl="WARNING"  onclick="toggleLevel('WARNING')" >WRN</button>
+        <button class="lvl-btn on" data-lvl="ERROR"    onclick="toggleLevel('ERROR')"   >ERR</button>
+        <button class="lvl-btn on" data-lvl="CRITICAL" onclick="toggleLevel('CRITICAL')">CRT</button>
+      </div>
+      <div class="toolbar-sep"></div>
+      <button id="stream-btn" class="ctrl-btn stream-on" onclick="toggleStream()">⏸ Pause</button>
+      <button class="ctrl-btn" onclick="clearLog()">🗑 Clear</button>
+      <button class="ctrl-btn" onclick="downloadLog()">⬇ Download</button>
+      <button id="linenum-btn" class="ctrl-btn" onclick="toggleLineNums()">## Lines</button>
+      <div class="toolbar-sep"></div>
+      <span id="log-file-info"></span>
+      <span id="stream-status"></span>
+    </div>
+
+    <!-- Search Bar -->
+    <div class="search-bar">
+      <select id="log-preset" onchange="onPresetChange()">
+        <option value="">— Preset —</option>
+        <option value="error|traceback|exception">Errors</option>
+        <option value="warning|warn">Warnings</option>
+        <option value="error|warning|traceback">Errors + Warnings</option>
+        <option value="start|running|initialized">Startup</option>
+        <option value="connect|disconnect|timeout|reconnect">Connection</option>
+        <option value="restart|kill|stop|shutdown">Restart / Stop</option>
+        <option value="traceback|exception|raise">Traceback</option>
+      </select>
+      <input id="search-input" type="text" placeholder="Search logs..."
+             oninput="onSearchInput()" onkeydown="onSearchKeydown(event)">
+      <label><input type="checkbox" id="filter-toggle" checked onchange="onFilterToggle()"> Filter</label>
+      <span id="log-nav-btns" style="display:none">
+        <button class="log-nav-btn" onclick="searchNav(-1)" title="Prev (Shift+Enter)">&#9650;</button>
+        <button class="log-nav-btn" onclick="searchNav(1)"  title="Next (Enter)">&#9660;</button>
+      </span>
+      <span class="match-count" id="match-count"></span>
+    </div>
+
+    <!-- Log Terminal (or no-file message) -->
+    <div id="no-file-msg">← Select a log file to view</div>
+    <div class="log-terminal" id="log-terminal" style="display:none"></div>
+
+  </div><!-- /viewer -->
+</div><!-- /main-layout -->
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   Log Viewer — WebSocket-powered real-time log stream
+   ═══════════════════════════════════════════════════════════════ */
+
+// ── Config ─────────────────────────────────────────────────
+let wsPort = __WS_PORT__;
+
+// ── State ──────────────────────────────────────────────────
+let ws = null;
+let reconnectTimer = null;
+let currentFile = '';          // Active log file name
+let logStreaming = false;       // True when live subscription is active
+let logLines = [];             // All visible lines (buffer, max MAX_LOG_LINES)
+let logPendingLines = [];      // RAF buffer for incremental append
+let logRafPending = false;
+let logLineBase = 0;           // Line number offset (when buffer trimmed)
+let logSessionId = 0;          // Incremented per subscribe to ignore stale msgs
+let availableFiles = [];       // File list from state
+let logSearchTerm = '';
+let logSearchIsRegex = false;
+let logFilterMode = true;      // true = hide non-matching lines
+let logSearchDebounce = null;
+let logSearchMatchEls = [];
+let logSearchMatchIdx = -1;
+let logSearchAbortId = 0;
+let logRenderAbortId = 0;
+let autoScroll = true;
+
+// Level filter: set of visible levels (all on by default)
+let visibleLevels = new Set(['DEBUG','INFO','WARNING','ERROR','CRITICAL']);
+
+const MAX_LOG_LINES    = 5000;
+const RENDER_CHUNK_SIZE = 500;
+const SEARCH_CHUNK_SIZE = 400;
+
+// ── WebSocket ──────────────────────────────────────────────
+function connect() {
+  const host = window.location.hostname || '127.0.0.1';
+  ws = new WebSocket(`ws://${host}:${wsPort}`);
+
+  ws.onopen = () => {
+    setBanner('ok');
+    if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+    // Re-subscribe to current file after reconnect
+    if (currentFile) subscribeFile(currentFile);
+  };
+
+  ws.onmessage = (evt) => {
+    try { handleMessage(JSON.parse(evt.data)); }
+    catch (e) { console.error('WS parse error:', e); }
+  };
+
+  ws.onclose = () => { setBanner('lost'); scheduleReconnect(); };
+  ws.onerror = () => { setBanner('lost'); };
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setInterval(() => {
+    if (!ws || ws.readyState === WebSocket.CLOSED) connect();
+  }, 3000);
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function setBanner(status) {
+  const b = document.getElementById('conn-banner');
+  b.className = 'conn-' + (status === 'ok' ? 'ok' : status === 'lost' ? 'conn-lost' : 'conn-waiting');
+  if (status === 'ok') b.style.display = 'none';
+  else {
+    b.style.display = 'block';
+    b.textContent = status === 'lost' ? 'Connection lost — reconnecting...' : 'Connecting to PBMaster...';
+  }
+}
+
+// ── Message Handling ───────────────────────────────────────
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'state':
+      updateFileList(msg.data.local_logs || []);
+      break;
+
+    case 'local_logs_list':
+      updateFileList(msg.files || []);
+      break;
+
+    case 'local_logs':
+      if (msg.sid !== undefined && msg.sid !== logSessionId) break;
+      logLines = msg.lines || [];
+      logLineBase = 0;
+      if (msg.streaming) logStreaming = true;
+      updateStreamBtn();
+      renderLogs();
+      break;
+
+    case 'local_log_lines':
+      if (msg.sid !== undefined && msg.sid !== logSessionId) break;
+      logLines.push(...(msg.lines || []));
+      if (logLines.length > MAX_LOG_LINES) {
+        const trimmed = logLines.length - MAX_LOG_LINES;
+        logLines = logLines.slice(-MAX_LOG_LINES);
+        logLineBase += trimmed;
+      }
+      appendLogLines(msg.lines || []);
+      break;
+
+    case 'error':
+      console.error('Server error:', msg.error);
+      break;
+  }
+}
+
+// ── Sidebar ────────────────────────────────────────────────
+function updateFileList(files) {
+  availableFiles = files;
+  const list = document.getElementById('file-list');
+  const empty = document.getElementById('sidebar-empty');
+  if (!files.length) {
+    list.innerHTML = '';
+    list.appendChild(empty);
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  // Rebuild buttons
+  list.innerHTML = '';
+  for (const f of files) {
+    const btn = document.createElement('button');
+    btn.className = 'file-item' + (f === currentFile ? ' active' : '');
+    btn.textContent = f;
+    btn.title = f;
+    btn.onclick = () => selectFile(f);
+    list.appendChild(btn);
+  }
+}
+
+function selectFile(filename) {
+  if (filename === currentFile && logStreaming) return;
+  currentFile = filename;
+
+  // Highlight active
+  document.querySelectorAll('.file-item').forEach(b => {
+    b.classList.toggle('active', b.textContent === filename);
+  });
+
+  // Show terminal, hide placeholder
+  document.getElementById('no-file-msg').style.display = 'none';
+  document.getElementById('log-terminal').style.display = '';
+
+  // Update info label
+  document.getElementById('log-file-info').textContent = filename;
+
+  subscribeFile(filename);
+}
+
+function subscribeFile(filename) {
+  // Clear old content
+  logLines = [];
+  logLineBase = 0;
+  logPendingLines = [];
+  logRafPending = false;
+  ++logRenderAbortId;
+  const terminal = document.getElementById('log-terminal');
+  if (terminal) terminal.innerHTML = '';
+
+  const sid = ++logSessionId;
+  send({ cmd: 'subscribe_local_logs', file: filename, lines: 300, sid: sid });
+  logStreaming = true;
+  updateStreamBtn();
+  setStreamStatus('Streaming…');
+}
+
+// ── Stream Controls ────────────────────────────────────────
+function toggleStream() {
+  if (logStreaming) {
+    send({ cmd: 'unsubscribe_local_logs' });
+    logStreaming = false;
+    setStreamStatus('Paused');
+  } else {
+    if (currentFile) subscribeFile(currentFile);
+  }
+  updateStreamBtn();
+}
+
+function updateStreamBtn() {
+  const btn = document.getElementById('stream-btn');
+  if (!btn) return;
+  if (logStreaming) {
+    btn.textContent = '⏸ Pause';
+    btn.className = 'ctrl-btn stream-on';
+  } else {
+    btn.textContent = '▶ Stream';
+    btn.className = 'ctrl-btn';
+  }
+}
+
+function setStreamStatus(msg) {
+  const el = document.getElementById('stream-status');
+  if (el) el.textContent = msg;
+}
+
+function clearLog() {
+  logLines = [];
+  logLineBase = 0;
+  logPendingLines = [];
+  logRafPending = false;
+  ++logRenderAbortId;
+  const terminal = document.getElementById('log-terminal');
+  if (terminal) terminal.innerHTML = '';
+  updateMatchCount(0);
+}
+
+function downloadLog() {
+  if (!logLines.length) return;
+  const blob = new Blob([logLines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = currentFile || 'log.log';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function toggleLineNums() {
+  const terminal = document.getElementById('log-terminal');
+  const btn = document.getElementById('linenum-btn');
+  terminal.style.display = 'none';
+  terminal.classList.toggle('show-line-nums');
+  terminal.offsetHeight;
+  terminal.style.display = '';
+  if (btn) btn.className = terminal.classList.contains('show-line-nums') ? 'ctrl-btn active' : 'ctrl-btn';
+}
+
+// ── Level Filter ───────────────────────────────────────────
+function extractLevel(line) {
+  // PBGui format: "2026-03-01T... [Service] [INFO] ..."
+  const m = line.match(/\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/i);
+  if (m) return m[1].toUpperCase();
+  // Fallback: word-boundary match anywhere
+  const m2 = line.match(/\b(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b/i);
+  if (m2) {
+    const lvl = m2[1].toUpperCase();
+    return lvl === 'WARN' ? 'WARNING' : lvl;
+  }
+  return 'INFO';
+}
+
+function levelClass(level) {
+  switch (level) {
+    case 'DEBUG':    return 'log-debug';
+    case 'INFO':     return 'log-info';
+    case 'WARNING':  return 'log-warning';
+    case 'ERROR':    return 'log-error';
+    case 'CRITICAL': return 'log-critical';
+    default:         return 'log-info';
+  }
+}
+
+function toggleLevel(lvl) {
+  const btn = document.querySelector(`.lvl-btn[data-lvl="${lvl}"]`);
+  if (visibleLevels.has(lvl)) {
+    visibleLevels.delete(lvl);
+    if (btn) btn.classList.remove('on');
+  } else {
+    visibleLevels.add(lvl);
+    if (btn) btn.classList.add('on');
+  }
+  // Re-apply level visibility to existing DOM nodes
+  const terminal = document.getElementById('log-terminal');
+  for (const div of terminal.children) {
+    const lvlAttr = div.dataset.level || 'INFO';
+    if (!visibleLevels.has(lvlAttr)) {
+      div.classList.add('log-level-hidden');
+    } else {
+      div.classList.remove('log-level-hidden');
+    }
+  }
+  updateMatchCount();
+}
+
+// ── Log Rendering ──────────────────────────────────────────
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function getSearchRegex() {
+  if (!logSearchTerm) return null;
+  try {
+    const pat = logSearchIsRegex
+      ? logSearchTerm
+      : logSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('(' + pat + ')', 'gi');
+  } catch (e) { return null; }
+}
+
+function testSearchMatch(text) {
+  const re = getSearchRegex();
+  return re ? re.test(text) : false;
+}
+
+function buildLogDiv(line, lineNum) {
+  const div = document.createElement('div');
+  if (lineNum != null) div.dataset.ln = lineNum;
+
+  const level = extractLevel(line);
+  div.dataset.level = level;
+  div.dataset.text = line;
+
+  let cls = levelClass(level);
+
+  // Level visibility
+  if (!visibleLevels.has(level)) cls += ' log-level-hidden';
+
+  const term = logSearchTerm;
+  const matches = term && testSearchMatch(line);
+  if (term) {
+    if (matches) {
+      cls += ' log-highlight';
+      const re = getSearchRegex();
+      div.innerHTML = re ? esc(line).replace(re, '<mark>$1</mark>') : esc(line);
+    } else {
+      div.textContent = line;
+      if (logFilterMode) cls += ' log-hidden';
+    }
+  } else {
+    div.textContent = line;
+  }
+  div.className = cls;
+  return div;
+}
+
+function renderLogs() {
+  const terminal = document.getElementById('log-terminal');
+  logPendingLines = [];
+  logRafPending = false;
+  terminal.innerHTML = '';
+
+  const total = logLines.length;
+  if (total === 0) { updateMatchCount(0); return; }
+
+  if (total <= RENDER_CHUNK_SIZE) {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < total; i++) frag.appendChild(buildLogDiv(logLines[i], logLineBase + i + 1));
+    terminal.appendChild(frag);
+    if (autoScroll) terminal.scrollTop = terminal.scrollHeight;
+    if (logSearchTerm) setTimeout(applySearch, 0); else updateMatchCount(0);
+    return;
+  }
+
+  const renderId = ++logRenderAbortId;
+  let idx = 0;
+  const statusDiv = document.createElement('div');
+  statusDiv.style.cssText = 'color:#888;padding:8px;font-size:12px';
+  statusDiv.textContent = 'Rendering… 0%';
+  terminal.appendChild(statusDiv);
+
+  function renderChunk() {
+    if (renderId !== logRenderAbortId) return;
+    const end = Math.min(idx + RENDER_CHUNK_SIZE, total);
+    const frag = document.createDocumentFragment();
+    for (; idx < end; idx++) frag.appendChild(buildLogDiv(logLines[idx], logLineBase + idx + 1));
+    if (idx >= total) {
+      statusDiv.remove();
+      terminal.appendChild(frag);
+      if (autoScroll) terminal.scrollTop = terminal.scrollHeight;
+      if (logSearchTerm) setTimeout(applySearch, 0); else updateMatchCount(0);
+    } else {
+      terminal.insertBefore(frag, statusDiv);
+      statusDiv.textContent = 'Rendering… ' + Math.round((idx / total) * 100) + '%';
+      requestAnimationFrame(renderChunk);
+    }
+  }
+  requestAnimationFrame(renderChunk);
+}
+
+function appendLogLines(newLines) {
+  if (!newLines.length) return;
+  const startNum = logLineBase + logLines.length - newLines.length + 1;
+  for (let i = 0; i < newLines.length; i++) {
+    logPendingLines.push({ line: newLines[i], num: startNum + i });
+  }
+  if (logRafPending) return;
+  logRafPending = true;
+  requestAnimationFrame(() => {
+    const terminal = document.getElementById('log-terminal');
+    const wasAtBottom = autoScroll ||
+      (terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 40);
+    const frag = document.createDocumentFragment();
+    for (const item of logPendingLines) frag.appendChild(buildLogDiv(item.line, item.num));
+    logPendingLines = [];
+    logRafPending = false;
+    terminal.appendChild(frag);
+    // Trim DOM
+    while (terminal.childElementCount > MAX_LOG_LINES) terminal.removeChild(terminal.firstChild);
+    if (wasAtBottom) terminal.scrollTop = terminal.scrollHeight;
+    updateMatchCount();
+  });
+}
+
+// ── Search ─────────────────────────────────────────────────
+function onPresetChange() {
+  const val = document.getElementById('log-preset').value;
+  if (val) {
+    logSearchTerm = val;
+    logSearchIsRegex = true;
+    document.getElementById('search-input').value = val;
+  } else {
+    logSearchTerm = '';
+    logSearchIsRegex = false;
+    document.getElementById('search-input').value = '';
+  }
+  setTimeout(applySearch, 0);
+}
+
+function onSearchInput() {
+  logSearchTerm = (document.getElementById('search-input').value || '').trim();
+  logSearchIsRegex = false;
+  document.getElementById('log-preset').value = '';
+  if (logSearchDebounce) clearTimeout(logSearchDebounce);
+  logSearchDebounce = setTimeout(applySearch, 300);
+}
+
+function onFilterToggle() {
+  logFilterMode = document.getElementById('filter-toggle').checked;
+  setTimeout(applySearch, 0);
+}
+
+function onSearchKeydown(e) {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  searchNav(e.shiftKey ? -1 : 1);
+}
+
+function searchNav(dir) {
+  if (logFilterMode || !logSearchMatchEls.length) return;
+  if (logSearchMatchIdx >= 0 && logSearchMatchIdx < logSearchMatchEls.length)
+    logSearchMatchEls[logSearchMatchIdx].classList.remove('log-current-match');
+  logSearchMatchIdx += dir;
+  if (logSearchMatchIdx >= logSearchMatchEls.length) logSearchMatchIdx = 0;
+  if (logSearchMatchIdx < 0) logSearchMatchIdx = logSearchMatchEls.length - 1;
+  const el = logSearchMatchEls[logSearchMatchIdx];
+  el.classList.add('log-current-match');
+  const terminal = document.getElementById('log-terminal');
+  terminal.scrollTop = el.offsetTop - terminal.offsetTop - terminal.clientHeight / 2 + el.offsetHeight / 2;
+  updateMatchCount(0);
+}
+
+function applySearch() {
+  const terminal = document.getElementById('log-terminal');
+  const el = document.getElementById('match-count');
+  const navBtns = document.getElementById('log-nav-btns');
+  const re = getSearchRegex();
+  const children = Array.from(terminal.children);
+  logSearchMatchEls = [];
+  logSearchMatchIdx = -1;
+
+  if (!logSearchTerm) {
+    for (const div of children) {
+      const text = div.dataset.text || div.textContent;
+      div.textContent = text;
+      // Remove search-related classes
+      div.className = div.className
+        .replace(/ log-highlight| log-hidden| log-current-match/g, '');
+    }
+    if (el) el.textContent = '';
+    if (navBtns) navBtns.style.display = 'none';
+    return;
+  }
+
+  const searchId = ++logSearchAbortId;
+  const total = children.length;
+  let idx = 0;
+
+  function processChunk() {
+    if (searchId !== logSearchAbortId) return;
+    const end = Math.min(idx + SEARCH_CHUNK_SIZE, total);
+    for (; idx < end; idx++) {
+      const div = children[idx];
+      const text = div.dataset.text || div.textContent;
+      let cls = div.className
+        .replace(/ log-highlight| log-hidden| log-current-match/g, '');
+      const matches = testSearchMatch(text);
+      if (matches) {
+        cls += ' log-highlight';
+        div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
+        logSearchMatchEls.push(div);
+      } else {
+        div.textContent = text;
+        if (logFilterMode) cls += ' log-hidden';
+      }
+      div.className = cls;
+    }
+    if (idx < total) {
+      if (el) el.textContent = 'Searching…';
+      requestAnimationFrame(processChunk);
+    } else {
+      if (navBtns) navBtns.style.display = (!logFilterMode && logSearchMatchEls.length) ? '' : 'none';
+      updateMatchCount(0);
+    }
+  }
+  requestAnimationFrame(processChunk);
+}
+
+function updateMatchCount(blockCount) {
+  const el = document.getElementById('match-count');
+  if (!el) return;
+  if (!logSearchTerm) { el.textContent = ''; return; }
+  const count = document.getElementById('log-terminal').querySelectorAll('.log-highlight').length;
+  if (!logFilterMode && logSearchMatchIdx >= 0) {
+    el.textContent = (logSearchMatchIdx + 1) + ' / ' + count;
+  } else {
+    el.textContent = count + ' matches';
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>

@@ -41,13 +41,39 @@ import threading
 import time
 import traceback
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from pbgui_purefunc import load_ini, save_ini
+from pbgui_purefunc import load_ini, save_ini, PBGDIR
 from logging_helpers import human_log as _log
 
 if TYPE_CHECKING:
     from PBMaster import PBMaster
+
+
+# ── Local log helpers ────────────────────────────────────────
+
+def _local_logs_dir() -> Path:
+    """Return the local data/logs directory."""
+    return Path(PBGDIR) / "data" / "logs"
+
+
+def _tail_file(path: Path, n: int) -> list[str]:
+    """Return the last *n* lines of *path* (all lines if n <= 0)."""
+    try:
+        size = path.stat().st_size
+        if size == 0:
+            return []
+        with open(path, "rb") as f:
+            # Read enough bytes to cover n lines (heuristic: 200 bytes/line)
+            chunk = min(size, max(n * 200, 65536)) if n > 0 else size
+            f.seek(max(0, size - chunk))
+            data = f.read()
+        text = data.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        return lines[-n:] if n > 0 else lines
+    except Exception:
+        return []
 
 SERVICE = "PBMaster"
 
@@ -86,6 +112,9 @@ class WSServer:
         self._log_subs: dict = {}
         # Per-client session ids for log dedup: ws -> sid
         self._log_sids: dict = {}
+
+        # Per-client LOCAL log subscriptions: ws_id -> {file, pos, sid, name}
+        self._local_log_subs: dict = {}
 
         # Cached service results (set by PBMaster main loop)
         self._last_services: dict = {}
@@ -167,12 +196,14 @@ class WSServer:
                 _log(SERVICE, f"[ws] Listening on ws://{self._host}:{self._port}")
                 push_task = asyncio.create_task(self._push_loop())
                 log_task = asyncio.create_task(self._log_push_loop())
+                local_log_task = asyncio.create_task(self._local_log_push_loop())
 
                 # Wait until stop is requested
                 await self._stop_event.wait()
 
                 push_task.cancel()
                 log_task.cancel()
+                local_log_task.cancel()
                 server.close()
                 await server.wait_closed()
 
@@ -216,11 +247,13 @@ class WSServer:
             pass  # Client disconnected
         finally:
             self._clients.discard(websocket)
-            # Clean up log subscription
-            stream_id = self._log_subs.pop(id(websocket), None)
-            self._log_sids.pop(id(websocket), None)
+            # Clean up log subscriptions
+            ws_id = id(websocket)
+            stream_id = self._log_subs.pop(ws_id, None)
+            self._log_sids.pop(ws_id, None)
             if stream_id and self._pbmaster.streamer:
                 self._pbmaster.streamer.stop_stream(stream_id)
+            self._local_log_subs.pop(ws_id, None)
             _log(SERVICE, f"[ws] Client disconnected: {remote}")
 
     # ── Command handling ────────────────────────────────────
@@ -236,6 +269,11 @@ class WSServer:
             "unsubscribe_logs": self._cmd_unsubscribe_logs,
             "kill_instance": self._cmd_kill_instance,
             "set_setting": self._cmd_set_setting,
+            # Local log commands
+            "list_local_logs": self._cmd_list_local_logs,
+            "get_local_logs": self._cmd_get_local_logs,
+            "subscribe_local_logs": self._cmd_subscribe_local_logs,
+            "unsubscribe_local_logs": self._cmd_unsubscribe_local_logs,
         }.get(cmd)
 
         if not handler:
@@ -425,6 +463,58 @@ class WSServer:
         if stream_id and self._pbmaster.streamer:
             self._pbmaster.streamer.stop_stream(stream_id)
 
+    # ── Local log commands ──────────────────────────────────
+
+    async def _cmd_list_local_logs(self, websocket, _request: dict):
+        """Return sorted list of *.log filenames in data/logs/."""
+        d = _local_logs_dir()
+        files = sorted(p.name for p in d.glob("*.log") if p.is_file()) if d.exists() else []
+        await websocket.send(json.dumps({"type": "local_logs_list", "files": files}))
+
+    async def _cmd_get_local_logs(self, websocket, request: dict):
+        """Fetch the last N lines from a local log file (one-shot)."""
+        filename = request.get("file", "")
+        lines_n = int(request.get("lines", 200))
+        sid = request.get("sid")
+        fp = _local_logs_dir() / filename
+        if not filename or not fp.exists() or fp.resolve().parent != _local_logs_dir().resolve():
+            await websocket.send(json.dumps({"type": "error", "error": "Local log file not found"}))
+            return
+        content = _tail_file(fp, lines_n)
+        resp: dict = {"type": "local_logs", "file": filename, "lines": content}
+        if sid is not None:
+            resp["sid"] = sid
+        await websocket.send(json.dumps(resp))
+
+    async def _cmd_subscribe_local_logs(self, websocket, request: dict):
+        """Start live streaming of a local log file."""
+        filename = request.get("file", "")
+        lines_n = int(request.get("lines", 200))
+        sid = request.get("sid")
+        fp = _local_logs_dir() / filename
+        if not filename or not fp.exists() or fp.resolve().parent != _local_logs_dir().resolve():
+            await websocket.send(json.dumps({"type": "error", "error": "Local log file not found"}))
+            return
+        ws_id = id(websocket)
+        # Cancel previous local sub for this client
+        self._local_log_subs.pop(ws_id, None)
+        # Send initial content
+        content = _tail_file(fp, lines_n)
+        resp: dict = {"type": "local_logs", "file": filename, "lines": content, "streaming": True}
+        if sid is not None:
+            resp["sid"] = sid
+        await websocket.send(json.dumps(resp))
+        # Record position at end of file
+        try:
+            pos = fp.stat().st_size
+        except Exception:
+            pos = 0
+        self._local_log_subs[ws_id] = {"file": fp, "pos": pos, "sid": sid, "name": filename}
+
+    async def _cmd_unsubscribe_local_logs(self, websocket, _request: dict):
+        """Stop live local log streaming for this client."""
+        self._local_log_subs.pop(id(websocket), None)
+
     async def _cmd_kill_instance(self, websocket, request: dict):
         """Kill a bot instance on a VPS. PBRun will auto-restart it."""
         host = request.get("host", "")
@@ -598,6 +688,63 @@ class WSServer:
                 _log(SERVICE, f"[ws] Log push error: {e}", level="WARNING")
                 await asyncio.sleep(LOG_PUSH_INTERVAL)
 
+    async def _local_log_push_loop(self):
+        """Push new local log lines to subscribed clients (tail -f equivalent)."""
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.sleep(LOG_PUSH_INTERVAL)
+                if not self._local_log_subs:
+                    continue
+
+                dead: list = []
+                for ws_id, sub in list(self._local_log_subs.items()):
+                    ws = next((c for c in self._clients if id(c) == ws_id), None)
+                    if not ws:
+                        dead.append(ws_id)
+                        continue
+
+                    fp: Path = sub["file"]
+                    pos: int = sub["pos"]
+                    try:
+                        size = fp.stat().st_size
+                    except Exception:
+                        continue
+
+                    # Handle log rotation (file got truncated / rotated)
+                    if size < pos:
+                        sub["pos"] = 0
+                        pos = 0
+
+                    if size <= pos:
+                        continue
+
+                    try:
+                        with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                            f.seek(pos)
+                            new_text = f.read(65536)  # max 64 KB per interval
+                            sub["pos"] = f.tell()
+                        new_lines = new_text.splitlines()
+                        if new_lines:
+                            msg: dict = {
+                                "type": "local_log_lines",
+                                "file": sub["name"],
+                                "lines": new_lines,
+                            }
+                            if sub["sid"] is not None:
+                                msg["sid"] = sub["sid"]
+                            await ws.send(json.dumps(msg))
+                    except Exception:
+                        dead.append(ws_id)
+
+                for ws_id in dead:
+                    self._local_log_subs.pop(ws_id, None)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                _log(SERVICE, f"[ws] Local log push error: {e}", level="WARNING")
+                await asyncio.sleep(LOG_PUSH_INTERVAL)
+
     # ── State serialization ─────────────────────────────────
 
     def _get_full_state(self) -> dict:
@@ -649,12 +796,17 @@ class WSServer:
         # Services (cached from last service check)
         services = self._last_services
 
+        # Local log files available on this machine
+        d = _local_logs_dir()
+        local_logs = sorted(p.name for p in d.glob("*.log") if p.is_file()) if d.exists() else []
+
         return {
             "connections": conn_summary,
             "system": system,
             "instances": instances,
             "streams": streams,
             "services": services,
+            "local_logs": local_logs,
             "timestamp": time.time(),
             "ui_settings": self._load_ui_settings(),
         }
