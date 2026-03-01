@@ -44,7 +44,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from pbgui_purefunc import load_ini, save_ini, PBGDIR
+from pbgui_purefunc import load_ini, save_ini
 from logging_helpers import human_log as _log
 
 if TYPE_CHECKING:
@@ -54,8 +54,12 @@ if TYPE_CHECKING:
 # ── Local log helpers ────────────────────────────────────────
 
 def _local_logs_dir() -> Path:
-    """Return the local data/logs directory."""
-    return Path(PBGDIR) / "data" / "logs"
+    """Return the local data/logs directory.
+
+    Uses the module file's location rather than cwd so it works correctly
+    even when PBMaster daemon was started from a different working directory.
+    """
+    return Path(__file__).resolve().parent.parent / "data" / "logs"
 
 
 def _tail_file(path: Path, n: int) -> list[str]:
