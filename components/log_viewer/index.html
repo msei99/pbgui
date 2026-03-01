@@ -350,7 +350,7 @@ let logPendingLines = [];      // RAF buffer for incremental append
 let logRafPending = false;
 let logLineBase = 0;           // Line number offset (when buffer trimmed)
 let logSessionId = 0;          // Incremented per subscribe to ignore stale msgs
-let availableFiles = [];       // File list from state
+let availableFiles = __INITIAL_FILES__;  // Pre-filled by Python; updated via WS
 let logSearchTerm = '';
 let logSearchIsRegex = false;
 let logFilterMode = true;      // true = hide non-matching lines
@@ -376,6 +376,9 @@ function connect() {
   ws.onopen = () => {
     setBanner('ok');
     if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+    // Request file list explicitly (state push may not have local_logs if daemon
+    // was started before this feature was added)
+    send({ cmd: 'list_local_logs' });
     // Re-subscribe to current file after reconnect
     if (currentFile) subscribeFile(currentFile);
   };
@@ -853,6 +856,8 @@ function updateMatchCount(blockCount) {
 }
 
 // ── Init ───────────────────────────────────────────────────
+// Populate sidebar immediately from server-injected file list
+if (availableFiles.length) updateFileList(availableFiles);
 connect();
 </script>
 </body>

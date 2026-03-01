@@ -1,5 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import json
 from pathlib import Path
 import logging_helpers
 
@@ -93,7 +94,7 @@ with st.expander("Default rotation", expanded=False):
         st.success("Saved default rotation settings")
 
 if services:
-    with st.expander("Per-log rotation", expanded=True):
+    with st.expander("Per-log rotation", expanded=False):
         st.caption("Each service log can override size and number of rotated files.")
         for service in services:
             max_bytes, backup_count = logging_helpers.get_rotate_settings(service=service)
@@ -148,5 +149,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 ws_port = _get_ws_port()
-html = _load_log_viewer_html().replace("__WS_PORT__", str(ws_port))
+logs_dir = Path.cwd() / "data" / "logs"
+log_files = sorted(p.name for p in logs_dir.glob("*.log") if p.is_file()) if logs_dir.exists() else []
+html = (
+    _load_log_viewer_html()
+    .replace("__WS_PORT__", str(ws_port))
+    .replace("__INITIAL_FILES__", json.dumps(log_files))
+)
 components.html(html, height=500, scrolling=False)
