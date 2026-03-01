@@ -323,27 +323,18 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.62 (28-02-2026)
-- Fix: PNL Today/Yesterday no longer showed 0 for PB7 instances — second `[fills] initializing` after boot reset the skip-flag and caused all fill lines to be ignored
-- Improved: Market Data jobs panel restructured — progress rows always visible above Running expander, detailed job info (status, coins, FX backfill, substatus, last result) inside Running expander
-- New: Job management actions — retry failed jobs (requeue to pending), delete individual or bulk jobs from Pending/Failed/Done lists
-- New: Job details dialog button inside Running expander for raw JSON inspection
-- Improved: Task worker requeues active job on graceful stop instead of marking it failed
-- Improved: Task worker per-job cancel check during build best 1m execution
-- New: Pending/Failed/Done job lists with selectable table rows and bulk actions (delete selected / delete all)
-- Fix: PBMaster no longer sends false-positive "service down" alerts on transient SSH errors — connection failures during service checks are now reported as `UNKNOWN` (no alert, no restart) instead of `STOPPED`
-- New: Market Data `PB7 cache` tab now shows an interactive OHLCV chart (same lazy multi-resolution zoom as the `1m` tab) when a row is selected
-- Improved: Market Data "Already have" table loads in ~10ms on warm start (was ~12s) via persistent SQLite inventory cache with mtime-based per-coin invalidation
-- Fix: Binance 1000x coins (SHIB, FLOKI, BONK, PEPE, LUNC, RATS, ...) now resolve to correct CCXT symbol (`1000SHIB/USDT:USDT`) and archive symbol (`1000SHIBUSDT`) via `data/coindata/binance/mapping.json` — no hardcoded dict, automatically up-to-date
-- Fix: Binance 1000x coin storage directories now match PB7 cache layout (`1000SHIB_USDT:USDT` instead of `SHIB_USDT:USDT`); existing wrong dirs migrated
-- Improved: Binance latest 1m loop now logs start (`coin`, `symbol`, `lookback`, date range) and done (`pages`, `days`, `minutes written`) per coin
-- Improved: Default cycle interval for latest 1m refresh increased — Hyperliquid 120s → 1800s (30 min), Binance 120s → 3600s (60 min); avoids overlap when many coins are enabled
-- New: "Select all" / "Clear all" buttons in Market Data settings for enabled-coins multiselect (Hyperliquid and Binance)
-- New: "▶ Run now" button in Market Data Actions tab triggers next latest 1m refresh cycle immediately (Hyperliquid and Binance) — writes a flag file consumed by PBData at end of current sleep
-- New: "⏹ Cancel queued refresh" replaces the Refresh now button when a refresh is already pending, allowing cancellation before the cycle starts
-- New: "⏹ Stop current run" button appears during an active cycle — sends a stop signal; PBData aborts the loop after the current coin finishes
-- Improved: Binance and Hyperliquid status expanders auto-refresh every 5 seconds; per-coin progress bar shows coins done / total and current coin being processed
-- Improved: PBData restart no longer immediately re-triggers latest 1m fetch — remaining interval is respected on restart; if PBData crashed mid-cycle, the run resumes from the last completed coin instead of starting over
+## v1.62 (01-03-2026)
+- New: Binance USDM full historical 1m OHLCV backfill — inception-to-today via official monthly/daily archive ZIPs (data.binance.vision) with CCXT gap-fill; same NPZ format as PB7 cache
+- New: Task worker job type `binance_best_1m` with per-coin progress, cancel support, and chunk tracking
+- New: Market Data jobs panel — Pending/Failed/Done lists with selectable rows, bulk delete, retry failed, raw JSON inspection
+- New: `PB7 cache` tab shows interactive OHLCV chart when a row is selected
+- New: "Select all" / "Clear all" buttons for enabled-coins multiselect (Hyperliquid and Binance)
+- New: "Run now", "Cancel queued" and "Stop current run" buttons for latest 1m refresh cycles (Hyperliquid and Binance)
+- Improved: Status expanders auto-refresh every 5s with per-coin progress bar
+- Improved: PBData restart respects remaining cycle interval; mid-cycle crash resumes from last completed coin
+- Improved: Market Data "Already have" table ~10ms warm load via persistent SQLite inventory cache
+- Fix: PBMaster no longer sends false-positive "service down" alerts on transient SSH errors
+- Fix: PNL Today/Yesterday showed 0 for PB7 instances after bot restart
 
 ## v1.61 (27-02-2026)
 - New: PBMaster SSH-based VPS management service — persistent SSH connections to all configured VPS nodes with centralized command execution, service monitoring, and real-time log streaming

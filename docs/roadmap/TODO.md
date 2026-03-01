@@ -154,6 +154,29 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ---
 
+## P2 – Längerfristig
+
+### Hyperliquid Rate-Limit Budget Tracking (PB7)
+**Ziel**
+- Pro-IP Request-Budget für Hyperliquid mitzählen und proaktiv drosseln, statt reaktiv auf 429-Fehler zu warten.
+
+**Hintergrund**
+- Hyperliquid liefert (Stand März 2026) keine Rate-Limit-Header (`X-RateLimit-Remaining` etc.) in den HTTP-Antworten — nur einen blanken 429 bei Überschreitung.
+- Das HL-Limit liegt bei ~1200 Requests/Minute pro IP.
+- Mehrere Bots auf derselben IP teilen dieses Budget, haben aber keine Sichtbarkeit auf den aktuellen Verbrauch.
+
+**Umfang**
+- Shared Request-Counter (z.B. via Datei oder IPC) für alle PB7-Instanzen pro IP.
+- Proaktives Throttling wenn Budget-Schwelle erreicht (z.B. 80%).
+- Fallback bleibt der bestehende reaktive 429-Backoff.
+
+**Done wenn**
+- Bots drosseln koordiniert, bevor 429 eintritt.
+- Funktioniert auch bei Server-Neustart (alle Bots gleichzeitig).
+- Kein Performanceverlust im Normalbetrieb.
+
+---
+
 ## Arbeitsmodus (ab jetzt)
 - Neue Ideen immer als Eintrag mit **Ziel**, **Umfang**, **Done wenn** erfassen.
 - Erst priorisieren (P0/P1/P2), dann umsetzen.

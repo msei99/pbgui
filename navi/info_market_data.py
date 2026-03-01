@@ -2263,7 +2263,19 @@ def view_market_data():
         if _canonical_market_coin(exchange, c)
     ]
 
-    coin_options = _coin_options_for_exchange(str(exchange))
+    # Cache coin_options in session state per exchange so the options list is
+    # identical across all reruns within the same interaction sequence (select-all
+    # → save). Without this, a CoinData cache miss between reruns can return a
+    # smaller approved set, causing the multiselect to silently drop sessions-state
+    # items that are no longer in options — resulting in fewer coins being saved.
+    _coin_opts_key = f"_market_data_coin_options_{str(exchange).lower()}"
+    _fresh_opts = _coin_options_for_exchange(str(exchange))
+    _cached_opts: list[str] = st.session_state.get(_coin_opts_key) or []
+    # Refresh cache only when we get a bigger/different result (avoids clobbering
+    # a good 553-item cache with a transient 100-item CoinData result).
+    if len(_fresh_opts) >= len(_cached_opts):
+        st.session_state[_coin_opts_key] = _fresh_opts
+    coin_options: list[str] = st.session_state[_coin_opts_key] or _fresh_opts
     option_set = set(coin_options)
     enabled_default = [c for c in enabled_default_raw if c in option_set]
     dropped_defaults = sorted(set(enabled_default_raw) - option_set)
@@ -2284,14 +2296,16 @@ def view_market_data():
         with st.expander("Settings (Latest 1m Auto-Refresh)", expanded=False):
             st.caption("Configure automatic 1m candle refresh settings. Changes are saved to pbgui.ini and applied automatically in the next cycle (no restart needed).")
 
-            # Apply select/clear action BEFORE multiselect is instantiated
+            # Apply select/clear action BEFORE multiselect is instantiated.
+            # Use explicit session_state assignment (not pop+default) so the key
+            # is reliably set regardless of Streamlit's default-handling behaviour.
             _hl_action_key = f"hl_coins_action_{enabled_key}"
             _hl_action = st.session_state.pop(_hl_action_key, None)
             if _hl_action == "all":
-                st.session_state.pop(enabled_key, None)
+                st.session_state[enabled_key] = list(coin_options)
                 enabled_default = list(coin_options)
             elif _hl_action == "clear":
-                st.session_state.pop(enabled_key, None)
+                st.session_state[enabled_key] = []
                 enabled_default = []
 
             enabled_in_settings = st.multiselect(
@@ -2563,14 +2577,16 @@ def view_market_data():
                 "Changes are saved to pbgui.ini and applied automatically in the next cycle (no restart needed)."
             )
 
-            # Apply select/clear action BEFORE multiselect is instantiated
+            # Apply select/clear action BEFORE multiselect is instantiated.
+            # Use explicit session_state assignment (not pop+default) so the key
+            # is reliably set regardless of Streamlit's default-handling behaviour.
             _bnc_action_key = f"bnc_coins_action_{enabled_key}"
             _bnc_action = st.session_state.pop(_bnc_action_key, None)
             if _bnc_action == "all":
-                st.session_state.pop(enabled_key, None)
+                st.session_state[enabled_key] = list(coin_options)
                 enabled_default = list(coin_options)
             elif _bnc_action == "clear":
-                st.session_state.pop(enabled_key, None)
+                st.session_state[enabled_key] = []
                 enabled_default = []
 
             enabled_in_settings_bnc = st.multiselect(

@@ -1,20 +1,73 @@
 # Market Data
 
-This page manages PBGui market-data workflows for Hyperliquid, including l2Book archive downloads, TradFi symbol mapping, and Build best 1m OHLCV jobs.
+This page manages PBGui market-data workflows for Hyperliquid and Binance USDM, including l2Book archive downloads, TradFi symbol mapping, Binance 1m auto-refresh, and Build best 1m OHLCV jobs.
 
 ## Page Layout
 
 Expanders are shown in this order:
-1. Market Data status
-2. Build best 1m OHLCV
-3. TradFi Symbol Mappings
-4. Download l2Book from AWS
+1. Settings (Latest 1m Auto-Refresh) — Hyperliquid
+2. Settings (Binance USDM Latest 1m Auto-Refresh)
+3. Market Data status (Hyperliquid)
+4. Market Data status (Binance USDM)
+5. Build best 1m OHLCV
+6. TradFi Symbol Mappings
+7. Download l2Book from AWS
+
+## Settings (Latest 1m Auto-Refresh) — Hyperliquid
+
+Controls the automatic 1m candle refresh loop for Hyperliquid symbols.
+
+- **Enabled coins** — multiselect from all known Hyperliquid symbols
+- **Select all / Clear all** — quickly enable or disable all coins
+- **Cycle interval (s)** — how often all enabled coins are refreshed (default: 1800s)
+- **Pause between coins (s)** — delay between coins to avoid rate limits (default: 0.5s)
+- **API timeout per coin (s)** — per-coin request timeout (default: 30s)
+- **Min / Max lookback days** — window for the latest fetch (default: 2 / 4 days)
+- Changes are saved to `pbgui.ini` and applied in the next cycle — no restart needed.
+
+## Settings (Binance USDM Latest 1m Auto-Refresh)
+
+Controls the automatic 1m candle refresh loop for Binance USDM perpetuals.
+
+- **Enabled coins** — multiselect from all known Binance USDM coins
+- **Select all / Clear all** — quickly enable or disable all coins
+- **Cycle interval (s)** — how often all enabled coins are refreshed (default: 3600s)
+- **Pause between coins (s)** — delay between coins (default: 0.5s)
+- **API timeout per coin (s)** — per-coin request timeout (default: 30s)
+- **Min / Max lookback days** — window for the latest fetch (default: 2 / 7 days)
+- Changes are saved to `pbgui.ini` and applied in the next cycle — no restart needed.
 
 ## Market Data Status
 
 Use this section to monitor latest fetch loops, inventory, and background job health.
 
-Highlights:
+The status expander auto-refreshes every 5 seconds while open.
+
+### Control Buttons
+
+- **⏩ Run now** — skips the remaining wait and triggers the next refresh cycle immediately
+- **⏹ Cancel queued refresh** — appears instead of Run now when a refresh is already queued; cancels it before the cycle starts
+- **⏹ Stop current run** — appears during an active cycle; sends a stop signal so PBData aborts after the current coin finishes
+
+### Progress Bar
+
+While a cycle is running, a progress bar shows `coins done / total` and the current coin being processed.
+
+### Status Table
+
+Shows per-coin result of the last completed cycle:
+- `last_fetch` — timestamp of last attempt
+- `result` — `ok`, `error`, or `skipped`
+- `lookback_days` — days fetched
+- `minutes_written` — candles written in that run
+- `note` — `no_local_data` means no local data existed yet; max lookback was used automatically
+- `next_run_in_s` — estimated seconds until next cycle
+
+### Restart Behavior
+
+When PBData restarts, it reads the last run timestamp and waits the remaining interval — it does not immediately re-fetch. If PBData crashed mid-cycle, the run resumes from the last completed coin.
+
+---
 - Read-only inventory for PBGui and PB7 cache data
 - Source-code based coverage views
 - Job progress with day/month context for stock-perp builds
@@ -111,19 +164,45 @@ Storage path:
 
 ## Build best 1m OHLCV
 
-This starts background `hl_best_1m` jobs for eligible XYZ symbols.
+This starts background build jobs for eligible symbols.
 
-Eligibility in coin selector:
-- Symbol must have mapping status `ok`
-- Must have Tiingo mapping (`tiingo_ticker` or `tiingo_fx_ticker`)
+### Job Types
 
-Controls:
-- Build best 1m
-- Start date (optional)
-- End date (optional)
-- Refetch TradFi data from scratch (stock-perps)
+**`hl_best_1m`** — Hyperliquid XYZ stock-perps:
+- Eligibility: mapping status `ok` + Tiingo ticker present
+- Controls: Build best 1m, Start date, End date, Refetch TradFi from scratch
 
-### Data strategy
+**`binance_best_1m`** — Binance USDM full historical backfill:
+- Downloads complete inception-to-today 1m OHLCV from official Binance archives (data.binance.vision) — monthly + daily ZIPs — with CCXT gap-fill
+- Coin selection from all enabled Binance coins
+- Controls: Start date, End date, Refetch
+- Storage: `data/ohlcv/binanceusdm/1m/<COIN>/YYYY-MM-DD.npz` (same format as PB7 cache)
+
+### Job Management
+
+The job panel shows three sections:
+- **Pending** — jobs queued for execution
+- **Running** — currently executing job with live progress
+- **Failed / Done** — completed jobs
+
+Actions:
+- **Retry** — requeues a failed job to Pending
+- **Delete** — removes individual job
+- **Delete selected / Delete all** — bulk delete from Failed or Done list
+- **Raw JSON** (🔍 button) — shows full job file content for debugging
+
+### Progress Display
+
+While running, the panel shows:
+- Stage: `starting`, `running`, `done`
+- Current coin
+- Chunk done / total
+- Minutes written
+- Duration
+- For Binance: pages fetched, days covered
+- For HL TradFi: month YYYY-MM day X/Y, Tiingo quota usage, 429 wait states
+
+### Data Strategy (hl_best_1m)
 
 Build best 1m runs newest → oldest in the selected date window.
 
@@ -159,7 +238,7 @@ Date controls:
 - `Start date` limits the oldest day to process
 - `End date` limits the newest day to process (default = today)
 
-### Progress and waits
+### Progress and Waits (hl_best_1m)
 
 Job panel can show:
 - `month YYYY-MM day X/Y`
