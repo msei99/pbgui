@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from pathlib import Path
 import logging_helpers
 
@@ -8,7 +9,30 @@ from pbgui_func import (
     is_authenticted,
     get_navi_paths,
 )
-from logging_view import view_log_filtered
+from pbgui_purefunc import load_ini
+
+
+# ── Component helpers ──────────────────────────────────────
+
+_COMPONENT_DIR = Path(__file__).resolve().parent.parent / "components" / "log_viewer"
+_COMPONENT_HTML: str | None = None
+
+
+def _load_log_viewer_html() -> str:
+    """Load and cache the Log Viewer HTML component."""
+    global _COMPONENT_HTML
+    if _COMPONENT_HTML is None:
+        _COMPONENT_HTML = (_COMPONENT_DIR / "index.html").read_text(encoding="utf-8")
+    return _COMPONENT_HTML
+
+
+def _get_ws_port() -> int:
+    val = load_ini("pbmaster", "ws_port")
+    if val and val.isdigit():
+        port = int(val)
+        if 1024 <= port <= 65535:
+            return port
+    return 8765
 
 # ============================================================================
 # Page setup
@@ -30,7 +54,7 @@ st.header("Logging", divider="rainbow")
 
 st.caption(
     "Central log viewer for all PBGui services. "
-    "Select one or more logfiles to view, filter by level, tags, or free text."
+    "Select a log file in the viewer below — live stream with level filter and text search."
 )
 
 st.subheader("Rotation Settings")
@@ -106,9 +130,23 @@ if services:
 else:
     st.info("No logfiles found in data/logs yet.")
 
-# The view_log_filtered widget already handles:
-# - multi-file selection & merged view
-# - level/tag/user/text filters
-# - purge, clear, raw mode
-# - auto-rotation awareness
-view_log_filtered("PBCoinData")
+# ── Live Log Viewer (WebSocket component) ─────────────────
+
+st.subheader("Live Log Viewer")
+
+st.markdown("""
+<style>
+.stMainBlockContainer {
+    padding-bottom: 0 !important;
+}
+.stMainBlockContainer iframe {
+    height: calc(100vh - 480px) !important;
+    min-height: 380px !important;
+    border: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+ws_port = _get_ws_port()
+html = _load_log_viewer_html().replace("__WS_PORT__", str(ws_port))
+components.html(html, height=500, scrolling=False)
