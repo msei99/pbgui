@@ -169,6 +169,33 @@ def list_vps():
         if st.button(":material/add_box:"):
             st.session_state.init_vps = vpsmanager.add_vps()
             st.rerun()
+        pbremote = st.session_state.pbremote
+        _api_sync = [
+            s for s in pbremote.remote_servers
+            if s.is_online() and not s.is_api_md5_same(pbremote.api_md5)
+        ]
+        if _api_sync:
+            _sync_names = ", ".join(s.name for s in _api_sync)
+            if st.button(":red[🔴 API not in sync]", key="vps_api_status_btn",
+                         help=f"Not in sync: {_sync_names} — Click to sync."):
+                pbremote.sync_api_up()
+                timeout = 180
+                _status = st.empty()
+                with st.spinner("Syncing API keys..."):
+                    while not pbremote.check_if_api_synced():
+                        _status.caption(f"{timeout}s — {pbremote.unsynced_api} server(s) remaining")
+                        time.sleep(1)
+                        timeout -= 1
+                        if timeout == 0:
+                            break
+                _status.empty()
+                if timeout == 0:
+                    st.error("API sync timed out")
+                else:
+                    st.toast("API keys synced", icon="✅")
+                st.rerun()
+        else:
+            st.button(":green[🟢 API in sync]", key="vps_api_status_btn", disabled=True)
 
         # Only show sudo password if there are VPS to import
         if vps_to_import:
@@ -512,34 +539,6 @@ def list_vps():
         column_config=column_config,
     )
     st.info("Select your VPS in the sidebar to get a detailed VPS report.")
-    with st.sidebar:
-        pbremote = st.session_state.pbremote
-        _api_sync = [
-            s for s in pbremote.remote_servers
-            if s.is_online() and not s.is_api_md5_same(pbremote.api_md5)
-        ]
-        if _api_sync:
-            _sync_names = ", ".join(s.name for s in _api_sync)
-            if st.button(":red[🔴 API not in sync]", key="vps_api_status_btn",
-                         help=f"Not in sync: {_sync_names} — Click to sync."):
-                pbremote.sync_api_up()
-                timeout = 180
-                _status = st.empty()
-                with st.spinner("Syncing API keys..."):
-                    while not pbremote.check_if_api_synced():
-                        _status.caption(f"{timeout}s — {pbremote.unsynced_api} server(s) remaining")
-                        time.sleep(1)
-                        timeout -= 1
-                        if timeout == 0:
-                            break
-                _status.empty()
-                if timeout == 0:
-                    st.error("API sync timed out")
-                else:
-                    st.toast("API keys synced", icon="✅")
-                st.rerun()
-        else:
-            st.button(":green[🟢 API in sync]", key="vps_api_status_btn", disabled=True)
 
 def manage_master():
     vpsmanager = st.session_state.vpsmanager
