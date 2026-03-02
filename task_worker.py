@@ -209,6 +209,7 @@ def _run_job(job_path: Path) -> None:
 
 
 def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
+    job_id = job_path.stem
     profile = str(payload.get("profile") or "pbgui-hyperliquid").strip() or "pbgui-hyperliquid"
     region = str(payload.get("region") or "").strip()
     coins = payload.get("coins")
@@ -295,6 +296,7 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
         "hl_aws_l2book_auto start profile=%s region=%s range=%s->%s coins=%s timeout_s=%s workers=%s only_missing_1m_src_hours=%s"
         % (profile, region, start_day, end_day, len(coins), l2book_timeout_s, l2book_workers, only_missing_1m_src_hours)
     )
+    _append_to_job_log(job_id, f"job started  coins={coins}  range={start_day}->{end_day}  profile={profile}  region={region}")
 
     days = _iter_days(start_day, end_day)
     coin_days: dict[str, list[str]] = {}
@@ -462,6 +464,7 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
                 mb = res['total_bytes'] / (1024 * 1024)
                 summary += f" ({mb:.1f} MB)"
             append_exchange_download_log("hyperliquid", f"[INFO] [hl_aws_l2book_auto] {coin} {day} {summary}")
+            _append_to_job_log(job_id, f"  {coin}  {day}  {summary}")
 
             try:
                 dl_count = int(res.get("downloaded", 0))
@@ -490,6 +493,8 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
             else:
                 update_progress(last_result=res, stage="running")
     
+    _append_to_job_log(job_id, f"job finished  downloaded={downloaded_total}  skipped={skipped_total}  failed={failed_total}")
+
     # After all downloads: trigger Build OHLCV jobs for coins with new data
     if coins_with_downloads:
         end_day = datetime.utcnow().strftime("%Y%m%d")
