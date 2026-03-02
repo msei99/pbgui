@@ -95,7 +95,7 @@ with st.sidebar:
     
     st.caption(display_name, help=f"📂 {result_name}")
 
-    if st.button("← Back to Optimize Results", use_container_width=True):
+    if st.button("← Back to Optimize Results", width='stretch'):
         if "pareto_explorer_path" in st.session_state:
             del st.session_state.pareto_explorer_path
         st.switch_page("navi/v7_optimize.py")

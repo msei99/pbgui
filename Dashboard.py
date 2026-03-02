@@ -1002,7 +1002,7 @@ class Dashboard():
                 key=f"dashboard_income_open_live_vs_backtest_{position}",
                 help="Open PBv7 Live vs Backtest",
                 disabled=(single_user is None),
-                use_container_width=True,
+                width='stretch',
             ):
                 st.session_state["v7_live_vs_backtest_prefill_user"] = single_user
                 st.switch_page(get_navi_paths()["V7_LIVE_VS_BACKTEST"])

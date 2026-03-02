@@ -1485,7 +1485,7 @@ def live_vs_backtest_page():
                     key="v7_live_vs_backtest_reset_starting_balance",
                     help="Reset to calculated starting balance",
                     disabled=(calc_sb is None),
-                    use_container_width=True,
+                    width='stretch',
                     on_click=_reset_starting_balance_to_calc,
                 )
         with c5:
@@ -1505,14 +1505,14 @@ def live_vs_backtest_page():
                     f"Enqueues a backtest using your data/run_v7/{single_user}/config.json"
                 ),
                 disabled=(compare_exchange == "combined"),
-                use_container_width=True,
+                width='stretch',
             )
         with c7:
             if st.button(
                 ":material/refresh:",
                 key="v7_live_vs_backtest_refresh",
                 help="Refresh this page",
-                use_container_width=True,
+                width='stretch',
             ):
                 # Clear cached DB-derived user list
                 st.session_state.pop(user_with_income_cache_key, None)
@@ -1522,7 +1522,7 @@ def live_vs_backtest_page():
                 ":material/home:",
                 key="v7_live_vs_backtest_back_to_dashboards",
                 help="Go to Dashboards",
-                use_container_width=True,
+                width='stretch',
             ):
                 # Ask Dashboards page to open the matching user dashboard if it exists.
                 st.session_state["dashboards_open_dashboard"] = single_user
@@ -1748,7 +1748,7 @@ def live_vs_backtest_page():
                 ":material/sync:",
                 key="v7_live_vs_backtest_sync",
                 help="Sync Start/End to selected backtest range",
-                use_container_width=True,
+                width='stretch',
             ):
                 try:
                     sd = bt_cfg.get("start_date", None)
@@ -2079,7 +2079,7 @@ def live_vs_backtest_page():
                             "bt_taker_fee",
                         ]
                         df_bt = df_c[[c for c in cols if c in df_c.columns]].copy()
-                        st.dataframe(df_bt, use_container_width=True, hide_index=True)
+                        st.dataframe(df_bt, width='stretch', hide_index=True)
 
                     with tab_live:
                         st.markdown(
@@ -2100,7 +2100,7 @@ def live_vs_backtest_page():
                             "live_c_mult",
                         ]
                         df_live = df_c[[c for c in cols if c in df_c.columns]].copy()
-                        st.dataframe(df_live, use_container_width=True, hide_index=True)
+                        st.dataframe(df_live, width='stretch', hide_index=True)
 
                     with tab_eff:
                         st.markdown(
@@ -2121,7 +2121,7 @@ def live_vs_backtest_page():
                             "live_min_notional_eff",
                         ]
                         df_eff = df_c[[c for c in cols if c in df_c.columns]].copy()
-                        st.dataframe(df_eff, use_container_width=True, hide_index=True)
+                        st.dataframe(df_eff, width='stretch', hide_index=True)
                         st.markdown(
                             "<div style='font-size:0.95rem; color: rgba(255,255,255,0.7);'>"
                             "Effective minimum order at start-price is computed as: "
@@ -2140,7 +2140,7 @@ def live_vs_backtest_page():
                         )
                         cols = ["Coin", "bt_source", "bt_symbol", "live_exchange", "live_symbol", "note"]
                         df_n = df_c[[c for c in cols if c in df_c.columns]].copy()
-                        st.dataframe(df_n, use_container_width=True, hide_index=True)
+                        st.dataframe(df_n, width='stretch', hide_index=True)
         except Exception:
             pass
 
@@ -2491,7 +2491,7 @@ def live_vs_backtest_page():
             fig.update_layout(dragmode="select")
             selection_state = st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width='stretch',
                 on_select="rerun",
                 selection_mode=["box"],
                 key="v7_live_vs_backtest_plot",
@@ -2500,14 +2500,14 @@ def live_vs_backtest_page():
         except TypeError:
             # Older Streamlit: fall back to regular Plotly chart with explicit modebar config.
             try:
-                st.plotly_chart(fig, use_container_width=True, config=plotly_config)
+                st.plotly_chart(fig, width='stretch', config=plotly_config)
             except Exception:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
         except Exception:
             try:
-                st.plotly_chart(fig, use_container_width=True, config=plotly_config)
+                st.plotly_chart(fig, width='stretch', config=plotly_config)
             except Exception:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
         # Apply selection -> date range sync
         try:
@@ -2569,9 +2569,9 @@ def live_vs_backtest_page():
         except Exception:
             pass
         try:
-            st.plotly_chart(fig, use_container_width=True, config=plotly_config)
+            st.plotly_chart(fig, width='stretch', config=plotly_config)
         except Exception:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
     # If Select range is turned off, reset the date window back to live data range.
     try:
@@ -2713,7 +2713,7 @@ def live_vs_backtest_page():
             # Show as a small overview table (keeps the main plot unchanged)
             st.dataframe(
                 sum_df.sort_values(["GapSum", "Category"], ascending=[False, True]),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
 
@@ -2737,12 +2737,12 @@ def live_vs_backtest_page():
         deviating = comp_df[comp_df["AbsDiff"] >= float(threshold)].copy()
         if deviating.empty:
             st.info("No deviations within the current threshold in this range.")
-            st.dataframe(comp_df.sort_values("Date"), use_container_width=True, hide_index=True)
+            st.dataframe(comp_df.sort_values("Date"), width='stretch', hide_index=True)
             return
 
         st.dataframe(
             deviating.sort_values(["AbsDiff", "Date"], ascending=[False, True]).head(int(show_top)),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -2798,7 +2798,7 @@ def live_vs_backtest_page():
                 "◀︎ -1d",
                 key="v7_live_vs_backtest_diag_day_prev",
                 disabled=cur_idx <= 0,
-                use_container_width=True,
+                width='stretch',
                 help="Go to previous day",
             )
 
@@ -2807,7 +2807,7 @@ def live_vs_backtest_page():
                 "+1d ▶︎",
                 key="v7_live_vs_backtest_diag_day_next",
                 disabled=cur_idx >= len(all_dates) - 1,
-                use_container_width=True,
+                width='stretch',
                 help="Go to next day",
             )
 
@@ -3250,7 +3250,7 @@ def live_vs_backtest_page():
                         except Exception:
                             pass
 
-                        st.plotly_chart(fig2, use_container_width=True)
+                        st.plotly_chart(fig2, width='stretch')
 
                         # Compact table of missed initial entries
                         try:
@@ -3280,7 +3280,7 @@ def live_vs_backtest_page():
                                 ]
                                 st.dataframe(
                                     missed_tbl[cols_show].sort_values("time"),
-                                    use_container_width=True,
+                                    width='stretch',
                                     hide_index=True,
                                 )
                         except Exception:
@@ -3296,8 +3296,8 @@ def live_vs_backtest_page():
                 hdf["time"] = pd.to_datetime(hdf["timestamp"].astype('int64'), unit='ms', utc=True)
                 hdf["kind"] = hdf["uniqueid"].apply(_classify_uniqueid)
                 ksum = hdf.groupby("kind").agg(rows=("uniqueid", "count"), income_sum=("income", "sum")).reset_index()
-                st.dataframe(ksum.sort_values("income_sum", ascending=False), use_container_width=True, hide_index=True)
-                st.dataframe(hdf[["time", "symbol", "income", "kind", "uniqueid"]], use_container_width=True, hide_index=True)
+                st.dataframe(ksum.sort_values("income_sum", ascending=False), width='stretch', hide_index=True)
+                st.dataframe(hdf[["time", "symbol", "income", "kind", "uniqueid"]], width='stretch', hide_index=True)
             else:
                 st.info("No live income rows for this day (in this scope).")
 
@@ -3318,7 +3318,7 @@ def live_vs_backtest_page():
 
                 if not fday.empty:
                     cols = [c for c in ["time", "coin", "type", "qty", "qty_coin", "contract_size", "price", "pnl", "fee_paid", "net"] if c in fday.columns]
-                    st.dataframe(fday[cols].sort_values("time"), use_container_width=True, hide_index=True)
+                    st.dataframe(fday[cols].sort_values("time"), width='stretch', hide_index=True)
                 else:
                     st.info("No backtest fills for this day (in this scope).")
             else:
@@ -3340,7 +3340,7 @@ def live_vs_backtest_page():
                         edf["time"] = pd.to_datetime(edf["timestamp"].astype('int64'), unit='ms', utc=True)
                         # fee is stored as a positive cost in executions
                         edf["net"] = (edf["realized_pnl"].fillna(0.0) - edf["fee"].fillna(0.0)).astype(float)
-                        st.dataframe(edf[["time", "symbol", "side", "qty", "price", "fee", "realized_pnl", "net", "trade_id", "order_id"]], use_container_width=True, hide_index=True)
+                        st.dataframe(edf[["time", "symbol", "side", "qty", "price", "fee", "realized_pnl", "net", "trade_id", "order_id"]], width='stretch', hide_index=True)
                     else:
                         # Minimal, user-facing hint: show earliest/latest execution we have.
                         all_min = all_max = None
@@ -3670,9 +3670,9 @@ def live_vs_backtest_page():
                     return styles
 
                 styled = view.style.apply(_cell_style, axis=None)
-                st.dataframe(styled, use_container_width=True, hide_index=True)
+                st.dataframe(styled, width='stretch', hide_index=True)
             except Exception:
-                st.dataframe(view, use_container_width=True, hide_index=True)
+                st.dataframe(view, width='stretch', hide_index=True)
 
 
 # Redirect to Login if not authenticated or session state not initialized
