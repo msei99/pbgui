@@ -602,20 +602,17 @@ def get_inventory(
                 "missing_minutes": int(missing_minutes),
             }
 
-        # Find coins that need recomputation
+        # Find coins that need recomputation.
+        # UI design principle: the GUI only reads from cache; background workers
+        # are responsible for keeping the cache up to date via refresh_coin().
+        # Therefore: cached coins are NEVER recomputed here (unless force_refresh=True).
+        # Only coins that are not yet in the cache get computed (cold-start).
         coins_to_recompute: list[str] = []
         coins_to_delete: list[str] = []
 
-        # Coins on disk not in cache, or mtime changed
-        for coin, cpath in coin_dirs.items():
-            lmt = live_mtimes[coin]
-            lsmt = live_src_mtimes.get(coin, 0.0)
+        for coin in coin_dirs:
             if force_refresh or coin not in cached:
                 coins_to_recompute.append(coin)
-            else:
-                c = cached[coin]
-                if abs(c["dir_mtime"] - lmt) > 0.001 or (is_1m and abs(c["src_mtime"] - lsmt) > 0.001):
-                    coins_to_recompute.append(coin)
 
         # Coins in cache but no longer on disk → remove
         for coin in list(cached.keys()):
@@ -720,5 +717,56 @@ def invalidate_coin(exchange: str, dataset: str, coin: str) -> None:
         conn.execute(
             "DELETE FROM inventory WHERE exchange=? AND dataset=? AND coin=?",
             (ex, ds, cn),
+        )
+        conn.commit()
+
+
+def refresh_coin(
+    exchange: str,
+    dataset: str,
+    coin: str,
+    lag_minutes: int = 0,
+    tradfi_type_fn: "Callable[[str], str] | None" = None,
+    expected_minutes_fn: "Callable[[str, Any], set[int]] | None" = None,
+) -> None:
+    """Recompute and persist inventory for a single coin immediately.
+
+    Called by the task worker after finishing a coin so the UI reads
+    fresh data without needing its own recompute.
+    """
+    ex = str(exchange or "").strip().lower()
+    ds = str(dataset or "").strip().lower()
+    cn = str(coin or "").strip()
+    coin_dirs = _coin_dirs_for_dataset(ex, ds)
+    cpath = coin_dirs.get(cn)
+    if cpath is None:
+        return
+    lmt = _dir_mtime(cpath)
+    is_1m = ds in ("1m", "candles_1m")
+    lsmt = _src_mtime(ex, cn) if is_1m else 0.0
+    try:
+        computed = _compute_coin(ex, ds, cn, cpath, lag_minutes, tradfi_type_fn, expected_minutes_fn)
+    except Exception:
+        return
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO inventory
+              (exchange, dataset, coin, dir_mtime, src_mtime,
+               n_files, total_bytes, oldest_day, newest_day, n_days,
+               expected_hours, coverage_pct, missing_days_count, missing_days_sample,
+               hl_minutes, other_minutes, missing_minutes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                ex, ds, cn, lmt, lsmt,
+                int(computed["n_files"]), int(computed["total_bytes"]),
+                str(computed["oldest_day"]), str(computed["newest_day"]),
+                int(computed["n_days"]), float(computed["expected_hours"]),
+                float(computed["coverage_pct"]), int(computed["missing_days_count"]),
+                str(computed["missing_days_sample"]),
+                int(computed["hl_minutes"]), int(computed["other_minutes"]),
+                int(computed["missing_minutes"]),
+            ),
         )
         conn.commit()
