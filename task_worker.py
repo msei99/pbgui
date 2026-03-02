@@ -33,7 +33,7 @@ from task_queue import (
     write_worker_pid,
     enqueue_job,
 )
-from inventory_cache import refresh_coin as _refresh_inventory_coin
+from inventory_cache import refresh_coin as _refresh_inventory_coin, sweep_cache_mtimes as _sweep_cache_mtimes
 
 
 _STOP = False
@@ -834,6 +834,30 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
 
+def _run_cache_sweep_thread(interval_s: float = 600.0) -> None:
+    """Background daemon thread: periodically sweep inventory cache for external file changes.
+
+    Checks all cached (exchange, dataset, coin) entries against current dir mtimes.
+    Refreshes coins whose files changed (e.g. manually deleted/moved), removes
+    entries whose directories no longer exist.
+    Runs every `interval_s` seconds (default: 10 minutes).
+    """
+    while not _STOP:
+        try:
+            result = _sweep_cache_mtimes()
+            if result["refreshed"] or result["deleted"]:
+                _job_log(
+                    f"[cache-sweep] refreshed={result['refreshed']}  "
+                    f"deleted={result['deleted']}  unchanged={result['unchanged']}"
+                )
+        except Exception as e:
+            _job_log(f"[cache-sweep] error: {e}")
+        # Sleep in small increments so _STOP is checked promptly
+        deadline = time.monotonic() + interval_s
+        while not _STOP and time.monotonic() < deadline:
+            time.sleep(5.0)
+
+
 def main() -> int:
     ensure_task_dirs()
 
@@ -843,6 +867,15 @@ def main() -> int:
     pid = os.getpid()
     write_worker_pid(pid)
     _job_log(f"worker started pid={pid}")
+
+    # Start background cache sweep thread (checks external file changes every 10 min)
+    _sweep_t = threading.Thread(
+        target=_run_cache_sweep_thread,
+        kwargs={"interval_s": 600.0},
+        daemon=True,
+        name="cache-sweep",
+    )
+    _sweep_t.start()
 
     # One active thread per job type — at most one job of each type runs in parallel.
     active_threads: dict[str, threading.Thread] = {}

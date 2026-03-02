@@ -721,6 +721,65 @@ def invalidate_coin(exchange: str, dataset: str, coin: str) -> None:
         conn.commit()
 
 
+def sweep_cache_mtimes() -> dict:
+    """Check all cached (exchange, dataset, coin) rows against current dir mtimes.
+
+    For each cached coin:
+      - If the directory no longer exists → remove from cache (invalidate).
+      - If dir_mtime (or src_mtime for 1m) changed → recompute via refresh_coin().
+      - Otherwise → leave as-is (unchanged).
+
+    Returns a dict: {"refreshed": int, "deleted": int, "unchanged": int}
+    """
+    refreshed = 0
+    deleted = 0
+    unchanged = 0
+
+    # Load all cached rows grouped by (exchange, dataset)
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "SELECT exchange, dataset, coin, dir_mtime, src_mtime FROM inventory"
+        )
+        rows = cur.fetchall()
+
+    # Group by (exchange, dataset) to avoid calling _coin_dirs_for_dataset repeatedly
+    from collections import defaultdict as _defaultdict
+    groups: dict[tuple, list] = _defaultdict(list)
+    for ex, ds, coin, dir_mt, src_mt in rows:
+        groups[(ex, ds)].append((coin, float(dir_mt), float(src_mt)))
+
+    for (ex, ds), coins in groups.items():
+        is_1m = ds in ("1m", "candles_1m")
+        coin_dirs = _coin_dirs_for_dataset(ex, ds)
+
+        for coin, cached_dir_mt, cached_src_mt in coins:
+            cpath = coin_dirs.get(coin)
+
+            if cpath is None:
+                # Directory gone — remove from cache
+                invalidate_coin(ex, ds, coin)
+                deleted += 1
+                continue
+
+            cur_dir_mt = _dir_mtime(cpath)
+            cur_src_mt = _src_mtime(ex, coin) if is_1m else 0.0
+
+            mtime_changed = (
+                abs(cur_dir_mt - cached_dir_mt) > 0.001
+                or (is_1m and abs(cur_src_mt - cached_src_mt) > 0.001)
+            )
+            if mtime_changed:
+                try:
+                    refresh_coin(ex, ds, coin)
+                    refreshed += 1
+                except Exception:
+                    pass
+            else:
+                unchanged += 1
+
+    return {"refreshed": refreshed, "deleted": deleted, "unchanged": unchanged}
+
+
 def refresh_coin(
     exchange: str,
     dataset: str,
