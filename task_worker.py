@@ -515,6 +515,7 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
 
 def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     started_ts = time.time()
+    job_id = job_path.stem
     coins = payload.get("coins")
     coins = coins if isinstance(coins, list) else []
     coins = [str(c).strip().upper() for c in coins if str(c).strip()]
@@ -530,6 +531,8 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
 
     total_steps = max(1, len(coins))
     step_i = 0
+
+    _append_to_job_log(job_id, f"job started  coins={coins}  end_day={end_day}  start_day={start_day or 'inception'}  refetch={refetch}")
 
     def update_progress(**kw):
         def mut(o):
@@ -562,6 +565,7 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         if _is_cancel_requested(job_path):
             raise RuntimeError("cancelled")
         step_i += 1
+        _append_to_job_log(job_id, f"[{step_i}/{total_steps}] {coin}  starting")
         stock_coin = bool(_is_stock_perp_coin(coin))
         update_progress(
             stage="running",
@@ -652,6 +656,9 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
             if _is_cancel_requested(job_path):
                 raise RuntimeError("cancelled") from e
             raise
+        except Exception as e:
+            _append_to_job_log(job_id, f"  {coin}  ERROR {e}")
+            raise
         out = res.to_dict()
         if isinstance(out, dict):
             out["duration_s"] = int(max(0, time.time() - started_ts))
@@ -661,6 +668,9 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                 out.pop("bybit_minutes_filled", None)
         append_exchange_download_log("hyperliquid", f"[INFO] [hl_best_1m_job] {coin} {out}")
         update_progress(stage="running", last_result=out)
+        _append_to_job_log(job_id, f"  {coin}  done  duration_s={int(time.time()-started_ts)}")
+
+    _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
 
 def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
@@ -788,62 +798,92 @@ def main() -> int:
     write_worker_pid(pid)
     _job_log(f"worker started pid={pid}")
 
+    # One active thread per job type — at most one job of each type runs in parallel.
+    active_threads: dict[str, threading.Thread] = {}
+    threads_lock = threading.Lock()
+
+    def _run_job_thread(job_run: Path, jtype: str) -> None:
+        """Thread target: run one job, handle requeue/fail, then unregister."""
+        try:
+            _run_job(job_run)
+        except Exception as e:
+            # Graceful worker stop: requeue so the job resumes after restart.
+            if _STOP and job_run.exists() and not _is_cancel_requested(job_run):
+                try:
+                    update_job_file(
+                        job_run,
+                        mutate=lambda o: o.update(
+                            {"status": "pending", "error": "worker stopped; requeued"}
+                        ),
+                    )
+                    move_job_file(job_run, "pending")
+                    _job_log(f"worker stopping; requeued job {job_run.name}", level="WARNING")
+                    return
+                except Exception:
+                    pass
+            _job_log(f"fatal in job runner: {e}")
+            try:
+                if job_run.exists():
+                    update_job_file(job_run, mutate=lambda o: o.update({"status": "failed", "error": str(e)}))
+                    move_job_file(job_run, "failed")
+            except Exception:
+                pass
+        finally:
+            with threads_lock:
+                active_threads.pop(jtype, None)
+
     try:
         _requeue_stale_running_jobs(max_age_s=3600)
 
         consecutive_errors = 0
         while not _STOP:
             try:
-                # Refresh PID file periodically so the UI can detect a live worker
-                # even if the OS reuses our PID after a long sleep.
+                # Refresh PID file periodically.
                 try:
                     write_worker_pid(os.getpid())
                 except Exception:
                     pass
 
-                pending_dir = get_task_state_dir("pending")
+                with threads_lock:
+                    running_types = set(active_threads.keys())
 
+                pending_dir = get_task_state_dir("pending")
                 jobs = sorted(pending_dir.glob("*.json"), key=lambda p: p.name)
+
                 if not jobs:
                     time.sleep(2.0)
                     consecutive_errors = 0
                     continue
 
-                job_src = jobs[0]
-                # move to running atomically
-                job_run = move_job_file(job_src, "running")
-                try:
-                    _run_job(job_run)
-                except Exception as e:
-                    # Graceful worker stop (e.g. service stop/restart):
-                    # do not fail the active job, requeue it so it can resume
-                    # when the worker comes back.
-                    if _STOP and job_run.exists() and not _is_cancel_requested(job_run):
-                        try:
-                            update_job_file(
-                                job_run,
-                                mutate=lambda o: o.update(
-                                    {
-                                        "status": "pending",
-                                        "error": "worker stopped; requeued",
-                                    }
-                                ),
-                            )
-                            move_job_file(job_run, "pending")
-                            _job_log(f"worker stopping; requeued job {job_run.name}", level="WARNING")
+                started_any = False
+                for job_src in jobs:
+                    if _STOP:
+                        break
+                    obj = _load_job(job_src)
+                    if not obj:
+                        continue
+                    jtype = str(obj.get("type") or "").strip()
+                    with threads_lock:
+                        if jtype in active_threads:
+                            # This type is already running — skip, keep FIFO order.
                             continue
+                        try:
+                            job_run = move_job_file(job_src, "running")
                         except Exception:
-                            pass
+                            continue
+                        t = threading.Thread(
+                            target=_run_job_thread,
+                            args=(job_run, jtype),
+                            daemon=True,
+                            name=f"job-{jtype}",
+                        )
+                        active_threads[jtype] = t
+                    t.start()
+                    _job_log(f"started job {job_run.name} type={jtype}")
+                    started_any = True
 
-                    _job_log(f"fatal in job runner: {e}")
-                    # if still in running, mark failed best-effort
-                    try:
-                        if job_run.exists():
-                            update_job_file(job_run, mutate=lambda o: o.update({"status": "failed", "error": str(e)}))
-                            move_job_file(job_run, "failed")
-                    except Exception:
-                        pass
-
+                if not started_any:
+                    time.sleep(1.0)
                 consecutive_errors = 0
 
             except Exception as loop_err:
@@ -854,6 +894,10 @@ def main() -> int:
                     return 1
                 time.sleep(min(5.0 * consecutive_errors, 30.0))
 
+        # Wait for running threads to finish (each will requeue its job on _STOP).
+        _job_log("worker stopping; waiting for active jobs...")
+        for t in list(active_threads.values()):
+            t.join(timeout=30.0)
         _job_log("worker stopping")
         return 0
     finally:
