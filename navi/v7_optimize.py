@@ -50,7 +50,6 @@ def opt_v7():
         if col3.button(":material/delete: Del", key="opt_v7_preset_delete"):
             opt_v7.preset_remove(st.session_state.opt_v7_preset_select)
             st.rerun()
-    st.subheader("Create/Edit")
     opt_v7.edit()
 
 # ── Sub-view: list of available optimize configs ─────────────────────────────
@@ -70,7 +69,6 @@ def opt_v7_list():
             opt_v7_list.edit_selected()
         if st.button(":material/delete:", help="Delete selected Optimizes. If none selected all will be deleted"):
             opt_v7_list.remove_selected()
-    st.subheader("Available Configs")
     opt_v7_list.view_optimizes()
 
 # ── Sub-view: Results list ───────────────────────────────────────────────────
@@ -87,7 +85,6 @@ def opt_v7_results():
         if st.button(":material/delete: all"):
             opt_v7_results.remove_all_results()
             st.rerun()
-    st.subheader("All Results")
     opt_v7_results.view_results()
 
 # ── Sub-view: Pareto explorer ────────────────────────────────────────────────
