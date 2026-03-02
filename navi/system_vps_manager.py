@@ -1,11 +1,79 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, sync_api, select_file
+from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, sync_api, select_file, render_header_with_guide
 from VPSManager import VPSManager, VPS
 import re
 from Monitor import Monitor
 from datetime import datetime
 from PBCoinData import CoinData
+from pathlib import Path
+
+
+def _docs_index(lang: str) -> list[tuple[str, str]]:
+    ln = str(lang or "EN").strip().upper()
+    folder = "help_de" if ln == "DE" else "help"
+    docs_dir = Path(__file__).resolve().parents[1] / "docs" / folder
+    if not docs_dir.is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for p in sorted(docs_dir.glob("*.md")):
+        label = p.name
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                first = f.readline().strip()
+            if first.startswith("#"):
+                label = first.lstrip("#").strip() or p.name
+        except Exception:
+            label = p.name
+        out.append((label, str(p)))
+    return out
+
+
+def _read_markdown(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Failed to read docs: {e}"
+
+
+@st.dialog("Help & Tutorials", width="large")
+def _vps_manager_help_modal(default_topic: str = "VPS Manager"):
+    lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="vps_manager_help_lang")
+    docs = _docs_index(str(lang))
+    if not docs:
+        st.info("No help docs found.")
+        return
+    labels = [d[0] for d in docs]
+    default_index = 0
+    try:
+        target = str(default_topic or "").strip().lower()
+        if target:
+            for i, lbl in enumerate(labels):
+                if target in str(lbl).lower():
+                    default_index = i
+                    break
+    except Exception:
+        default_index = 0
+    sel = st.selectbox(
+        "Select Topic",
+        options=list(range(len(labels))),
+        format_func=lambda i: labels[int(i)],
+        index=int(default_index),
+        key="vps_manager_help_sel",
+    )
+    path = docs[int(sel)][1]
+    md = _read_markdown(path)
+    st.markdown(md, unsafe_allow_html=True)
+    try:
+        base = str(st.get_option("server.baseUrlPath") or "").strip("/")
+        prefix = f"/{base}" if base else ""
+        st.markdown(
+            f"<a href='{prefix}/help' target='_blank'>Open full Help page in new tab</a>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
 import psutil
 import subprocess
 import shlex
@@ -2618,7 +2686,11 @@ if not is_authenticted() or is_session_state_not_initialized():
 
 # Page Setup
 set_page_config("VPS Manager")
-st.header("VPS Manager", divider="red")
+render_header_with_guide(
+    "VPS Manager",
+    guide_callback=lambda: _vps_manager_help_modal(),
+    guide_key="vps_manager_header_help_btn",
+)
 
 if not "vpsmanager" in st.session_state:
     st.session_state.vpsmanager = VPSManager()

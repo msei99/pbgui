@@ -331,6 +331,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - New: PBv7 Optimize — 4 top-level tabs: Config | Queue | Log | Results; Log tab with streaming viewer (replaces inline per-job log); optimize log path migrated to `data/logs/optimizes/`
 - New: PBv7 Optimize guide (EN + DE) covering all 4 tabs, typical workflows, and sidebar actions
 - New: PBv7 Run guide (EN + DE) covering instance list, edit form, status icons, and typical workflows
+- New: VPS Manager guide (EN + DE) covering overview table, Master/VPS management, branch switching, and add-VPS wizard
+- New: Dashboard guide (EN + DE) covering view, create, and edit workflows
 - New: Per-job log files (`data/logs/jobs/`) — each task worker job writes its own timestamped log with per-coin progress, stage transitions, errors, and summary
 - New: "Log" button on all job rows (Running/Done/Failed/Pending) — switches to Activity Log tab and opens the job's log in the streaming viewer; jobs subdir excluded from sidebar to prevent flooding
 - New: "Rerun" button for Done jobs — re-queues a completed job with the same payload while preserving history
