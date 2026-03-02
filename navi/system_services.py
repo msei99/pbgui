@@ -1204,13 +1204,13 @@ def pbmaster_details():
             _btn_cols = st.columns([0.2, 0.2, 0.6])
             with _btn_cols[0]:
                 if st.button("Enable All", key="pbmaster_enable_all",
-                             use_container_width=True):
+                             width='stretch'):
                     for h in available:
                         st.session_state[f"pbmaster_host_{h}"] = True
                     st.rerun()
             with _btn_cols[1]:
                 if st.button("Disable All", key="pbmaster_disable_all",
-                             use_container_width=True):
+                             width='stretch'):
                     for h in available:
                         st.session_state[f"pbmaster_host_{h}"] = False
                     st.rerun()

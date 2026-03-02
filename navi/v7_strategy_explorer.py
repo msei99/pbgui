@@ -5281,7 +5281,7 @@ def render_replay_backtest_v7(*, replay_frames: list[dict], hist_df: pd.DataFram
         height=800,
         margin=dict(l=50, r=50, t=50, b=50),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # Minimal per-frame details
     st.caption(
@@ -9176,7 +9176,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
                 "?",
                 key=f"se_chart_help_btn_{title_side.lower()}",
                 help="Show/hide chart help",
-                use_container_width=True,
+                width='stretch',
             ):
                 st.session_state[help_state_key] = not bool(st.session_state.get(help_state_key, False))
 
@@ -9253,7 +9253,7 @@ def create_plotly_graph(side: OrderType, data: GVData):
                     ]
                     if cols:
                         df_fills = df_fills[cols]
-                    st.dataframe(df_fills, use_container_width=True, height=250)
+                    st.dataframe(df_fills, width='stretch', height=250)
     except Exception:
         pass
 
@@ -10640,7 +10640,7 @@ def show_visualizer():
                     "Start Simulation (entry fills)",
                     key="se_hist_sim_start_btn",
                     type="primary",
-                    use_container_width=True,
+                    width='stretch',
                     help="Runs the historical candle-walk simulation from the selected start time and stores fill markers.",
                     on_click=_request_hist_sim_run,
                 )
@@ -10696,7 +10696,7 @@ def show_visualizer():
                     "Start Compare (PB7/B/C)",
                     key="se_hist_compare_start_btn",
                     type="primary",
-                    use_container_width=True,
+                    width='stretch',
                     help="Runs compare and renders the table below (stored in session state).",
                     on_click=_request_hist_compare_run,
                 )
@@ -11512,10 +11512,10 @@ def show_visualizer():
                     if (not movie_generated_this_run) and (not do_export):
                         with movie_out:
                             if fig is not None:
-                                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+                                st.plotly_chart(fig, width='stretch', config={"displayModeBar": True})
                             try:
                                 if df_fills is not None and hasattr(df_fills, "empty") and not df_fills.empty:
-                                    st.dataframe(df_fills, use_container_width=True, height=250)
+                                    st.dataframe(df_fills, width='stretch', height=250)
                                     try:
                                         # Summary below the table
                                         fills_n = int(len(df_fills))
@@ -12709,7 +12709,7 @@ def show_visualizer():
                             st.info(summary)
                         if not sample_df.empty:
                             with st.expander("Missing candles (sample)", expanded=False):
-                                st.dataframe(sample_df, use_container_width=True, height=200)
+                                st.dataframe(sample_df, width='stretch', height=200)
 
                         # Offer actions.
                         try:
@@ -12735,7 +12735,7 @@ def show_visualizer():
                         if st.button(
                             "Shift start time forward (keep warmup)",
                             key="se_compare_shift_start_btn",
-                            use_container_width=True,
+                            width='stretch',
                             help="Moves the analysis/compare start forward so the required warmup window no longer includes missing candles (or missing history before the first available candle).",
                         ):
                             try:
@@ -12849,7 +12849,7 @@ def show_visualizer():
                         if mismatches_only and not cmp_df.empty:
                             cmp_df = cmp_df[cmp_df["status"] != "match"].copy()
                         st.write(f"**{title}**")
-                        st.dataframe(cmp_df, use_container_width=True)
+                        st.dataframe(cmp_df, width='stretch')
 
                         # Debug helper: dump PB7 open orders around the first mismatch.
                         # This helps determine whether the mismatching fill is caused by
@@ -13935,7 +13935,7 @@ def generate_animation_v7(start_time, frames, step_mins, hist_df, symbol, contex
     layout = go.Layout(**layout_args)
     
     fig = go.Figure(data=init_data, layout=layout, frames=fig_frames)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def generate_animation_v7_modeb(
@@ -15180,7 +15180,7 @@ def generate_animation_v7_modeb(
             }
         except Exception:
             pass
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+        st.plotly_chart(fig, width='stretch', config={"displayModeBar": True})
 
         # Fills table under the chart
         try:
@@ -15211,7 +15211,7 @@ def generate_animation_v7_modeb(
                     st.session_state["se_movie_fills_modeb"] = df_fills
                 except Exception:
                     pass
-                st.dataframe(df_fills, use_container_width=True, height=250)
+                st.dataframe(df_fills, width='stretch', height=250)
                 try:
                     fills_n = int(len(df_fills))
                     df_s = df_fills
@@ -16450,7 +16450,7 @@ def generate_animation_v7_modec(
             }
         except Exception:
             pass
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+        st.plotly_chart(fig, width='stretch', config={"displayModeBar": True})
 
         # Fills table under the chart
         try:
@@ -16477,7 +16477,7 @@ def generate_animation_v7_modec(
                     st.session_state["se_movie_fills_modec"] = df_fills
                 except Exception:
                     pass
-                st.dataframe(df_fills, use_container_width=True, height=250)
+                st.dataframe(df_fills, width='stretch', height=250)
                 # Summary (keep robust: don't hide the whole section due to one parsing error)
                 fills_n = int(len(df_fills))
                 df_s = df_fills

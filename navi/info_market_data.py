@@ -1153,7 +1153,7 @@ def _render_jobs_panel(
                 df_rows = pd.DataFrame(rows)
                 event = st.dataframe(
                     df_rows,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     height=int(table_height),
                     on_select="rerun",
@@ -1492,7 +1492,7 @@ def _tradfi_spec_view_dialog():
     table_height = min(1100, max(540, 34 * (len(view_rows) + 2)))
     st.dataframe(
         view_rows,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=int(table_height),
         column_config={
@@ -2782,14 +2782,14 @@ def view_market_data():
                     _c1, _c2 = st.columns([1, 1])
                     with _c1:
                         if not _bnc_queued:
-                            if st.button("⏩ Refresh now", key="bnc_run_now_btn", help="Skip wait and trigger next Binance refresh cycle immediately", use_container_width=True):
+                            if st.button("⏩ Refresh now", key="bnc_run_now_btn", help="Skip wait and trigger next Binance refresh cycle immediately", width='stretch'):
                                 try:
                                     _bnc_flag_path.touch()
                                     st.toast("Refresh triggered — cycle will start within seconds.")
                                 except Exception as _e:
                                     st.error(f"Failed: {_e}")
                         else:
-                            if st.button("⏹ Cancel queued refresh", key="bnc_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", use_container_width=True):
+                            if st.button("⏹ Cancel queued refresh", key="bnc_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", width='stretch'):
                                 try:
                                     _bnc_flag_path.unlink(missing_ok=True)
                                     st.toast("Queued refresh cancelled.")
@@ -2797,7 +2797,7 @@ def view_market_data():
                                     st.error(f"Failed: {_e}")
                     with _c2:
                         if _bnc_running:
-                            if st.button("⏹ Stop current run", key="bnc_stop_btn", type="primary", help="Stop after the current coin finishes", use_container_width=True):
+                            if st.button("⏹ Stop current run", key="bnc_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
                                 try:
                                     _bnc_stop_path.touch()
                                     st.toast("Stop signal sent — run will abort after current coin.")
@@ -2838,7 +2838,7 @@ def view_market_data():
                                     "next_run_in_s": next_run,
                                     "note": (cst.get("note") or cst.get("error") or "") if isinstance(cst, dict) else "",
                                 })
-                            st.dataframe(bnc_status_rows, use_container_width=True)
+                            st.dataframe(bnc_status_rows, width='stretch')
                         else:
                             st.info("No Binance latest 1m status available yet.")
             _bnc_status_fragment()
@@ -2869,7 +2869,7 @@ def view_market_data():
                     [0.18, 0.22, 0.22, 0.38], vertical_alignment="bottom"
                 )
                 with bnc_c_build:
-                    bnc_run = st.button("Build best 1m", key="market_data_bnc_best_1m_run", use_container_width=True)
+                    bnc_run = st.button("Build best 1m", key="market_data_bnc_best_1m_run", width='stretch')
                 with bnc_c_start:
                     bnc_start_date = st.date_input(
                         "Start date (optional)", value=None,
@@ -2959,14 +2959,14 @@ def view_market_data():
                     _c1, _c2 = st.columns([1, 1])
                     with _c1:
                         if not _hl_queued:
-                            if st.button("⏩ Refresh now", key="hl_run_now_btn", help="Skip wait and trigger next Hyperliquid refresh cycle immediately", use_container_width=True):
+                            if st.button("⏩ Refresh now", key="hl_run_now_btn", help="Skip wait and trigger next Hyperliquid refresh cycle immediately", width='stretch'):
                                 try:
                                     _hl_flag_path.touch()
                                     st.toast("Refresh triggered — cycle will start within seconds.")
                                 except Exception as _e:
                                     st.error(f"Failed: {_e}")
                         else:
-                            if st.button("⏹ Cancel queued refresh", key="hl_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", use_container_width=True):
+                            if st.button("⏹ Cancel queued refresh", key="hl_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", width='stretch'):
                                 try:
                                     _hl_flag_path.unlink(missing_ok=True)
                                     st.toast("Queued refresh cancelled.")
@@ -2974,7 +2974,7 @@ def view_market_data():
                                     st.error(f"Failed: {_e}")
                     with _c2:
                         if _hl_running:
-                            if st.button("⏹ Stop current run", key="hl_stop_btn", type="primary", help="Stop after the current coin finishes", use_container_width=True):
+                            if st.button("⏹ Stop current run", key="hl_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
                                 try:
                                     _hl_stop_path.touch()
                                     st.toast("Stop signal sent — run will abort after current coin.")
@@ -3020,7 +3020,7 @@ def view_market_data():
                                         "next_run_in_s": next_run,
                                     }
                                 )
-                            st.dataframe(rows, use_container_width=True)
+                            st.dataframe(rows, width='stretch')
                         else:
                             st.info("No latest 1m status available yet.")
             _hl_status_fragment()
@@ -3145,7 +3145,7 @@ def view_market_data():
 
                 c_build, c_start, c_end, c_refetch = st.columns([0.18, 0.22, 0.22, 0.38], vertical_alignment="bottom")
                 with c_build:
-                    run_improve = st.button("Build best 1m", key="market_data_hl_best_1m_run_improve", use_container_width=True)
+                    run_improve = st.button("Build best 1m", key="market_data_hl_best_1m_run_improve", width='stretch')
                 with c_start:
                     build_start_date = st.date_input(
                         "Start date (optional)",
@@ -3432,7 +3432,7 @@ def view_market_data():
                     df.columns = [label for _, label in display_cols]
                     sel = st.dataframe(
                         df,
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                         selection_mode="single-row",
                         on_select="rerun",
@@ -4209,7 +4209,7 @@ def view_market_data():
             }
             event = st.dataframe(
                 df_display,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 on_select="rerun",
                 selection_mode="single-row",
@@ -4747,7 +4747,7 @@ def view_market_data():
                 }
                 event_pb7 = st.dataframe(
                     df_pb7_display,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     on_select="rerun",
                     selection_mode="single-row",
@@ -4991,7 +4991,7 @@ def view_market_data():
                                     unsafe_allow_html=True,
                                 )
                                 st.caption("Overview (days). Select a month below to inspect minutes.")
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width='stretch')
 
                                 # Build month list from date range
                                 chart_full_start_day = str(start_day or "")
@@ -5267,7 +5267,7 @@ def view_market_data():
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
                                 unsafe_allow_html=True,
                             )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
 
                         with st.expander("OHLCV chart", expanded=False):
                             show_volume = True
@@ -5483,7 +5483,7 @@ def view_market_data():
                         xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
                         yaxis=dict(autorange="reversed", showgrid=False),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
                     if ds_l.startswith("pb7_cache:"):
                         with st.expander("OHLCV chart", expanded=False):

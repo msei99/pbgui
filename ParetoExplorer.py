@@ -395,7 +395,7 @@ class ParetoExplorer:
                 st.button(
                     "🔄 Load all_results.bin",
                     help="Load all optimization results to compare with non-Pareto configs. This may take 10-30 seconds.",
-                    use_container_width=True,
+                    width='stretch',
                     on_click=_set_all_results_loaded,
                     args=(True,),
                 )
@@ -412,7 +412,7 @@ class ParetoExplorer:
                 st.button(
                     "⚡ Switch to Fast Mode",
                     help="Show only Pareto configs for faster performance",
-                    use_container_width=True,
+                    width='stretch',
                     on_click=_set_all_results_loaded,
                     args=(False,),
                 )
@@ -1632,7 +1632,7 @@ class ParetoExplorer:
                     st.info("Some near-edge expansions were limited (e.g. lower bound clamped to 0). See 'expand_note'.")
                 if _rows:
                     st.caption(f"{len(_rows)} bound(s) listed (added/removed/changed/limited).")
-                    st.dataframe(_rows, use_container_width=True, hide_index=True)
+                    st.dataframe(_rows, width='stretch', hide_index=True)
                 else:
                     st.caption("No bounds changes detected.")
 
@@ -1640,7 +1640,7 @@ class ParetoExplorer:
                     st.write("**Parameters near bounds**")
                     if near_rows:
                         st.caption(f"{len(near_rows)} parameter(s) are near bounds (tolerance {near_bounds_tol:.0%}).")
-                        st.dataframe(near_rows, use_container_width=True, hide_index=True)
+                        st.dataframe(near_rows, width='stretch', hide_index=True)
                     else:
                         st.caption("No parameters near bounds detected (or data unavailable).")
             except Exception:
@@ -1650,7 +1650,7 @@ class ParetoExplorer:
             if st.button(
                 "💾 Create Optimize Preset",
                 type="primary",
-                use_container_width=True,
+                width='stretch',
                 key=f"{key_prefix}_create_preset",
             ):
                 try:
@@ -2550,7 +2550,7 @@ class ParetoExplorer:
         st.markdown("---")
         col_bt1, col_bt2, col_bt3 = st.columns([1, 2, 1])
         with col_bt2:
-            if st.button("🚀 Run Backtest with this Config", use_container_width=True, type="primary"):
+            if st.button("🚀 Run Backtest with this Config", width='stretch', type="primary"):
                 try:
                     import BacktestV7
                     from pbgui_func import get_navi_paths, pb7dir
@@ -3419,7 +3419,7 @@ class ParetoExplorer:
                         title_prefix=""
                     )
                     fig_xy.update_layout(height=400, showlegend=False)
-                    event_xy = st.plotly_chart(fig_xy, key='chart_xy', on_select="rerun", use_container_width=True)
+                    event_xy = st.plotly_chart(fig_xy, key='chart_xy', on_select="rerun", width='stretch')
                 
                 with col_xz:
                     st.markdown(f"**XZ Plane**<br><small>{x_metric} vs {z_metric}</small>", unsafe_allow_html=True)
@@ -3432,7 +3432,7 @@ class ParetoExplorer:
                         title_prefix=""
                     )
                     fig_xz.update_layout(height=400, showlegend=False)
-                    event_xz = st.plotly_chart(fig_xz, key='chart_xz', on_select="rerun", use_container_width=True)
+                    event_xz = st.plotly_chart(fig_xz, key='chart_xz', on_select="rerun", width='stretch')
                 
                 with col_yz:
                     st.markdown(f"**YZ Plane**<br><small>{y_metric} vs {z_metric}</small>", unsafe_allow_html=True)
@@ -3445,7 +3445,7 @@ class ParetoExplorer:
                         title_prefix=""
                     )
                     fig_yz.update_layout(height=400, showlegend=False)
-                    event_yz = st.plotly_chart(fig_yz, key='chart_yz', on_select="rerun", use_container_width=True)
+                    event_yz = st.plotly_chart(fig_yz, key='chart_yz', on_select="rerun", width='stretch')
                 
                 # Handle click events from any of the three charts
                 for event in [event_xy, event_xz, event_yz]:
@@ -4186,7 +4186,7 @@ class ParetoExplorer:
                         fig = self.viz.plot_risk_profile_radar(selected_configs, labels)
                         
                         # Make radar chart clickable to select configs
-                        radar_selection = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key='risk_profile_radar')
+                        radar_selection = st.plotly_chart(fig, width='stretch', on_select="rerun", key='risk_profile_radar')
                         
                         # Handle clicks on radar chart (both points and legend)
                         if radar_selection and hasattr(radar_selection, 'selection'):

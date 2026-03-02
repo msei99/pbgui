@@ -17,7 +17,7 @@ try:
     from streamlit_bokeh import streamlit_bokeh  # type: ignore
 except Exception:
     def streamlit_bokeh(fig, **kwargs):
-        return st.bokeh_chart(fig, use_container_width=kwargs.get("use_container_width", True))
+        return st.bokeh_chart(fig, width='stretch')
 import numpy as np
 from shutil import rmtree
 import sys

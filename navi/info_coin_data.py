@@ -326,7 +326,7 @@ def view_coindata():
         expanded=False,
     ):
         if unmatched_display:
-            st.dataframe(unmatched_display, use_container_width=True, hide_index=True)
+            st.dataframe(unmatched_display, width='stretch', hide_index=True)
         else:
             st.success("No unmatched CMC symbols for selected exchange.")
 
