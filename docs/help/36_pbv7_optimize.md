@@ -14,7 +14,6 @@ It is organised into four tabs at the top of the page:
 
 ## Config tab
 
-### List view
 Shows all saved optimisation configurations.
 
 Sidebar actions:
@@ -26,7 +25,6 @@ Sidebar actions:
 | `:material/edit:` | Edit the selected config |
 | `:material/delete:` | Delete the selected config(s) |
 
-### Edit view
 When you create or open a config the edit form opens in the Config tab.
 
 Sidebar actions:
@@ -102,7 +100,6 @@ Use the **Lines** selector to control how many historical lines are loaded on co
 
 ## Results tab
 
-### Results list
 Browse all completed optimisation results.
 
 Sidebar actions:
