@@ -22,6 +22,7 @@ from Exchange import set_ws_limits
 from market_data import load_market_data_config, get_daily_hour_coverage_for_dataset, set_enabled_coins
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
 from binance_best_1m import update_latest_binance_1m_for_coin
+from inventory_cache import refresh_coin as _refresh_inventory_coin
 
 
 async def _wait_for_flag(flag_path: _Path, timeout: float) -> bool:
@@ -729,6 +730,10 @@ class PBData():
                                 invalid_live_meta_coins.add(str(coin).strip().upper())
                         except Exception:
                             pass
+                        try:
+                            _refresh_inventory_coin("hyperliquid", "1m_api", coin)
+                        except Exception:
+                            pass
                     except Exception as e:
                         coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "error"
@@ -929,6 +934,10 @@ class PBData():
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
                         coin_status["api_result"] = res
+                        try:
+                            _refresh_inventory_coin("binanceusdm", "1m_api", coin)
+                        except Exception:
+                            pass
                     except Exception as e:
                         coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "error"

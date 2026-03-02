@@ -33,6 +33,7 @@ from task_queue import (
     write_worker_pid,
     enqueue_job,
 )
+from inventory_cache import refresh_coin as _refresh_inventory_coin
 
 
 _STOP = False
@@ -492,6 +493,11 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
                 )
             else:
                 update_progress(last_result=res, stage="running")
+        # After all days for this coin: refresh l2Book inventory cache
+        try:
+            _refresh_inventory_coin("hyperliquid", "l2Book", coin)
+        except Exception:
+            pass
     
     _append_to_job_log(job_id, f"job finished  downloaded={downloaded_total}  skipped={skipped_total}  failed={failed_total}")
 
@@ -695,6 +701,10 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         append_exchange_download_log("hyperliquid", f"[INFO] [hl_best_1m_job] {coin} {out}")
         update_progress(stage="running", last_result=out)
         _append_to_job_log(job_id, f"  {coin}  done  duration_s={int(time.time()-started_ts)}")
+        try:
+            _refresh_inventory_coin("hyperliquid", "1m", coin)
+        except Exception:
+            pass
 
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
@@ -816,6 +826,10 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         append_exchange_download_log("binanceusdm", f"[INFO] [binance_best_1m_job] {coin} {out}")
         _append_to_job_log(job_id, f"  {coin}  done  days_checked={out.get('days_checked', 0)}  minutes_written={out.get('minutes_written', 0)}  notes={out.get('notes', [])}")
         update_progress(stage="running", last_result=out)
+        try:
+            _refresh_inventory_coin("binanceusdm", "1m", coin)
+        except Exception:
+            pass
 
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
