@@ -14,7 +14,6 @@ Sie ist in vier Tabs am Seitenanfang gegliedert:
 
 ## Tab: Config
 
-### Listenansicht
 Zeigt alle gespeicherten Optimierungskonfigurationen.
 
 Sidebar-Aktionen:
@@ -26,7 +25,6 @@ Sidebar-Aktionen:
 | `:material/edit:` | Ausgewählte Config bearbeiten |
 | `:material/delete:` | Ausgewählte Config(s) löschen |
 
-### Bearbeitungsansicht
 Beim Erstellen oder Öffnen einer Config öffnet sich das Bearbeitungsformular im Config-Tab.
 
 Sidebar-Aktionen:
@@ -102,7 +100,6 @@ Mit dem **Lines**-Selektor lässt sich steuern, wie viele historische Zeilen bei
 
 ## Tab: Results
 
-### Ergebnisliste
 Zeigt alle abgeschlossenen Optimierungsergebnisse.
 
 Sidebar-Aktionen:
