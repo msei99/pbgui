@@ -1222,7 +1222,7 @@ class PBRun():
         if not any([self.pbdir, self.pb7dir]):
             if __name__ == '__main__':
                 _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
-                exit(1)
+                sys.exit(1)
             else:
                 _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
                 return
@@ -1236,7 +1236,7 @@ class PBRun():
         if not any([self.pbvenv, self.pb7venv]):
             if __name__ == '__main__':
                 _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
-                exit(1)
+                sys.exit(1)
             else:
                 _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 return
@@ -2448,16 +2448,11 @@ def main():
     - Logs in pbgui/data/logs/PBRun.log and creates a .old if the file is too heavy.
     - Create and monitor single, multi and instances of passivbot. (Instances will be deleted in future versions)
     """
-    pbgdir = Path.cwd()
-    dest = Path(f'{pbgdir}/data/logs')
-    if not dest.exists():
-        dest.mkdir(parents=True)
-    logfile = Path(f'{str(dest)}/PBRun.log')
-    _log("PBRun", "Start: PBRun")
     run = PBRun()
     if run.is_running():
         _log("PBRun", "PBRun already started", level="ERROR")
-        exit(1)
+        sys.exit(1)
+    _log("PBRun", "Start: PBRun")
     run.save_pid()
     if run.pb7dir:
         run.watch_v7()

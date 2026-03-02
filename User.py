@@ -328,9 +328,3 @@ class Users:
                 shutil.copy(PurePath(self.api7_path), destination)
             with Path(f'{self.api7_path}').open("w", encoding="UTF-8") as f:
                 json.dump(save_users, f, indent=4)
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

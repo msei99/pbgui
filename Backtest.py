@@ -26,7 +26,8 @@ from pathlib import Path, PurePath
 from shutil import rmtree
 import requests
 import datetime
-import logging
+import traceback
+from logging_helpers import human_log as _log
 
 class BacktestItem(Base):
     def __init__(self, config: str = None):
@@ -192,7 +193,7 @@ class BacktestItem(Base):
                 self.ed = t["ed"]
                 self.sb = t["sb"]
         except Exception as e:
-            print(f'{str(file)} is corrupted {e}')
+            _log('Backtest', f'{str(file)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
 
     def save(self):
         dest = Path(f'{PBGDIR}/data/bt_queue')
@@ -499,7 +500,7 @@ class BacktestResult:
             with open(r, "r", encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f'{str(r)} is corrupted {e}')
+            _log('Backtest', f'{str(r)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
 
     def load_result_txt(self):
         r = Path(f'{self.backtest_path}/backtest_result.txt')
@@ -525,7 +526,7 @@ class BacktestResults:
         self.results_d = []
 
     def remove(self, bt_result: BacktestResult):
-        print(bt_result.backtest_path)
+        _log('Backtest', str(bt_result.backtest_path), level='DEBUG')
         rmtree(bt_result.backtest_path, ignore_errors=True)
         self.backtests.remove(bt_result)
 
@@ -940,9 +941,6 @@ class BacktestResults:
 
 
 def main():
-    # Disable Streamlit Warnings when running directly
-    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
-    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     bt = BacktestQueue()
     while True:
         bt.load()
@@ -956,7 +954,7 @@ def main():
             if not eval(pb_config.get("backtest", "autostart")):
                 return
             if item.status() == "not started":
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.file} started')
+                _log('Backtest', f'Backtesting {item.file} started', level='INFO')
                 item.run()
         time.sleep(60)
 

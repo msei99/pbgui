@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as _st_components
 import json
 import hjson
 import pprint
@@ -172,9 +173,22 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.62 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': "Passivbot GUI v1.63 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
+    # Global layout CSS — applied on every page
+    st.markdown("""
+<style>
+    .stMainBlockContainer {
+        padding-top: 2.25rem !important;
+        padding-bottom: 0 !important;
+    }
+    .stMainBlockContainer h1,
+    .stMainBlockContainer h2,
+    .stMainBlockContainer h3 {
+        margin-top: 0.25rem !important;
+    }
+</style>""", unsafe_allow_html=True)
     # Check VPS Errors
     if str(page) != "VPS Monitor":
         has_vps_errors()
@@ -406,3 +420,89 @@ def has_vps_errors():
                     st.warning(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} Swap: {error["swap"]} CPU: {error["cpu"]} Disk: {error["disk"]}')
                 else:
                     st.warning(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} Swap: {error["swap"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}')
+
+
+# ── Log Viewer component ─────────────────────────────────────────────────────
+
+_LOG_VIEWER_DIR = Path(__file__).resolve().parent / "components" / "log_viewer"
+_LOG_VIEWER_HTML: str | None = None
+
+
+def _load_log_viewer_html() -> str:
+    global _LOG_VIEWER_HTML
+    if _LOG_VIEWER_HTML is None:
+        _LOG_VIEWER_HTML = (_LOG_VIEWER_DIR / "index.html").read_text(encoding="utf-8")
+    return _LOG_VIEWER_HTML
+
+
+def render_log_viewer(
+    preselect: str = "",
+    iframe_height_offset: int = 200,
+    display_title: str = "",
+) -> None:
+    """Render the WebSocket log viewer component.
+
+    Centralises all boilerplate: HTML loading, placeholder injection, CSS
+    override, and component rendering.
+
+    Args:
+        preselect: filename (e.g. ``"MarketData.log"``) to auto-open on load.
+        iframe_height_offset: pixels subtracted from ``100vh`` for the iframe
+            height.  Increase when there are tabs or extra widgets above the
+            viewer (default 200 for a plain page, ~260 when inside tabs).
+        display_title: optional human-readable label shown in the viewer
+            toolbar alongside the filename (e.g. the backtest name).
+    """
+    ws_port_val = load_ini("pbmaster", "ws_port")
+    ws_port = (
+        int(ws_port_val)
+        if ws_port_val and ws_port_val.isdigit() and 1024 <= int(ws_port_val) <= 65535
+        else 8765
+    )
+    logs_dir = Path(__file__).resolve().parent / "data" / "logs"
+    log_files: list[str] = []
+    if logs_dir.exists():
+        # Only top-level *.log — job logs (data/logs/jobs/) are intentionally excluded
+        # from the sidebar to avoid flooding it. They are loaded on-demand via preselect.
+        log_files = sorted(p.name for p in logs_dir.glob("*.log") if p.is_file())
+    file_sizes: dict = {}
+    rotated_files: dict = {}
+    if logs_dir.exists():
+        for base in log_files:
+            file_sizes[base] = (logs_dir / base).stat().st_size
+            variants: list[str] = []
+            for i in range(1, 20):
+                p = logs_dir / f"{base}.{i}"
+                if p.is_file():
+                    variants.append(p.name)
+                    file_sizes[p.name] = p.stat().st_size
+                else:
+                    break
+            p_old = logs_dir / f"{base}.old"
+            if p_old.is_file():
+                variants.append(p_old.name)
+                file_sizes[p_old.name] = p_old.stat().st_size
+            if variants:
+                rotated_files[base] = variants
+
+    html = (
+        _load_log_viewer_html()
+        .replace("__WS_PORT__", str(ws_port))
+        .replace("__INITIAL_FILES__", json.dumps(log_files))
+        .replace("__FILE_SIZES__", json.dumps(file_sizes))
+        .replace("__ROTATED_FILES__", json.dumps(rotated_files))
+        .replace("__PRESELECT_FILE__", json.dumps(preselect))
+        .replace("__DISPLAY_TITLE__",    json.dumps(display_title))
+    )
+
+    st.markdown(f"""
+<style>
+    /* Target the iframe only */
+    .stMainBlockContainer iframe {{
+        height: calc(100vh - {iframe_height_offset}px) !important;
+        min-height: 400px !important;
+        border: none !important;
+    }}
+</style>""", unsafe_allow_html=True)
+
+    _st_components.html(html, height=600, scrolling=False)

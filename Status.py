@@ -9,6 +9,7 @@ This status list is then sent through PBRemote to the remote storage, enabling u
 """
 from pathlib import Path
 import json
+from logging_helpers import human_log as _log
 
 class InstanceStatus():
     """Stores information about one passivbot configuration."""
@@ -138,7 +139,7 @@ class InstancesStatus():
                             status.running = instances["instances"][instance]["running"]
                             self.add(status)
                 except json.JSONDecodeError as e:
-                    print(f"Error loading status file: {e}")
+                    _log('Status', f'Error loading status file: {e}', level='ERROR')
 
     def save(self):
         """Saves the current status information to the status file."""
@@ -158,10 +159,3 @@ class InstancesStatus():
         file = Path(self.status_file)
         with open(file, "w", encoding='utf-8') as f:
             json.dump(status, f, indent=4)
-
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

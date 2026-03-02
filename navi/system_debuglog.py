@@ -1,6 +1,5 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_authenticted, get_navi_paths, PBGDIR, get_debuglog
-import logging
 import os
 import random
 from pathlib import Path
