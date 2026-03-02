@@ -1,6 +1,7 @@
 import streamlit as st
 import pbgui_help
-from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, sync_api, select_file, render_header_with_guide
+import time
+from pbgui_func import set_page_config, is_session_state_not_initialized, info_popup, error_popup, is_authenticted, get_navi_paths, select_file, render_header_with_guide
 from VPSManager import VPSManager, VPS
 import re
 from Monitor import Monitor
@@ -512,7 +513,33 @@ def list_vps():
     )
     st.info("Select your VPS in the sidebar to get a detailed VPS report.")
     with st.sidebar:
-        sync_api()
+        pbremote = st.session_state.pbremote
+        _api_sync = [
+            s for s in pbremote.remote_servers
+            if s.is_online() and not s.is_api_md5_same(pbremote.api_md5)
+        ]
+        if _api_sync:
+            _sync_names = ", ".join(s.name for s in _api_sync)
+            if st.button(":red[🔴 API not in sync]", key="vps_api_status_btn",
+                         help=f"Not in sync: {_sync_names} — Click to sync."):
+                pbremote.sync_api_up()
+                timeout = 180
+                _status = st.empty()
+                with st.spinner("Syncing API keys..."):
+                    while not pbremote.check_if_api_synced():
+                        _status.caption(f"{timeout}s — {pbremote.unsynced_api} server(s) remaining")
+                        time.sleep(1)
+                        timeout -= 1
+                        if timeout == 0:
+                            break
+                _status.empty()
+                if timeout == 0:
+                    st.error("API sync timed out")
+                else:
+                    st.toast("API keys synced", icon="✅")
+                st.rerun()
+        else:
+            st.button(":green[🟢 API in sync]", key="vps_api_status_btn", disabled=True)
 
 def manage_master():
     vpsmanager = st.session_state.vpsmanager

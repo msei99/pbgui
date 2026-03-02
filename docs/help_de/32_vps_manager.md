@@ -31,6 +31,10 @@ Sidebar:
 | **Master (local)** Schaltfläche | Master-Verwaltungsansicht öffnen |
 | **VPS-Hostname** Schaltflächen | Per-VPS-Verwaltungsansicht öffnen |
 
+Am Ende der Sidebar zeigt eine **API-Sync-Status-Schaltfläche** den aktuellen Stand:
+- **🟢 API in sync** (grün, deaktiviert) — alle Online-VPS-Server haben die aktuellen API-Keys
+- **🔴 API not in sync** (rot, klickbar) — ein oder mehrere Server sind veraltet; klicken, um Keys auf alle zu übertragen; ein Live-Zähler zeigt verbleibende Server an (Timeout: 180 s)
+
 ---
 
 ## Master-Verwaltung
@@ -112,4 +116,5 @@ Der **Log-Viewer** am Seitenende erlaubt das Abrufen und Anzeigen beliebiger Log
 
 ### API-Key-Synchronisation prüfen
 - Spalte **API Sync** in der Übersicht: ❌ bedeutet, dass VPS-Keys veraltet sind
-- VPS-Detailansicht öffnen → **Update CoinData API** (oder den globalen **API Sync**-Button in der Sidebar verwenden)
+- Sidebar-Ende: erscheint eine **🔴 API not in sync** Schaltfläche, klicken um Keys mit Live-Fortschrittszähler zu synchronisieren
+- Pro VPS: VPS-Detailansicht öffnen → **Update CoinData API**
