@@ -67,7 +67,7 @@ class ParetoExplorer:
         self.loader = None
         self.viz = None
         
-    def run(self):
+    def run(self, stage: str = "Command Center"):
         """Main entry point - runs the Streamlit app"""
 
         show_timings = bool(st.session_state.get('pareto_show_timings', False))
@@ -215,14 +215,12 @@ class ParetoExplorer:
             self.viz = ParetoVisualizations(self.loader)
         
         # Main content area
-        stage = st.session_state.get('stage', 'Command Center')
-
         with timer.section(f"stage:{stage}"):
-            if stage == 'Command Center':
+            if stage == "Command Center":
                 self._show_command_center()
-            elif stage == 'Pareto Playground':
+            elif stage == "Pareto Playground":
                 self._show_pareto_playground()
-            elif stage == 'Deep Intelligence':
+            elif stage == "Deep Intelligence":
                 self._show_deep_intelligence()
 
         if show_timings:
@@ -489,40 +487,6 @@ class ParetoExplorer:
                 st.info(f"📍 Showing **{num_showing:,}** configs (Rank {view_range[0]+1}-{view_range[1]})")
                 
                 st.markdown("---")
-            
-            # Navigation
-            st.subheader("🗺️ Navigate")
-            
-            stages = [
-                "🎯 Command Center",
-                "🎨 Pareto Playground", 
-                "🧠 Deep Intelligence",
-            ]
-            
-            # Remove emoji for session state key
-            stage_keys = [s.split(' ', 1)[1] for s in stages]
-            
-            # Get current stage from session state
-            current_stage = st.session_state.get('stage', 'Command Center')
-            
-            # Find index of current stage
-            try:
-                current_index = stage_keys.index(current_stage)
-            except ValueError:
-                current_index = 0  # Default to Command Center
-            
-            selected = st.radio(
-                "Choose Stage:",
-                stages,
-                index=current_index,
-                key='stage_selector',
-                label_visibility='collapsed'
-            )
-            
-            # Store selected stage
-            st.session_state['stage'] = selected.split(' ', 1)[1]
-            
-            st.markdown("---")
             
             # Quick actions
             st.subheader("⚡ Quick Actions")
@@ -1755,7 +1719,6 @@ class ParetoExplorer:
     def _show_command_center(self):
         """Stage 1: Command Center - Overview and Top Performers"""
         
-        st.title("🎯 COMMAND CENTER")
         st.markdown("**High-level overview of your optimization run**")
         
         # Load Strategy Configuration Section
@@ -2643,13 +2606,8 @@ class ParetoExplorer:
     def _show_pareto_playground(self):
         """Stage 2: Pareto Playground - Interactive Exploration"""
         
-        st.title("🎨 PARETO PLAYGROUND")
-        st.markdown("**Interactive multi-dimensional exploration**")
-        
-        st.markdown("---")
-        
         # Preference sliders
-        st.subheader("🎚️ YOUR PREFERENCES")
+        st.subheader("🎚 Your Preferences")
         
         col1, col2, col3 = st.columns(3)
         
@@ -3584,10 +3542,6 @@ class ParetoExplorer:
     
     def _show_deep_intelligence(self):
         """Stage 3: Deep Intelligence - Parameter & Market Analysis"""
-        
-        st.title("🧠 DEEP INTELLIGENCE")
-        st.markdown("**Advanced parameter and scenario analysis**")
-
 
         # Persist active tab across reruns/mode switches.
         # Streamlit tabs do not expose a readable active tab state, so we use a stateful

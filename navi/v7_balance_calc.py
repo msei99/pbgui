@@ -1,6 +1,6 @@
 import streamlit as st
 from pathlib import Path
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide
 from Config import BalanceCalculator
 
 
@@ -70,17 +70,17 @@ if not is_authenticted() or is_session_state_not_initialized():
 
 # Page Setup
 set_page_config("PBv7 Balance Calculator")
-_c_title, _c_help = st.columns([0.94, 0.06], vertical_alignment="center")
-with _c_title:
-    st.header("PBv7 Balance Calculator")
-with _c_help:
-    if st.button("📖 Guide", key="bc_guide_btn", help="Open help and tutorials"):
-        _help_modal("Balance Calculator")
-        st.stop()
-st.markdown(
-    "<hr style='width:100%;margin-top:-0.5rem;margin-bottom:1rem;border:0;border-top:2px solid #ff4b4b;' />",
-    unsafe_allow_html=True,
+
+render_header_with_guide(
+    "PBv7 Balance Calculator",
+    guide_callback=lambda: (st.session_state.update({"bc_open_guide": True}), st.rerun()),
+    guide_key="bc_guide_btn",
 )
+
+# Open guide dialog in a clean run (after header render, before balance_calculator() to avoid dialog conflict)
+if st.session_state.pop("bc_open_guide", False):
+    _help_modal("Balance Calculator")
+    st.stop()
 
 # Check if PB7 is installed
 if not is_pb7_installed():

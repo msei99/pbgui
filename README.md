@@ -348,6 +348,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Improved: Logging guide updated with "Where to find what" table — users can quickly look up which log file contains messages for each component
 - Fix: PBRemote — 10 stability fixes (file handle leaks, UnboundLocalErrors, atomic API key writes, list mutation during iteration, infinite recursion in `__next__`, corrupt JSON crash in sync loop)
 - Fix: VPS branch switch playbooks — use `git reset --hard` instead of `git pull` to handle divergent branches (e.g. after PR merge)
+- Improved: Pareto Explorer — sidebar navigation replaced with segmented-control tabs (Command Center / Pareto Playground / Deep Intelligence) matching Backtest and Optimize; oversized stage titles removed; 📖 Guide button added (EN + DE)
+- New: Balance Calculator — 📖 Guide button added (EN + DE)
 
 ## v1.62 (01-03-2026)
 - New: Binance USDM full historical 1m OHLCV backfill — inception-to-today via official monthly/daily archive ZIPs (data.binance.vision) with CCXT gap-fill; same NPZ format as PB7 cache

@@ -1,6 +1,6 @@
 import streamlit as st
 from pathlib import Path
-from pbgui_func import is_session_state_not_initialized, is_authenticted
+from pbgui_func import is_session_state_not_initialized, is_authenticted, set_page_config, render_header_with_guide
 from ParetoExplorer import ParetoExplorer
 
 
@@ -55,15 +55,7 @@ def _help_modal(default_topic: str = "Pareto Explorer"):
     )
     st.markdown(_read_markdown(docs[int(sel)][1]), unsafe_allow_html=True)
 
-# Reduce top padding
-st.markdown("""
-<style>
-    .block-container {
-        padding-top: 1rem;
-        padding-bottom: 0rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+set_page_config("Pareto Explorer")
 
 # Authentication check
 if is_session_state_not_initialized() or not is_authenticted():
@@ -103,18 +95,30 @@ with st.sidebar:
     
     st.caption(display_name, help=f"📂 {result_name}")
 
-    if st.button("📖 Guide", key="pareto_guide_btn", use_container_width=True):
-        _help_modal("Pareto Explorer")
-
     if st.button("← Back to Optimize Results", use_container_width=True):
         if "pareto_explorer_path" in st.session_state:
             del st.session_state.pareto_explorer_path
         st.switch_page("navi/v7_optimize.py")
 
+# Page header with Guide button (top-right)
+render_header_with_guide(
+    "Pareto Explorer",
+    guide_callback=lambda: _help_modal("Pareto Explorer"),
+    guide_key="pareto_guide_btn",
+)
+
+# Stage navigation (same pattern as Backtest / Optimize)
+_PARETO_TABS = ["Command Center", "Pareto Playground", "Deep Intelligence"]
+if "pareto_main_view" not in st.session_state:
+    st.session_state.pareto_main_view = "Command Center"
+_active_stage = st.segmented_control(
+    "", options=_PARETO_TABS, default="Command Center", key="pareto_main_view"
+) or "Command Center"
+
 # Run the Pareto Explorer
 try:
     explorer = ParetoExplorer(st.session_state.pareto_explorer_path)
-    explorer.run()
+    explorer.run(stage=_active_stage)
 except Exception as e:
     st.error(f"❌ Error loading Pareto Explorer: {e}")
     st.exception(e)
