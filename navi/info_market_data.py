@@ -4101,11 +4101,24 @@ def view_market_data():
         _missing_lag_minutes = max(0, int((_latest_interval_s + 59) // 60))
 
         from inventory_cache import get_inventory as _get_inventory
+        import time as _time
+
+        def _get_inventory_cached(exchange: str, dataset: str, lag_minutes: int, **kwargs) -> list:
+            """Session-state TTL cache (30s) around get_inventory to avoid recomputing on every Streamlit rerun."""
+            cache_key = f"_inv_cache_{exchange}_{dataset}"
+            ts_key = f"_inv_ts_{exchange}_{dataset}"
+            now = _time.monotonic()
+            if cache_key in st.session_state and now - st.session_state.get(ts_key, 0) < 30.0:
+                return st.session_state[cache_key]
+            result = _get_inventory(exchange, dataset, lag_minutes=lag_minutes, **kwargs)
+            st.session_state[cache_key] = result
+            st.session_state[ts_key] = now
+            return result
 
         # Helper function to render table for a specific dataset
         def _render_dataset_table(dataset_ds: str, tab_key: str) -> tuple:
             _is_hl = str(_storage_ex) == "hyperliquid"
-            _raw = _get_inventory(
+            _raw = _get_inventory_cached(
                 _storage_ex,
                 dataset_ds,
                 lag_minutes=_missing_lag_minutes,
