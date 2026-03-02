@@ -9,6 +9,7 @@ from time import sleep
 from datetime import datetime
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _human_log
+from logging_helpers import human_log as _log
 
 from ccxt.base.errors import (
     AuthenticationError,
@@ -1051,14 +1052,14 @@ class Exchange:
                     last_trade = trades[-1]
                     all_histories = trades + all_histories
                 if len(trades) == limit:
-                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(first_trade['timestamp']), 'till', self.instance.iso8601(last_trade['timestamp']))
+                    _log('Exchange', f'User:{self.user.name} Fetched {len(trades)} trades from {self.instance.iso8601(first_trade["timestamp"])} till {self.instance.iso8601(last_trade["timestamp"])}', level='DEBUG')
                     end = trades[0]['timestamp']
                 else:
-                    print(f'User:{self.user.name} Fetched', len(trades), 'trades from', self.instance.iso8601(since), 'till', self.instance.iso8601(end))
+                    _log('Exchange', f'User:{self.user.name} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='DEBUG')
                     since = since + week
                     end = since + week
                 if since > now:
-                    print(f'User:{self.user.name} Done')
+                    _log('Exchange', f'User:{self.user.name} Done', level='DEBUG')
                     break
             for history in all_histories:
                 income = {}
@@ -2856,7 +2857,7 @@ class Exchange:
                                 cpSymbols.append(symbol["symbol"])
                             break
                     except Exception as e:
-                        print(f'User:{self.user.name} Error:', e)
+                        _log('Exchange', f'User:{self.user.name} Error: {e}', level='ERROR')
         cpSymbols.sort()
         return cpSymbols
 
@@ -2985,76 +2986,4 @@ class Exchange:
             # print(symbol, we, min_price, balance_needed_symbol)
         return balance_needed
 
-            
-def main():
-    print("Don't Run this Class from CLI")
-    # exchange = Exchange("gateio", None)
-    # exchange.fetch_symbols()
-    # print(exchange.swap)
-    # users = Users()
-    # exchange = Exchange("bitget", users.find_user("bitget_CPT"))
-    # exchange.fetch_symbols()
-    # print(exchange.fetch_copytrading_symbols())
-    # exchange = Exchange("hyperliquid", users.find_user("hl_HYPErQuantum"))
-    # print(exchange.fetch_prices(["DOGE/USDC:USDC", "WIF/USDC:USDC"], "swap"))
-    # exchange = Exchange("binance", users.find_user("binance_CPT"))
-    # exchange = Exchange("bybit", users.find_user("HYPErQuantum"))
-    # exchange = Exchange("hyperliquid", users.find_user("hl_mani05_DOGE"))
-    # exchange = Exchange("bitget", users.find_user("bitget_HYPErQuantum"))
-    # exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
-    # symbols = ["BTCUSDT"]
-    # symbols = ["DOGEUSDT", "VETUSDT", "ICPUSDT", "INJUSDT"]
-    # exchange = Exchange("hyperliquid", None)
-    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDC')
-    # exchange = Exchange("okx", None)
-    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    # exchange = Exchange("binance", None)
-    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    # exchange = Exchange("bybit", None)
-    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    # exchange = Exchange("bitget", None)
-    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    # exchange = Exchange("gateio", None)
-    # balance_needed = exchange.calculate_balance_needed(symbols, 12.0, 0.03215)
-    # print(f'Balance needed on {exchange.id} for {symbols} is {balance_needed:.2f} USDT')
-    # exchange.load_market()
-    # exchange.fetch_symbol_min_order_price("BTCUSDT")
-    # exchange.fetch_symbol_min_order_price("ETHUSDT")
-    # exchange.fetch_symbol_min_order_price("SOLUSDT")
-    # exchange.fetch_symbol_min_order_price("DOGEUSDT")
-    # save markets as json
-    # with open('binance_markets.json', 'w') as f:
-    #     json.dump(exchange._markets, f, indent=4)
-    
 
-    # exchange.fetch_symbols()
-    # print(exchange.fetch_copytrading_symbols())
-    # exchange = Exchange("bybit", users.find_user("bybit_CPTV7HR"))
-    # print(exchange.fetch_balance("swap"))
-    # exchange.fetch_symbols()
-    # exchange = Exchange("okx", users.find_user("okx_MAINCPT"))
-    # exchange.fetch_symbols()
-    # print(allowed_symbols)
-    # print(exchange.swap)
-    # print(exchange.fetch_positions())
-    # print(exchange.fetch_all_open_orders("DOGE/USDC:USDC"))
-    # print(exchange.fetch_prices(["DOGE/USDC:USDC"], "swap"))
-    # print(exchange.fetch_prices(["DOGE/USDT:USDT", "WIF/USDT:USDT"], "swap"))
-    # print(exchange.fetch_balance("swap"))
-
-    # print(exchange.symbol_to_exchange_symbol("BTCUSDC", "swap"))
-    # print(exchange.fetch_symbol_info("DOGEUSDC", "swap"))
-    # print(exchange.fetch_price("DOGE/USDC:USDC", "swap"))
-    # exchange.fetch_symbols()
-    # spot = exchange.fetch_spot()
-    # print(exchange.fetch_history(1749323083834))
-    # print(exchange.fetch_balance("swap"))
-    # print(spot)
-
-if __name__ == '__main__':
-    main()

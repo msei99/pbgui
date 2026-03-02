@@ -1,10 +1,10 @@
 import streamlit as st
+import time
 from pbgui_func import (
     set_page_config,
     is_session_state_not_initialized,
     is_authenticted,
     get_navi_paths,
-    sync_api,
     render_header_with_guide,
 )
 from User import User, Users
@@ -634,7 +634,32 @@ def select_user():
         if st.button("Add"):
             st.session_state.edit_user = User()
             st.rerun()
-        sync_api()
+        _api_sync = [
+            s for s in pbremote.remote_servers
+            if s.is_online() and not s.is_api_md5_same(pbremote.api_md5)
+        ]
+        if _api_sync:
+            _sync_names = ", ".join(s.name for s in _api_sync)
+            if st.button(":red[🔴 API not in sync]", key="apikeys_api_status_btn",
+                         help=f"Not in sync: {_sync_names} — Click to sync."):
+                pbremote.sync_api_up()
+                timeout = 180
+                _status = st.empty()
+                with st.spinner("Syncing API keys..."):
+                    while not pbremote.check_if_api_synced():
+                        _status.caption(f"{timeout}s — {pbremote.unsynced_api} server(s) remaining")
+                        time.sleep(1)
+                        timeout -= 1
+                        if timeout == 0:
+                            break
+                _status.empty()
+                if timeout == 0:
+                    st.error("API sync timed out")
+                else:
+                    st.toast("API keys synced", icon="✅")
+                st.rerun()
+        else:
+            st.button(":green[🟢 API in sync]", key="apikeys_api_status_btn", disabled=True)
     if f'editor_{st.session_state.ed_user_key}' in st.session_state:
         ed = st.session_state[f'editor_{st.session_state.ed_user_key}']
         for row in ed["edited_rows"]:

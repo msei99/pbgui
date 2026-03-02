@@ -562,9 +562,3 @@ class Monitor():
         with col4:
             st.number_input('CPU Error', step=1.0, format="%.1f", key="edit_cpu_error_single")
             st.number_input('Traceback Error', step=1.0, format="%.1f", key="edit_traceback_error_single")
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

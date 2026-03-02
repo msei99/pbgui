@@ -16,6 +16,8 @@ from pathlib import Path, PurePath
 import re
 import time
 import hashlib
+import traceback
+from logging_helpers import human_log as _log
 
 try:
     import msgspec  # type: ignore
@@ -851,9 +853,9 @@ class ParetoDataLoader:
                         _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
 
                 parsed_count += 1
-        except Exception:
-            import traceback
-            traceback.print_exc()
+        except Exception as e:
+            _log('ParetoDataLoader', f'Error during scan: {e}', level='ERROR',
+                 meta={'traceback': traceback.format_exc()})
             return False
         t_scan = time.perf_counter() - t_scan0
 
@@ -1354,9 +1356,8 @@ class ParetoDataLoader:
                         parsed_count += 1
             except Exception as e:
                 if parsed_count < 3:  # Show first 3 errors
-                    import traceback
-                    print(f"Error parsing {json_file}:")
-                    traceback.print_exc()
+                    _log('ParetoDataLoader', f'Error parsing {json_file}: {e}', level='ERROR',
+                         meta={'traceback': traceback.format_exc()})
                 continue
 
             t_parse = time.perf_counter() - t_parse0
@@ -1776,8 +1777,6 @@ class ParetoDataLoader:
             return self.pareto_configs_cache[config_index]
         
         try:
-            import json
-            
             # Get sorted pareto JSON files
             pareto_files = sorted([f for f in os.listdir(self.pareto_dir) if f.endswith('.json')])
             if not pareto_files:
@@ -1843,9 +1842,8 @@ class ParetoDataLoader:
             return None
             
         except Exception as e:
-            import traceback
-            print(f"Error loading full config for index {config_index}: {e}")
-            traceback.print_exc()
+            _log('ParetoDataLoader', f'Error loading full config for index {config_index}: {e}', level='ERROR',
+                 meta={'traceback': traceback.format_exc()})
             return None
 
     def _parse_config_light(
@@ -2338,9 +2336,8 @@ class ParetoDataLoader:
             )
         
         except Exception as e:
-            import traceback
-            print(f"Error parsing JSON config at index {idx}:")
-            traceback.print_exc()
+            _log('ParetoDataLoader', f'Error parsing JSON config at index {idx}: {e}', level='ERROR',
+                 meta={'traceback': traceback.format_exc()})
             return None
     
     def get_pareto_configs(self) -> List[ConfigMetrics]:

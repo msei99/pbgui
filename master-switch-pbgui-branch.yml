@@ -57,8 +57,8 @@
       register: commit_reset
       notify: restart pbgui
 
-    - name: Pull latest changes (only if no specific commit provided)
-      command: git pull
+    - name: Reset to latest remote HEAD (only if no specific commit provided)
+      command: git reset --hard "origin/{{ target_branch }}"
       args:
         chdir: "{{ pbgdir }}"
       when: target_commit == ""

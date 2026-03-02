@@ -11,6 +11,7 @@ from threading import Lock
 
 from hyperliquid_api import resolve_hyperliquid_coin_name
 from market_data import normalize_market_data_coin_dir
+from logging_helpers import human_log as _log
 
 
 HYPERLIQUID_AWS_REGION = "us-east-2"
@@ -854,7 +855,7 @@ def download_hyperliquid_l2book_aws(
             if fail_fast:
                 raise
             if verbose:
-                print(f"[hyperliquid_aws] download failed: s3://{bucket}/{obj.key}: {exc!r}")
+                _log('HyperliquidAWS', f'Download failed: s3://{bucket}/{obj.key}: {exc!r}', level='WARNING')
             err_code = _s3_error_code(exc)
             err_msg = f"{err_code}: {exc}" if err_code else str(exc)
             error_by_key[obj.key] = err_msg

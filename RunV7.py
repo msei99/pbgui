@@ -971,10 +971,3 @@ class V7Instances:
            if user == instance.user:
                return True
         return False
-
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

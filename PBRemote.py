@@ -14,7 +14,6 @@ from pathlib import Path, PurePath
 from time import sleep
 import glob
 import json
-from io import TextIOWrapper
 from datetime import datetime
 import platform
 from PBRun import PBRun
@@ -24,6 +23,7 @@ import hashlib
 import traceback
 import gzip
 from MonitorConfig import MonitorConfig
+from logging_helpers import human_log as _log
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -274,13 +274,13 @@ class RemoteServer():
                         self._pb7_python = "N/A"
                     return
                 except Exception as e:
-                    print(f'{str(remote)} is corrupted {e}')
+                    _log('PBRemote', f'{str(remote)} is corrupted {e}', level='ERROR')
 
     def sync_v7_down(self, role: str):
         """Sync the v7 configurations from the remote storage to the local machine."""
         if self.instances_status_v7.has_new_status():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_v7.json from: {self.name}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync v7 from: {self.name}')
+            _log('PBRemote', f'New status_v7.json from: {self.name}', level='INFO')
+            _log('PBRemote', f'Sync v7 from: {self.name}', level='INFO')
             pbgdir = Path.cwd()
             if role == "master":
                 # cmd = ['rclone', 'sync', '-v', '--include', f'{{cmd_**/alive_*.cmd*,run_v7_{self.name}/**/*.json}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
@@ -288,54 +288,54 @@ class RemoteServer():
             else:
                 cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
-            log = open(logfile,"ab")
-            if platform.system() == "Windows":
-                creationflags = subprocess.CREATE_NO_WINDOW
-                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-            else:
-                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            with open(logfile, "ab") as log:
+                if platform.system() == "Windows":
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
             PBRun().update_status(self.instances_status_v7.status_file, self.name)
             status_ts = self.instances_status_v7.status_ts
             self.instances_status_v7.update_status()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_v7 ts: {self.name} old: {status_ts} new: {self.instances_status_v7.status_ts}')
+            _log('PBRemote', f'Update status_v7 ts: {self.name} old: {status_ts} new: {self.instances_status_v7.status_ts}', level='INFO')
 
     def sync_multi_down(self):
         """Sync the multi configurations from the remote storage to the local machine."""
         if self.instances_status.has_new_status():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi from: {self.name}')
+            _log('PBRemote', f'New status.json from: {self.name}', level='INFO')
+            _log('PBRemote', f'Sync multi from: {self.name}', level='INFO')
             pbgdir = Path.cwd()
             cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', f'{self.bucket}/multi_{self.name}', PurePath(f'{pbgdir}/data/remote/multi_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
-            log = open(logfile,"ab")
-            if platform.system() == "Windows":
-                creationflags = subprocess.CREATE_NO_WINDOW
-                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-            else:
-                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            with open(logfile, "ab") as log:
+                if platform.system() == "Windows":
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
             PBRun().update_status(self.instances_status.status_file, self.name)
             status_ts = self.instances_status.status_ts
             self.instances_status.update_status()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}')
+            _log('PBRemote', f'Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}', level='INFO')
 
     def sync_single_down(self):
         """Sync the single configurations from the local machine to the remote storage."""
         if self.instances_status_single.has_new_status():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync single from: {self.name}')
+            _log('PBRemote', f'New status_single.json from: {self.name}', level='INFO')
+            _log('PBRemote', f'Sync single from: {self.name}', level='INFO')
             pbgdir = Path.cwd()
             cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', f'{self.bucket}/instances_{self.name}', PurePath(f'{pbgdir}/data/remote/instances_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
-            log = open(logfile,"ab")
-            if platform.system() == "Windows":
-                creationflags = subprocess.CREATE_NO_WINDOW
-                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-            else:
-                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+            with open(logfile, "ab") as log:
+                if platform.system() == "Windows":
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+                else:
+                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
             PBRun().update_status(self.instances_status_single.status_file, self.name)
             status_ts = self.instances_status_single.status_ts
             self.instances_status_single.update_status()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_single ts: {self.name} old: {status_ts} new: {self.instances_status_single.status_ts}')
+            _log('PBRemote', f'Update status_single ts: {self.name} old: {status_ts} new: {self.instances_status_single.status_ts}', level='INFO')
 
     def sync_api(self):
         """
@@ -356,7 +356,7 @@ class RemoteServer():
         If different, It creates a backup of the passivbot api-keys.json to pbgui/data/backup, and then copy the new api-keys.json file to the passivbot directory.
         """
         if self.calculate_md5(api_file) != self.calculate_md5(api_keys):
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Install new API Keys from: {self.name} to {api_keys}')
+            _log('PBRemote', f'Install new API Keys from: {self.name} to {api_keys}', level='INFO')
             # Backup api-keys
             date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             pbgdir = Path.cwd()
@@ -368,8 +368,10 @@ class RemoteServer():
                 destination.mkdir(parents=True)
             if api_keys.exists():
                 shutil.copy(api_keys, destination)
-            # Copy new api-keys
-            shutil.copy(api_file, api_keys)
+            # Copy new api-keys atomically (write to temp, then rename)
+            tmp = api_keys.with_suffix('.tmp')
+            shutil.copy(api_file, tmp)
+            tmp.replace(api_keys)
 
     def calculate_md5(self, file: Path):
         """Checks if the two API files have the same hash using md5 protocol."""
@@ -387,12 +389,12 @@ class RemoteServer():
         # rclone delete pbgui:pbgui --include *manibot51*/**
         cmd = ['rclone', 'delete', '-v', f'{self.bucket}', '--include', f'*{self.name}*/**']
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
-        log = open(logfile,"ab")
-        if platform.system() == "Windows":
-            creationflags = subprocess.CREATE_NO_WINDOW
-            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-        else:
-            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        with open(logfile, "ab") as log:
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
         # delete local files
         shutil.rmtree(f'{pbgdir}/data/remote/cmd_{self.name}', ignore_errors=True)
         shutil.rmtree(f'{pbgdir}/data/remote/instances_{self.name}', ignore_errors=True)
@@ -437,19 +439,14 @@ class PBRemote():
         if pb_config.has_option("main", "pb7dir"):
             self.pb7dir = pb_config.get("main", "pb7dir")
         if not any([self.pbdir, self.pb7dir]):
-            if __name__ == '__main__':
-                sys.stdout = sys.__stdout__
-                sys.stderr = sys.__stderr__
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
-                exit(1)
-            else:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No passivbot directory configured in pbgui.ini')
-                return
+            _log('PBRemote', 'Error: No passivbot directory configured in pbgui.ini', level='ERROR')
+            self.error = "No passivbot directory configured in pbgui.ini"
+            return
         # Print Warning if only pbdir or pb7dir configured
         if not self.pbdir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot directory configured in pbgui.ini')
+            _log('PBRemote', 'Warning: No passivbot directory configured in pbgui.ini', level='WARNING')
         if not self.pb7dir:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Warning: No passivbot v7 directory configured in pbgui.ini')
+            _log('PBRemote', 'Warning: No passivbot v7 directory configured in pbgui.ini', level='WARNING')
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
@@ -469,34 +466,19 @@ class PBRemote():
         self.bucket_region = None
         self.rclone_installed = self.is_rclone_installed()
         if not self.rclone_installed:
-            if __name__ == '__main__':
-                sys.stdout = sys.__stdout__
-                sys.stderr = sys.__stderr__
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: rclone not installed')
-                exit(1)
-            else:
-                self.error = "rclone not installed"
-                return
+            _log('PBRemote', 'Error: rclone not installed', level='ERROR')
+            self.error = "rclone not installed"
+            return
         self.fetch_buckets()
         if not self.buckets:
-            if __name__ == '__main__':
-                sys.stdout = sys.__stdout__
-                sys.stderr = sys.__stderr__
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: No buckets found')
-                exit(1)
-            else:
-                self.error = "Rclone not configured. No buckets found."
-                return
+            _log('PBRemote', 'Error: No buckets found', level='ERROR')
+            self.error = "Rclone not configured. No buckets found."
+            return
         self.load_config()
         if not self.bucket:
-            if __name__ == '__main__':
-                sys.stdout = sys.__stdout__
-                sys.stderr = sys.__stderr__
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:')
-                exit(1)
-            else:
-                self.error = "bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:"
-                return
+            _log('PBRemote', 'Error: bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:', level='ERROR')
+            self.error = "bucket not configured. Please configure bucket in pbgui.ini\n[pbremote]\nbucket = <bucket_name>:"
+            return
         self.bucket_dir = f'{self.bucket}{self.bucket.split(":")[0]}'
         self.load_remote()
 
@@ -562,12 +544,6 @@ class PBRemote():
 
     def __iter__(self):
         return iter(self.remote_servers)
-
-    def __next__(self):
-        if self.index > len(self.remote_servers):
-            raise StopIteration
-        self.index += 1
-        return next(self)
 
     def list(self):
         return list(map(lambda c: c.name, self.remote_servers))
@@ -844,6 +820,7 @@ class PBRemote():
             spath (str): The specific path to synchronize (e.g., "cmd", "instances", "status").
         """
         pbgdir = Path.cwd()
+        cmd = None
         if direction == 'up' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'instances':
@@ -862,17 +839,20 @@ class PBRemote():
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'slave':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,cmd_**/alive_*.cmd*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
+        if cmd is None:
+            _log('PBRemote', f'sync() called with unknown combination: direction={direction!r} spath={spath!r}', level='ERROR')
+            return
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
         if logfile.exists():
             if logfile.stat().st_size >= 10485760:
                 logfile.replace(f'{pbgdir}/data/logs/sync.log.old')
                 logfile = Path(f'{pbgdir}/data/logs/sync.log')
-        log = open(logfile,"ab")
-        if platform.system() == "Windows":
-            creationflags = subprocess.CREATE_NO_WINDOW
-            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-        else:
-            subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        with open(logfile, "ab") as log:
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
 
     def sync_status_down(self):
         if self.role == "master":
@@ -882,47 +862,48 @@ class PBRemote():
 
     def sync_v7_up(self):
         if self.local_run.instances_status_v7.has_new_status():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_v7.json from: {self.name}')
+            _log('PBRemote', f'New status_v7.json from: {self.name}', level='INFO')
             status_ts = self.local_run.instances_status_v7.status_ts
             self.local_run.instances_status_v7.update_status()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_v7 ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_v7.status_ts}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync v7 up: {self.name}')
+            _log('PBRemote', f'Update status_v7 ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_v7.status_ts}', level='INFO')
+            _log('PBRemote', f'Sync v7 up: {self.name}', level='INFO')
             self.sync('up', 'run_v7')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status_v7.json up: {self.name}')
+            _log('PBRemote', f'Sync status_v7.json up: {self.name}', level='INFO')
             self.sync('up', 'status_v7')
 
     def sync_multi_up(self):
         if self.local_run.instances_status.has_new_status():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status.json from: {self.name}')
+            _log('PBRemote', f'New status.json from: {self.name}', level='INFO')
             status_ts = self.local_run.instances_status.status_ts
             self.local_run.instances_status.update_status()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status ts: {self.name} old: {status_ts} new: {self.local_run.instances_status.status_ts}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync multi up: {self.name}')
+            _log('PBRemote', f'Update status ts: {self.name} old: {status_ts} new: {self.local_run.instances_status.status_ts}', level='INFO')
+            _log('PBRemote', f'Sync multi up: {self.name}', level='INFO')
             self.sync('up', 'multi')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status.json up: {self.name}')
+            _log('PBRemote', f'Sync status.json up: {self.name}', level='INFO')
             self.sync('up', 'status')
     
     def sync_single_up(self):
         if self.local_run.instances_status_single.has_new_status():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} New status_single.json from: {self.name}')
+            _log('PBRemote', f'New status_single.json from: {self.name}', level='INFO')
             status_ts = self.local_run.instances_status_single.status_ts
             self.local_run.instances_status_single.update_status()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Update status_single ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_single.status_ts}')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync single up: {self.name}')
+            _log('PBRemote', f'Update status_single ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_single.status_ts}', level='INFO')
+            _log('PBRemote', f'Sync single up: {self.name}', level='INFO')
             self.sync('up', 'instances')
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync status_single.json up: {self.name}')
+            _log('PBRemote', f'Sync status_single.json up: {self.name}', level='INFO')
             self.sync('up', 'status_single')
 
     def sync_api_up(self):
         """Takes the api-keys.json from passivbot folder to sync it to other remotes by putting it in data/cmd/api-keys.json."""
         pbgdir = Path.cwd()
         api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
+        source = None
         if self.pb7dir:
             source = Path(f'{self.pb7dir}/api-keys.json')
         elif self.pbdir:
             source = Path(f'{self.pbdir}/api-keys.json')
-        if source.exists():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Sync api-keys.json to all remote servers')
+        if source and source.exists():
+            _log('PBRemote', 'Sync api-keys.json to all remote servers', level='INFO')
             shutil.copy(source, api_file)
     
     def check_if_api_synced(self):
@@ -947,20 +928,29 @@ class PBRemote():
             if instance.running:
                 monitor_file = Path(f'{path_multi}/{instance.name}/monitor.json')
                 if Path(monitor_file).exists():
-                    with open(monitor_file, "r", encoding='utf-8') as f:
-                        monitor.append(json.load(f))
+                    try:
+                        with open(monitor_file, "r", encoding='utf-8') as f:
+                            monitor.append(json.load(f))
+                    except Exception as e:
+                        _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
         for instance in self.local_run.instances_status_single.instances:
             if instance.running:
                 monitor_file = Path(f'{path_single}/{instance.name}/monitor.json')
                 if Path(monitor_file).exists():
-                    with open(monitor_file, "r", encoding='utf-8') as f:
-                        monitor.append(json.load(f))
+                    try:
+                        with open(monitor_file, "r", encoding='utf-8') as f:
+                            monitor.append(json.load(f))
+                    except Exception as e:
+                        _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
         for instance in self.local_run.instances_status_v7.instances:
             if instance.running:
                 monitor_file = Path(f'{path_v7}/{instance.name}/monitor.json')
                 if Path(monitor_file).exists():
-                    with open(monitor_file, "r", encoding='utf-8') as f:
-                        monitor.append(json.load(f))
+                    try:
+                        with open(monitor_file, "r", encoding='utf-8') as f:
+                            monitor.append(json.load(f))
+                    except Exception as e:
+                        _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
         return monitor
 
     def alive(self):
@@ -1029,11 +1019,12 @@ class PBRemote():
 
     def calculate_api_md5(self):
         """Makes a md5 hash from the api-keys.json in passivbot folder."""
+        file = None
         if self.pb7dir:
             file = Path(f'{self.pb7dir}/api-keys.json')
         elif self.pbdir:
             file = Path(f'{self.pbdir}/api-keys.json')
-        if file.exists():
+        if file and file.exists():
             with open(file, 'rb') as file_obj:
                 file_contents = file_obj.read()
             return hashlib.md5(file_contents).hexdigest()
@@ -1055,7 +1046,7 @@ class PBRemote():
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Add Server: {rserver.name}')
+            _log('PBRemote', f'Add Server: {rserver.name}', level='INFO')
             self.add(rserver)
 
     def update_remote_servers(self):
@@ -1078,12 +1069,12 @@ class PBRemote():
                 if rserver.name == server.name:
                     add = False
             if add:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Add New Server: {rserver.name}')
+                _log('PBRemote', f'Add New Server: {rserver.name}', level='INFO')
                 self.add(rserver)
         # Remove servers that are not in the remote anymore
-        for server in self.remote_servers:
+        for server in list(self.remote_servers):
             if not Path(f'{pbgdir}/data/remote/cmd_{server.name}').exists():
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Remove Server: {server.name}')
+                _log('PBRemote', f'Remove Server: {server.name}', level='INFO')
                 self.remove(server)
 
     def run(self):
@@ -1100,7 +1091,7 @@ class PBRemote():
             count = 0
             while True:
                 if count > 5:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBRemote')
+                    _log('PBRemote', 'Error: Can not start PBRemote', level='ERROR')
                     break
                 sleep(2)
                 if self.is_running():
@@ -1109,8 +1100,11 @@ class PBRemote():
 
     def stop(self):
         if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBRemote')
-            psutil.Process(self.my_pid).kill()
+            _log('PBRemote', 'Stop: PBRemote', level='INFO')
+            try:
+                psutil.Process(self.my_pid).kill()
+            except psutil.NoSuchProcess:
+                pass
 
     def is_running(self):
         self.load_pid()
@@ -1129,13 +1123,18 @@ class PBRemote():
     def load_pid(self):
         if self.pidfile.exists():
             with open(self.pidfile) as f:
-                pid = f.read()
-                self.my_pid = int(pid) if pid.isnumeric() else None
+                pid = f.read().strip()
+                try:
+                    self.my_pid = int(pid) if pid.isnumeric() else None
+                except ValueError:
+                    self.my_pid = None
 
     def save_pid(self):
         self.my_pid = os.getpid()
-        with open(self.pidfile, 'w') as f:
+        tmp_path = self.pidfile.with_suffix(self.pidfile.suffix + '.tmp')
+        with tmp_path.open('w', encoding='utf-8') as f:
             f.write(str(self.my_pid))
+        tmp_path.replace(self.pidfile)
 
     def load_config(self):
         """Load the bucket name used in the remote storage from pbgui.ini."""
@@ -1183,12 +1182,15 @@ class PBRemote():
         """Checks if rclone is installed and return all the buckets available in the remote server as an array."""
         if self.is_rclone_installed():
             cmd = ['rclone', 'config', 'dump']
+            rcfile = None
             try:
                 result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 if result.returncode == 0:
                     rcfile = result.stdout
             except FileNotFoundError:
                 pass
+            if not rcfile:
+                return None
             config = json.loads(rcfile)
             bucket = self.bucket[0:-1]
             if bucket in config:
@@ -1263,58 +1265,37 @@ def main():
 
     ### Usage : 
     - Run PBRemote and save its process ID to pbremote.pid.
-    - Logs in pbgui/data/logs/PBRemote.log and creates a .old file if the file is >10MB.
-    - 
+    - Logs in pbgui/data/logs/PBRemote.log (rotation handled by logging_helpers).
     """
-    pbgdir = Path.cwd()
-    dest = Path(f'{pbgdir}/data/logs')
-    if not dest.exists():
-        dest.mkdir(parents=True)
-    logfile = Path(f'{str(dest)}/PBRemote.log')
-    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Init: PBRemote')
     remote = PBRemote()
     if remote.is_running():
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBRemote already started')
-        exit(1)
-    remote.save_pid()
+        _log('PBRemote', 'Error: PBRemote already started', level='ERROR')
+        sys.exit(1)
     if not remote.bucket:
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        print(f'Error: {remote.error}')
-        exit(1)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBRemote {remote.bucket}')
+        _log('PBRemote', f'Error: {remote.error}', level='ERROR')
+        sys.exit(1)
+    _log('PBRemote', f'Start: PBRemote {remote.bucket}', level='INFO')
+    remote.save_pid()
     remote.startts = round(datetime.now().timestamp())
     while True:
         try:
-            if logfile.exists():
-                if logfile.stat().st_size >= 10485760:
-                    logfile.replace(f'{str(logfile)}.old')
-                    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-                    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             remote.sync_v7_up()
             remote.sync_multi_up()
             remote.sync_single_up()
             remote.check_if_api_synced()
-            # remote.alive()
-            # remote.sync('down', 'cmd')
             remote.sync_status_down()
             remote.update_remote_servers()
             for server in remote.remote_servers:
                 remote.alive()
                 for s in remote.remote_servers:
                     s.load()
-                # server.load()
                 server.sync_v7_down(remote.role)
                 server.sync_multi_down()
                 server.sync_single_down()
                 server.sync_api()
         except Exception as e:
-            print(f'Something went wrong, but continue {e}')
-            traceback.print_exc()
+            _log('PBRemote', f'Something went wrong, but continue: {e}', level='ERROR')
+            _log('PBRemote', 'PBRemote main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
 
 if __name__ == '__main__':
     main()

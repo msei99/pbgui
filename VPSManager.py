@@ -16,6 +16,7 @@ import subprocess
 import re
 import shlex
 from pbgui_purefunc import pbdir, pbvenv, pb7dir, pb7venv, load_ini
+from logging_helpers import human_log as _log
 
 PBGDIR = Path.cwd()
 PBDIR = pbdir()
@@ -155,7 +156,7 @@ class VPS:
 
         # Generate SSH key if missing
         if not pubkey_path.exists() or not privkey_path.exists():
-            print("🪪 No SSH key found — generating a new ed25519 key pair...")
+            _log('VPSManager', 'No SSH key found — generating a new ed25519 key pair...', level='INFO')
             try:
                 subprocess.run([
                     "ssh-keygen",
@@ -164,34 +165,34 @@ class VPS:
                     "-f", str(privkey_path),
                     "-N", ""
                 ], check=True)
-                print(f"✅ SSH key generated: {pubkey_path}")
+                _log('VPSManager', f'SSH key generated: {pubkey_path}', level='INFO')
             except Exception as e:
-                print(f"💥 Failed to generate SSH key: {e}")
+                _log('VPSManager', f'Failed to generate SSH key: {e}', level='ERROR')
                 return
         else:
-            print(f"🔑 Found existing SSH key: {pubkey_path}")
+            _log('VPSManager', f'Found existing SSH key: {pubkey_path}', level='INFO')
 
         # Ensure password provided
         if not self.user_pw:
-            print("❌ Password is required to install the SSH key.")
+            _log('VPSManager', 'Password is required to install the SSH key.', level='ERROR')
             return
 
         target = f"{self.user}@{self.hostname}"
-        print(f"🔌 Installing SSH key to {target}...")
+        _log('VPSManager', f'Installing SSH key to {target}...', level='INFO')
 
         try:
             cmd = ["sshpass", "-p", self.user_pw, "ssh-copy-id", "-o", "StrictHostKeyChecking=no", target]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
-                print(f"✅ SSH key successfully installed to {target}")
+                _log('VPSManager', f'SSH key successfully installed to {target}', level='INFO')
             else:
-                print(f"⚠️ Failed to install SSH key. Output:\n{result.stdout}\n{result.stderr}")
+                _log('VPSManager', f'Failed to install SSH key. Output:\n{result.stdout}\n{result.stderr}', level='WARNING')
 
         except FileNotFoundError:
-            print("❌ ssh-copy-id or sshpass is not installed on this machine.")
+            _log('VPSManager', 'ssh-copy-id or sshpass is not installed on this machine.', level='ERROR')
         except Exception as e:
-            print(f"💥 Unexpected error: {e}")
+            _log('VPSManager', f'Unexpected error: {e}', level='ERROR')
 
     def can_login_ssh(self, timeout: int = 5) -> bool:
         """
@@ -202,7 +203,7 @@ class VPS:
             bool: True if login succeeds, False otherwise.
         """
         if not all([self.ip, self.user]):
-            print("⚠️ Missing SSH credentials (IP or username).")
+            _log('VPSManager', 'Missing SSH credentials (IP or username).', level='WARNING')
             return False
 
         ssh = paramiko.SSHClient()
@@ -210,7 +211,7 @@ class VPS:
 
         try:
             # --- Attempt key authentication first ---
-            print(f"🔌 Trying SSH connection to {self.user}@{self.ip} with key authentication...")
+            _log('VPSManager', f'Trying SSH connection to {self.user}@{self.ip} with key authentication...', level='INFO')
             ssh.connect(
                 hostname=self.ip,
                 username=self.user,
@@ -220,30 +221,30 @@ class VPS:
                 allow_agent=True,
                 look_for_keys=True,
             )
-            print(f"✅ Successfully connected to {self.user}@{self.ip} using key authentication")
+            _log('VPSManager', f'Successfully connected to {self.user}@{self.ip} using key authentication', level='INFO')
             ssh.close()
             return True
 
         except paramiko.AuthenticationException:
-            print(f"⚠️ Key authentication failed for {self.user}@{self.ip}. Trying password login...")
+            _log('VPSManager', f'Key authentication failed for {self.user}@{self.ip}. Trying password login...', level='WARNING')
 
         except paramiko.SSHException as e:
             # only skip/continue if key login not available
             if "No authentication methods available" in str(e):
-                print("⚠️ Key login not available, will try password")
+                _log('VPSManager', 'Key login not available, will try password', level='WARNING')
             else:
-                print(f"⚠️ SSH error: {e}")
+                _log('VPSManager', f'SSH error: {e}', level='WARNING')
                 ssh.close()
                 return False
         except Exception as e:
-            print(f"💥 Unexpected error: {e}")
+            _log('VPSManager', f'Unexpected error: {e}', level='ERROR')
             ssh.close()
             return False
 
         # --- Password login fallback ---
-        print(f"🔌 Trying SSH connection to {self.user}@{self.ip} with password authentication...")
+        _log('VPSManager', f'Trying SSH connection to {self.user}@{self.ip} with password authentication...', level='INFO')
         if getattr(self, "user_pw", None):
-            print(f"🔑 Using password authentication for {self.user}@{self.ip}")
+            _log('VPSManager', f'Using password authentication for {self.user}@{self.ip}', level='INFO')
             try:
                 ssh.connect(
                     hostname=self.ip,
@@ -255,31 +256,31 @@ class VPS:
                     allow_agent=False,
                     look_for_keys=False,
                 )
-                print(f"✅ Successfully connected to {self.user}@{self.ip} using password")
+                _log('VPSManager', f'Successfully connected to {self.user}@{self.ip} using password', level='INFO')
 
                 # Install SSH key if key login failed
                 try:
-                    print(f"🔑 Installing SSH key for {self.user}@{self.ip}...")
+                    _log('VPSManager', f'Installing SSH key for {self.user}@{self.ip}...', level='INFO')
                     self.install_ssh_key()
-                    print(f"✅ SSH key installed successfully")
+                    _log('VPSManager', 'SSH key installed successfully', level='INFO')
                 except Exception as e:
-                    print(f"⚠️ Failed to install SSH key: {e}")
+                    _log('VPSManager', f'Failed to install SSH key: {e}', level='WARNING')
 
                 ssh.close()
                 return True
 
             except paramiko.AuthenticationException:
-                print(f"❌ Password authentication failed for {self.user}@{self.ip}.")
+                _log('VPSManager', f'Password authentication failed for {self.user}@{self.ip}.', level='ERROR')
             except (paramiko.SSHException, socket.timeout) as e:
-                print(f"⚠️ SSH error while connecting with password: {e}")
+                _log('VPSManager', f'SSH error while connecting with password: {e}', level='WARNING')
             except Exception as e:
-                print(f"💥 Unexpected error during password login: {e}")
+                _log('VPSManager', f'Unexpected error during password login: {e}', level='ERROR')
 
         else:
-            print("⚠️ No password provided; cannot fallback to password login.")
+            _log('VPSManager', 'No password provided; cannot fallback to password login.', level='WARNING')
 
         ssh.close()
-        print(f"🔒 SSH session to {self.ip} closed.\n")
+        _log('VPSManager', f'SSH session to {self.ip} closed.', level='DEBUG')
         return False
 
     def fetch_vps_info(self):
@@ -299,11 +300,11 @@ class VPS:
         result = {"pb6": False, "coinmarketcap": None, "swap": "0"}
 
         if not self.ip or not self.user:
-            print("⚠️ Missing VPS IP or username.")
+            _log('VPSManager', 'Missing VPS IP or username.', level='WARNING')
             return result
 
         try:
-            print(f"🔹 Connecting to VPS {self.hostname} ({self.ip})...")
+            _log('VPSManager', f'Connecting to VPS {self.hostname} ({self.ip})...', level='INFO')
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
@@ -315,9 +316,9 @@ class VPS:
                 )
                 swap_size = stdout.read().decode().strip()
                 result["swap"] = swap_size if swap_size else "0"
-                print(f"💾 Swap size on VPS {self.hostname}: {result['swap']}")
+                _log('VPSManager', f'Swap size on VPS {self.hostname}: {result["swap"]}', level='DEBUG')
             except Exception as e:
-                print(f"⚠️ Failed to get swap size on VPS {self.hostname}: {e}")
+                _log('VPSManager', f'Failed to get swap size on VPS {self.hostname}: {e}', level='WARNING')
 
             # Fetch and parse pbgui.ini
             sftp = ssh.open_sftp()
@@ -328,9 +329,9 @@ class VPS:
                 with sftp.file(remote_path, mode='r') as config_file:
                     content = config_file.read().decode()
             except FileNotFoundError:
-                print(f"❌ File not found on VPS {self.hostname} ({self.ip}): {remote_path}")
+                _log('VPSManager', f'File not found on VPS {self.hostname} ({self.ip}): {remote_path}', level='ERROR')
             except Exception as e:
-                print(f"❌ Error reading file from VPS {self.hostname} ({self.ip}): {e}")
+                _log('VPSManager', f'Error reading file from VPS {self.hostname} ({self.ip}): {e}', level='ERROR')
             finally:
                 sftp.close()
                 ssh.close()
@@ -343,27 +344,27 @@ class VPS:
             try:
                 config_data.read_string(content)
             except Exception as e:
-                print(f"⚠️ Error parsing config file from VPS {self.hostname} ({self.ip}): {e}")
+                _log('VPSManager', f'Error parsing config file from VPS {self.hostname} ({self.ip}): {e}', level='WARNING')
                 return result
 
             # Check for CoinMarketCap API key
             if config_data.has_section("coinmarketcap") and config_data.has_option("coinmarketcap", "api_key"):
                 result["coinmarketcap"] = config_data.get("coinmarketcap", "api_key")
-                print(f"✅ Successfully fetched API key from {self.hostname} {result['coinmarketcap']}")
+                _log('VPSManager', f'Successfully fetched API key from {self.hostname}', level='INFO')
             else:
-                print(f"⚠️ 'api_key' not found in [coinmarketcap] section on VPS {self.hostname}")
+                _log('VPSManager', f"'api_key' not found in [coinmarketcap] section on VPS {self.hostname}", level='WARNING')
 
             # Check if PB6 is installed
             if config_data.has_section("main") and config_data.has_option("main", "pbdir"):
                 pbdir = config_data.get("main", "pbdir").strip()
                 if pbdir:
                     result["pb6"] = True
-                    print(f"✅ PB6 detected on VPS {self.hostname}")
+                    _log('VPSManager', f'PB6 detected on VPS {self.hostname}', level='INFO')
             else:
-                print(f"ℹ️ PB6 not detected on VPS {self.hostname}")
+                _log('VPSManager', f'PB6 not detected on VPS {self.hostname}', level='INFO')
 
         except Exception as e:
-            print(f"❌ Error connecting to VPS {self.hostname} ({self.ip}): {e}")
+            _log('VPSManager', f'Error connecting to VPS {self.hostname} ({self.ip}): {e}', level='ERROR')
 
         return result
 
@@ -380,14 +381,14 @@ class VPS:
         fw_enabled = False
 
         if not all([self.ip, self.user, self.user_pw]):
-            print("⚠️ Missing SSH credentials (IP, username, or sudo password).")
+            _log('VPSManager', 'Missing SSH credentials (IP, username, or sudo password).', level='WARNING')
             return fw_enabled, ""
 
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         try:
-            print(f"🔌 Connecting to {self.user}@{self.ip} to fetch UFW settings...")
+            _log('VPSManager', f'Connecting to {self.user}@{self.ip} to fetch UFW settings...', level='INFO')
 
             ssh.connect(
                 hostname=self.ip,
@@ -409,11 +410,9 @@ class VPS:
             # Remove harmless sudo prompt
             errors = re.sub(r"\[sudo\] password for .*?:\s*", "", errors).strip()
 
-            print("📝 Raw UFW output:")
-            print(output)
+            _log('VPSManager', f'Raw UFW output: {output}', level='DEBUG')
             if errors:
-                print("⚠️ Raw errors from UFW command:")
-                print(errors)
+                _log('VPSManager', f'Raw errors from UFW command: {errors}', level='WARNING')
 
             # Detect wrong sudo password
             if any(err in errors.lower() for err in [
@@ -423,7 +422,7 @@ class VPS:
                 "a password is required",
                 "1 incorrect password attempt",
             ]):
-                print("❌ Wrong sudo password provided.")
+                _log('VPSManager', 'Wrong sudo password provided.', level='ERROR')
                 ssh.close()
                 return fw_enabled, ""
 
@@ -431,7 +430,7 @@ class VPS:
             if re.search(r"Status:\s+active", output, re.IGNORECASE):
                 fw_enabled = True
             else:
-                print("⚠️ Firewall is disabled!")
+                _log('VPSManager', 'Firewall is disabled!', level='WARNING')
 
             # Detect allowed SSH IPs (supports Anywhere and IPv6)
             pattern = re.compile(r"^22/tcp\s+ALLOW\s+([0-9.:/A-Za-z]+)", re.IGNORECASE)
@@ -442,20 +441,19 @@ class VPS:
                     ip = match.group(1)
                     allowed_ips.append(ip)
                     if ip.lower() in ("anywhere", "anywhere (v6)", "0.0.0.0/0"):
-                        print("⚠️ SSH is open to any IP!")
+                        _log('VPSManager', 'SSH is open to any IP!', level='WARNING')
 
-            print(f"✅ Firewall enabled: {fw_enabled}")
-            print(f"✅ Allowed SSH IPs: {allowed_ips}")
+            _log('VPSManager', f'Firewall enabled: {fw_enabled}, Allowed SSH IPs: {allowed_ips}', level='INFO')
 
         except paramiko.AuthenticationException:
-            print(f"❌ SSH authentication failed for {self.user}@{self.ip}.")
+            _log('VPSManager', f'SSH authentication failed for {self.user}@{self.ip}.', level='ERROR')
         except (paramiko.SSHException, socket.timeout) as e:
-            print(f"⚠️ SSH connection error: {e}")
+            _log('VPSManager', f'SSH connection error: {e}', level='WARNING')
         except Exception as e:
-            print(f"💥 Unexpected error: {e}")
+            _log('VPSManager', f'Unexpected error: {e}', level='ERROR')
         finally:
             ssh.close()
-            print(f"🔒 SSH session to {self.ip} closed.\n")
+            _log('VPSManager', f'SSH session to {self.ip} closed.', level='DEBUG')
 
         return fw_enabled, ",".join(allowed_ips)
 
@@ -928,9 +926,3 @@ class VPSManager:
         }
         with open(file, "w", encoding='utf-8') as f:
             json.dump(config, f, indent=4)
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

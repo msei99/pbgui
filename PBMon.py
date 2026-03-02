@@ -6,21 +6,43 @@ import sys
 import os
 from pathlib import Path, PurePath
 from time import sleep
-from io import TextIOWrapper
-from datetime import datetime
 import platform
 import traceback
 from pbgui_func import PBGDIR
 from telegram import Bot
 from PBRemote import PBRemote
-import re
 from pbgui_purefunc import load_ini, save_ini
+from logging_helpers import human_log as _log
+
+
+def _atomic_write_text(path: Path, content: str):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tmp.open("w", encoding="utf-8") as f:
+            f.write(content)
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise
+
+
+def _kill_process(process: psutil.Process, context: str):
+    try:
+        process.kill()
+        process.wait(timeout=3)
+    except psutil.NoSuchProcess:
+        pass
+    except psutil.TimeoutExpired:
+        _log("PBMon", f"Timed out waiting for process to stop ({context})", level="WARNING")
+    except psutil.AccessDenied as e:
+        _log("PBMon", f"Access denied while stopping process ({context}): {e}", level="ERROR")
 
 class PBMon():
     def __init__(self):
         self.piddir = Path(f'{PBGDIR}/data/pid')
-        if not self.piddir.exists():
-            self.piddir.mkdir(parents=True)
+        self.piddir.mkdir(parents=True, exist_ok=True)
         self.pidfile = Path(f'{self.piddir}/pbmon.pid')
         self.my_pid = None
         self.offline_error = []
@@ -64,7 +86,8 @@ class PBMon():
             count = 0
             while True:
                 if count > 5:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBMon')
+                    _log("PBMon", "Can not start PBMon", level="ERROR")
+                    break
                 sleep(1)
                 if self.is_running():
                     break
@@ -72,8 +95,11 @@ class PBMon():
 
     def stop(self):
         if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBMon')
-            psutil.Process(self.my_pid).kill()
+            _log("PBMon", "Stop: PBMon")
+            try:
+                _kill_process(psutil.Process(self.my_pid), "PBMon")
+            except psutil.NoSuchProcess:
+                pass
 
     def restart(self):
         if self.is_running():
@@ -92,13 +118,15 @@ class PBMon():
     def load_pid(self):
         if self.pidfile.exists():
             with open(self.pidfile) as f:
-                pid = f.read()
-                self.my_pid = int(pid) if pid.isnumeric() else None
+                pid = f.read().strip()
+                try:
+                    self.my_pid = int(pid) if pid.isnumeric() else None
+                except ValueError:
+                    self.my_pid = None
 
     def save_pid(self):
         self.my_pid = os.getpid()
-        with open(self.pidfile, 'w') as f:
-            f.write(str(self.my_pid))
+        _atomic_write_text(self.pidfile, str(self.my_pid))
     
     async def send_telegram_message(self, message):
         bot = Bot(token=self.telegram_token)
@@ -124,46 +152,36 @@ class PBMon():
                         self.instance_error.append(error["name"])
                         msg = msg + f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} Swap: {error["swap"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}\n'
             # remove errors that are no longer present
-            self.offline_error = [error for error in self.offline_error if error in [error["server"] for error in errors if error["name"] == "offline"]]
-            self.system_error = [error for error in self.system_error if error in [error["server"] for error in errors if error["name"] == "system"]]
-            self.instance_error = [error for error in self.instance_error if error in [error["name"] for error in errors if error["name"] not in ["offline", "system"]]]
+            offline_servers = {e["server"] for e in errors if e["name"] == "offline"}
+            system_servers = {e["server"] for e in errors if e["name"] == "system"}
+            instance_names = {e["name"] for e in errors if e["name"] not in ("offline", "system")}
+            self.offline_error = [s for s in self.offline_error if s in offline_servers]
+            self.system_error = [s for s in self.system_error if s in system_servers]
+            self.instance_error = [n for n in self.instance_error if n in instance_names]
             msg = re.sub(r':blue\[(.*?)\]', r'*\1*', msg)
             msg = re.sub(r':red\[(.*?)\]', r'*\1*', msg)
             msg = re.sub(r':green\[(.*?)\]', r'\1', msg)
             msg = re.sub(r':orange\[(.*?)\]', r'\1', msg)
             if msg:
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Send Message:\n{msg}')
+                _log("PBMon", f"Send Message: {msg.strip()}")
                 await self.send_telegram_message(msg)
    
 
 def main():
-    dest = Path(f'{PBGDIR}/data/logs')
-    if not dest.exists():
-        dest.mkdir(parents=True)
-    logfile = Path(f'{str(dest)}/PBMon.log')
-    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBMon')
     pbmon = PBMon()
     if pbmon.is_running():
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBMon already started')
-        exit(1)
+        _log("PBMon", "PBMon already started", level="ERROR")
+        sys.exit(1)
+    _log("PBMon", "Start: PBMon")
     pbmon.save_pid()
     while True:
         try:
-            if logfile.exists():
-                if logfile.stat().st_size >= 10485760:
-                    logfile.replace(f'{str(logfile)}.old')
-                    sys.stdout = TextIOWrapper(open(logfile,"ab",0), write_through=True)
-                    sys.stderr = TextIOWrapper(open(logfile,"ab",0), write_through=True)
             if pbmon.telegram_token and pbmon.telegram_chat_id:
                 asyncio.run(pbmon.has_errors())
             sleep(60)
         except Exception as e:
-            print(f'Something went wrong, but continue {e}')
-            traceback.print_exc()
+            _log("PBMon", f"Something went wrong, but continue: {e}", level="ERROR")
+            _log("PBMon", "PBMon main loop traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 if __name__ == '__main__':
     main()

@@ -76,9 +76,3 @@ class Services():
             self.pbcoindata.run()
         if self.pbmaster_was_running:
             self.pbmaster.run()
-    
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

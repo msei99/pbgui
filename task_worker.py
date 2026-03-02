@@ -27,6 +27,7 @@ from task_queue import (
     clear_worker_pid,
     ensure_task_dirs,
     get_task_state_dir,
+    get_job_log_path,
     move_job_file,
     update_job_file,
     write_worker_pid,
@@ -114,6 +115,18 @@ def _is_cancel_requested(job_path: Path) -> bool:
 
 def _job_log(msg: str, level: str = "INFO") -> None:
     append_exchange_download_log("hyperliquid", f"[worker] {msg}", level=level)
+
+
+def _append_to_job_log(job_id: str, msg: str) -> None:
+    """Append one timestamped line to the per-job log file in _tasks/logs/."""
+    try:
+        p = get_job_log_path(job_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(f"{ts}  {msg}\n")
+    except Exception:
+        pass
 
 
 def _recent_corrupt_l2book_files(*, coin: str, since_ts: float) -> list[str]:
@@ -652,6 +665,7 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
 
 def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     started_ts = time.time()
+    job_id = job_path.stem
     coins = payload.get("coins")
     coins = coins if isinstance(coins, list) else []
     coins = [str(c).strip().upper() for c in coins if str(c).strip()]
@@ -667,6 +681,8 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
 
     total_steps = max(1, len(coins))
     step_i = 0
+
+    _append_to_job_log(job_id, f"job started  coins={coins}  end_day={end_day}  start_day={start_day or 'inception'}  refetch={refetch}")
 
     def update_progress(**kw):
         def mut(o):
@@ -687,19 +703,32 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         if _is_cancel_requested(job_path):
             raise RuntimeError("cancelled")
         step_i += 1
+        _append_to_job_log(job_id, f"[{step_i}/{total_steps}] {coin}  starting")
         update_progress(stage="running", coin=coin, chunk_done=0, chunk_total=0,
                         last_result={"days_checked": 0, "minutes_written": 0,
                                      "duration_s": int(max(0, time.time() - started_ts))})
 
         last_chunk_update = 0.0
+        last_logged_stage = ""
 
-        def progress_cb(snap: dict[str, Any]) -> None:
-            nonlocal last_chunk_update
+        def progress_cb(snap: dict[str, Any], _coin=coin) -> None:
+            nonlocal last_chunk_update, last_logged_stage
             now = time.time()
+            stage = str(snap.get("stage") or "running")
+            # Log important stage transitions once per stage change
+            if stage != last_logged_stage:
+                last_logged_stage = stage
+                extra = ""
+                if snap.get("day"):
+                    extra = f"  day={snap['day']}"
+                elif snap.get("month_key"):
+                    extra = f"  month={snap['month_key']}"
+                elif snap.get("first_archive"):
+                    extra = f"  first_archive={snap['first_archive']}"
+                _append_to_job_log(job_id, f"  {_coin}  stage={stage}{extra}")
             if now - last_chunk_update < 0.5:
                 return
             last_chunk_update = now
-            stage = str(snap.get("stage") or "running")
             kw: dict[str, Any] = {"stage": stage}
             if snap.get("day"):
                 kw["day"] = str(snap["day"])
@@ -735,6 +764,7 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                 stop_check=_job_stop_check,
             )
         except RuntimeError as e:
+            _append_to_job_log(job_id, f"  {coin}  ERROR {e}")
             if _is_cancel_requested(job_path):
                 raise RuntimeError("cancelled") from e
             raise
@@ -742,7 +772,10 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         if isinstance(out, dict):
             out["duration_s"] = int(max(0, time.time() - started_ts))
         append_exchange_download_log("binanceusdm", f"[INFO] [binance_best_1m_job] {coin} {out}")
+        _append_to_job_log(job_id, f"  {coin}  done  days_checked={out.get('days_checked', 0)}  minutes_written={out.get('minutes_written', 0)}  notes={out.get('notes', [])}")
         update_progress(stage="running", last_result=out)
+
+    _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
 
 def main() -> int:
