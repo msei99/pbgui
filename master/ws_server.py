@@ -177,8 +177,7 @@ class WSServer:
             self._stop_event = asyncio.Event()
             self._loop.run_until_complete(self._serve())
         except Exception as e:
-            _log(SERVICE, f"[ws] Server thread error: {e}", level="ERROR")
-            traceback.print_exc()
+            _log(SERVICE, f"[ws] Server thread error: {e}", level="ERROR", meta={'traceback': traceback.format_exc()})
         finally:
             if self._loop and not self._loop.is_closed():
                 self._loop.close()
@@ -470,7 +469,11 @@ class WSServer:
     # ── Local log commands ──────────────────────────────────
 
     async def _cmd_list_local_logs(self, websocket, _request: dict):
-        """Return sorted list of *.log filenames in data/logs/."""
+        """Return sorted list of *.log filenames in data/logs/ (top-level only).
+
+        Job logs in data/logs/jobs/ are intentionally excluded — they are served
+        on-demand via get/subscribe commands when the viewer preselects them.
+        """
         d = _local_logs_dir()
         files = sorted(p.name for p in d.glob("*.log") if p.is_file()) if d.exists() else []
         await websocket.send(json.dumps({"type": "local_logs_list", "files": files}))
@@ -481,11 +484,16 @@ class WSServer:
         lines_n = int(request.get("lines", 200))
         sid = request.get("sid")
         fp = _local_logs_dir() / filename
-        if not filename or not fp.exists() or fp.resolve().parent != _local_logs_dir().resolve():
+        logs_root = _local_logs_dir().resolve()
+        if not filename or not fp.resolve().is_relative_to(logs_root):
             await websocket.send(json.dumps({"type": "error", "error": "Local log file not found"}))
             return
-        content = _tail_file(fp, lines_n)
-        resp: dict = {"type": "local_logs", "file": filename, "lines": content}
+        content = _tail_file(fp, lines_n) if fp.exists() else []
+        try:
+            file_size = fp.stat().st_size
+        except Exception:
+            file_size = 0
+        resp: dict = {"type": "local_logs", "file": filename, "lines": content, "file_size": file_size}
         if sid is not None:
             resp["sid"] = sid
         await websocket.send(json.dumps(resp))
@@ -496,19 +504,25 @@ class WSServer:
         lines_n = int(request.get("lines", 200))
         sid = request.get("sid")
         fp = _local_logs_dir() / filename
-        if not filename or not fp.exists() or fp.resolve().parent != _local_logs_dir().resolve():
+        logs_root = _local_logs_dir().resolve()
+        # Security check: path must be within logs_root even if file doesn't exist yet
+        if not filename or not fp.resolve().is_relative_to(logs_root):
             await websocket.send(json.dumps({"type": "error", "error": "Local log file not found"}))
             return
         ws_id = id(websocket)
         # Cancel previous local sub for this client
         self._local_log_subs.pop(ws_id, None)
-        # Send initial content
-        content = _tail_file(fp, lines_n)
-        resp: dict = {"type": "local_logs", "file": filename, "lines": content, "streaming": True}
+        # Send initial content (empty if file not yet created)
+        content = _tail_file(fp, lines_n) if fp.exists() else []
+        try:
+            file_size = fp.stat().st_size
+        except Exception:
+            file_size = 0
+        resp: dict = {"type": "local_logs", "file": filename, "lines": content, "streaming": True, "file_size": file_size}
         if sid is not None:
             resp["sid"] = sid
         await websocket.send(json.dumps(resp))
-        # Record position at end of file
+        # Record position; push loop will start reading once file appears
         try:
             pos = fp.stat().st_size
         except Exception:

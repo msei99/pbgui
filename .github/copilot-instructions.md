@@ -20,13 +20,23 @@
 ## Chat trigger phrases
 
 - If the user writes `Bitte in Todo festhalten:`, store the content in `docs/roadmap/TODO.md` (do not store it in repository root files).
-- If the user writes `Merke Dir:`, store the content as a persistent instruction in this file (`.github/copilot-instructions.md`) under `## Merkliste aus Chat`.
+- If the user writes `Merke Dir:`, store the content as a persistent instruction in this file (`.github/copilot-instructions.md`) under `## Persistent Notes`.
 
-## Merkliste aus Chat
+## Persistent Notes
 
 - Future `Merke Dir:` entries must be appended here as short bullet points.
-- **NIEMALS eigenmächtige grosse Design-Änderungen**: Kein Modul-Rewrite, Datei löschen, Architektur-Umbau oder Löschen/Ersetzen von bestehendem Code ohne explizite User-Bestätigung. Erst Vorschlag formulieren, fragen, auf „Ja" warten — dann implementieren.
-- GUI-Sprache ist durchgehend Englisch; nur Guides/Tutorials werden in Englisch und Deutsch angeboten.
+- Before writing any `Merke Dir:` entry to the file, show the planned text as a proposal and wait for user confirmation.
+- Always write `Merke Dir:` entries in English, even if the user submits them in German.
+- **NEVER make large unsolicited design changes**: no module rewrites, file deletions, architecture overhauls, or replacing/deleting existing code without explicit user confirmation. Always propose first, ask, wait for "Yes" — then implement.
+- GUI language is English throughout; only guides/tutorials are offered in both English and German.
+- **Logging architecture (3-tier model)**:
+  - **Tier 1 — Daemon logs** (each own file): services with their own long-running daemon loop. Do NOT add to `LOG_GROUPS` — they get `data/logs/{service}.log` automatically.
+  - **Tier 2 — Data pipeline logs** (each own file): data pipeline components (database, exchange, market data, sync). Do NOT add to `LOG_GROUPS`.
+  - **Tier 3 — `PBGui.log`**: UI helper classes without their own daemon loop. MUST be added to `LOG_GROUPS` in `logging_helpers.py` (single source of truth for routing).
+  - Routing is handled via the `LOG_GROUPS` dict in `logging_helpers.py` — **never** hardcode the `logfile=` parameter at call sites.
+  - The service tag (e.g. `[VPSManager]`) is always embedded in each log entry → grep works even in a shared file.
+  - All logs go to `data/logs/` — never to any other directory.
+  - **No direct `print()` or `logging.xxx`** in GUI modules — exclusively use `_log('ServiceName', msg, level='...')` via `from logging_helpers import human_log as _log`.
 
 ## Repo boundaries (important)
 
@@ -91,9 +101,11 @@
 ## Logging
 
 - **ALL logs** MUST go to `data/logs/` directory.
-- Pattern: `data/logs/{ModuleName}.log` (e.g. `data/logs/PBCoinData.log`, `data/logs/PBData.log`).
 - **NEVER** create log files in data directories (`coindata/`, `caches/`, etc.).
-- Use standard Python logging module with appropriate log levels.
+- **Never** use the standard Python `logging` module or `print()` in GUI modules.
+- Exclusively use `_log('ServiceName', msg, level='...')` via `from logging_helpers import human_log as _log`.
+- Log file routing is determined by `LOG_GROUPS` in `logging_helpers.py` (see 3-tier model in `## Persistent Notes`).
+- Always pass tracebacks via `meta={'traceback': traceback.format_exc()}` — never use `traceback.print_exc()`.
 
 ## Module responsibilities
 
@@ -139,7 +151,8 @@
 
 ## File operations
 
-- Atomic writes: write to temp file, then rename
+- Atomic writes (write to temp file, then rename) are required for any file that could be read by another process during writing, or where a partial write would leave the file in a corrupt state (e.g. config files, PID files, JSON data files). Not needed for log files or one-time creation.
+- When reading files, always sanitize content (e.g. `.strip()`) and handle parse errors (`ValueError`, `JSONDecodeError`, etc.) explicitly — never assume well-formed input.
 - Check `Path.exists()` before read
 - JSON with `indent=4` for readability
 - Never overwrite on fetch/parse failure

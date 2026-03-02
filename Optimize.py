@@ -20,7 +20,7 @@ import configparser
 import pbgui_help
 from time import sleep
 import traceback
-import logging
+from logging_helpers import human_log as _log
 
 class OptimizeItem(Base):
     BOOLS = ['n', 'y']
@@ -110,7 +110,7 @@ class OptimizeItem(Base):
             cmd.extend(shlex.split(cmd_end))
             cmd.extend(['-oc', str(PurePath(f'{self.oc.config_file}')), '-bd', str(PurePath(f'{pbdir()}/backtests/pbgui'))])
             log = open(self.log,"w")
-            print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Start: {cmd}')
+            _log('Optimize', f'Start: {cmd}', level='INFO')
             if platform.system() == "Windows":
                 creationflags = subprocess.CREATE_NO_WINDOW
                 result = subprocess.run(cmd, stdout=log, stderr=log, cwd=pbdir(), text=True, creationflags=creationflags)
@@ -325,8 +325,7 @@ class OptimizeItem(Base):
                                 results_dict["symbol"] = symbol
                                 results_dict[k] = r[symbol][k]
                 except Exception as e:
-                    print(f'{str(result)} is corrupted {e}')
-                    traceback.print_exc()
+                    _log('Optimize', f'{str(result)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
             self.results.append(results_dict)
 
     def fetch_results_fpath(self):
@@ -407,7 +406,7 @@ class OptimizeItem(Base):
                 self.position = t["position"]
                 return True
         except Exception as e:
-            print(f'{str(file)} is corrupted {e}')
+            _log('Optimize', f'{str(file)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
             return False
 
     def save(self, pos: int):
@@ -842,7 +841,7 @@ class OptimizeResults:
                         symbols.append(symbol)
                     return symbols, results[list(results.keys())[0]]
             except Exception as e:
-                print(f'{str(file)} is corrupted {e}')
+                _log('Optimize', f'{str(file)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
 
     def load_result(self, file = str):
         p = Path(file)
@@ -1087,15 +1086,12 @@ class OptimizeResults:
         self.bt_results.view(only=True)
 
 def main():
-    # Disable Streamlit Warnings when running directly
-    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
-    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeQueue()
     while True:
         for item in opt.items:
             while not item.is_finish():
                 if not item.is_running():
-                    print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.file} started')
+                    _log('Optimize', f'Optimizing {item.file} started', level='INFO')
                     item.start(opt.cpu)
                     opt.load_options()
                     if opt.mode == "circular":

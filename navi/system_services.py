@@ -4,7 +4,8 @@ from pbgui_func import (
     is_session_state_not_initialized,
     is_authenticted,
     get_navi_paths,
-    sync_api,
+    render_log_viewer,
+    render_header_with_guide,
     PBGDIR,
 )
 from pbgui_purefunc import load_ini, save_ini
@@ -15,7 +16,6 @@ import html as _html
 from pathlib import Path
 import pbgui_help
 from Monitor import Monitor
-from logging_view import view_log_filtered
 from Exchange import MAX_PRIVATE_WS_GLOBAL, Exchanges
 
 
@@ -98,7 +98,6 @@ def pbrun_overview(key_suffix=""):
         pbrun.run()
     elif not desired and is_running:
         pbrun.stop()
-    st.metric(label="PBRun", value='✅' if desired else '❌')
 
 def pbremote_overview(key_suffix=""):
     pbremote = st.session_state.pbremote
@@ -110,7 +109,6 @@ def pbremote_overview(key_suffix=""):
         pbremote.run()
     elif not desired and is_running:
         pbremote.stop()
-    st.metric(label="PBRemote", value='✅' if desired else '❌')
 
 def pbmon_overview(key_suffix=""):
     pbmon = st.session_state.pbmon
@@ -122,7 +120,6 @@ def pbmon_overview(key_suffix=""):
         pbmon.run()
     elif not desired and is_running:
         pbmon.stop()
-    st.metric(label="PBMon", value='✅' if desired else '❌')
 
 def pbstat_overview(key_suffix=""):
     pbstat = st.session_state.pbstat
@@ -134,7 +131,6 @@ def pbstat_overview(key_suffix=""):
         pbstat.run()
     elif not desired and is_running:
         pbstat.stop()
-    st.metric(label="PBStat", value='✅' if desired else '❌')
 
 def pbdata_overview(key_suffix=""):
     pbdata = st.session_state.pbdata
@@ -146,7 +142,6 @@ def pbdata_overview(key_suffix=""):
         pbdata.run()
     elif not desired and is_running:
         pbdata.stop()
-    st.metric(label="PBData", value='✅' if desired else '❌')
 
 def pbcoindata_overview(key_suffix=""):
     pbcoindata = st.session_state.pbcoindata
@@ -158,7 +153,6 @@ def pbcoindata_overview(key_suffix=""):
         pbcoindata.run()
     elif not desired and is_running:
         pbcoindata.stop()
-    st.metric(label="PBCoinData", value='✅' if desired else '❌')
 
 def pbmaster_overview(key_suffix=""):
     pbmaster = st.session_state.pbmaster
@@ -170,29 +164,25 @@ def pbmaster_overview(key_suffix=""):
         pbmaster.run()
     elif not desired and is_running:
         pbmaster.stop()
-    st.metric(label="PBMaster", value='✅' if desired else '❌')
 
 def overview():
-    col_1, col_2, col_3 = st.columns(3)
-    with col_1:
-        pbrun_overview(key_suffix="_ov")
-    with col_2:
-        pbremote_overview(key_suffix="_ov")
-    with col_3:
-        pbmon_overview(key_suffix="_ov")
-    col_4, col_5, col_6 = st.columns(3)
-    with col_4:
-        pbstat_overview(key_suffix="_ov")
-    with col_5:
-        pbdata_overview(key_suffix="_ov")
-    with col_6:
-        pbcoindata_overview(key_suffix="_ov")
-    col_7, col_8, col_9 = st.columns(3)
-    with col_7:
-        pbmaster_overview(key_suffix="_ov")
+    _services = [
+        ("PBRun",      pbrun_overview),
+        ("PBRemote",   pbremote_overview),
+        ("PBMon",      pbmon_overview),
+        ("PBStat",     pbstat_overview),
+        ("PBData",     pbdata_overview),
+        ("PBCoinData", pbcoindata_overview),
+        ("PBMaster",   pbmaster_overview),
+    ]
+    cols = st.columns(4)
+    for i, (name, fn) in enumerate(_services):
+        with cols[i % 4]:
+            with st.container(border=True):
+                fn(key_suffix="_ov")
 
 def pbrun_details():
-    view_log_filtered("PBRun")
+    render_log_viewer(preselect="PBRun.log", iframe_height_offset=280)
 
 def _pbremote_sidebar():
     """Sidebar content for PBRemote: overview toggle + action buttons + server list."""
@@ -201,15 +191,54 @@ def _pbremote_sidebar():
         st.session_state.monitor = Monitor()
     monitor = st.session_state.monitor
 
+    # Pre-compute api_sync so we can show status before the server list
+    api_sync = [
+        s for s in pbremote.remote_servers
+        if s.is_online() and not s.is_api_md5_same(pbremote.api_md5)
+    ]
+
     pbremote_overview(key_suffix="_det")
-    if st.button(":material/refresh:", key="pbremote_sidebar_refresh"):
+    if st.button(":material/settings: Settings", key="pbremote_settings_btn"):
+        st.session_state.pbremote_view_mode = "settings"
+        st.rerun()
+    _in_detail = ("server" in st.session_state) or bool(monitor.servers)
+    if st.button(":material/description: Log", key="pbremote_server_back_btn") and _in_detail:
+        st.session_state.pop("server", None)
+        monitor.d_v7 = []
+        monitor.d_multi = []
+        monitor.d_single = []
+        monitor.servers = []
+        st.rerun()
+    if api_sync:
+        _sync_names = ", ".join(s.name for s in api_sync)
+        if st.button(":red[🔴 API not in sync]", key="pbremote_api_status_btn",
+                     help=f"Not in sync: {_sync_names} — Click to sync."):
+            pbremote.sync_api_up()
+            timeout = 180
+            _status = st.empty()
+            with st.spinner("Syncing API keys..."):
+                while not pbremote.check_if_api_synced():
+                    _status.caption(f"{timeout}s — {pbremote.unsynced_api} server(s) remaining")
+                    time.sleep(1)
+                    timeout -= 1
+                    if timeout == 0:
+                        break
+            _status.empty()
+            if timeout == 0:
+                st.error("API sync timed out")
+            else:
+                st.toast("API keys synced", icon="✅")
+            st.rerun()
+    else:
+        st.button(":green[🟢 API in sync]", key="pbremote_api_status_btn", disabled=True)
+    if st.button(":material/refresh:", key="pbremote_sidebar_refresh",
+                 help="Refresh remote server status"):
         pbremote.update_remote_servers()
         monitor.d_v7 = []
         monitor.d_multi = []
         monitor.d_single = []
         st.rerun()
     st.markdown("**Remote Servers**")
-    api_sync = []
     if st.button("View All Instances", key="pbremote_sidebar_all"):
         if "server" in st.session_state:
             del st.session_state.server
@@ -221,13 +250,24 @@ def _pbremote_sidebar():
     for rserver in sorted(pbremote.remote_servers, key=lambda s: s.name):
         if rserver.is_online():
             color = "green"
-            if not rserver.is_api_md5_same(pbremote.api_md5):
-                api_sync.append(rserver)
+            _v7  = [i.name for i in rserver.instances_status_v7.instances     if i.enabled_on == rserver.name]
+            _mul = [i.name for i in rserver.instances_status.instances         if i.enabled_on == rserver.name]
+            _sgl = [i.name for i in rserver.instances_status_single.instances  if i.enabled_on == rserver.name]
+            _tip_lines = []
+            if _v7:
+                _tip_lines += [f"V7 ({len(_v7)}):"] + [f"• {n}" for n in _v7] + [""]
+            if _mul:
+                _tip_lines += [f"Multi ({len(_mul)}):"] + [f"• {n}" for n in _mul] + [""]
+            if _sgl:
+                _tip_lines += [f"Single ({len(_sgl)}):"] + [f"• {n}" for n in _sgl] + [""]
+            _tip = "\n\n".join(_tip_lines) if _tip_lines else "No instances"
         else:
             color = "red"
+            _tip = "Offline"
         _sc1, _sc2 = st.columns([4, 1])
         with _sc1:
-            if st.button(f":{color}[{rserver.name}]", key=f"sidebar_srv_{rserver.name}"):
+            if st.button(f":{color}[{rserver.name}]", key=f"sidebar_srv_{rserver.name}",
+                         help=_tip):
                 monitor.d_v7 = []
                 monitor.d_multi = []
                 monitor.d_single = []
@@ -238,8 +278,6 @@ def _pbremote_sidebar():
                     rserver.delete_server()
                     pbremote.update_remote_servers()
                     st.rerun()
-    sync_api()
-    return api_sync
 
 def pbremote_details():
     pbremote = st.session_state.pbremote
@@ -247,8 +285,14 @@ def pbremote_details():
         st.session_state.monitor = Monitor()
     monitor = st.session_state.monitor
 
-    # ── Settings expander ────────────────────────────────────────────────────
-    with st.expander(":material/settings: Settings​", expanded=not pbremote.buckets):
+    if "pbremote_view_mode" not in st.session_state:
+        st.session_state.pbremote_view_mode = "viewer"
+
+    if st.session_state.pbremote_view_mode == "settings":
+        with st.sidebar:
+            if st.button(":material/arrow_back: Back", key="pbremote_back_btn"):
+                st.session_state.pbremote_view_mode = "viewer"
+                st.rerun()
 
         # ── Bucket section ───────────────────────────────────────────────────
         st.markdown("**Bucket**")
@@ -431,6 +475,7 @@ def pbremote_details():
                 f: getattr(monitor.monitor_config, f) for f in _MC_FIELDS
             }
             st.rerun()
+        return
 
     # ── Server panel ────────────────────────────────────────────────────────
     if "server" in st.session_state:
@@ -441,10 +486,7 @@ def pbremote_details():
     elif monitor.servers:
         monitor.view_server_instances()
     else:
-        st.info("Please select a remote server from the sidebar to view details.")
-
-    st.markdown("---")
-    view_log_filtered("PBRemote")
+        render_log_viewer(preselect="PBRemote.log", iframe_height_offset=280)
 
 @st.dialog("Info", width="large")
 def result_popup(message, result):
@@ -457,8 +499,15 @@ def result_popup(message, result):
 def pbmon_details():
     pbmon = st.session_state.pbmon
 
-    with st.expander(":material/settings: Settings​​", expanded=not (pbmon.telegram_token and pbmon.telegram_chat_id)):
-        # Read current values into session state only once (avoids overwriting user edits)
+    if "pbmon_view_mode" not in st.session_state:
+        st.session_state.pbmon_view_mode = "viewer"
+
+    if st.session_state.pbmon_view_mode == "settings":
+        with st.sidebar:
+            if st.button(":material/arrow_back: Back", key="pbmon_back_btn"):
+                st.session_state.pbmon_view_mode = "viewer"
+                st.rerun()
+
         if "pbmon_telegram_token" not in st.session_state:
             st.session_state.pbmon_telegram_token = pbmon.telegram_token
         if "pbmon_telegram_chat_id" not in st.session_state:
@@ -474,22 +523,22 @@ def pbmon_details():
         if st.button(":material/save:", key="pbmon_save_config", type="primary" if _pbmon_dirty else "secondary"):
             pbmon.telegram_token = st.session_state.pbmon_telegram_token
             pbmon.telegram_chat_id = st.session_state.pbmon_telegram_chat_id
+            st.session_state.pbmon_view_mode = "viewer"
+            st.rerun()
+        return
+
+    with st.sidebar:
+        if st.button(":material/settings: Settings", key="pbmon_settings_btn"):
+            st.session_state.pbmon_view_mode = "settings"
             st.rerun()
 
-    view_log_filtered("PBMon")
+    render_log_viewer(preselect="PBMon.log", iframe_height_offset=280)
 
 def pbstat_details():
-    view_log_filtered("PBStat")
+    render_log_viewer(preselect="PBStat.log", iframe_height_offset=280)
 
 def pbdata_details():
     pbdata = st.session_state.pbdata
-    # Callback for refresh button to avoid manual save/restore of session flags
-    def _pbdata_refresh_callback():
-        try:
-            st.session_state.users.load()
-        except Exception:
-            pass
-
     users = st.session_state.users
 
     # ── Helper functions for reading INI values ──────────────────────────────
@@ -513,11 +562,20 @@ def pbdata_details():
         except Exception:
             return None
 
-    # ── Settings expander ────────────────────────────────────────────────────
-    with st.expander(":material/settings: Settings​​​", expanded=False):
+    if "pbdata_view_mode" not in st.session_state:
+        st.session_state.pbdata_view_mode = "viewer"
 
-        # Refresh users button inside expander
-        st.button(":material/refresh: Refresh Users", key="button_pbdata_refresh", on_click=_pbdata_refresh_callback)
+    if st.session_state.pbdata_view_mode == "settings":
+        # Reload users from disk so newly added API keys appear immediately
+        try:
+            users.load()
+        except Exception:
+            pass
+
+        with st.sidebar:
+            if st.button(":material/arrow_back: Back", key="pbdata_back_btn"):
+                st.session_state.pbdata_view_mode = "viewer"
+                st.rerun()
 
         # Users multiselect
         if "pbdata_users" not in st.session_state:
@@ -752,8 +810,15 @@ def pbdata_details():
                 st.success('Config saved.')
                 st.rerun()
 
-    # Log viewer (always visible, outside Settings expander)
-    view_log_filtered("PBData")
+        return
+
+    with st.sidebar:
+        if st.button(":material/settings: Settings", key="pbdata_settings_btn"):
+            st.session_state.pbdata_view_mode = "settings"
+            st.rerun()
+
+    # Log viewer
+    render_log_viewer(preselect="PBData.log", iframe_height_offset=280)
 
     # Show fetch summary JSON (generated by PBData)
     try:
@@ -976,7 +1041,15 @@ def pbdata_details():
 def pbcoindata_details():
     pbcoindata = st.session_state.pbcoindata
 
-    with st.expander(":material/settings: Settings​​​​", expanded=not pbcoindata.api_key):
+    if "pbcoindata_view_mode" not in st.session_state:
+        st.session_state.pbcoindata_view_mode = "viewer"
+
+    if st.session_state.pbcoindata_view_mode == "settings":
+        with st.sidebar:
+            if st.button(":material/arrow_back: Back", key="pbcoindata_back_btn"):
+                st.session_state.pbcoindata_view_mode = "viewer"
+                st.rerun()
+
         # Initialize session state once so widgets don't reset on every rerun
         if "edit_coindata_api_key" not in st.session_state:
             st.session_state["edit_coindata_api_key"] = pbcoindata.api_key
@@ -1016,18 +1089,22 @@ def pbcoindata_details():
             pbcoindata.mapping_interval = st.session_state.get("edit_coindata_mapping_interval", pbcoindata.mapping_interval)
             pbcoindata.save_config()
             st.success("Config saved.")
+            st.session_state.pbcoindata_view_mode = "viewer"
+            st.rerun()
+        return
+
+    with st.sidebar:
+        if st.button(":material/settings: Settings", key="pbcoindata_settings_btn"):
+            st.session_state.pbcoindata_view_mode = "settings"
             st.rerun()
 
-    # API status — cached for 5 minutes to avoid burning CMC credits on every rerun
+    # API status — auto-checked on page load, cached for 5 minutes to avoid burning CMC credits on every rerun
     _API_CACHE_TTL = 300
     _api_cache = st.session_state.get("_coindata_api_status_cache")
     _api_cache_age = int(time.time() - _api_cache["ts"]) if _api_cache else None
     _api_stale = _api_cache is None or _api_cache_age >= _API_CACHE_TTL
     if pbcoindata.api_key:
-        _btn_col, _age_col = st.columns([1, 4])
-        with _btn_col:
-            _force_refresh = st.button(":material/refresh: Check API", key="coindata_api_check_btn")
-        if _api_stale or _force_refresh:
+        if _api_stale:
             _ok = pbcoindata.fetch_api_status()
             st.session_state["_coindata_api_status_cache"] = {
                 "ok": _ok,
@@ -1036,30 +1113,47 @@ def pbcoindata_details():
             }
             _api_cache = st.session_state["_coindata_api_status_cache"]
             _api_cache_age = 0
-        with _age_col:
-            if _api_cache_age is not None:
-                st.caption(f"Last checked {_api_cache_age}s ago")
-        if _api_cache and _api_cache["ok"]:
-            st.success("**API Key is valid**", icon="✅")
-            _api_cols = st.columns([1, 1, 1, 1, 2])
-            with _api_cols[0]:
-                st.metric("Monthly Limit", pbcoindata.credit_limit_monthly)
-            with _api_cols[1]:
-                st.metric("Used Today", pbcoindata.credits_used_day)
-            with _api_cols[2]:
-                st.metric("Used Monthly", pbcoindata.credits_used_month)
-            with _api_cols[3]:
-                st.metric("Credits Left", pbcoindata.credits_left)
-            with _api_cols[4]:
-                st.metric("Reset in", pbcoindata.credit_limit_monthly_reset.replace("In ", ""))
-        elif _api_cache:
-            st.error(_api_cache["error"] or "Unknown API error", icon="🚨")
-    view_log_filtered("PBCoinData")
+
+        _status_col, _refresh_col = st.columns([0.97, 0.03])
+        with _refresh_col:
+            _force_refresh = st.button(":material/refresh:", key="coindata_api_check_btn", help="Refresh API status now")
+            if _force_refresh:
+                _ok = pbcoindata.fetch_api_status()
+                st.session_state["_coindata_api_status_cache"] = {
+                    "ok": _ok,
+                    "ts": time.time(),
+                    "error": pbcoindata.api_error if not _ok else None,
+                }
+                st.rerun()
+        with _status_col:
+            if _api_cache and _api_cache["ok"]:
+                _age_str = f" *(checked {_api_cache_age}s ago)*" if _api_cache_age is not None else ""
+                st.success(
+                    f"**API Key valid** — "
+                    f"Limit: {pbcoindata.credit_limit_monthly} &nbsp;•&nbsp; "
+                    f"Today: {pbcoindata.credits_used_day} &nbsp;•&nbsp; "
+                    f"Monthly: {pbcoindata.credits_used_month} &nbsp;•&nbsp; "
+                    f"Left: **{pbcoindata.credits_left}** &nbsp;•&nbsp; "
+                    f"Resets: {pbcoindata.credit_limit_monthly_reset.replace('In ', '')}"
+                    f"{_age_str}",
+                    icon="✅",
+                )
+            elif _api_cache:
+                st.error(_api_cache["error"] or "Unknown API error", icon="🚨")
+    render_log_viewer(preselect="PBCoinData.log", iframe_height_offset=340)
 
 def pbmaster_details():
     pbmaster = st.session_state.pbmaster
 
-    with st.expander(":material/settings: Settings", expanded=False):
+    if "pbmaster_view_mode" not in st.session_state:
+        st.session_state.pbmaster_view_mode = "viewer"
+
+    if st.session_state.pbmaster_view_mode == "settings":
+        with st.sidebar:
+            if st.button(":material/arrow_back: Back", key="pbmaster_back_btn"):
+                st.session_state.pbmaster_view_mode = "viewer"
+                st.rerun()
+
         # Auto-restart toggle
         if "pbmaster_auto_restart" not in st.session_state:
             st.session_state.pbmaster_auto_restart = pbmaster.auto_restart
@@ -1152,6 +1246,13 @@ def pbmaster_details():
             pbmaster.monitor_interval = st.session_state.pbmaster_monitor_interval
             pbmaster.ws_port = st.session_state.pbmaster_ws_port
             pbmaster.enabled_hosts = _new_enabled
+            st.session_state.pbmaster_view_mode = "viewer"
+            st.rerun()
+        return
+
+    with st.sidebar:
+        if st.button(":material/settings: Settings", key="pbmaster_settings_btn"):
+            st.session_state.pbmaster_view_mode = "settings"
             st.rerun()
 
     # Connection status
@@ -1178,10 +1279,8 @@ def pbmaster_details():
                         f"**{hostname}** ({info['ip']}): {info.get('last_error', 'disconnected')}",
                         icon="⚠️"
                     )
-    else:
-        st.info("Start PBMaster to see SSH connection status and service monitoring.")
 
-    view_log_filtered("PBMaster")
+    render_log_viewer(preselect="PBMaster.log", iframe_height_offset=280)
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
@@ -1191,75 +1290,64 @@ if not is_authenticted() or is_session_state_not_initialized():
 # Page Setup
 set_page_config("PBGUI Services")
 
-c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")
-with c_title:
-    st.title("PBGUI Services")
-
+# Read active tab from session state *before* rendering the widget so the
+# title can be shown above the tabs on every rerun.
 _TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "PBMaster"]
+_cur_tab = st.session_state.get("services_active_tab") or "Overview"
+if _cur_tab not in _TABS:
+    _cur_tab = "Overview"
+
+_guide_topic = "Services" if _cur_tab == "Overview" else _cur_tab
+render_header_with_guide(
+    "PBGUI Services" if _cur_tab == "Overview" else _cur_tab,
+    guide_callback=lambda t=_guide_topic: _help_modal(t),
+    guide_key=f"guide_btn_{_cur_tab}",
+    level="subheader",
+)
+
 active_tab = st.segmented_control("Tabs", _TABS, key="services_active_tab", default="Overview", label_visibility="collapsed")
 if active_tab is None:
     active_tab = "Overview"
 
 if active_tab == "Overview":
-    with c_help:
-        if st.button("📖", key="guide_btn_overview", help="Open Services help"):
-            _help_modal("Services")
     overview()
 
 elif active_tab == "PBRun":
     with st.sidebar:
         pbrun_overview(key_suffix="_det")
-    with c_help:
-        if st.button("📖", key="guide_btn_pbrun", help="Open PBRun help"):
-            _help_modal("PBRun")
     pbrun_details()
 
 elif active_tab == "PBRemote":
-    with st.sidebar:
-        api_sync = _pbremote_sidebar()
-    with c_help:
-        if st.button("📖", key="guide_btn_pbremote", help="Open PBRemote help"):
-            _help_modal("PBRemote")
-    if api_sync:
-        st.warning("API not in sync with remote servers: " + ", ".join(s.name for s in api_sync))
+    if st.session_state.get("pbremote_view_mode", "viewer") == "viewer":
+        with st.sidebar:
+            _pbremote_sidebar()
     pbremote_details()
 
 elif active_tab == "PBMon":
-    with st.sidebar:
-        pbmon_overview(key_suffix="_det")
-    with c_help:
-        if st.button("📖", key="guide_btn_pbmon", help="Open PBMon help"):
-            _help_modal("PBMon")
+    if st.session_state.get("pbmon_view_mode", "viewer") == "viewer":
+        with st.sidebar:
+            pbmon_overview(key_suffix="_det")
     pbmon_details()
 
 elif active_tab == "PBStat":
     with st.sidebar:
         pbstat_overview(key_suffix="_det")
-    with c_help:
-        if st.button("📖", key="guide_btn_pbstat", help="Open PBStat help"):
-            _help_modal("PBStat")
     pbstat_details()
 
 elif active_tab == "PBData":
-    with st.sidebar:
-        pbdata_overview(key_suffix="_det")
-    with c_help:
-        if st.button("📖", key="guide_btn_pbdata", help="Open PBData help"):
-            _help_modal("PBData")
+    if st.session_state.get("pbdata_view_mode", "viewer") == "viewer":
+        with st.sidebar:
+            pbdata_overview(key_suffix="_det")
     pbdata_details()
 
 elif active_tab == "PBCoinData":
-    with st.sidebar:
-        pbcoindata_overview(key_suffix="_det")
-    with c_help:
-        if st.button("📖", key="guide_btn_pbcoindata", help="Open PBCoinData help"):
-            _help_modal("PBCoinData")
+    if st.session_state.get("pbcoindata_view_mode", "viewer") == "viewer":
+        with st.sidebar:
+            pbcoindata_overview(key_suffix="_det")
     pbcoindata_details()
 
 elif active_tab == "PBMaster":
-    with st.sidebar:
-        pbmaster_overview(key_suffix="_det")
-    with c_help:
-        if st.button("📖", key="guide_btn_pbmaster", help="Open PBMaster help"):
-            _help_modal("PBMaster")
+    if st.session_state.get("pbmaster_view_mode", "viewer") == "viewer":
+        with st.sidebar:
+            pbmaster_overview(key_suffix="_det")
     pbmaster_details()

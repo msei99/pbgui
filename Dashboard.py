@@ -1525,10 +1525,3 @@ class Dashboard():
                                     line=dict(color=color, width=2, dash = 'dot'), name=legend))
         fig.update_layout(legend = dict(font = dict(size = 14)))
         st.plotly_chart(fig, key=f"dashboard_orders_plot_{pos}_{st.session_state.get('dashboard_reload_token', 0)}")
-
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

@@ -704,6 +704,36 @@ def improve_best_binance_1m_for_coin(
             month_data = _download_archive_monthly(symbol_code, cur_year, cur_month)
             if month_data is None:
                 notes.append(f"monthly_download_failed={cur_year}-{cur_month:02d}")
+                # Fallback: try daily ZIPs for each day in the month (monthly archive may not
+                # be published yet for the most recently completed month)
+                append_exchange_download_log(
+                    STORAGE_EXCHANGE,
+                    f"[binance_best_1m] monthly_zip_unavailable={cur_year}-{cur_month:02d} coin={coin_u}, falling back to daily ZIPs",
+                    level="WARNING",
+                )
+                num_days_fb = calendar.monthrange(cur_year, cur_month)[1]
+                monthly_cutoff = date.today() - timedelta(days=ARCHIVE_MIN_AGE_DAYS)
+                for fb_i in range(num_days_fb):
+                    if _stop():
+                        break
+                    fb_day = date(cur_year, cur_month, fb_i + 1)
+                    if fb_day > d_end or fb_day > monthly_cutoff:
+                        continue
+                    fb_day_s = fb_day.strftime("%Y-%m-%d")
+                    fb_path = _binance_day_path(coin_u, fb_day_s)
+                    if not refetch and fb_path.exists():
+                        existing_fb = _read_day_npz(fb_path, day=fb_day_s)
+                        if len(existing_fb) >= 1200:
+                            days_checked += 1
+                            continue
+                    _emit({"stage": "daily_fallback", "day": fb_day_s, "done": days_checked})
+                    fb_candles = _download_archive_daily(symbol_code, fb_day_s)
+                    if fb_candles:
+                        w = _write_candles_for_day(coin_u, fb_day_s, fb_candles, overwrite=refetch)
+                        minutes_written += w
+                        archive_daily_downloaded += 1
+                    days_checked += 1
+                    _emit({"stage": "daily_fallback", "day": fb_day_s, "done": days_checked, "minutes_written": minutes_written})
             else:
                 archive_monthly_downloaded += 1
                 month_days = sorted(month_data.keys())

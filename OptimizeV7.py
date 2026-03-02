@@ -38,7 +38,8 @@ from Config import (
     ConfigV7Editor,
 )
 from PBCoinData import normalize_symbol
-import logging
+import traceback
+from logging_helpers import human_log as _log
 import os
 import fnmatch
 import math
@@ -180,7 +181,7 @@ class OptimizeV7QueueItem:
                 try:
                     st.error(message)
                 except Exception:
-                    print(message)
+                    _log('OptimizeV7', message, level='ERROR')
 
             try:
                 with open(self.json, "r", encoding="utf-8") as f:
@@ -6605,9 +6606,6 @@ class OptimizesV7:
 
 
 def main():
-    # Disable Streamlit Warnings when running directly
-    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
-    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeV7Queue()
     while True:
         opt.load()
@@ -6620,11 +6618,11 @@ def main():
                 return
             if item.is_existing():
                 if item.status() == "not started" or item.status() == "error":
-                    print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')
+                    _log('OptimizeV7', f'Optimizing {item.filename} started', level='INFO')
                     item.run()
                     time.sleep(1)
             else:
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimize config file for {item.filename} not found, jumping to next in queue')
+                _log('OptimizeV7', f'Optimize config file for {item.filename} not found, jumping to next in queue', level='WARNING')
         time.sleep(60)
 
 if __name__ == '__main__':

@@ -151,19 +151,6 @@ html = _load_component_html().replace("__WS_PORT__", str(ws_port))
 # CSS to make the iframe fill the remaining viewport.
 st.markdown("""
 <style>
-    /* Minimize padding */
-    .stMainBlockContainer {
-        padding-top: 2.25rem !important;
-        padding-bottom: 0 !important;
-    }
-
-    /* Keep page title from looking clipped against top navigation */
-    .stMainBlockContainer h1,
-    .stMainBlockContainer h2,
-    .stMainBlockContainer h3 {
-        margin-top: 0.25rem !important;
-    }
-
     /* Target the iframe only */
     .stMainBlockContainer iframe {
         height: calc(100vh - 200px) !important;

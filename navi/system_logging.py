@@ -1,6 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import json
 from pathlib import Path
 import logging_helpers
 
@@ -9,30 +7,61 @@ from pbgui_func import (
     is_session_state_not_initialized,
     is_authenticted,
     get_navi_paths,
+    render_header_with_guide,
+    render_log_viewer,
 )
-from pbgui_purefunc import load_ini
 
 
-# ── Component helpers ──────────────────────────────────────
+# ── Guide helpers ──────────────────────────────────────────
 
-_COMPONENT_DIR = Path(__file__).resolve().parent.parent / "components" / "log_viewer"
-_COMPONENT_HTML: str | None = None
+def _docs_index(lang: str) -> list[tuple[str, str]]:
+    folder = "help_de" if str(lang).strip().upper() == "DE" else "help"
+    docs_dir = Path(__file__).resolve().parents[1] / "docs" / folder
+    if not docs_dir.is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for p in sorted(docs_dir.glob("*.md")):
+        label = p.name
+        try:
+            first = p.read_text(encoding="utf-8").splitlines()[0].strip()
+            if first.startswith("#"):
+                label = first.lstrip("#").strip() or p.name
+        except Exception:
+            pass
+        out.append((label, str(p)))
+    return out
 
 
-def _load_log_viewer_html() -> str:
-    global _COMPONENT_HTML
-    if _COMPONENT_HTML is None:
-        _COMPONENT_HTML = (_COMPONENT_DIR / "index.html").read_text(encoding="utf-8")
-    return _COMPONENT_HTML
+def _read_markdown(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except Exception as e:
+        return f"Failed to read docs: {e}"
 
 
-def _get_ws_port() -> int:
-    val = load_ini("pbmaster", "ws_port")
-    if val and val.isdigit():
-        port = int(val)
-        if 1024 <= port <= 65535:
-            return port
-    return 8765
+@st.dialog("Help & Tutorials", width="large")
+def _help_modal(default_topic: str = "Logging"):
+    lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="logging_help_lang")
+    docs = _docs_index(str(lang))
+    if not docs:
+        st.info("No help docs found.")
+        return
+    labels = [d[0] for d in docs]
+    default_index = 0
+    target = str(default_topic or "").strip().lower()
+    if target:
+        for i, lbl in enumerate(labels):
+            if target in str(lbl).lower():
+                default_index = i
+                break
+    sel = st.selectbox(
+        "Select Topic",
+        options=list(range(len(labels))),
+        format_func=lambda i: labels[int(i)],
+        index=int(default_index),
+        key="logging_help_sel",
+    )
+    st.markdown(_read_markdown(docs[int(sel)][1]), unsafe_allow_html=True)
 
 
 # ============================================================================
@@ -56,11 +85,16 @@ if "logging_view_mode" not in st.session_state:
 # ============================================================================
 
 if st.session_state.logging_view_mode == "settings":
-    if st.button(":material/arrow_back: Back to Log Viewer", key="logging_back_btn"):
-        st.session_state.logging_view_mode = "viewer"
-        st.rerun()
+    with st.sidebar:
+        if st.button(":material/arrow_back: Back to Log Viewer", key="logging_back_btn"):
+            st.session_state.logging_view_mode = "viewer"
+            st.rerun()
 
-    st.header("Log Rotation Settings", divider="rainbow")
+    render_header_with_guide(
+        "Log Rotation Settings",
+        guide_callback=lambda: _help_modal("Logging"),
+        guide_key="logging_guide_btn_settings",
+    )
 
     logs_dir = Path.cwd() / "data" / "logs"
     services = sorted([p.stem for p in logs_dir.glob("*.log") if p.is_file()]) if logs_dir.exists() else []
@@ -129,34 +163,15 @@ if st.session_state.logging_view_mode == "settings":
 # Log Viewer (default — full height)
 # ============================================================================
 
-c_title, c_settings = st.columns([0.90, 0.10], vertical_alignment="center")
-with c_title:
-    st.header("Logging", divider="rainbow")
-with c_settings:
+with st.sidebar:
     if st.button(":material/settings: Settings", key="logging_settings_btn"):
         st.session_state.logging_view_mode = "settings"
         st.rerun()
 
-st.caption("Select a log file on the left — live stream with level filter and text search.")
-
-st.markdown("""
-<style>
-.stMainBlockContainer { padding-bottom: 0 !important; }
-.stMainBlockContainer iframe {
-    height: calc(100vh - 160px) !important;
-    min-height: 400px !important;
-    border: none !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-ws_port = _get_ws_port()
-logs_dir = Path.cwd() / "data" / "logs"
-log_files = sorted(p.name for p in logs_dir.glob("*.log") if p.is_file()) if logs_dir.exists() else []
-html = (
-    _load_log_viewer_html()
-    .replace("__WS_PORT__", str(ws_port))
-    .replace("__INITIAL_FILES__", json.dumps(log_files))
+render_header_with_guide(
+    "Logging",
+    guide_callback=lambda: _help_modal("Logging"),
+    guide_key="logging_guide_btn_viewer",
 )
-components.html(html, height=600, scrolling=False)
-components.html(html, height=500, scrolling=False)
+
+render_log_viewer()

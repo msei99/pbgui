@@ -18,6 +18,25 @@ _LEVEL_MAP = {
 _service_min_levels = {}
 _global_min_level = 0
 
+# Service-to-log-group mapping.
+# Services listed here share a common log file (group name = log stem)
+# instead of getting their own individual {service}.log file.
+LOG_GROUPS: dict[str, str] = {
+    'VPSManager':      'PBGui',
+    'Instance':        'PBGui',
+    'Config':          'PBGui',
+    'Multi':           'PBGui',
+    'ParetoDataLoader':'PBGui',
+    'Status':          'PBGui',
+    'HyperliquidAWS':  'PBGui',
+    'Backtest':        'PBGui',
+    'BacktestMulti':   'PBGui',
+    'Optimize':        'PBGui',
+    'OptimizeMulti':   'PBGui',
+    'BacktestV7':      'PBGui',
+    'OptimizeV7':      'PBGui',
+}
+
 
 DEFAULT_ROTATE_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_ROTATE_BACKUP_COUNT = 1
@@ -437,7 +456,8 @@ def human_log(service: str, msg: str, user: str = None, tags=None, level: str = 
         if not logfile:
             p = Path.cwd() / 'data' / 'logs'
             p.mkdir(parents=True, exist_ok=True)
-            logfile = str(p / f'{service}.log')
+            log_stem = LOG_GROUPS.get(service, service)
+            logfile = str(p / f'{log_stem}.log')
 
         # Rotate if oversize (keep only current + one rotated generation)
         try:

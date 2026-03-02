@@ -15,8 +15,6 @@ import platform
 import subprocess
 import sys
 import traceback
-from datetime import datetime
-from io import TextIOWrapper
 from pathlib import Path, PurePath
 from time import sleep
 
@@ -167,8 +165,8 @@ class PBMaster:
                 hostname = config.get('_hostname')
                 if hostname:
                     hostnames.append(hostname)
-            except Exception:
-                pass
+            except Exception as e:
+                _log(SERVICE, f"[_collect_hostnames] skipping corrupt file {filepath}: {e}", level='DEBUG')
         return sorted(set(hostnames))
 
     @property
@@ -243,8 +241,10 @@ class PBMaster:
 
     def save_pid(self):
         self.my_pid = os.getpid()
-        with open(self.pidfile, 'w') as f:
+        tmp_path = self.pidfile.with_suffix(self.pidfile.suffix + '.tmp')
+        with tmp_path.open('w', encoding='utf-8') as f:
             f.write(str(self.my_pid))
+        tmp_path.replace(self.pidfile)
 
     # ── Alert system ──
 
@@ -508,38 +508,23 @@ class PBMaster:
 
 def main():
     """Daemon entry point (same pattern as PBMon)."""
-    dest = Path(f'{PBGDIR}/data/logs')
-    if not dest.exists():
-        dest.mkdir(parents=True)
-    logfile = Path(f'{str(dest)}/PBMaster.log')
-    sys.stdout = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
-    sys.stderr = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
-    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Start: PBMaster')
-
     pbmaster = PBMaster()
     if pbmaster.is_running():
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: PBMaster already started')
-        exit(1)
+        _log('PBMaster', 'Error: PBMaster already started', level='ERROR')
+        sys.exit(1)
+    _log('PBMaster', 'Start: PBMaster', level='INFO')
     pbmaster.save_pid()
 
     try:
         pbmaster._setup()
     except Exception as e:
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error during setup: {e}')
-        traceback.print_exc()
-        exit(1)
+        _log('PBMaster', f'Error during setup: {e}', level='ERROR')
+        _log('PBMaster', 'PBMaster setup traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
+        sys.exit(1)
 
     loop_count = 0
     while True:
         try:
-            if logfile.exists():
-                if logfile.stat().st_size >= 10485760:
-                    logfile.replace(f'{str(logfile)}.old')
-                    sys.stdout = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
-                    sys.stderr = TextIOWrapper(open(logfile, "ab", 0), write_through=True)
-
             pbmaster._loop_iteration(loop_count)
             loop_count += 1
             # Sleep but wake instantly when pbgui.ini changes
@@ -549,9 +534,8 @@ def main():
             pbmaster._shutdown()
             break
         except Exception as e:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} '
-                  f'Error in main loop, but continue: {e}')
-            traceback.print_exc()
+            _log('PBMaster', f'Error in main loop, but continue: {e}', level='WARNING')
+            _log('PBMaster', 'PBMaster main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
             pbmaster._ini_watcher.changed.wait(timeout=pbmaster.monitor_interval)
 
 

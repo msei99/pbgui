@@ -22,6 +22,7 @@ import numpy as np
 from shutil import rmtree
 import sys
 import traceback
+from logging_helpers import human_log as _log
 
 class Instance(Base):
     def __init__(self, config: str = None):
@@ -133,7 +134,7 @@ class Instance(Base):
                 upnl = 0
             return upnl
         except Exception as e:
-            print(f'Error calculating upnl: {self.user} {self.symbol} {self.market_type} {e}')
+            _log('Instance', f'Error calculating upnl: {self.user} {self.symbol} {self.market_type} {e}', level='ERROR')
             return 0
     @property
     def psize(self):
@@ -155,7 +156,7 @@ class Instance(Base):
                 psize = 0
             return psize
         except Exception as e:
-            print(f'Error calculating psize: {self.user} {self.symbol} {self.market_type} {e}')
+            _log('Instance', f'Error calculating psize: {self.user} {self.symbol} {self.market_type} {e}', level='ERROR')
             return 0
     @property
     def price(self):
@@ -165,7 +166,7 @@ class Instance(Base):
             if not price: return 0
             return price
         except Exception as e:
-            print(f'Error calculating price: {self.user} {self.symbol} {self.market_type} {e}')
+            _log('Instance', f'Error calculating price: {self.user} {self.symbol} {self.market_type} {e}', level='ERROR')
             return 0
     @property
     def next_tp(self):
@@ -178,7 +179,7 @@ class Instance(Base):
                         next_tp = order["price"]
             return next_tp
         except Exception as e:
-            print(f'Error calculating next_tp: {self.user} {self.symbol} {self.market_type} {e}')
+            _log('Instance', f'Error calculating next_tp: {self.user} {self.symbol} {self.market_type} {e}', level='ERROR')
             return 0
     @property
     def next_dca(self):
@@ -191,7 +192,7 @@ class Instance(Base):
                         next_dca = order["price"]
             return next_dca
         except Exception as e:
-            print(f'Error calculating next_dca: {self.user} {self.symbol} {self.market_type} {e}')
+            _log('Instance', f'Error calculating next_dca: {self.user} {self.symbol} {self.market_type} {e}', level='ERROR')
             return 0
     @property
     def dca(self):
@@ -203,7 +204,7 @@ class Instance(Base):
                     dca += 1
             return dca
         except Exception as e:
-            print(f'Error calculating dca: {self.user} {self.symbol} {self.market_type} {e}')
+            _log('Instance', f'Error calculating dca: {self.user} {self.symbol} {self.market_type} {e}', level='ERROR')
             return 0
 
     @multi.setter
@@ -313,7 +314,7 @@ class Instance(Base):
                 with open(ffile, "r", encoding='utf-8') as f:
                     fundings = json.load(f)
             except Exception as e:
-                print(f'{str(ffile)} is corrupted {e}')
+                _log('Instance', f'{str(ffile)} is corrupted: {e}', level='WARNING')
         file = Path(f'{self._instance_path}/trades.json')
         if not file.exists():
             return
@@ -321,7 +322,7 @@ class Instance(Base):
             with open(file, "r", encoding='utf-8') as f:
                 trades = json.load(f)
         except Exception as e:
-            print(f'{str(file)} is corrupted {e}')
+            _log('Instance', f'{str(file)} is corrupted: {e}', level='WARNING')
         if not trades:
             return
         data = {'timestamp': [],
@@ -609,7 +610,7 @@ class Instance(Base):
                 with open(file_lft, "r", encoding='utf-8') as f:
                     since = json.load(f)
             except Exception as e:
-                print(f'{str(file_lft)} is corrupted {e}')
+                _log('Instance', f'{str(file_lft)} is corrupted: {e}', level='WARNING')
                 file_lft.unlink()
         if file.exists():
             try:
@@ -619,7 +620,7 @@ class Instance(Base):
                 if type(trades[-1]["timestamp"]) == int:
                     since = trades[-1]["timestamp"]
             except Exception as e:
-                print(f'{str(file)} is corrupted {e}')
+                _log('Instance', f'{str(file)} is corrupted: {e}', level='WARNING')
         now = self.fetch_timestamp()
         new_trades = self._exchange.fetch_trades(self.symbol_ccxt, self._market_type, since)
         if new_trades:
@@ -633,7 +634,7 @@ class Instance(Base):
         if save:
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(trades, f, indent=4)
-                print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {self.user} {self.symbol} Fetched {len(trades) - ltrades} trades')
+                _log('Instance', f'{self.user} {self.symbol} Fetched {len(trades) - ltrades} trades', level='INFO')
 
     def save_trades(self, trades : json):
         if trades:
@@ -711,7 +712,7 @@ class Instance(Base):
         if self._config.type != "recursive_grid" or self.exchange.id not in ["binance", "kucoinfutures", "bitget", "bybit", "bingx", "okx"]:
             return
         self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
-        print(self._symbol_ccxt)
+        _log('Instance', f'view_grid symbol_ccxt: {self._symbol_ccxt}', level='DEBUG')
         ohlcv = self.exchange.fetch_ohlcv(self.symbol_ccxt, self._market_type, timeframe="4h", limit=100)
         self._ohlcv_df = pd.DataFrame(ohlcv, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         self._ohlcv_df["color"] = np.where(self._ohlcv_df["close"] > self._ohlcv_df["open"], "green", "red")
@@ -732,9 +733,9 @@ class Instance(Base):
             # njit_funcs = __import__("njit_funcs")
         except Exception as e:
             st.write("### Can not import grid functions from passivbot")
-            traceback.print_exc()
+            _log('Instance', f'Can not import grid functions: {e}', level='ERROR', meta={'traceback': traceback.format_exc()})
             return
-        print(self.symbol)
+        _log('Instance', f'view_grid symbol: {self.symbol}', level='DEBUG')
         symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults = self.exchange.fetch_symbol_info(self.symbol, self.market_type)
         # print(symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults)
         short = json.loads(self._config.config)["short"]
@@ -923,9 +924,9 @@ class Instance(Base):
                 self._config.load_config()
                 return True
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
-        print(f'Error load Instance: {str(file)}')
+                _log('Instance', f'Something went wrong loading instance, continuing: {e}', level='WARNING',
+                     meta={'traceback': traceback.format_exc()})
+        _log('Instance', f'Error load Instance: {str(file)}', level='ERROR')
         return False
 
     def load_status(self):
@@ -940,7 +941,7 @@ class Instance(Base):
                 self._status = json.load(f)
                 return True
             except Exception as e:
-                print(f'Error load_status: {self.user} {self.symbol} {self.market_type} {e}')
+                _log('Instance', f'Error load_status: {self.user} {self.symbol} {self.market_type} {e}', level='ERROR')
                 return False
 
     def save_status(self):
@@ -1100,7 +1101,7 @@ class Instances:
             if file.exists():
                 inst = Instance()
                 if inst.load(p):
-                    print(f'{str(p)} loaded')
+                    _log('Instance', f'{str(p)} loaded', level='DEBUG')
                     self.instances.append(inst)
                     self.instances = sorted(self.instances, key=lambda d: d.user)
                     return
@@ -1146,9 +1147,3 @@ class Instances:
                 for line in reversed(log):
                     logr = logr+line
         stx.scrollableTextbox(logr,height="800", key=f'stx_{log_filename}')
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

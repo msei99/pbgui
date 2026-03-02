@@ -4,7 +4,6 @@ import sys
 import os
 from pathlib import Path, PurePath
 from time import sleep
-from io import TextIOWrapper
 from datetime import datetime
 import platform
 import traceback
@@ -1692,7 +1691,8 @@ class PBData():
             count = 0
             while True:
                 if count > 5:
-                    print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Error: Can not start PBData')
+                    _human_log('PBData', 'Error: Can not start PBData', level='ERROR')
+                    break
                 sleep(1)
                 if self.is_running():
                     break
@@ -1701,8 +1701,11 @@ class PBData():
 
     def stop(self):
         if self.is_running():
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} Stop: PBData')
-            psutil.Process(self.my_pid).kill()
+            _human_log('PBData', 'Stop: PBData', level='INFO')
+            try:
+                psutil.Process(self.my_pid).kill()
+            except psutil.NoSuchProcess:
+                pass
 
     def restart(self):
         if self.is_running():
@@ -1726,8 +1729,10 @@ class PBData():
 
     def save_pid(self):
         self.my_pid = os.getpid()
-        with open(self.pidfile, 'w') as f:
+        tmp_path = self.pidfile.with_suffix(self.pidfile.suffix + '.tmp')
+        with tmp_path.open('w', encoding='utf-8') as f:
             f.write(str(self.my_pid))
+        tmp_path.replace(self.pidfile)
     
     def load_fetch_users(self):
         pb_config = configparser.ConfigParser()
@@ -2868,10 +2873,7 @@ class PBData():
                         try:
                             _human_log('PBData', f"[poll] Shared {kind} poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
                         except Exception:
-                            try:
-                                print(f"[PBData] [poll] Shared {kind} poll failed for {user.name}: {e}\n{tb}")
-                            except Exception:
-                                pass
+                            pass
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
@@ -2954,10 +2956,7 @@ class PBData():
                         try:
                             _human_log('PBData', f"[poll] Shared COMBINED poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
                         except Exception:
-                            try:
-                                print(f"[PBData] [poll] Shared COMBINED poll failed for {user.name}: {e}\n{tb}")
-                            except Exception:
-                                pass
+                            pass
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
@@ -3863,30 +3862,12 @@ class PBData():
 def main():
     """Entry point kept synchronous; spins up an async loop internally."""
     dest = Path(f'{PBGDIR}/data/logs')
-    if not dest.exists():
-        dest.mkdir(parents=True)
-    # Use centralized human_log for PBData startup instead of redirecting stdout/stderr
-    msg = 'Start: PBData'
-    try:
-        _human_log('PBData', msg, level='INFO')
-    except Exception:
-        pass
-    try:
-        print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {msg}')
-    except Exception:
-        pass
+    dest.mkdir(parents=True, exist_ok=True)
     pbdata = PBData()
     if pbdata.is_running():
-        msg = 'Error: PBData already started'
-        try:
-            _human_log('PBData', msg, level='ERROR')
-        except Exception:
-            pass
-        try:
-            print(f'{datetime.now().isoformat(sep=" ", timespec="seconds")} {msg}')
-        except Exception:
-            pass
-        exit(1)
+        _human_log('PBData', 'Error: PBData already started', level='ERROR')
+        sys.exit(1)
+    _human_log('PBData', 'Start: PBData', level='INFO')
     pbdata.save_pid()
 
     async def run_loop():
@@ -3913,21 +3894,14 @@ def main():
                         tb = traceback.format_exc()
                         _human_log('PBData', f"[loop] update_db_async ERROR: {e}", level='ERROR', meta={'traceback': tb})
                     except Exception:
-                        try:
-                            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] [loop] update_db_async ERROR: {e}")
-                        except Exception:
-                            pass
+                        pass
                 await asyncio.sleep(1)
             except Exception as e:
                 try:
                     tb = traceback.format_exc()
                     _human_log('PBData', f"[loop] Unexpected error: {e}", level='ERROR', meta={'traceback': tb})
                 except Exception:
-                    try:
-                        print(f'Something went wrong, but continue {e}')
-                        traceback.print_exc()
-                    except Exception:
-                        pass
+                    pass
 
     async def _shutdown():
         try:
@@ -3992,10 +3966,6 @@ def main():
         msg = '[shutdown] Exiting'
         try:
             _human_log('PBData', msg, level='INFO')
-        except Exception:
-            pass
-        try:
-            print(f"{datetime.now().isoformat(sep=' ', timespec='seconds')} [PBData] {msg}")
         except Exception:
             pass
         try:

@@ -490,6 +490,8 @@ class CoinData:
     
     def load_mapping(self, exchange: str, use_cache: bool = True) -> list:
         """Load mapping.json for an exchange with optional mtime-aware caching."""
+        if not exchange:
+            return []
         mapping_file = self._get_exchange_dir(exchange) / "mapping.json"
         if not mapping_file.exists():
             self._exchange_mapping_ts.pop(exchange, None)
@@ -765,6 +767,8 @@ class CoinData:
         use_cache: bool = True,
     ) -> list[str]:
         """Return sorted unique tags from mapping records for an exchange."""
+        if not exchange:
+            return []
         mapping = self.load_mapping(exchange=exchange, use_cache=use_cache)
         quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
 
@@ -1253,7 +1257,10 @@ class CoinData:
     def stop(self):
         if self.is_running():
             _log('PBCoinData', 'Stop: PBCoinData', level='INFO')
-            psutil.Process(self.my_pid).kill()
+            try:
+                psutil.Process(self.my_pid).kill()
+            except psutil.NoSuchProcess:
+                pass
 
     def restart(self):
         if self.is_running():
@@ -1272,8 +1279,11 @@ class CoinData:
     def load_pid(self):
         if self.pidfile.exists():
             with open(self.pidfile) as f:
-                pid = f.read()
-                self.my_pid = int(pid) if pid.isnumeric() else None
+                pid = f.read().strip()
+                try:
+                    self.my_pid = int(pid) if pid.isnumeric() else None
+                except ValueError:
+                    self.my_pid = None
 
     def save_pid(self):
         self.my_pid = os.getpid()
@@ -2739,15 +2749,11 @@ class CoinData:
         return sorted(approved_coins), sorted(ignored_coins)
 
 def main():
-    pbgdir = Path.cwd()
-    dest = Path(f'{pbgdir}/data/logs')
-    if not dest.exists():
-        dest.mkdir(parents=True)
-    _log('PBCoinData', 'Start: PBCoinData', level='INFO')
     pbcoindata = CoinData()
     if pbcoindata.is_running():
         _log('PBCoinData', 'PBCoinData already started', level='ERROR')
-        exit(1)
+        sys.exit(1)
+    _log('PBCoinData', 'Start: PBCoinData', level='INFO')
     pbcoindata.save_pid()
     while True:
         try:
@@ -2758,6 +2764,7 @@ def main():
             pbcoindata.load_config()
         except Exception as e:
             _log('PBCoinData', f'Something went wrong, but continue: {e}', level='ERROR')
+            _log('PBCoinData', 'PBCoinData main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
 
 if __name__ == '__main__':
     main()

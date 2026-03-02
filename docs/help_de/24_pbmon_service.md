@@ -1,37 +1,82 @@
-# PBMon Service Details
+# PBMon Service
 
-PBMon ist ein Hintergrunddienst, der laufende Passivbot-Instanzen überwacht und bei ungewöhnlichem Verhalten oder Fehlern Alarme über Telegram sendet.
+PBMon ist ein schlanker Hintergrunddienst, der deine PBRemote-Server und laufende
+Passivbot-Instanzen überwacht. Bei einem Problem sendet er dir sofort eine Telegram-Nachricht,
+damit du reagieren kannst — ohne die UI manuell prüfen zu müssen.
 
-## Was PBMon macht
+## Was PBMon überwacht
 
-- Überprüft kontinuierlich den Zustand und Status aktiver Bot-Prozesse
-- Überwacht auf feststeckende Positionen, übermäßige Fehler oder unerwartete Stopps
-- Sendet Echtzeit-Alarmmeldungen an einen konfigurierten Telegram-Chat
-- Schreibt Service-Logs nach `data/logs/PBMon.log`
+PBMon ruft alle 60 Sekunden die Fehlerprüfung von PBRemote ab und prüft auf:
 
-## Konfiguration
+| Alarmtyp | Wird ausgelöst wenn |
+|----------|----------------------|
+| **Server offline** | Ein entfernter VPS nicht erreichbar ist |
+| **Systemressource** | Ein Server den konfigurierten Speicher-, CPU-, Swap- oder Disk-Schwellenwert überschreitet |
+| **Instanzfehler** | Eine laufende Passivbot-Instanz einen Fehler oder unerwarteten Stopp meldet |
 
-Um PBMon zu nutzen, musst du einen Telegram-Bot konfigurieren.
+Jeder Alarm wird **einmalig** pro Fehlerereignis gesendet. PBMon merkt sich, welche Fehler
+bereits gemeldet wurden, und sendet nur dann eine neue Nachricht, wenn ein zuvor behobener
+Fehler erneut auftritt.
 
-1. Erstelle einen Bot über [@BotFather](https://t.me/botfather) auf Telegram und kopiere den **Bot Token**
-2. Starte einen Chat mit deinem neuen Bot und sende eine Nachricht
-3. Finde deine **Chat ID** heraus (z.B. über Bots wie `@userinfobot`)
-4. Trage beide Werte auf der PBMon-Detailseite ein:
-   - `Telegram Bot Token`
-   - `Telegram Chat ID`
+## Einrichtung: Telegram-Bot anlegen
 
-Änderungen werden automatisch gespeichert. Starte den PBMon-Service neu, damit der neue Token wirksam wird.
+1. Öffne Telegram und chatte mit **[@BotFather](https://t.me/botfather)**
+2. Sende `/newbot` und folge den Anweisungen — kopiere den **Bot Token**
+3. Starte eine Unterhaltung mit deinem neuen Bot (sende `/start`)
+4. Finde deine **Chat ID** heraus — am einfachsten über **[@userinfobot](https://t.me/userinfobot)**
+5. Trage beide Werte in den PBMon-Einstellungen ein (siehe unten) und speichere
 
-## PBMon-Detailseite
+> **Wichtig:** Der Bot kann dir keine Nachrichten schicken, bis du ihm mindestens eine
+> Nachricht gesendet hast. Der Befehl `/start` genügt.
 
-Auf `System → Services → PBMon → Show Details` kannst du:
+## PBMon-Tab — Viewer-Modus (Standard)
 
-- Den aktuellen PBMon-Status prüfen (läuft/gestoppt)
-- Den Service ein-/ausschalten
-- Telegram-Zugangsdaten konfigurieren
-- Den integrierten gefilterten PBMon-Log-Viewer nutzen
+Wenn du **System → Services → PBMon** öffnest, lädt sofort der vollhöhige Log-Viewer
+mit dem Live-Stream von `PBMon.log`.
 
-## Schnelle Fehlersuche
+- Nutze die **Level-Filter**-Buttons (DBG / INF / WRN / ERR), um relevante Zeilen zu fokussieren
+- Nutze **Search**, um einen bestimmten Servernamen oder Fehlertext zu finden
+- Das **Version**-Dropdown zeigt rotierte Archive (`.1`, `.old`)
 
-- **Keine Alarme erhalten**: Prüfe `data/logs/PBMon.log` auf Telegram-API-Fehler. Stelle sicher, dass Token und Chat-ID korrekt sind.
-- **Bot muss gestartet sein**: Du musst mindestens eine Nachricht (z.B. `/start`) an deinen Telegram-Bot senden, bevor er dir Nachrichten schicken kann.
+## PBMon-Tab — Einstellungsmodus
+
+Klicke auf **⚙ Settings** in der linken Seitenleiste, um die Einstellungsansicht zu öffnen.
+
+| Feld | Beschreibung |
+|------|--------------|
+| **Telegram Bot Token** | Token von @BotFather (gespeichert in `pbgui.ini`) |
+| **Telegram Chat ID** | Deine persönliche oder Gruppen-Chat-ID |
+
+Drücke **💾** zum Speichern und Rückkehr zum Viewer. Der Speichern-Button wird
+**primär (rot)**, sobald es ungespeicherte Änderungen gibt.
+
+> Änderungen wirken beim **nächsten Überwachungszyklus** (innerhalb von 60 Sekunden) —
+> kein Neustart erforderlich.
+
+## PBMon starten und stoppen
+
+Nutze den **PBMon-Toggle** in der linken Seitenleiste im PBMon-Tab:
+
+- Toggle **ein** → startet PBMon als abgekoppelten Hintergrundprozess
+- Toggle **aus** → stoppt den Prozess sauber
+
+Der **Overview**-Tab zeigt ✅ / ❌ Statusindikatoren für alle Services auf einen Blick.
+
+## Log-Format
+
+PBMon nutzt den zentralen PBGui-Logger. Jede Zeile folgt dem Format:
+
+```
+2026-03-01T12:55:50.123 [PBMon] [INFO] Start: PBMon
+2026-03-01T12:55:52.456 [PBMon] [INFO] Send Message: Server: *myVPS* is offline
+2026-03-01T12:58:00.789 [PBMon] [ERROR] Something went wrong, but continue: ...
+```
+
+## Fehlerbehebung
+
+| Symptom | Prüfen |
+|---------|--------|
+| Keine Telegram-Alarme | Token und Chat ID in den Settings prüfen · `PBMon.log` auf `[ERROR]`-Zeilen durchsuchen |
+| Fehler „Chat not found" | Sicherstellen, dass du `/start` an den Bot gesendet hast, bevor PBMon das erste Mal lief |
+| PBMon startet nicht | Möglicherweise läuft eine weitere Instanz — `data/pid/pbmon.pid` prüfen |
+| Alarme hören auf | PBMon könnte abgestürzt sein — Status im Overview-Tab prüfen |

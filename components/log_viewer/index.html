@@ -173,6 +173,16 @@ body {
 .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
 #log-file-info { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 #stream-status { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.lines-label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-dim); white-space: nowrap;
+}
+#lines-select {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text); font-size: 12px;
+  padding: 2px 4px; cursor: pointer;
+}
+.file-size-info { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 
 /* ─── Search Bar ───────────────────────────────────────────── */
 .search-bar {
@@ -247,6 +257,7 @@ body {
 .log-critical { color: var(--purple); font-weight: 600; }
 
 .log-hidden { display: none; }
+.log-level-hidden { display: none; }
 .log-highlight { background: rgba(255,200,0,0.18); }
 .log-highlight mark { background: #e8a620; color: #000; border-radius: 2px; padding: 0 1px; }
 .log-highlight.log-current-match { background: rgba(255,160,0,0.40); outline: 1px solid #e8a620; }
@@ -293,6 +304,25 @@ body {
         <button class="lvl-btn on" data-lvl="ERROR"    onclick="toggleLevel('ERROR')"   >ERR</button>
         <button class="lvl-btn on" data-lvl="CRITICAL" onclick="toggleLevel('CRITICAL')">CRT</button>
       </div>
+      <div class="toolbar-sep"></div>
+      <label class="lines-label">Lines:
+        <select id="lines-select" onchange="onLinesChange()">
+            <option value="200" selected>200</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+          <option value="2000">2000</option>
+          <option value="5000">5000</option>
+          <option value="10000">10000</option>
+          <option value="25000">25000</option>
+          <option value="-1">All</option>
+        </select>
+      </label>
+      <span id="file-size-info" class="file-size-info"></span>
+      <label class="lines-label" id="rotation-label" style="display:none">Version:
+        <select id="rotation-select" onchange="onRotationChange()">
+          <option value="current">Current</option>
+        </select>
+      </label>
       <div class="toolbar-sep"></div>
       <button id="stream-btn" class="ctrl-btn stream-on" onclick="toggleStream()">⏸ Pause</button>
       <button class="ctrl-btn" onclick="clearLog()">🗑 Clear</button>
@@ -351,6 +381,10 @@ let logRafPending = false;
 let logLineBase = 0;           // Line number offset (when buffer trimmed)
 let logSessionId = 0;          // Incremented per subscribe to ignore stale msgs
 let availableFiles = __INITIAL_FILES__;  // Pre-filled by Python; updated via WS
+let fileSizes = __FILE_SIZES__;          // filename → bytes, pre-filled by Python
+let rotatedFiles = __ROTATED_FILES__;    // base → [rotated variants]
+const preselectedFile = __PRESELECT_FILE__ || '';
+const displayTitle    = __DISPLAY_TITLE__    || '';
 let logSearchTerm = '';
 let logSearchIsRegex = false;
 let logFilterMode = true;      // true = hide non-matching lines
@@ -429,6 +463,7 @@ function handleMessage(msg) {
       logLines = msg.lines || [];
       logLineBase = 0;
       if (msg.streaming) logStreaming = true;
+      if (msg.file_size !== undefined) updateFileSize(msg.file_size);
       updateStreamBtn();
       renderLogs();
       break;
@@ -487,8 +522,32 @@ function selectFile(filename) {
   document.getElementById('no-file-msg').style.display = 'none';
   document.getElementById('log-terminal').style.display = '';
 
-  // Update info label
-  document.getElementById('log-file-info').textContent = filename;
+  // Update info label (show friendly title only for the preselected file)
+  document.getElementById('log-file-info').textContent =
+      (displayTitle && filename === preselectedFile) ? displayTitle + '  ·  ' + filename : filename;
+
+  // Show file size from local data immediately (updated again when WS responds)
+  if (fileSizes[filename] !== undefined) updateFileSize(fileSizes[filename]);
+  else updateFileSize(0);
+
+  // Populate rotation dropdown
+  const rotLabel = document.getElementById('rotation-label');
+  const rotSel = document.getElementById('rotation-select');
+  const variants = rotatedFiles[filename] || [];
+  if (variants.length) {
+    rotSel.innerHTML = '<option value="current">Current</option>';
+    for (const v of variants) {
+      const suffix = v.replace(filename, '');
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = suffix.startsWith('.') ? suffix : '.' + suffix;
+      rotSel.appendChild(opt);
+    }
+    rotSel.value = 'current';
+    rotLabel.style.display = '';
+  } else {
+    rotLabel.style.display = 'none';
+  }
 
   subscribeFile(filename);
 }
@@ -504,10 +563,74 @@ function subscribeFile(filename) {
   if (terminal) terminal.innerHTML = '';
 
   const sid = ++logSessionId;
-  send({ cmd: 'subscribe_local_logs', file: filename, lines: 300, sid: sid });
+  send({ cmd: 'subscribe_local_logs', file: filename, lines: getSelectedLines(), sid: sid });
   logStreaming = true;
   updateStreamBtn();
   setStreamStatus('Streaming…');
+}
+
+// ── Lines selector & file size ─────────────────────────────
+function getSelectedLines() {
+  const sel = document.getElementById('lines-select');
+  return sel ? parseInt(sel.value, 10) : 200;
+}
+
+function onLinesChange() {
+  // Re-fetch with new line count if a file is selected
+  if (currentFile) {
+    const rotSel = document.getElementById('rotation-select');
+    const rotVal = rotSel ? rotSel.value : 'current';
+    if (rotVal === 'current') subscribeFile(currentFile);
+    else fetchRotatedFile(rotVal);
+  }
+}
+
+function onRotationChange() {
+  const rotSel = document.getElementById('rotation-select');
+  if (!rotSel || !currentFile) return;
+  const val = rotSel.value;
+  if (val === 'current') {
+    if (fileSizes[currentFile] !== undefined) updateFileSize(fileSizes[currentFile]);
+    else updateFileSize(0);
+    subscribeFile(currentFile);
+  } else {
+    fetchRotatedFile(val);
+  }
+}
+
+function fetchRotatedFile(filename) {
+  // One-shot fetch of a rotated (archived) log — no streaming
+  if (logStreaming) {
+    send({ cmd: 'unsubscribe_local_logs' });
+    logStreaming = false;
+  }
+  updateStreamBtn();
+  setStreamStatus('Archive');
+
+  logLines = [];
+  logLineBase = 0;
+  logPendingLines = [];
+  logRafPending = false;
+  ++logRenderAbortId;
+  const terminal = document.getElementById('log-terminal');
+  if (terminal) terminal.innerHTML = '';
+
+  // Show file size
+  if (fileSizes[filename] !== undefined) updateFileSize(fileSizes[filename]);
+  else updateFileSize(0);
+
+  const sid = ++logSessionId;
+  send({ cmd: 'get_local_logs', file: filename, lines: getSelectedLines(), sid: sid });
+}
+
+function updateFileSize(bytes) {
+  const el = document.getElementById('file-size-info');
+  if (!el) return;
+  if (bytes === 0) { el.textContent = ''; return; }
+  const units = ['B','KB','MB','GB'];
+  let v = bytes, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  el.textContent = v.toFixed(1) + ' ' + units[i];
 }
 
 // ── Stream Controls ────────────────────────────────────────
@@ -525,12 +648,23 @@ function toggleStream() {
 function updateStreamBtn() {
   const btn = document.getElementById('stream-btn');
   if (!btn) return;
-  if (logStreaming) {
-    btn.textContent = '⏸ Pause';
-    btn.className = 'ctrl-btn stream-on';
-  } else {
-    btn.textContent = '▶ Stream';
+  const rotSel = document.getElementById('rotation-select');
+  const isArchive = rotSel && rotSel.value !== 'current';
+  if (isArchive) {
+    btn.textContent = '📦 Archive';
     btn.className = 'ctrl-btn';
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+  } else {
+    btn.disabled = false;
+    btn.style.opacity = '';
+    if (logStreaming) {
+      btn.textContent = '⏸ Pause';
+      btn.className = 'ctrl-btn stream-on';
+    } else {
+      btn.textContent = '▶ Stream';
+      btn.className = 'ctrl-btn';
+    }
   }
 }
 
@@ -802,7 +936,10 @@ function applySearch() {
       div.textContent = text;
       // Remove search-related classes
       div.className = div.className
-        .replace(/ log-highlight| log-hidden| log-current-match/g, '');
+        .replace(/ log-highlight| log-hidden| log-level-hidden| log-current-match/g, '');
+      // Reapply level visibility
+      const lvl0 = div.dataset.level || 'INFO';
+      if (!visibleLevels.has(lvl0)) div.classList.add('log-level-hidden');
     }
     if (el) el.textContent = '';
     if (navBtns) navBtns.style.display = 'none';
@@ -820,7 +957,9 @@ function applySearch() {
       const div = children[idx];
       const text = div.dataset.text || div.textContent;
       let cls = div.className
-        .replace(/ log-highlight| log-hidden| log-current-match/g, '');
+        .replace(/ log-highlight| log-hidden| log-level-hidden| log-current-match/g, '');
+      const lvl1 = div.dataset.level || 'INFO';
+      if (!visibleLevels.has(lvl1)) { div.className = cls + ' log-level-hidden'; continue; }
       const matches = testSearchMatch(text);
       if (matches) {
         cls += ' log-highlight';
@@ -859,6 +998,11 @@ function updateMatchCount(blockCount) {
 // Populate sidebar immediately from server-injected file list
 if (availableFiles.length) updateFileList(availableFiles);
 connect();
+// Auto-select pre-configured file after a short delay (WS may not be ready yet)
+// Note: preselected file may not be in the sidebar list (e.g. job logs) — load it directly.
+if (preselectedFile) {
+  setTimeout(() => selectFile(preselectedFile), 100);
+}
 </script>
 </body>
 </html>

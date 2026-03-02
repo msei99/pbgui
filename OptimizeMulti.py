@@ -6,6 +6,7 @@ import sys
 import platform
 import hjson
 import traceback
+from logging_helpers import human_log as _log
 import subprocess
 import glob
 import configparser
@@ -19,7 +20,6 @@ from shutil import rmtree
 import datetime
 from MultiBounds import MultiBounds
 from BacktestMulti import BacktestMultiItem
-import logging
 
 class OptimizeMultiQueueItem():
     def __init__(self):
@@ -796,8 +796,7 @@ class OptimizeMultiItem:
                 if "bounds" in opt_config:
                     self.bounds.config = opt_config["bounds"] 
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
+                _log('OptimizeMulti', f'Something went wrong, but continue {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
     
     def save(self):
         self.path = Path(f'{PBGDIR}/data/opt_multi')
@@ -885,9 +884,6 @@ class OptimizesMulti:
                 self.optimizes.append(opt)
     
 def main():
-    # Disable Streamlit Warnings when running directly
-    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
-    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeMultiQueue()
     while True:
         opt.load()
@@ -899,7 +895,7 @@ def main():
             if not eval(pb_config.get("optimize_multi", "autostart")):
                 return
             if item.status() == "not started":
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')
+                _log('OptimizeMulti', f'Optimizing {item.filename} started', level='INFO')
                 item.run()
                 time.sleep(1)
         time.sleep(60)
