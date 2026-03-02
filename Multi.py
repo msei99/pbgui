@@ -13,6 +13,7 @@ import glob
 from shutil import rmtree
 import traceback
 import shutil
+from logging_helpers import human_log as _log
 
 class MultiInstance():
     def __init__(self):
@@ -564,9 +565,8 @@ class MultiInstance():
                 self.initialize()
                 return True
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                print(f'Error in config file: {file}')
-                traceback.print_exc()
+                _log('Multi', f'Error in config file: {file} — {e}', level='ERROR',
+                     meta={'traceback': traceback.format_exc()})
 
     def save(self):
         pbgdir = Path.cwd()
@@ -1287,9 +1287,3 @@ class MultiInstances:
                return True
         return False
 
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

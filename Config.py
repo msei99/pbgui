@@ -6,6 +6,7 @@ from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 import pbgui_help
 import traceback
 import multiprocessing
+from logging_helpers import human_log as _log
 import datetime
 from Exchange import Exchange, V7
 from PBCoinData import CoinData, normalize_symbol
@@ -7507,8 +7508,8 @@ class ConfigV7():
                     config = json.load(f)
                 self.config = config
             except Exception as e:
-                print(f'Error loding v7 config: {file} {e}')
-                traceback.print_exc()
+                _log('Config', f'Error loading v7 config: {file} {e}', level='ERROR',
+                     meta={'traceback': traceback.format_exc()})
 
 
     def save_config(self):
@@ -8008,8 +8009,3 @@ class BalanceCalculator:
             recommended_balance = math.ceil(result * 1.1 / 10) * 10
             st.write(f"### Recommended Balance (10% more): :green[{int(recommended_balance)} USDT]")
 
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

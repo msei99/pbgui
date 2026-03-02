@@ -14,6 +14,7 @@ import sys
 import platform
 import hjson
 import traceback
+from logging_helpers import human_log as _log
 import subprocess
 import shlex
 import glob
@@ -30,7 +31,6 @@ from pathlib import Path, PurePath
 from User import Users
 from shutil import rmtree
 import datetime
-import logging
 
 class BacktestMultiQueueItem():
     def __init__(self):
@@ -519,8 +519,7 @@ class BacktestMultiItem:
                             self.symbols[symbol] = config
 #                            self.configs.append(config)
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
+                _log('BacktestMulti', f'Something went wrong, but continue {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
 
     def create_from_multi_optimize(self, path: str):
         self.name = PurePath(path).stem
@@ -558,8 +557,7 @@ class BacktestMultiItem:
                     config = Config(config_file, config_pretty_str(symbol_config))
                     self.symbols[symbol] = config
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
+                _log('BacktestMulti', f'Something went wrong, but continue {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
 
     def optimize(self):
         LOSS_ALLOWANCE_PCT_MIN = 0.0
@@ -959,8 +957,7 @@ class BacktestMultiItem:
                             config.load_config()
                             self.symbols[symbol] = config
             except Exception as e:
-                print(f'Something went wrong, but continue {e}')
-                traceback.print_exc()
+                _log('BacktestMulti', f'Something went wrong, but continue {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
     
     def calculate_results(self):
         p = str(Path(f'{pbdir()}/backtests/pbgui_multi/{self.name}/multisymbol/{self.exchange}/**/analysis.json'))
@@ -1028,7 +1025,7 @@ class BacktestMultiResult:
             with open(r, "r", encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f'{str(r)} is corrupted {e}')
+            _log('BacktestMulti', f'{str(r)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
     
     def load_symbols(self):
         if self.backtest_config:
@@ -1043,7 +1040,7 @@ class BacktestMultiResult:
             with open(r, "r", encoding='utf-8') as f:
                 return hjson.load(f)
         except Exception as e:
-            print(f'{str(r)} is corrupted {e}')
+            _log('BacktestMulti', f'{str(r)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
 
     def load_stats(self):
         """
@@ -1224,9 +1221,6 @@ class BacktestsMulti:
                 self.backtests.append(bt)
     
 def main():
-    # Disable Streamlit Warnings when running directly
-    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
-    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     bt = BacktestMultiQueue()
     while True:
         bt.load()
@@ -1240,7 +1234,7 @@ def main():
             if not eval(pb_config.get("backtest_multi", "autostart")):
                 return
             if item.status() == "not started":
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.filename} started')
+                _log('BacktestMulti', f'Backtesting {item.filename} started', level='INFO')
                 item.run()
                 time.sleep(1)
         time.sleep(60)

@@ -11,7 +11,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars, render_log_viewer
 from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 from pbgui_purefunc import load_ini, save_ini
 from PBCoinData import CoinData, normalize_symbol
@@ -25,7 +25,8 @@ import shutil
 from RunV7 import V7Instance
 import OptimizeV7
 import datetime
-import logging
+import traceback
+from logging_helpers import human_log as _log
 import os
 import fnmatch
 
@@ -61,23 +62,6 @@ class BacktestV7QueueItem():
                     f.seek(start_pos)
                     # Read the last 100 KB (or less if the file is smaller)
                     return f.read().decode('utf-8', errors='ignore')  # Decode and ignore errors
-
-    @st.fragment
-    def view_log(self):
-        col1, col2, col3 = st.columns([1,1,8], vertical_alignment="bottom")
-        with col1:
-            st.checkbox("Reverse", value=True , key=f'reverse_view_log_{self.name}', )
-        with col2:
-            st.selectbox("view last kB", [50, 100, 250, 500, 1000, 2000, 5000, 10000, 100000], key=f'size_view_log_{self.name}')
-        with col3:
-            if st.button(":material/refresh:", key=f'refresh_view_log_{self.name}'):
-                st.rerun(scope="fragment")
-        logfile = self.load_log(st.session_state[f'size_view_log_{self.name}'])
-        if logfile:
-            if st.session_state[f'reverse_view_log_{self.name}']:
-                logfile = '\n'.join(logfile.split('\n')[::-1])
-        with st.container(height=1200):
-            st.code(logfile)
 
     def status(self):
         if self.is_backtesting():
@@ -166,6 +150,7 @@ class BacktestV7QueueItem():
             new_os_path = os.path.dirname(pb7venv()) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
             cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/backtest.py'), str(PurePath(f'{self.json}'))]
+            self.log.parent.mkdir(parents=True, exist_ok=True)
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -288,7 +273,14 @@ class BacktestV7Queue:
                 qitem.filename = config["filename"]
                 qitem.json = config["json"]
                 qitem.exchange = config["exchange"]
-                qitem.log = Path(f'{PBGDIR}/data/bt_v7_queue/{qitem.filename}.log')
+                # Log path: data/logs/backtests/{filename}.log
+                # Auto-migrate from old location (data/bt_v7_queue/{filename}.log)
+                new_log = Path(f'{PBGDIR}/data/logs/backtests/{qitem.filename}.log')
+                old_log = Path(f'{PBGDIR}/data/bt_v7_queue/{qitem.filename}.log')
+                if old_log.exists() and not new_log.exists():
+                    new_log.parent.mkdir(parents=True, exist_ok=True)
+                    old_log.rename(new_log)
+                qitem.log = new_log
                 qitem.pidfile = Path(f'{PBGDIR}/data/bt_v7_queue/{qitem.filename}.pid')
                 qitem.config.config_file = qitem.json
                 qitem.config.load_config()
@@ -380,6 +372,8 @@ class BacktestV7Queue:
         if not "ed_key" in st.session_state:
             st.session_state.ed_key = 0
         ed_key = st.session_state.ed_key
+        # ── Process data_editor state BEFORE creating the segmented_control
+        # so that setting bt_v7_queue_view is allowed (widget not yet instantiated).
         if f'view_bt_v7_queue_{ed_key}' in st.session_state:
             ed = st.session_state[f'view_bt_v7_queue_{ed_key}']
             for row in ed["edited_rows"]:
@@ -393,13 +387,48 @@ class BacktestV7Queue:
                     bt = BacktestV7Results()
                     bt.results_path = f'{pb7dir()}/backtests/pbgui/{self.d[row]["item"].name}'
                     st.session_state.bt_v7_results = bt
-                    del st.session_state.bt_v7_queue
+                    st.session_state["_bt_v7_main_view_next"] = "Results"
                     st.rerun()
                 if "log" in ed["edited_rows"][row]:
-                    self.d[row]["item"].log_show = ed["edited_rows"][row]["log"]
-                    self.d[row]["log"] = ed["edited_rows"][row]["log"]
+                    checked = bool(ed["edited_rows"][row]["log"])
+                    if checked:
+                        # Exclusive selection: clear all others first
+                        for i, d_row in enumerate(self.d):
+                            d_row["item"].log_show = (i == int(row))
+                            d_row["log"] = (i == int(row))
+                        log_file = self.d[int(row)]["item"].log
+                        # Migrate old log location (data/bt_v7_queue/) → new location (data/logs/backtests/)
+                        if log_file and not log_file.exists():
+                            old_log = Path(f'{PBGDIR}/data/bt_v7_queue/{log_file.name}')
+                            if old_log.exists():
+                                log_file.parent.mkdir(parents=True, exist_ok=True)
+                                try:
+                                    old_log.rename(log_file)
+                                except Exception:
+                                    pass
+                        if log_file:
+                            st.session_state["bt_v7_queue_log_preselect"] = f"backtests/{log_file.name}"
+                        # Bump ed_key so data_editor re-renders with fresh checkbox state
+                        st.session_state.ed_key = ed_key + 1
+                        st.session_state["_bt_v7_main_view_next"] = "Log"
+                        st.rerun()
+                    else:
+                        self.d[int(row)]["item"].log_show = False
+                        self.d[int(row)]["log"] = False
+        # ── Queue table ──
+        # Clear log selection when returning to Queue tab so no checkbox stays ticked
+        prev = st.session_state.get("_bt_v7_queue_prev_view", "Queue")
+        if prev == "Log":
+            any_set = any(d_row["log"] for d_row in self.d)
+            if any_set:
+                for d_row in self.d:
+                    d_row["item"].log_show = False
+                    d_row["log"] = False
+                st.session_state.ed_key = st.session_state.ed_key + 1
+                st.session_state["_bt_v7_queue_prev_view"] = "Queue"
+                st.rerun()
+        st.session_state["_bt_v7_queue_prev_view"] = "Queue"
         column_config = {
-            # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
             "view": st.column_config.CheckboxColumn(label="View Results"),
             "log": st.column_config.CheckboxColumn(label="View Logfile"),
@@ -409,9 +438,8 @@ class BacktestV7Queue:
             "filename": st.column_config.TextColumn(label="Filename"),
             "exchange": st.column_config.ListColumn(label="Exchange"),
             "finish": st.column_config.CheckboxColumn(label="Finished"),
-            }
-        #Display Queue
-        height = 36+(len(self.d))*35
+        }
+        height = 36 + (len(self.d)) * 35
         if "sort_bt_v7_queue" in st.session_state:
             if st.session_state.sort_bt_v7_queue != self.sort:
                 self.sort = st.session_state.sort_bt_v7_queue
@@ -424,19 +452,42 @@ class BacktestV7Queue:
                 self.save_sort_queue()
         else:
             st.session_state.sort_bt_v7_queue_order = self.sort_order
-        # Display sort options
         col1, col2 = st.columns([1, 9], vertical_alignment="bottom")
         with col1:
             st.selectbox("Sort by:", ['Time', 'Name', 'Status'], key=f'sort_bt_v7_queue', index=0)
         with col2:
             st.checkbox("Reverse", value=True, key=f'sort_bt_v7_queue_order')
-        # Sort results
         self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_bt_v7_queue']], reverse=st.session_state[f'sort_bt_v7_queue_order'])
-        if height > 1000: height = 1016
+        if height > 1000:
+            height = 1016
         st.data_editor(data=self.d, height="auto", key=f'view_bt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','name','finish','running'])
-        for item in self.items:
-            if item.log_show:
-                item.view_log()
+
+    def view_log(self):
+        """Render the log viewer for the currently selected backtest log."""
+        st.session_state["_bt_v7_queue_prev_view"] = "Log"
+        _log_item_name = ""
+        for d_row in self.d:
+            if d_row.get("log"):
+                _log_item_name = str(d_row.get("Name") or "")
+                # Ensure log is migrated to the canonical location before viewing
+                item = d_row["item"]
+                if item.log and not item.log.exists():
+                    old_log = Path(f'{PBGDIR}/data/bt_v7_queue/{item.log.name}')
+                    if old_log.exists():
+                        item.log.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            old_log.rename(item.log)
+                            st.session_state["bt_v7_queue_log_preselect"] = f"backtests/{item.log.name}"
+                        except Exception:
+                            pass
+                break
+        preselect = st.session_state.get("bt_v7_queue_log_preselect", "")
+        if not preselect:
+            for item in self.items:
+                if item.is_running() and item.log:
+                    preselect = f"backtests/{item.log.name}"
+                    break
+        render_log_viewer(preselect=preselect, iframe_height_offset=300, display_title=_log_item_name)
 
     def load_sort_queue(self):
         pb_config = configparser.ConfigParser()
@@ -1622,7 +1673,7 @@ class BacktestV7Result:
             with open(r, "r", encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f'{str(r)} is corrupted {e}')
+            _log('BacktestV7', f'{str(r)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
     
     def load_backtest_config(self):
         r = Path(f'{self.result_path}/config.json')
@@ -1630,7 +1681,7 @@ class BacktestV7Result:
             with open(r, "r", encoding='utf-8') as f:
                 return f.read()
         except Exception as e:
-            print(f'{str(r)} is corrupted {e}')
+            _log('BacktestV7', f'{str(r)} is corrupted {e}', level='WARNING', meta={'traceback': traceback.format_exc()})
 
     def load_final_balance(self):
         balance = Path(f'{self.result_path}/balance_and_equity.csv')
@@ -1684,9 +1735,9 @@ class BacktestV7Result:
         return 0, 0
 
     def load_be(self):
-        print(f"Loading balance and equity data for {self.result_path}")
+        _log('BacktestV7', f'Loading balance and equity data for {self.result_path}', level='DEBUG')
         if self.be is None:
-            print("Balance and equity data not loaded, loading now...")
+            _log('BacktestV7', 'Balance and equity data not loaded, loading now...', level='DEBUG')
             # Try both .csv and .csv.gz
             be = f'{self.result_path}/balance_and_equity.csv'
             be_gz = f'{self.result_path}/balance_and_equity.csv.gz'
@@ -1695,11 +1746,11 @@ class BacktestV7Result:
             compression = None
             
             if Path(be).exists():
-                print("Balance and equity file exists, reading...") 
+                _log('BacktestV7', 'Balance and equity file exists, reading...', level='DEBUG')
                 file_path = be
                 compression = None
             elif Path(be_gz).exists():
-                print("Balance and equity .gz file exists, reading...")
+                _log('BacktestV7', 'Balance and equity .gz file exists, reading...', level='DEBUG')
                 file_path = be_gz
                 compression = 'gzip'
             
@@ -1722,7 +1773,7 @@ class BacktestV7Result:
                     self.be['time'] = self.be.index
                 except (ValueError, TypeError):
                     # Old format: index is minutes (numeric)
-                    print("Using old format (minutes-based index)")
+                    _log('BacktestV7', 'Using old format (minutes-based index)', level='DEBUG')
                     timestamp = datetime.datetime.strptime(self.ed, '%Y-%m-%d').timestamp()
                     start_time = timestamp - (float(self.be.index[-1]) * 60)
                     self.be['time'] = datetime.datetime.fromtimestamp(start_time) + pd.to_timedelta(self.be.index, unit='m')
@@ -2579,6 +2630,7 @@ class BacktestV7Results:
                         st.session_state["se_movie_engine"] = "PB7 fills.csv (from backtest)"
                     except Exception:
                         pass
+                    st.session_state["_bt_v7_main_view_next"] = "Results"
                     st.switch_page(get_navi_paths()["V7_STRATEGY_EXPLORER"])
 
     def optimize_from_result(self):
@@ -2664,9 +2716,9 @@ class BacktestV7Results:
                             bt_v7.save_queue()
                 if "bt_v7_results" in st.session_state:
                     del st.session_state.bt_v7_results
-                if "config_v7_config_archive" in st.session_state:
-                    del st.session_state.config_v7_config_archive
+                # Keep config_v7_config_archive so returning to Archive tab lands back in the same archive
                 st.session_state.bt_v7_queue = BacktestV7Queue()
+                st.session_state["_bt_v7_main_view_next"] = "Queue"
                 st.rerun()
         with col2:
             if st.button("Cancel"):
@@ -2680,7 +2732,8 @@ class BacktestV7Results:
         if selected_count == 0:
             error_popup("No Backtests selected")
             return
-        if selected_count > 1:
+        # For archive context or multiple selections: use parameter selection form → Queue
+        if selected_count > 1 or "config_v7_config_archive" in st.session_state:
             self.select_parameters(ed)
             return
         for row in ed["edited_rows"]:
@@ -2690,8 +2743,6 @@ class BacktestV7Results:
                     st.session_state.bt_v7.config.backtest.end_date = "now"
                     if "bt_v7_results" in st.session_state:
                         del st.session_state.bt_v7_results
-                    if "config_v7_config_archive" in st.session_state:
-                        del st.session_state.config_v7_config_archive
                     st.rerun()
     
     def calculate_balance(self):
@@ -2713,6 +2764,8 @@ class BacktestV7Results:
                     cfg.load_config()
                     st.session_state.bc_context_exchanges = list(cfg.backtest.exchanges or [])
                     st.session_state.balance_calc = BalanceCalculator(config_file)
+                    # Return to Archive tab if called from archive context, else Results
+                    st.session_state["_bt_v7_main_view_next"] = "Archive" if "config_v7_config_archive" in st.session_state else "Results"
                     st.switch_page(get_navi_paths()["V7_BALANCE_CALC"])
 
     def remove_selected_results(self):
@@ -2873,6 +2926,7 @@ class BacktestsV7:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
                     st.session_state.bt_v7_results = self.d[row]["item"].results
+                    st.session_state["_bt_v7_main_view_next"] = "Results"
                     st.rerun()
 
     def edit_selected(self):
@@ -2899,13 +2953,13 @@ class BacktestsV7:
         col1, col2 = st.columns([1,1])
         with col1:
             if st.button(":green[Yes]"):
+                if "bt_v7_remove_results" in st.session_state and st.session_state.bt_v7_remove_results:
+                    for bt in self.backtests:
+                        bt.results.remove_all_results()
                 rmtree(f'{PBGDIR}/data/bt_v7', ignore_errors=True)
-                if "bt_v7_remove_results" in st.session_state:
-                    if st.session_state.bt_v7_remove_results:
-                        for bt in self.backtests:
-                            bt.results.remove_all_results()
                 self.d = []
                 self.backtests = []
+                st.session_state.pop("bt_v7_results", None)
                 st.rerun()
         with col2:
             if st.button(":red[No]"):
@@ -2919,21 +2973,21 @@ class BacktestsV7:
         if selected_count == 0:
             self.remove_all()
             return
+        remove_results = st.session_state.get("bt_v7_remove_results", False)
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    self.d[row]["item"].remove()
-                    if "bt_v7_remove_results" in st.session_state:
-                        if st.session_state.bt_v7_remove_results:
-                            self.d[row]["item"].results.remove_all_results()
+                    item = self.d[int(row)]["item"]
+                    if remove_results:
+                        item.results.remove_all_results()
+                    item.remove()
         self.d = []
         self.backtests = []
+        # Stay on Configs tab – clear any stale Results session state
+        st.session_state.pop("bt_v7_results", None)
         st.rerun()
 
 def main():
-    # Disable Streamlit Warnings when running directly
-    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
-    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     bt = BacktestV7Queue()
     while True:
         bt.load()
@@ -2947,7 +3001,7 @@ def main():
             if not eval(pb_config.get("backtest_v7", "autostart")):
                 return
             if item.status() == "not started":
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Backtesting {item.filename} started')
+                _log('BacktestV7', f'Backtesting {item.filename} started', level='INFO')
                 item.run()
                 time.sleep(1)
         time.sleep(15)

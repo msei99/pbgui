@@ -11,7 +11,7 @@ import time
 import multiprocessing
 from Exchange import Exchange, V7
 from PBCoinData import CoinData
-from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars
+from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars, render_log_viewer
 from pbgui_purefunc import pb7_suite_preflight_errors
 import uuid
 from pathlib import Path, PurePath
@@ -38,7 +38,8 @@ from Config import (
     ConfigV7Editor,
 )
 from PBCoinData import normalize_symbol
-import logging
+import traceback
+from logging_helpers import human_log as _log
 import os
 import fnmatch
 import math
@@ -60,6 +61,9 @@ class OptimizeV7QueueItem:
         file = Path(f'{PBGDIR}/data/opt_v7_queue/{self.filename}.json')
         file.unlink(missing_ok=True)
         self.log.unlink(missing_ok=True)
+        # Also clean up old log location in case it was never migrated
+        old_log = Path(f'{PBGDIR}/data/opt_v7_queue/{self.filename}.log')
+        old_log.unlink(missing_ok=True)
         self.pidfile.unlink(missing_ok=True)
 
     def load_log(self, log_size: int = 50):
@@ -180,7 +184,7 @@ class OptimizeV7QueueItem:
                 try:
                     st.error(message)
                 except Exception:
-                    print(message)
+                    _log('OptimizeV7', message, level='ERROR')
 
             try:
                 with open(self.json, "r", encoding="utf-8") as f:
@@ -215,6 +219,7 @@ class OptimizeV7QueueItem:
                 cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), '-t', str(PurePath(f'{self.json}')), str(PurePath(f'{self.json}'))]
             else:
                 cmd = [pb7venv(), '-u', PurePath(f'{pb7dir()}/src/optimize.py'), str(PurePath(f'{self.json}'))]
+            self.log.parent.mkdir(parents=True, exist_ok=True)
             log = open(self.log,"w")
             if platform.system() == "Windows":
                 creationflags = subprocess.DETACHED_PROCESS
@@ -319,7 +324,7 @@ class OptimizeV7Queue:
                 config = OptimizeV7Item(qitem.json)
                 qitem.exchange = q_config["exchange"]
                 qitem.starting_config = config.config.pbgui.starting_config
-                qitem.log = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.log')
+                qitem.log = Path(f'{PBGDIR}/data/logs/optimizes/{qitem.filename}.log')
                 qitem.pidfile = Path(f'{PBGDIR}/data/opt_v7_queue/{qitem.filename}.pid')
                 self.add(qitem)
         # Remove items that are not existing anymore
@@ -425,11 +430,45 @@ class OptimizeV7Queue:
                     self.refresh()
                 if "edit" in ed["edited_rows"][row]:
                     st.session_state.opt_v7 = OptimizeV7Item(f'{PBGDIR}/data/opt_v7/{self.d[row]["item"].name}.json')
-                    del st.session_state.opt_v7_queue
+                    st.session_state["_opt_v7_main_view_next"] = "Config"
                     st.rerun()
                 if "log" in ed["edited_rows"][row]:
-                    self.d[row]["item"].log_show = ed["edited_rows"][row]["log"]
-                    self.d[row]["log"] = ed["edited_rows"][row]["log"]
+                    if ed["edited_rows"][row]["log"]:
+                        # Exclusive selection: clear all others first
+                        for i, d_row in enumerate(self.d):
+                            d_row["item"].log_show = (i == int(row))
+                            d_row["log"] = (i == int(row))
+                        log_file = self.d[int(row)]["item"].log
+                        # Migrate old log location (data/opt_v7_queue/) → new location (data/logs/optimizes/)
+                        if log_file and not log_file.exists():
+                            old_log = Path(f'{PBGDIR}/data/opt_v7_queue/{log_file.name}')
+                            if old_log.exists():
+                                log_file.parent.mkdir(parents=True, exist_ok=True)
+                                try:
+                                    old_log.rename(log_file)
+                                except Exception:
+                                    pass
+                        if log_file:
+                            st.session_state["opt_v7_queue_log_preselect"] = f"optimizes/{log_file.name}"
+                        # Bump ed_key so data_editor re-renders with fresh checkbox state
+                        st.session_state.ed_key = ed_key + 1
+                        st.session_state["_opt_v7_main_view_next"] = "Log"
+                        st.rerun()
+                    else:
+                        self.d[int(row)]["item"].log_show = False
+                        self.d[int(row)]["log"] = False
+        # Clear log selection when returning from Log tab
+        prev = st.session_state.get("_opt_v7_queue_prev_view", "Queue")
+        if prev == "Log":
+            any_set = any(d_row["log"] for d_row in self.d)
+            if any_set:
+                for d_row in self.d:
+                    d_row["item"].log_show = False
+                    d_row["log"] = False
+                st.session_state.ed_key = st.session_state.ed_key + 1
+                st.session_state["_opt_v7_queue_prev_view"] = "Queue"
+                st.rerun()
+        st.session_state["_opt_v7_queue_prev_view"] = "Queue"
         column_config = {
             # "id": None,
             "run": st.column_config.CheckboxColumn('Start/Stop', default=False),
@@ -461,9 +500,33 @@ class OptimizeV7Queue:
             st.checkbox("Reverse", value=True, key=f'sort_opt_v7_queue_order')
         self.d = sorted(self.d, key=lambda x: x[st.session_state[f'sort_opt_v7_queue']], reverse=st.session_state[f'sort_opt_v7_queue_order'])
         st.data_editor(data=self.d, height="auto", key=f'view_opt_v7_queue_{ed_key}', hide_index=None, column_order=None, column_config=column_config, disabled=['id','filename','starting_config','name','finish','running'])
-        for item in self.items:
-            if item.log_show:
-                item.view_log()
+
+    def view_log(self):
+        """Render the streaming log viewer for the currently selected optimize job log."""
+        st.session_state["_opt_v7_queue_prev_view"] = "Log"
+        _log_item_name = ""
+        for d_row in self.d:
+            if d_row.get("log"):
+                _log_item_name = str(d_row.get("name") or "")
+                item = d_row["item"]
+                # Ensure log is migrated to the canonical location before viewing
+                if item.log and not item.log.exists():
+                    old_log = Path(f'{PBGDIR}/data/opt_v7_queue/{item.log.name}')
+                    if old_log.exists():
+                        item.log.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            old_log.rename(item.log)
+                            st.session_state["opt_v7_queue_log_preselect"] = f"optimizes/{item.log.name}"
+                        except Exception:
+                            pass
+                break
+        preselect = st.session_state.get("opt_v7_queue_log_preselect", "")
+        if not preselect:
+            for item in self.items:
+                if item.is_running() and item.log:
+                    preselect = f"optimizes/{item.log.name}"
+                    break
+        render_log_viewer(preselect=preselect, iframe_height_offset=300, display_title=_log_item_name)
 
     def load_sort_queue(self):
         pb_config = configparser.ConfigParser()
@@ -645,6 +708,8 @@ class OptimizeV7Results:
         
         # Store path in session state and navigate to explorer
         st.session_state.pareto_explorer_path = str(results_dir)
+        # Bump ed_key before switching page so the checkbox is cleared on return
+        st.session_state.ed_key = st.session_state.get("ed_key", 0) + 1
         st.switch_page("navi/v7_pareto_explorer.py")
 
     def load_paretos(self, index):
@@ -6454,12 +6519,10 @@ class OptimizeV7Item(ConfigV7Editor):
         self.config.config_file = Path(f'{self.path}/{self.name}.json')
         self.config.save_config()
 
-    def save_queue(self):
-        preflight_errors = pb7_suite_preflight_errors(self.config.config)
-        if preflight_errors:
-            error_popup("\n\n".join(preflight_errors))
-            return
-
+    def save_queue(self) -> bool:
+        """Add this optimize config to the queue. Returns True on success."""
+        if not self.config.config_file:
+            return False
         dest = Path(f'{PBGDIR}/data/opt_v7_queue')
         unique_filename = str(uuid.uuid4())
         file = Path(f'{dest}/{unique_filename}.json') 
@@ -6472,6 +6535,7 @@ class OptimizeV7Item(ConfigV7Editor):
         dest.mkdir(parents=True, exist_ok=True)
         with open(file, "w", encoding='utf-8') as f:
             json.dump(opt_dict, f, indent=4)
+        return True
 
     def remove(self):
         Path(self.config.config_file).unlink(missing_ok=True)
@@ -6605,9 +6669,6 @@ class OptimizesV7:
 
 
 def main():
-    # Disable Streamlit Warnings when running directly
-    logging.getLogger("streamlit.runtime.state.session_state_proxy").disabled=True
-    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").disabled=True
     opt = OptimizeV7Queue()
     while True:
         opt.load()
@@ -6620,11 +6681,11 @@ def main():
                 return
             if item.is_existing():
                 if item.status() == "not started" or item.status() == "error":
-                    print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimizing {item.filename} started')
+                    _log('OptimizeV7', f'Optimizing {item.filename} started', level='INFO')
                     item.run()
                     time.sleep(1)
             else:
-                print(f'{datetime.datetime.now().isoformat(sep=" ", timespec="seconds")} Optimize config file for {item.filename} not found, jumping to next in queue')
+                _log('OptimizeV7', f'Optimize config file for {item.filename} not found, jumping to next in queue', level='WARNING')
         time.sleep(60)
 
 if __name__ == '__main__':

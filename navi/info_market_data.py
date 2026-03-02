@@ -32,9 +32,9 @@ from pbgui_func import (
     get_navi_paths,
     load_symbols_from_ini,
     render_header_with_guide,
+    render_log_viewer,
     PBGDIR,
 )
-from logging_view import view_log_filtered
 
 from market_data import (
     load_market_data_config,
@@ -84,6 +84,7 @@ from task_queue import (
     is_pid_running,
     request_cancel_job,
     retry_failed_job,
+    requeue_done_job,
     delete_jobs_by_ids,
     clear_worker_pid,
 )
@@ -851,7 +852,7 @@ def _render_jobs_panel(
 
         # --- Progress rows (always visible, above Running expander) ---
         if jobs:
-            h1, h2, h3, h4, h5, h6, h7, h9 = st.columns([0.16, 0.13, 0.09, 0.06, 0.17, 0.16, 0.08, 0.05])
+            h1, h2, h3, h4, h5, h6, h7, h9, h10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
             h1.write("id")
             h2.write("type")
             h3.write("status")
@@ -860,6 +861,7 @@ def _render_jobs_panel(
             h6.write("progress")
             h7.write("updated_ts")
             h9.write("stop")
+            h10.write("log")
 
         for j in jobs:
             jid = str(j.get("id") or "").strip()
@@ -891,7 +893,7 @@ def _render_jobs_panel(
             sk_b = (pr or {}).get("skipped_existing_bytes_total")
             fl_b = (pr or {}).get("failed_bytes_total")
 
-            c1, c2, c3, c4, c5, c6, c7, c9 = st.columns([0.16, 0.13, 0.09, 0.06, 0.17, 0.16, 0.08, 0.05])
+            c1, c2, c3, c4, c5, c6, c7, c9, c10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
             c1.write(jid)
             c2.write(str(j.get("type") or ""))
             c3.write(str(j.get("status") or ""))
@@ -907,6 +909,9 @@ def _render_jobs_panel(
                             st.warning("Job not found.")
                     except Exception as e:
                         st.error(str(e))
+            with c10:
+                if st.button("Log", key=f"{panel_key}_log_{jid}"):
+                    _goto_job_log([j])
 
         # --- Running expander: detailed job info (download stats, substatus etc.) ---
         def _render_job_details(match: dict) -> None:
@@ -1095,7 +1100,7 @@ def _render_jobs_panel(
 
         active_expander_key = f"{panel_key}_active_state_expander"
 
-        def _render_state_expander(title: str, state_key: str, state_jobs: list[dict], allow_retry: bool = False) -> None:
+        def _render_state_expander(title: str, state_key: str, state_jobs: list[dict], allow_retry: bool = False, allow_rerun: bool = False) -> None:
             with st.expander(
                 f"{title} ({len(state_jobs)})",
                 expanded=str(st.session_state.get(active_expander_key) or "") == state_key,
@@ -1202,8 +1207,8 @@ def _render_jobs_panel(
                                 st.warning("Retry failed: job not found.")
                         except Exception as e:
                             st.error(str(e))
-                    if a2.button("Details", key=f"{panel_key}_details_selected_{state_key}", disabled=not bool(selected_ids)):
-                        _job_details_dialog(list(selected_jobs))
+                    if a2.button("Log", key=f"{panel_key}_details_selected_{state_key}", disabled=not bool(selected_ids)):
+                        _goto_job_log(list(selected_jobs))
                     if a3.button("Delete", key=f"{panel_key}_delete_selected_{state_key}", disabled=not bool(selected_ids)):
                         try:
                             deleted_n = delete_jobs_by_ids(selected_ids, states=["failed"])
@@ -1233,10 +1238,67 @@ def _render_jobs_panel(
                             except Exception as e:
                                 st.session_state[confirm_key] = False
                                 st.error(str(e))
+                elif allow_rerun:
+                    r1, r2, r3, r4 = st.columns([1, 1, 1, 1])
+                    if r1.button("Rerun", key=f"{panel_key}_rerun_selected_{state_key}", disabled=not bool(selected_ids)):
+                        try:
+                            rerun_n = 0
+                            for sid in selected_ids:
+                                if requeue_done_job(str(sid)):
+                                    rerun_n += 1
+                            if rerun_n > 0:
+                                pid2 = read_worker_pid()
+                                if not (pid2 and is_pid_running(int(pid2))):
+                                    clear_worker_pid()
+                                    subprocess.Popen(
+                                        [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                                        stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL,
+                                        close_fds=True,
+                                    )
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Requeued {rerun_n}/{len(selected_ids)} jobs")
+                                st.rerun()
+                            else:
+                                st.warning("Rerun failed: job not found.")
+                        except Exception as e:
+                            st.error(str(e))
+                    if r2.button("Log", key=f"{panel_key}_details_selected_{state_key}", disabled=not bool(selected_ids)):
+                        _goto_job_log(list(selected_jobs))
+                    if r3.button("Delete", key=f"{panel_key}_delete_selected_{state_key}", disabled=not bool(selected_ids)):
+                        try:
+                            deleted_n = delete_jobs_by_ids(selected_ids, states=[state_key])
+                            if deleted_n > 0:
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Deleted {deleted_n}/{len(selected_ids)} jobs")
+                                st.rerun()
+                            else:
+                                st.warning("Delete failed: job not found.")
+                        except Exception as e:
+                            st.error(str(e))
+                    if r4.button("Delete all", key=f"{panel_key}_{state_key}_delete_all"):
+                        if not st.session_state.get(confirm_key, False):
+                            st.session_state[confirm_key] = True
+                            st.session_state[active_expander_key] = state_key
+                            st.rerun()
+                        else:
+                            try:
+                                ids = [str(j.get("id") or "").strip() for j in state_jobs if str(j.get("id") or "").strip()]
+                                deleted_n = delete_jobs_by_ids(ids, states=[state_key])
+                                st.session_state[confirm_key] = False
+                                st.session_state[active_expander_key] = state_key
+                                st.session_state[table_nonce_key] = int(st.session_state.get(table_nonce_key, 0)) + 1
+                                st.success(f"Deleted {deleted_n}/{len(ids)} jobs")
+                                st.rerun()
+                            except Exception as e:
+                                st.session_state[confirm_key] = False
+                                st.error(str(e))
                 else:
                     b1, b2, b3 = st.columns([1, 1, 1])
-                    if b1.button("Details", key=f"{panel_key}_details_selected_{state_key}", disabled=not bool(selected_ids)):
-                        _job_details_dialog(list(selected_jobs))
+                    if b1.button("Log", key=f"{panel_key}_details_selected_{state_key}", disabled=not bool(selected_ids)):
+                        _goto_job_log(list(selected_jobs))
                     if b2.button("Delete", key=f"{panel_key}_delete_selected_{state_key}", disabled=not bool(selected_ids)):
                         try:
                             deleted_n = delete_jobs_by_ids(selected_ids, states=[state_key])
@@ -1269,7 +1331,7 @@ def _render_jobs_panel(
 
         _render_state_expander("Pending jobs", "pending", pending_jobs, allow_retry=False)
         _render_state_expander("Failed jobs", "failed", failed_jobs, allow_retry=True)
-        _render_state_expander("Done jobs", "done", done_jobs, allow_retry=False)
+        _render_state_expander("Done jobs", "done", done_jobs, allow_rerun=True)
 
         if auto_refresh_key and not jobs:
             st.session_state[auto_refresh_key] = False
@@ -1298,6 +1360,20 @@ def _job_details_dialog(job: dict | list[dict]) -> None:
     status = str((job or {}).get("status") or "").strip()
     st.caption(f"id={jid} · type={jtype} · status={status}")
     st.json(job)
+
+
+def _goto_job_log(jobs: list[dict]) -> None:
+    """Switch to the Activity Log tab pre-selected on the first job's log.
+
+    Sets two session-state keys and triggers a rerun:
+    - ``market_data_main_view`` → "Activity log"  (switches the tab)
+    - ``_log_viewer_preselect_override`` → the filename  (drives preselect)
+    """
+    jid = str((jobs[0] if jobs else {}).get("id") or "").strip()
+    filename = f"jobs/{jid}.log" if jid else "MarketData.log"
+    st.session_state["market_data_main_view"] = "Activity log"
+    st.session_state["_log_viewer_preselect_override"] = filename
+    st.rerun()
 
 
 @st.dialog("Help & Tutorials", width="large")
@@ -5531,7 +5607,8 @@ def view_market_data():
             _gap_fragment()
 
     if main_view == "Activity log":
-        view_log_filtered("MarketData")
+        _preselect = st.session_state.pop("_log_viewer_preselect_override", "MarketData.log")
+        render_log_viewer(preselect=_preselect, iframe_height_offset=440)
 
 
 # Redirect to Login if not authenticated or session state not initialized

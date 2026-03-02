@@ -208,9 +208,3 @@ class MonitorConfig():
         save_ini("monitor", "error_error_single", str(self.error_error_single))
         save_ini("monitor", "traceback_warning_single", str(self.traceback_warning_single))
         save_ini("monitor", "traceback_error_single", str(self.traceback_error_single))
-
-def main():
-    print("Don't Run this Class from CLI")
-
-if __name__ == '__main__':
-    main()

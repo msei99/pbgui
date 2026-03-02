@@ -26,6 +26,16 @@ def get_task_state_dir(state: str) -> Path:
     return get_tasks_root_dir() / str(state).strip().lower()
 
 
+def get_job_log_path(job_id: str) -> Path:
+    """Return the path of the per-job log file (may not exist yet).
+
+    Files live in data/logs/jobs/ to avoid cluttering the main logs directory.
+    The WebSocket server is configured to serve this subdirectory.
+    """
+    from pbgui_purefunc import PBGDIR
+    return Path(PBGDIR) / "data" / "logs" / "jobs" / f"{str(job_id).strip()}.log"
+
+
 def ensure_task_dirs() -> None:
     for s in ("pending", "running", "done", "failed"):
         get_task_state_dir(s).mkdir(parents=True, exist_ok=True)
@@ -179,6 +189,32 @@ def retry_failed_job(job_id: str) -> bool:
     return False
 
 
+def requeue_done_job(job_id: str) -> bool:
+    """Create a new pending job with the same payload as a done job.
+
+    The done job is kept intact (history preserved).
+    Returns True if a done job with the given id was found and a new job was created.
+    """
+    jid = str(job_id or "").strip()
+    if not jid:
+        return False
+
+    for p in _iter_job_paths(["done"]):
+        if p.stem != jid:
+            continue
+        try:
+            original = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        payload = original.get("payload") if isinstance(original.get("payload"), dict) else {}
+        job_type = str(original.get("type") or "").strip()
+        if not job_type:
+            return False
+        enqueue_job(job_type=job_type, payload=payload)
+        return True
+    return False
+
+
 def delete_job(job_id: str, *, states: list[str] | None = None) -> bool:
     """Delete a job file from selected states.
 
@@ -196,12 +232,14 @@ def delete_job(job_id: str, *, states: list[str] | None = None) -> bool:
             continue
         try:
             p.unlink(missing_ok=True)  # type: ignore[arg-type]
+            get_job_log_path(jid).unlink(missing_ok=True)
             return True
         except Exception:
             try:
                 if p.exists():
                     p.unlink()
-                    return True
+                get_job_log_path(jid).unlink(missing_ok=True)
+                return True
             except Exception:
                 return False
     return False
