@@ -590,10 +590,31 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
             day="",
         )
         last_chunk_update = 0.0
+        last_log_stage: list[str] = [""]   # mutable cell for closure
+        last_log_ts: list[float] = [0.0]
 
         def progress_cb(snap: dict[str, Any]) -> None:
             nonlocal last_chunk_update
             now = time.time()
+            stage = str(snap.get("stage") or "running")
+
+            # Log stage transitions and periodic heartbeat (every 60s)
+            prev_stage = last_log_stage[0]
+            if stage != prev_stage or now - last_log_ts[0] >= 60.0:
+                day = str(snap.get("day") or snap.get("month_key") or "")
+                done = snap.get("done")
+                total = snap.get("total_days") or snap.get("planned")
+                extra = ""
+                if day:
+                    extra += f"  day={day}"
+                if done is not None and total is not None:
+                    extra += f"  {done}/{total}"
+                if snap.get("tiingo_wait_s") is not None:
+                    extra += f"  wait={snap['tiingo_wait_s']}s ({snap.get('tiingo_wait_reason','')})"
+                _append_to_job_log(job_id, f"    {coin}  stage={stage}{extra}")
+                last_log_stage[0] = stage
+                last_log_ts[0] = now
+
             if now - last_chunk_update < 0.5:
                 return
             last_chunk_update = now
@@ -725,14 +746,16 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
 
         last_chunk_update = 0.0
         last_logged_stage = ""
+        last_log_ts2: list[float] = [0.0]
 
         def progress_cb(snap: dict[str, Any], _coin=coin) -> None:
             nonlocal last_chunk_update, last_logged_stage
             now = time.time()
             stage = str(snap.get("stage") or "running")
-            # Log important stage transitions once per stage change
-            if stage != last_logged_stage:
+            # Log stage transitions and periodic heartbeat (every 60s)
+            if stage != last_logged_stage or now - last_log_ts2[0] >= 60.0:
                 last_logged_stage = stage
+                last_log_ts2[0] = now
                 extra = ""
                 if snap.get("day"):
                     extra = f"  day={snap['day']}"
@@ -740,6 +763,10 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                     extra = f"  month={snap['month_key']}"
                 elif snap.get("first_archive"):
                     extra = f"  first_archive={snap['first_archive']}"
+                done = snap.get("done")
+                total = snap.get("total_days")
+                if done is not None and total is not None:
+                    extra += f"  {done}/{total}"
                 _append_to_job_log(job_id, f"  {_coin}  stage={stage}{extra}")
             if now - last_chunk_update < 0.5:
                 return
