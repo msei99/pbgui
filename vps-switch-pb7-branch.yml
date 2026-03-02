@@ -92,8 +92,8 @@
       register: commit_reset
       notify: restart pb7
 
-    - name: Pull latest changes (only if no specific commit provided)
-      command: git pull "{{ remote_name }}" "{{ target_branch }}"
+    - name: Reset to latest remote HEAD (only if no specific commit provided)
+      command: git reset --hard "{{ remote_name }}/{{ target_branch }}"
       args:
         chdir: "{{ pb7dir }}"
       when: target_commit == ""
