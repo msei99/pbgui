@@ -31,6 +31,10 @@ Sidebar:
 | **Master (local)** button | Open the Master management view |
 | **VPS hostname** buttons | Open the per-VPS management view |
 
+At the bottom of the sidebar an **API sync status button** shows the current state:
+- **🟢 API in sync** (green, disabled) — all online VPS servers have the current API keys
+- **🔴 API not in sync** (red, clickable) — one or more servers are out of date; click to push keys to all of them; a live counter shows remaining servers (timeout: 180 s)
+
 ---
 
 ## Master management
@@ -112,4 +116,5 @@ The **Log viewer** at the bottom lets you fetch and display any log file from th
 
 ### Check API key sync
 - Overview table column **API Sync**: ❌ means VPS keys are out of date
-- Open the VPS detail → **Update CoinData API** (or use the global **API Sync** button in the sidebar)
+- Look at the bottom of the sidebar: a **🔴 API not in sync** button appears when keys are out of date — click it to push updated keys with a live progress counter
+- Per-VPS: open the VPS detail → **Update CoinData API**
