@@ -802,6 +802,34 @@ def _has_active_jobs(job_types: list[str] | None) -> bool:
         return False
 
 
+def _render_job_static_buttons(panel_key: str) -> None:
+    """Render Stop/Log buttons for active jobs using session-state data.
+
+    Called OUTSIDE any auto-refresh fragment so buttons never flicker or
+    get re-rendered automatically — only on real user interactions.
+    """
+    live_jobs = st.session_state.get(f"{panel_key}_live_jobs") or []
+    if not live_jobs:
+        return
+    for j in live_jobs:
+        jid = str(j.get("id") or "").strip()
+        if not jid:
+            continue
+        _jtype = str(j.get("type") or "")
+        _bc1, _bc2, _bspacer = st.columns([0.08, 0.08, 0.84])
+        with _bc1:
+            if st.button("Stop", key=f"{panel_key}_stop_{jid}", help=f"Stop job {jid}"):
+                try:
+                    ok2 = request_cancel_job(jid, reason="user stop")
+                    if not ok2:
+                        st.warning("Job not found.")
+                except Exception as _e:
+                    st.error(str(_e))
+        with _bc2:
+            if st.button("Log", key=f"{panel_key}_log_{jid}", help=f"Open log for {jid}"):
+                _goto_job_log([j])
+
+
 def _render_jobs_panel(
     *,
     job_types: list[str] | None,
@@ -809,13 +837,25 @@ def _render_jobs_panel(
     panel_key: str,
     show_worker_controls: bool = False,
     auto_refresh_key: str | None = None,
+    skip_action_buttons: bool = False,
 ) -> None:
+    """Render the jobs panel.
+
+    skip_action_buttons=True: omit Stop/Log buttons from the progress table and
+    store active jobs in session state instead.  Used when this function runs
+    inside an auto-refresh fragment so that the action buttons can be rendered
+    *outside* the fragment (preventing them from flickering/disappearing on
+    every auto-rerun).
+    """
     if show_worker_controls:
         pass
 
     try:
         jobs = list_jobs(states=["pending", "running"], limit=20)
         jobs = _filter_jobs_by_type(jobs, job_types)
+        if skip_action_buttons:
+            # Bridge: expose current jobs to the static button renderer outside this fragment
+            st.session_state[f"{panel_key}_live_jobs"] = jobs
         pending_jobs = list_jobs(states=["pending"], limit=200)
         pending_jobs = _filter_jobs_by_type(pending_jobs, job_types)
         done_jobs = list_jobs(states=["done"], limit=200)
@@ -852,16 +892,16 @@ def _render_jobs_panel(
 
         # --- Progress rows (always visible, above Running expander) ---
         if jobs:
-            h1, h2, h3, h4, h5, h6, h7, h9, h10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
-            h1.write("id")
-            h2.write("type")
-            h3.write("status")
-            h4.write("coin")
-            h5.write("chunk")
-            h6.write("progress")
-            h7.write("updated_ts")
-            h9.write("stop")
-            h10.write("log")
+            if skip_action_buttons:
+                # Wider columns — Stop/Log rendered outside the fragment as static buttons
+                h1, h2, h3, h4, h5, h6, h7 = st.columns([0.16, 0.14, 0.10, 0.07, 0.18, 0.20, 0.15])
+                h1.write("id"); h2.write("type"); h3.write("status"); h4.write("coin")
+                h5.write("chunk"); h6.write("progress"); h7.write("updated_ts")
+            else:
+                h1, h2, h3, h4, h5, h6, h7, h9, h10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
+                h1.write("id"); h2.write("type"); h3.write("status"); h4.write("coin")
+                h5.write("chunk"); h6.write("progress"); h7.write("updated_ts")
+                h9.write("stop"); h10.write("log")
 
         for j in jobs:
             jid = str(j.get("id") or "").strip()
@@ -885,33 +925,25 @@ def _render_jobs_panel(
                 pct = 0.0
             pct = max(0.0, min(1.0, pct))
 
-            dl_t = (pr or {}).get("downloaded_total")
-            sk_t = (pr or {}).get("skipped_existing_total")
-            fl_t = (pr or {}).get("failed_total")
-
-            dl_b = (pr or {}).get("downloaded_bytes_total")
-            sk_b = (pr or {}).get("skipped_existing_bytes_total")
-            fl_b = (pr or {}).get("failed_bytes_total")
-
-            c1, c2, c3, c4, c5, c6, c7, c9, c10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
-            c1.write(jid)
-            c2.write(str(j.get("type") or ""))
-            c3.write(str(j.get("status") or ""))
-            c4.write(coin)
-            c5.write(chunk)
-            c6.progress(pct)
-            c7.write(str(j.get("updated_ts") or ""))
-            with c9:
-                if st.button("Stop", key=f"{panel_key}_stop_{jid}"):
-                    try:
-                        ok2 = request_cancel_job(jid, reason="user stop")
-                        if not ok2:
-                            st.warning("Job not found.")
-                    except Exception as e:
-                        st.error(str(e))
-            with c10:
-                if st.button("Log", key=f"{panel_key}_log_{jid}"):
-                    _goto_job_log([j])
+            if skip_action_buttons:
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([0.16, 0.14, 0.10, 0.07, 0.18, 0.20, 0.15])
+                c1.write(jid); c2.write(str(j.get("type") or "")); c3.write(str(j.get("status") or ""))
+                c4.write(coin); c5.write(chunk); c6.progress(pct); c7.write(str(j.get("updated_ts") or ""))
+            else:
+                c1, c2, c3, c4, c5, c6, c7, c9, c10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
+                c1.write(jid); c2.write(str(j.get("type") or "")); c3.write(str(j.get("status") or ""))
+                c4.write(coin); c5.write(chunk); c6.progress(pct); c7.write(str(j.get("updated_ts") or ""))
+                with c9:
+                    if st.button("Stop", key=f"{panel_key}_stop_{jid}"):
+                        try:
+                            ok2 = request_cancel_job(jid, reason="user stop")
+                            if not ok2:
+                                st.warning("Job not found.")
+                        except Exception as e:
+                            st.error(str(e))
+                with c10:
+                    if st.button("Log", key=f"{panel_key}_log_{jid}"):
+                        _goto_job_log([j])
 
         # --- Running expander: detailed job info (download stats, substatus etc.) ---
         def _render_job_details(match: dict) -> None:
@@ -2923,7 +2955,7 @@ def view_market_data():
 
                 bnc_jobs_active = _has_active_jobs(["binance_best_1m"])
                 if bnc_jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
-                    @st.fragment(run_every=2)
+                    @st.fragment(run_every=5)
                     def _bnc_best_jobs_fragment():
                         _render_jobs_panel(
                             job_types=["binance_best_1m"],
@@ -2931,7 +2963,11 @@ def view_market_data():
                             panel_key="market_data_bnc_best_jobs",
                             show_worker_controls=True,
                             auto_refresh_key="market_data_bnc_best_auto_refresh",
+                            skip_action_buttons=True,
                         )
+                    _bnc_best_jobs_fragment()
+                    # Stop/Log buttons outside fragment — never auto-rerun, always stable
+                    _render_job_static_buttons("market_data_bnc_best_jobs")
                 else:
                     @st.fragment
                     def _bnc_best_jobs_fragment():
@@ -2941,7 +2977,7 @@ def view_market_data():
                             panel_key="market_data_bnc_best_jobs",
                             show_worker_controls=True,
                         )
-                _bnc_best_jobs_fragment()
+                    _bnc_best_jobs_fragment()
 
         elif str(exchange).lower() != "hyperliquid":
             st.info("Market Data actions are currently implemented for Hyperliquid and Binance (USDM).")
@@ -3218,7 +3254,7 @@ def view_market_data():
 
                 jobs_active_best = _has_active_jobs(["hl_best_1m"])
                 if jobs_active_best and _supports_fragment_run_every() and not _is_background_refresh_paused():
-                    @st.fragment(run_every=2)
+                    @st.fragment(run_every=5)
                     def _best_jobs_fragment():
                         _render_jobs_panel(
                             job_types=["hl_best_1m"],
@@ -3226,7 +3262,11 @@ def view_market_data():
                             panel_key="market_data_hl_best_jobs",
                             show_worker_controls=True,
                             auto_refresh_key="market_data_best_auto_refresh",
+                            skip_action_buttons=True,
                         )
+                    _best_jobs_fragment()
+                    # Stop/Log buttons outside fragment — never auto-rerun, always stable
+                    _render_job_static_buttons("market_data_hl_best_jobs")
                 else:
                     @st.fragment
                     def _best_jobs_fragment():
@@ -3759,7 +3799,7 @@ def view_market_data():
 
                 jobs_active = _has_active_jobs(["hl_aws_l2book_auto"])
                 if jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
-                    @st.fragment(run_every=2)
+                    @st.fragment(run_every=5)
                     def _jobs_fragment():
                         _render_jobs_panel(
                             job_types=["hl_aws_l2book_auto"],
@@ -3767,7 +3807,11 @@ def view_market_data():
                             panel_key="market_data_hl_jobs",
                             show_worker_controls=True,
                             auto_refresh_key="market_data_aws_auto_refresh",
+                            skip_action_buttons=True,
                         )
+                    _jobs_fragment()
+                    # Stop/Log buttons outside fragment — never auto-rerun, always stable
+                    _render_job_static_buttons("market_data_hl_jobs")
                 else:
                     @st.fragment
                     def _jobs_fragment():
@@ -4058,7 +4102,7 @@ def view_market_data():
                     with st.expander("Last download job", expanded=False):
                         jobs_active_last = _has_active_jobs(["hl_aws_l2book_auto"])
                         if jobs_active_last and _supports_fragment_run_every() and not _is_background_refresh_paused():
-                            @st.fragment(run_every=2)
+                            @st.fragment(run_every=5)
                             def _last_download_fragment():
                                 try:
                                     if not bool(list_jobs(states=["pending", "running"], limit=1)):
