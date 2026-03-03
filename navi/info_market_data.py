@@ -972,10 +972,11 @@ def _render_jobs_panel(
                             _goto_job_log([j])
 
             if fragment_progress_only:
-                if auto_refresh_key and not jobs:
-                    st.session_state[auto_refresh_key] = False
-                    st.rerun()
-                return  # expanders rendered outside the fragment
+            # Do NOT call st.rerun() here when no jobs — with unconditionally-rendered
+            # run_every fragments, a full rerun would not remove the fragment (good),
+            # but was previously the cause of "fragment does not exist anymore" spam:
+            # the rerun caused the fragment to switch from run_every→plain, leaving
+            # the old run_every timer firing into the void every 5 seconds.
 
         # --- Running expander: detailed job info (download stats, substatus etc.) ---
         def _render_job_details(match: dict) -> None:
@@ -2395,7 +2396,9 @@ def view_market_data():
     # Without this, Streamlit would fall back to index= on every rerun that clears
     # the key (e.g. after the Stop button triggers a full-page rerun), jumping the
     # exchange back to hyperliquid even if the user had chosen another exchange.
-    if "market_data_exchange" not in st.session_state:
+    # Also validate that a stale stored value is still in the current options list.
+    _stored_exchange = st.session_state.get("market_data_exchange")
+    if not _stored_exchange or _stored_exchange not in exchanges:
         st.session_state["market_data_exchange"] = default_exchange
 
     exchange = st.selectbox(
@@ -2836,7 +2839,8 @@ def view_market_data():
         st.session_state["market_data_main_view"] = st.session_state.pop("market_data_main_view_pending")
 
     main_view = st.segmented_control(
-        "",
+        "View",
+        label_visibility="collapsed",
         options=["Actions", "Already have", "Activity log"],
         default="Actions",
         key="market_data_main_view",
@@ -2997,8 +3001,7 @@ def view_market_data():
                         append_exchange_download_log("binanceusdm", f"[binance_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                bnc_jobs_active = _has_active_jobs(["binance_best_1m"])
-                if bnc_jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and not _is_background_refresh_paused():
                     @st.fragment(run_every=5)
                     def _bnc_best_jobs_fragment():
                         _render_jobs_panel(
@@ -3006,7 +3009,6 @@ def view_market_data():
                             details_key="market_data_bnc_best_job_details",
                             panel_key="market_data_bnc_best_jobs",
                             show_worker_controls=True,
-                            auto_refresh_key="market_data_bnc_best_auto_refresh",
                             fragment_progress_only=True,
                         )
                     _bnc_best_jobs_fragment()
@@ -3299,8 +3301,7 @@ def view_market_data():
                         append_exchange_download_log("hyperliquid", f"[hl_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                jobs_active_best = _has_active_jobs(["hl_best_1m"])
-                if jobs_active_best and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and not _is_background_refresh_paused():
                     @st.fragment(run_every=5)
                     def _best_jobs_fragment():
                         _render_jobs_panel(
@@ -3308,7 +3309,6 @@ def view_market_data():
                             details_key="market_data_hl_best_job_details",
                             panel_key="market_data_hl_best_jobs",
                             show_worker_controls=True,
-                            auto_refresh_key="market_data_best_auto_refresh",
                             fragment_progress_only=True,
                         )
                     _best_jobs_fragment()
@@ -3846,8 +3846,7 @@ def view_market_data():
                 region_default = load_aws_profile_region(profile) or HYPERLIQUID_AWS_REGION
                 region = str(st.session_state.get("market_data_hl_aws_region") or region_default).strip()
 
-                jobs_active = _has_active_jobs(["hl_aws_l2book_auto"])
-                if jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and not _is_background_refresh_paused():
                     @st.fragment(run_every=5)
                     def _jobs_fragment():
                         _render_jobs_panel(
@@ -3855,7 +3854,6 @@ def view_market_data():
                             details_key="market_data_hl_job_details",
                             panel_key="market_data_hl_jobs",
                             show_worker_controls=True,
-                            auto_refresh_key="market_data_aws_auto_refresh",
                             fragment_progress_only=True,
                         )
                 else:
@@ -4052,7 +4050,7 @@ def view_market_data():
 
                 # Job queue (shown below download controls)
                 _jobs_fragment()
-                if jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and not _is_background_refresh_paused():
                     _render_jobs_static_controls(
                         "market_data_hl_jobs",
                         ["hl_aws_l2book_auto"],
@@ -4152,15 +4150,9 @@ def view_market_data():
                             st.write("No download jobs yet.")
 
                     with st.expander("Last download job", expanded=False):
-                        jobs_active_last = _has_active_jobs(["hl_aws_l2book_auto"])
-                        if jobs_active_last and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                        if _supports_fragment_run_every() and not _is_background_refresh_paused():
                             @st.fragment(run_every=5)
                             def _last_download_fragment():
-                                try:
-                                    if not bool(list_jobs(states=["pending", "running"], limit=1)):
-                                        st.rerun()
-                                except Exception:
-                                    pass
                                 _render_last_download_job()
                         else:
                             @st.fragment
@@ -4178,7 +4170,8 @@ def view_market_data():
             else ["1m", "1m_api", "l2Book", "PB7 cache"]
         )
         have_view = st.segmented_control(
-            "",
+            "View",
+            label_visibility="collapsed",
             options=_have_options,
             default="1m",
             key="market_data_have_view",
@@ -5679,21 +5672,9 @@ def view_market_data():
 
         if sel_row:
             gaps_active = False
-            try:
-                gaps_active = bool(list_jobs(states=["pending", "running"], limit=1))
-            except Exception:
-                gaps_active = False
-
-            if gaps_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
+            if _supports_fragment_run_every() and not _is_background_refresh_paused():
                 @st.fragment(run_every=5)
                 def _gap_fragment():
-                    # Stop auto-refresh when no jobs remain
-                    try:
-                        still_active = bool(list_jobs(states=["pending", "running"], limit=1))
-                    except Exception:
-                        still_active = False
-                    if not still_active:
-                        st.rerun()
                     _render_gap_heatmap()
             else:
                 @st.fragment
@@ -5735,7 +5716,10 @@ with st.sidebar:
             if _pid and is_pid_running(int(_pid)):
                 os.kill(int(_pid), signal.SIGTERM)
             clear_worker_pid()
-            st.rerun()
+            # No explicit st.rerun() here — the button click already triggers a full
+            # rerun automatically. A second explicit rerun (double-rerun) can cause
+            # Streamlit to lose session state mid-render, resetting widgets like the
+            # Exchange selectbox back to their default value.
         except Exception as e:
             error_popup(str(e))
 
