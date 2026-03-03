@@ -14,7 +14,10 @@ from market_data import get_market_data_root_dir
 def _atomic_write_json(path: Path, obj: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2, sort_keys=True), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, indent=2, sort_keys=True))
+        f.flush()
+        os.fsync(f.fileno())  # ensure bytes hit disk before rename
     os.replace(tmp, path)
 
 

@@ -86,7 +86,9 @@ def _requeue_stale_running_jobs(max_age_s: int = 3600) -> None:
             st = p.stat()
             age = now - int(st.st_mtime)
             if age > int(max_age_s):
+                update_job_file(p, mutate=lambda o: o.update({"status": "pending", "error": "requeued after worker restart"}))
                 os.replace(p, pending_dir / p.name)
+                _job_log(f"requeued interrupted job {p.name} (age={age}s)", level="WARNING")
         except Exception:
             continue
 
@@ -912,7 +914,10 @@ def main() -> int:
                 active_threads.pop(jtype, None)
 
     try:
-        _requeue_stale_running_jobs(max_age_s=3600)
+        # On startup ALL running/ files are stale (worker was killed or crashed).
+        # max_age_s=0 requeues every file regardless of mtime — even jobs that were
+        # actively updating their progress file seconds before the crash.
+        _requeue_stale_running_jobs(max_age_s=0)
 
         consecutive_errors = 0
         while not _STOP:
