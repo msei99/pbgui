@@ -327,12 +327,17 @@ def _probe_archive_month(symbol_code: str, year: int, month: int) -> bool:
         return False
 
 
-def _find_first_archive_month(symbol_code: str) -> tuple[int, int] | None:
-    """Binary/linear search for earliest available monthly archive."""
-    # Search from 2019-01 up to present
+def _find_first_archive_month(
+    symbol_code: str,
+    *,
+    start_year: int = 2019,
+    start_month: int = 1,
+) -> tuple[int, int] | None:
+    """Linear search for earliest available monthly archive, starting from start_year/start_month."""
     today = date.today()
-    for year in range(2019, today.year + 1):
-        for month in range(1, 13):
+    for year in range(start_year, today.year + 1):
+        m0 = start_month if year == start_year else 1
+        for month in range(m0, 13):
             if year == today.year and month >= today.month:
                 break
             if _probe_archive_month(symbol_code, year, month):
@@ -628,9 +633,13 @@ def improve_best_binance_1m_for_coin(
             ccxt_minutes_fetched=ccxt_minutes_fetched, minutes_written=minutes_written, notes=["stopped"],
         )
 
-    # --- Step 2: Find first archive month ---
+    # --- Step 2: Find first archive month — start from inception month to avoid probing years of missing months ---
     _emit({"stage": "probing_archive", "coin": coin_u})
-    first_archive = _find_first_archive_month(symbol_code)
+    first_archive = _find_first_archive_month(
+        symbol_code,
+        start_year=inception_dt.year,
+        start_month=inception_dt.month,
+    )
     if first_archive:
         first_archive_date = date(first_archive[0], first_archive[1], 1)
         notes.append(f"first_archive={first_archive[0]}-{first_archive[1]:02d}")
