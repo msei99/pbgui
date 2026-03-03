@@ -29,6 +29,7 @@
 - Always write `Merke Dir:` entries in English, even if the user submits them in German.
 - **NEVER make large unsolicited design changes**: no module rewrites, file deletions, architecture overhauls, or replacing/deleting existing code without explicit user confirmation. Always propose first, ask, wait for "Yes" — then implement.
 - **Never extend the scope of a task on your own**: if you think something additional should be done, ask first — never silently do more than was requested.
+- **Symbol resolution always uses the mapping file** (`data/coindata/{exchange}/mapping.json`) — never ad-hoc CCXT market fetches or hardcoded prefix lists. For USDT linear perps filter on `quote == "USDT"` and `swap == True`. See `bybit_best_1m.py` (`_get_bybit_usdt_symbol`) and `binance_best_1m.py` (`_get_binance_symbol`) as reference implementations.
 - GUI language is English throughout; only guides/tutorials are offered in both English and German.
 - **Logging architecture (3-tier model)**:
   - **Tier 1 — Daemon logs** (each own file): services with their own long-running daemon loop. Do NOT add to `LOG_GROUPS` — they get `data/logs/{service}.log` automatically.
