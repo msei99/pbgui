@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.63
+# v1.64
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,13 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.64 (03-03-2026)
+- Improved: Market Data — job worker now runs different job types in parallel (one thread per type); e.g. Hyperliquid 1m, Binance 1m, and L2Book downloads can run simultaneously instead of sequentially
+- Improved: Market Data — inventory cache is now read-only in the UI; background task workers push updates per coin after each download, eliminating UI blocking during data fetch
+- New: Market Data — `sweep_cache_mtimes()` + 10-minute background sweep thread to detect external file changes and refresh the inventory cache automatically
+- Fix: Market Data — double-render of job panels removed; Stop/Log action buttons rendered outside auto-refresh fragment to prevent lost clicks; Running expander placed before Pending/Failed/Done expanders; `StreamlitAPIException` fixed via pending-key pattern for segmented-control navigation
+- Improved: Replace deprecated `use_container_width=True` with `width='stretch'` across all pages
 
 ## v1.63 (02-03-2026)
 - Improved: VPS Manager — API sync indicator replaced with colored status button (🔴 / 🟢) matching the API Keys page, with live progress counter and toast notification
