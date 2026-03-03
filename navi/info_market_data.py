@@ -4514,9 +4514,9 @@ def view_market_data():
 
     if main_view == "Already have":
         _have_options = (
-            ["1m", "PB7 cache"]
-            if str(exchange).lower() == "binance"
-            else ["1m", "1m_api", "l2Book", "PB7 cache"]
+            ["1m", "1m_api", "l2Book", "PB7 cache"]
+            if str(exchange).lower() == "hyperliquid"
+            else ["1m", "PB7 cache"]
         )
         have_view = st.segmented_control(
             "View",
