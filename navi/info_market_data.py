@@ -3221,22 +3221,79 @@ def view_market_data():
                             else:
                                 st.info("No Bybit latest 1m status available yet.")
                 _bbt_status_fragment()
+            else:
+                @st.fragment
+                def _bbt_status_fragment_static():
+                    _bbt_flag_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
+                    _bbt_stop_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_stop.flag")
+                    bbt_status_all = _load_market_data_status()
+                    bbt_status = bbt_status_all.get("bybit_latest_1m") if isinstance(bbt_status_all, dict) else {}
+                    _bbt_queued = _bbt_flag_path.exists()
+                    _bbt_running = bool(bbt_status.get("running")) if bbt_status else False
+                    with st.expander("Market Data status (Bybit Latest 1m)", expanded=False):
+                        _c1, _c2 = st.columns([1, 1])
+                        with _c1:
+                            if not _bbt_queued:
+                                if st.button("⏩ Refresh now", key="bbt_run_now_btn_s", help="Skip wait and trigger next Bybit refresh cycle immediately", width='stretch'):
+                                    try:
+                                        _bbt_flag_path.touch()
+                                        st.toast("Refresh triggered — cycle will start within seconds.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                            else:
+                                if st.button("⏹ Cancel queued refresh", key="bbt_cancel_btn_s", type="primary", help="Cancel the queued refresh", width='stretch'):
+                                    try:
+                                        _bbt_flag_path.unlink(missing_ok=True)
+                                        st.toast("Queued refresh cancelled.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                        with _c2:
+                            if _bbt_running:
+                                if st.button("⏹ Stop current run", key="bbt_stop_btn_s", type="primary", help="Stop after the current coin finishes", width='stretch'):
+                                    try:
+                                        _bbt_stop_path.touch()
+                                        st.toast("Stop signal sent — run will abort after current coin.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                        if not bbt_status:
+                            st.info("No Bybit status yet. Start PBData with Bybit enabled to populate status.")
+                        else:
+                            bbt_coins_st = bbt_status.get("coins") if isinstance(bbt_status, dict) else {}
+                            if isinstance(bbt_coins_st, dict) and bbt_coins_st:
+                                st.dataframe(list(bbt_coins_st.values()), width='stretch')
+                            else:
+                                st.info("No Bybit latest 1m status available yet.")
+                _bbt_status_fragment_static()
 
             # ── Best 1m archive builder ──────────────────────────────────────
-            with st.expander("Build Best 1m OHLCV from Bybit Archive", expanded=True):
-                st.markdown(
+            with st.expander("Build best 1m OHLCV (Bybit)", expanded=False):
+                st.caption(
                     "Downloads raw trade data from **public.bybit.com/trading** and aggregates to 1m OHLCV. "
                     "Then tops up the last few days via CCXT REST. "
                     "Coverage goes back to each symbol's listing date (BTC: 2020, ETH/DOGE: 2021+)."
                 )
-                bybit_c_coins, bybit_c_start, bybit_c_end, bybit_c_refetch = st.columns([2, 1, 1, 1])
-                with bybit_c_coins:
-                    bybit_build_coins = st.multiselect(
-                        "Coins to build / backfill",
-                        options=bybit_coin_list,
-                        default=bybit_coin_list,
-                        key="market_data_bybit_best_1m_coins",
-                    )
+
+                bybit_eligible_coins = bybit_coin_list[:]
+                if not bybit_eligible_coins:
+                    st.warning("No enabled coins. Add coins in Settings above first.")
+
+                bybit_build_options = ["All"] + bybit_eligible_coins if bybit_eligible_coins else []
+                bybit_build_sel = st.multiselect(
+                    "Coins for build",
+                    options=bybit_build_options,
+                    default=["All"] if bybit_eligible_coins else [],
+                    key="market_data_bybit_build_1m_sel",
+                )
+                if "All" in bybit_build_sel or not bybit_build_sel:
+                    bybit_build_coins = list(bybit_eligible_coins)
+                else:
+                    bybit_build_coins = [c for c in bybit_build_sel if c in bybit_eligible_coins]
+
+                bybit_c_build, bybit_c_start, bybit_c_end, bybit_c_refetch = st.columns(
+                    [0.18, 0.22, 0.22, 0.38], vertical_alignment="bottom"
+                )
+                with bybit_c_build:
+                    bybit_run = st.button("Build best 1m", key="market_data_bybit_best_1m_run", width='stretch')
                 with bybit_c_start:
                     bybit_start_date = st.date_input(
                         "Start date (optional)",
@@ -3258,12 +3315,6 @@ def view_market_data():
                         key="market_data_bybit_best_1m_refetch",
                         help="Re-downloads all archive files and overwrites existing data. Use to fix corrupted days.",
                     )
-
-                bybit_run = st.button(
-                    "▶ Build / backfill Bybit 1m",
-                    key="market_data_bybit_best_1m_run",
-                    type="primary",
-                )
 
                 if bybit_run:
                     try:
