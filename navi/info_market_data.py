@@ -5094,6 +5094,7 @@ def view_market_data():
                                     "api":            "#7e57c2",
                                     "other_exchange": "#ef6c00",
                                     "missing":        "#b23b3b",
+                                    "out-of-session": "#1e2a30",
                                     "market holiday": "#6a1b9a",
                                     "non-trading":    "#37474f",
                                 }
@@ -5101,13 +5102,14 @@ def view_market_data():
 
                                 for row_i, y in enumerate(years, start=1):
                                     max_days = 366 if calendar.isleap(int(y)) else 365
-                                    doy_vals:  list[int] = list(range(1, max_days + 1))
+                                    doy_vals:    list[int] = list(range(1, max_days + 1))
                                     l2b_row      = [0] * max_days
                                     api_row      = [0] * max_days
                                     oth_row      = [0] * max_days
                                     miss_row     = [0] * max_days
+                                    outsess_row  = [0] * max_days  # non-session time within a trading day
                                     holiday_row  = [0] * max_days
-                                    notsess_row  = [0] * max_days
+                                    notsess_row  = [0] * max_days  # entire non-trading day
                                     hover_row = [""] * max_days
 
                                     cur_day = dt0
@@ -5154,14 +5156,19 @@ def view_market_data():
                                                     cur_day = cur_day + _timedelta(days=1)
                                                     continue
                                                 miss_v = max(0, exp_ov - api_v - l2b_v - oth_v)
+                                                # out-of-session remainder so all bars reach 1440
+                                                outsess_v = max(0, 1440 - api_v - l2b_v - oth_v - miss_v)
                                             elif not counts_ov:
                                                 miss_v = 1440
+                                                outsess_v = 0
                                             else:
                                                 miss_v = max(0, 1440 - api_v - l2b_v - oth_v)
-                                            l2b_row[doy_idx]  = l2b_v
-                                            api_row[doy_idx]  = api_v
-                                            oth_row[doy_idx]  = oth_v
-                                            miss_row[doy_idx] = miss_v
+                                                outsess_v = 0
+                                            l2b_row[doy_idx]    = l2b_v
+                                            api_row[doy_idx]    = api_v
+                                            oth_row[doy_idx]    = oth_v
+                                            miss_row[doy_idx]   = miss_v
+                                            outsess_row[doy_idx] = outsess_v
                                             hover_row[doy_idx] = (
                                                 f"{day_s_ov} | api={api_v} l2Book={l2b_v} other={oth_v} missing={miss_v}"
                                             )
@@ -5174,6 +5181,7 @@ def view_market_data():
                                         ("missing", miss_row),
                                     ]
                                     tradfi_segs = [
+                                        ("out-of-session", outsess_row),
                                         ("market holiday", holiday_row),
                                         ("non-trading", notsess_row),
                                     ] if is_stock_perp_1m else []
