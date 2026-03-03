@@ -5071,128 +5071,104 @@ def view_market_data():
                                 tradfi_sessions: dict[str, tuple[int, int]] = {}
                                 tradfi_calendar_present = False
                                 years: list[int] = []
-                                cur = dt0
-                                while cur <= dt1:
-                                    y = int(cur.strftime("%Y"))
+                                cur_iter = dt0
+                                while cur_iter <= dt1:
+                                    y = int(cur_iter.strftime("%Y"))
                                     if y not in years:
                                         years.append(y)
-                                    cur = cur + _timedelta(days=1)
+                                    cur_iter = cur_iter + _timedelta(days=1)
                                 years = sorted(years)
-                                max_days = 366
-                                z = []
-                                text = []
-                                for y in years:
-                                    days_in_year = 366 if calendar.isleap(int(y)) else 365
-                                    row: list[float | None] = [None] * max_days
-                                    row_text = [""] * max_days
-                                    cur_day = dt0
-                                    while cur_day <= dt1:
-                                        day_s = cur_day.strftime("%Y%m%d")
-                                        if not day_s.startswith(str(y)):
-                                            cur_day = cur_day + _timedelta(days=1)
-                                            continue
-                                        try:
-                                            doy = cur_day.timetuple().tm_yday
-                                        except Exception:
-                                            cur_day = cur_day + _timedelta(days=1)
-                                            continue
-                                        idx = doy - 1
-                                        if 0 <= idx < days_in_year:
-                                            counts = day_counts.get(day_s) or {}
-                                            api = int(counts.get("api") or 0)
-                                            l2b = int(counts.get("l2Book_mid") or 0)
-                                            oth = int(counts.get("other_exchange") or 0)
-                                            miss = int(counts.get("missing") or 0)
-                                            if is_stock_perp_1m:
-                                                is_holiday = _is_tradfi_market_holiday(cur_day, tradfi_type)
-                                                sess = tradfi_sessions.get(day_s)
-                                                if sess is not None:
-                                                    expected_minutes = len(
-                                                        _tradfi_expected_minute_indices_from_session(
-                                                            day=cur_day,
-                                                            session_start_ms=int(sess[0]),
-                                                            session_end_ms=int(sess[1]),
-                                                        )
-                                                    )
-                                                elif tradfi_calendar_present:
-                                                    expected_minutes = 0
-                                                else:
-                                                    expected_minutes = len(_tradfi_expected_indices_for_type(cur_day, tradfi_type))
-                                                if is_holiday:
-                                                    expected_minutes = 0
-                                                covered_minutes = api + l2b + oth
-                                                miss = max(0, int(expected_minutes) - int(covered_minutes))
-                                                if expected_minutes == 0 and covered_minutes == 0:
-                                                    if is_holiday:
-                                                        row[idx] = 0.25
-                                                        row_text[idx] = f"{day_s} | market holiday"
-                                                    else:
-                                                        row[idx] = None
-                                                        row_text[idx] = f"{day_s} | non-trading session"
-                                                    cur_day = cur_day + _timedelta(days=1)
-                                                    continue
-                                            elif not counts:
-                                                miss = 1440
-                                            if miss > 0:
-                                                row[idx] = 0.0
-                                            elif oth > 0:
-                                                row[idx] = 0.75 if oth < 5 else 0.5
-                                            else:
-                                                row[idx] = 1.0
-                                            row_text[idx] = (
-                                                f"{day_s} | api={api} l2Book={l2b} other={oth} missing={miss}"
-                                            )
-                                        cur_day = cur_day + _timedelta(days=1)
-                                    z.append(row)
-                                    text.append(row_text)
 
-                                fig = go.Figure(
-                                    data=go.Heatmap(
-                                        z=z,
-                                        x=list(range(1, max_days + 1)),
-                                        y=[str(y) for y in years],
-                                        text=text,
-                                        hovertemplate="%{text}<extra></extra>",
-                                        colorscale=[
-                                            [0.0, "#b23b3b"],
-                                            [0.24, "#b23b3b"],
-                                            [0.25, "#7e57c2"],
-                                            [0.49, "#7e57c2"],
-                                            [0.5, "#ef6c00"],
-                                            [0.74, "#ef6c00"],
-                                            [0.75, "#7cb342"],
-                                            [0.99, "#7cb342"],
-                                            [1.0, "#2e7d32"],
-                                        ],
-                                        zmin=0,
-                                        zmax=1,
-                                        showscale=False,
-                                        xgap=1,
-                                        ygap=1,
-                                    )
+                                # Build flat per-day lists for stacked bar chart
+                                days_sorted_ov = sorted(
+                                    d for d in day_counts.keys()
+                                    if dt0 <= _datetime.strptime(d, "%Y%m%d").date() <= dt1
                                 )
+                                l2b_vals: list[int] = []
+                                api_vals: list[int] = []
+                                oth_vals: list[int] = []
+                                miss_vals: list[int] = []
+                                hover_ov: list[str] = []
+                                for day_s_ov in days_sorted_ov:
+                                    counts_ov = day_counts.get(day_s_ov) or {}
+                                    api_v = int(counts_ov.get("api") or 0)
+                                    l2b_v = int(counts_ov.get("l2Book_mid") or 0)
+                                    oth_v = int(counts_ov.get("other_exchange") or 0)
+                                    if is_stock_perp_1m:
+                                        cur_d_ov = _datetime.strptime(day_s_ov, "%Y%m%d").date()
+                                        is_holiday_ov = _is_tradfi_market_holiday(cur_d_ov, tradfi_type)
+                                        sess_ov = tradfi_sessions.get(day_s_ov)
+                                        if sess_ov is not None:
+                                            exp_ov = len(
+                                                _tradfi_expected_minute_indices_from_session(
+                                                    day=cur_d_ov,
+                                                    session_start_ms=int(sess_ov[0]),
+                                                    session_end_ms=int(sess_ov[1]),
+                                                )
+                                            )
+                                        elif tradfi_calendar_present:
+                                            exp_ov = 0
+                                        else:
+                                            exp_ov = len(_tradfi_expected_indices_for_type(cur_d_ov, tradfi_type))
+                                        if is_holiday_ov:
+                                            exp_ov = 0
+                                        miss_v = max(0, exp_ov - api_v - l2b_v - oth_v)
+                                    elif not counts_ov:
+                                        miss_v = 1440
+                                    else:
+                                        miss_v = max(0, 1440 - api_v - l2b_v - oth_v)
+                                    l2b_vals.append(l2b_v)
+                                    api_vals.append(api_v)
+                                    oth_vals.append(oth_v)
+                                    miss_vals.append(miss_v)
+                                    hover_ov.append(f"{day_s_ov} | api={api_v} l2Book={l2b_v} other={oth_v} missing={miss_v}")
+
+                                fig = go.Figure()
+                                fig.add_trace(go.Bar(
+                                    name="l2Book_mid",
+                                    x=days_sorted_ov, y=l2b_vals,
+                                    marker_color="#1e88e5",
+                                    customdata=hover_ov,
+                                    hovertemplate="%{customdata}<extra></extra>",
+                                ))
+                                fig.add_trace(go.Bar(
+                                    name="api",
+                                    x=days_sorted_ov, y=api_vals,
+                                    marker_color="#7e57c2",
+                                    customdata=hover_ov,
+                                    hovertemplate="%{customdata}<extra></extra>",
+                                ))
+                                fig.add_trace(go.Bar(
+                                    name="other_exchange",
+                                    x=days_sorted_ov, y=oth_vals,
+                                    marker_color="#ef6c00",
+                                    customdata=hover_ov,
+                                    hovertemplate="%{customdata}<extra></extra>",
+                                ))
+                                fig.add_trace(go.Bar(
+                                    name="missing",
+                                    x=days_sorted_ov, y=miss_vals,
+                                    marker_color="#b23b3b",
+                                    customdata=hover_ov,
+                                    hovertemplate="%{customdata}<extra></extra>",
+                                ))
                                 fig.update_layout(
-                                    height=120 + (len(years) * 26),
-                                    margin=dict(l=10, r=10, t=20, b=20),
-                                    xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
-                                    yaxis=dict(
-                                        autorange="reversed",
-                                        showgrid=False,
+                                    barmode="stack",
+                                    height=max(220, min(320, 180 + len(days_sorted_ov))),
+                                    margin=dict(l=10, r=10, t=30, b=40),
+                                    xaxis=dict(
                                         type="category",
-                                        categoryorder="array",
-                                        categoryarray=[str(y) for y in years],
-                                        tickmode="array",
-                                        tickvals=[str(y) for y in years],
-                                        ticktext=[str(y) for y in years],
+                                        tickangle=-60,
+                                        automargin=True,
+                                        showgrid=False,
+                                        tickmode="auto",
+                                        nticks=min(60, len(days_sorted_ov)),
                                     ),
-                                )
-                                st.markdown(
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>HL only</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7cb342;color:#fff;margin-right:8px;'>other_exchange &lt; 5 min</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange ≥ 5 min</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
-                                    "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing minutes</span>",
-                                    unsafe_allow_html=True,
+                                    yaxis=dict(showgrid=False, range=[0, 1440], title="minutes"),
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+                                    bargap=0.1,
+                                    plot_bgcolor="rgba(0,0,0,0)",
+                                    paper_bgcolor="rgba(0,0,0,0)",
                                 )
                                 st.caption("Overview (days). Select a month below to inspect minutes.")
                                 st.plotly_chart(fig, width='stretch')
