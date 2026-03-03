@@ -897,7 +897,11 @@ def _render_jobs_panel(
 
             # Auto-restart: if there are active jobs but the worker process is dead,
             # restart it automatically so jobs don't get stuck forever.
-            if jobs:
+            # Exception: if the user explicitly stopped the worker via the sidebar
+            # button, don't auto-restart — they intended to stop it. The flag is
+            # cleared as soon as a new job is enqueued (implicit restart intent).
+            _manually_stopped = bool(st.session_state.get("market_data_worker_stopped_manually"))
+            if jobs and not _manually_stopped:
                 _wp = read_worker_pid()
                 if not (_wp and is_pid_running(int(_wp))):
                     try:
@@ -1259,6 +1263,7 @@ def _render_jobs_panel(
                                 pid2 = read_worker_pid()
                                 if not (pid2 and is_pid_running(int(pid2))):
                                     clear_worker_pid()
+                                    st.session_state.pop("market_data_worker_stopped_manually", None)
                                     subprocess.Popen(
                                         [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
                                         stdout=subprocess.DEVNULL,
@@ -1316,6 +1321,7 @@ def _render_jobs_panel(
                                 pid2 = read_worker_pid()
                                 if not (pid2 and is_pid_running(int(pid2))):
                                     clear_worker_pid()
+                                    st.session_state.pop("market_data_worker_stopped_manually", None)
                                     subprocess.Popen(
                                         [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
                                         stdout=subprocess.DEVNULL,
@@ -2990,6 +2996,7 @@ def view_market_data():
                         append_exchange_download_log("binanceusdm", f"[binance_best_1m] queued job_id={job.job_id}")
                         pid = read_worker_pid()
                         if not (pid and is_pid_running(int(pid))):
+                            st.session_state.pop("market_data_worker_stopped_manually", None)
                             subprocess.Popen(
                                 [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
                                 stdout=subprocess.DEVNULL,
@@ -3289,6 +3296,7 @@ def view_market_data():
 
                         pid = read_worker_pid()
                         if not (pid and is_pid_running(int(pid))):
+                            st.session_state.pop("market_data_worker_stopped_manually", None)
                             subprocess.Popen(
                                 [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
                                 stdout=subprocess.DEVNULL,
@@ -4037,6 +4045,7 @@ def view_market_data():
                         # Start worker if not running
                         pid = read_worker_pid()
                         if not (pid and is_pid_running(int(pid))):
+                            st.session_state.pop("market_data_worker_stopped_manually", None)
                             subprocess.Popen(
                                 [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
                                 stdout=subprocess.DEVNULL,
@@ -5717,6 +5726,10 @@ with st.sidebar:
             if _pid and is_pid_running(int(_pid)):
                 os.kill(int(_pid), signal.SIGTERM)
             clear_worker_pid()
+            # Suppress auto-restart: the user deliberately stopped the worker.
+            # Without this flag, the run_every=5 fragment would restart the worker
+            # immediately the next time it fires (because pending jobs still exist).
+            st.session_state["market_data_worker_stopped_manually"] = True
             # No explicit st.rerun() here — the button click already triggers a full
             # rerun automatically. A second explicit rerun (double-rerun) can cause
             # Streamlit to lose session state mid-render, resetting widgets like the
