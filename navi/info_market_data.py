@@ -5085,7 +5085,7 @@ def view_market_data():
                                 fig = make_subplots(
                                     rows=n_years, cols=1,
                                     shared_xaxes=True,
-                                    vertical_spacing=0.0,
+                                    vertical_spacing=0.02,
                                 )
 
                                 _BAR_COLORS = {
@@ -5096,8 +5096,6 @@ def view_market_data():
                                     "out-of-session": "#2c3e50",
                                     "market holiday": "#546e7a",
                                 }
-                                _shown_in_legend: set[str] = set()  # unused, kept for trace showlegend=False
-
                                 for row_i, y in enumerate(years, start=1):
                                     max_days = 366 if calendar.isleap(int(y)) else 365
                                     doy_vals:    list[int] = list(range(1, max_days + 1))
@@ -5197,24 +5195,28 @@ def view_market_data():
                                         )
                                     fig.update_yaxes(
                                         range=[0, 1440], showgrid=False,
-                                        title_text=str(y), title_standoff=4,
                                         tickvals=[], ticktext=[],
-                                        showline=False, zeroline=False,
+                                        title_text=str(y),
+                                        title_standoff=4,
+                                        showline=False, zeroline=False, mirror=False,
+                                        row=row_i, col=1,
+                                    )
+                                    fig.update_xaxes(
+                                        showline=False, zeroline=False, mirror=False,
                                         row=row_i, col=1,
                                     )
 
                                 fig.update_layout(
                                     barmode="stack",
                                     height=80 + n_years * 90,
-                                    margin=dict(l=45, r=10, t=30, b=20),
-                                    xaxis=dict(range=[0.5, 366.5], showgrid=False, showline=False, tickangle=-45),
+                                    margin=dict(l=10, r=10, t=30, b=20),
+                                    xaxis=dict(range=[0.5, 366.5], showgrid=False, tickangle=-45, showline=False, zeroline=False),
                                     showlegend=False,
                                     bargap=0,
                                     bargroupgap=0,
                                     plot_bgcolor="rgba(0,0,0,0)",
                                     paper_bgcolor="rgba(0,0,0,0)",
                                 )
-                                fig.update_xaxes(showline=False, zeroline=False, showgrid=False)
                                 st.caption("Overview (days). Select a month below to inspect minutes.")
                                 st.plotly_chart(fig, width='stretch')
 
