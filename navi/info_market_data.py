@@ -244,7 +244,7 @@ def _tradfi_canonical_type_for_coin(coin: str) -> str:
 
 
 def _uses_us_holiday_calendar(canonical_type: str) -> bool:
-    return str(canonical_type or "").strip().lower() in {"equity_us", "etf", "commodity_etf", "index_etf"}
+    return str(canonical_type or "").strip().lower() in {"equity_us", "etf", "commodity_etf", "index_etf", "commodity"}
 
 
 def _is_fx_market_holiday(day: _date) -> bool:
@@ -5096,6 +5096,8 @@ def view_market_data():
                                     "out-of-session": "#2c3e50",
                                     "market holiday": "#546e7a",
                                 }
+                                _shown_in_legend: set[str] = set()
+
                                 for row_i, y in enumerate(years, start=1):
                                     max_days = 366 if calendar.isleap(int(y)) else 365
                                     doy_vals:    list[int] = list(range(1, max_days + 1))
@@ -5180,6 +5182,9 @@ def view_market_data():
                                         ("market holiday", holiday_row),
                                     ] if is_stock_perp_1m else []
                                     for seg_name, seg_vals in base_segs + tradfi_segs:
+                                        show_leg = seg_name not in _shown_in_legend
+                                        if show_leg:
+                                            _shown_in_legend.add(seg_name)
                                         fig.add_trace(
                                             go.Bar(
                                                 name=seg_name,
@@ -5187,7 +5192,7 @@ def view_market_data():
                                                 y=seg_vals,
                                                 marker_color=_BAR_COLORS[seg_name],
                                                 marker_line_width=0,
-                                                showlegend=False,
+                                                showlegend=show_leg,
                                                 customdata=hover_row,
                                                 hovertemplate="%{customdata}<extra></extra>",
                                             ),
@@ -5211,7 +5216,7 @@ def view_market_data():
                                     height=80 + n_years * 90,
                                     margin=dict(l=10, r=10, t=30, b=20),
                                     xaxis=dict(range=[0.5, 366.5], showgrid=False, tickangle=-45, showline=False, zeroline=False),
-                                    showlegend=False,
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
                                     bargap=0,
                                     bargroupgap=0,
                                     plot_bgcolor="rgba(0,0,0,0)",
