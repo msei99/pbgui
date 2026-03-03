@@ -328,6 +328,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Fix: Worker startup now requeues all interrupted jobs unconditionally (previously only jobs older than 1h were requeued; actively-running jobs whose progress file was recently updated were silently lost)
 - Fix: Job status field corrected to `pending` when requeueing (was left as `running` in the JSON content)
 - Improved: Requeue at startup is now logged with job name and age so crashes are visible in MarketData.log
+- Fix: Binance Build best 1m — Stop button now cancels within seconds during ZIP download; downloads now use streaming + per-chunk stop_check instead of blocking until full file received
+- Improved: Binance Build best 1m — archive probing phase now starts from inception month instead of 2019-01; eliminates up to ~80 redundant HEAD requests for recently-listed coins (e.g. ~1 min → < 1 sec)
 
 ## v1.64 (03-03-2026)
 - Improved: Market Data — job worker now runs different job types in parallel (one thread per type); e.g. Hyperliquid 1m, Binance 1m, and L2Book downloads can run simultaneously instead of sequentially
