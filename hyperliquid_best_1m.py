@@ -2677,40 +2677,60 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         
         # OPTIMIZATION 1: Skip days that are already complete
         if len(existing) >= 1440:
-            if ENABLE_TIMING_LOGS:
-                day_total_time = time.time() - day_start_time
-                append_exchange_download_log(
-                    "hyperliquid",
-                    f"[TIMING] {coin_u} {day_s} total={day_total_time:.3f}s "
-                    f"read={t_read:.3f}s SKIPPED (complete, existing=1440)"
-                )
-            days_checked += 1
-            if progress_cb is not None:
-                try:
-                    month_key, month_day_index, month_day_total = month_progress_by_day.get(day_s, ("", 0, 0))
-                    progress_cb({
-                        "stage": "improve",
-                        "planned": len(days),
-                        "done": i,
-                        "day": day_s,
-                        "days_checked": int(days_checked),
-                        "l2book_minutes_added": int(l2book_minutes_added),
-                        "binance_minutes_filled": int(binance_minutes_filled),
-                        "bybit_minutes_filled": int(bybit_minutes_filled),
-                        "month_key": str(month_key),
-                        "month_day_index": int(month_day_index),
-                        "month_day_total": int(month_day_total),
-                        "tiingo_wait_s": 0,
-                        "tiingo_wait_reason": "",
-                        "tiingo_wait_kind": "",
-                        "tradfi_source_kind": str(tradfi_source_kind or ""),
-                        "fx_backfill_mode": bool(tradfi_backfill_mode),
-                        "fx_backfill_direction": "newest_to_oldest" if tradfi_backfill_mode else "",
-                        "fx_empty_chunk_streak": int(tradfi_empty_period_streak),
-                    })
-                except Exception:
-                    pass
-            continue
+            # For coins with l2book data, only skip if all 24 hours already have
+            # at least one l2book candle — otherwise l2book can still improve quality.
+            _can_skip = True
+            if not is_stock_perp and l2_rng is not None:
+                _l2_range_covers_day = l2_rng[0] <= d <= l2_rng[1]
+                if _l2_range_covers_day:
+                    _sc_check = get_source_codes_for_day(exchange="hyperliquid", coin=coin_dir, day=day_s)
+                    if _sc_check is None:
+                        _can_skip = False
+                    else:
+                        for _h in range(24):
+                            _h0, _h1 = _h * 60, _h * 60 + 60
+                            _any_l2 = any(
+                                _mi < len(_sc_check) and int(_sc_check[_mi]) == int(SOURCE_CODE_L2BOOK)
+                                for _mi in range(_h0, _h1)
+                            )
+                            if not _any_l2:
+                                _can_skip = False
+                                break
+            if _can_skip:
+                if ENABLE_TIMING_LOGS:
+                    day_total_time = time.time() - day_start_time
+                    append_exchange_download_log(
+                        "hyperliquid",
+                        f"[TIMING] {coin_u} {day_s} total={day_total_time:.3f}s "
+                        f"read={t_read:.3f}s SKIPPED (complete, existing=1440)"
+                    )
+                days_checked += 1
+                if progress_cb is not None:
+                    try:
+                        month_key, month_day_index, month_day_total = month_progress_by_day.get(day_s, ("", 0, 0))
+                        progress_cb({
+                            "stage": "improve",
+                            "planned": len(days),
+                            "done": i,
+                            "day": day_s,
+                            "days_checked": int(days_checked),
+                            "l2book_minutes_added": int(l2book_minutes_added),
+                            "binance_minutes_filled": int(binance_minutes_filled),
+                            "bybit_minutes_filled": int(bybit_minutes_filled),
+                            "month_key": str(month_key),
+                            "month_day_index": int(month_day_index),
+                            "month_day_total": int(month_day_total),
+                            "tiingo_wait_s": 0,
+                            "tiingo_wait_reason": "",
+                            "tiingo_wait_kind": "",
+                            "tradfi_source_kind": str(tradfi_source_kind or ""),
+                            "fx_backfill_mode": bool(tradfi_backfill_mode),
+                            "fx_backfill_direction": "newest_to_oldest" if tradfi_backfill_mode else "",
+                            "fx_empty_chunk_streak": int(tradfi_empty_period_streak),
+                        })
+                    except Exception:
+                        pass
+                continue
         
         t0 = time.time()
         source_codes = get_source_codes_for_day(exchange="hyperliquid", coin=coin_dir, day=day_s)
@@ -2777,7 +2797,9 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                 if idx in existing:
                     if source_codes is None:
                         continue
-                    if source_codes[idx] != SOURCE_CODE_OTHER:
+                    # Only skip if the minute already has l2book data; replace API
+                    # and other-exchange (Binance/Bybit) candles with higher-quality l2book.
+                    if int(source_codes[idx]) == int(SOURCE_CODE_L2BOOK):
                         continue
                 existing[idx] = candle
                 added_indices.append(idx)
