@@ -5169,6 +5169,7 @@ def view_market_data():
                                                 x=doy_vals,
                                                 y=seg_vals,
                                                 marker_color=_BAR_COLORS[seg_name],
+                                                marker_line_width=0,
                                                 showlegend=show_leg,
                                                 customdata=hover_row,
                                                 hovertemplate="%{customdata}<extra></extra>",
@@ -5187,7 +5188,8 @@ def view_market_data():
                                     margin=dict(l=10, r=10, t=30, b=20),
                                     xaxis=dict(range=[0.5, 366.5], showgrid=False, tickangle=-45),
                                     legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
-                                    bargap=0.05,
+                                    bargap=0,
+                                    bargroupgap=0,
                                     plot_bgcolor="rgba(0,0,0,0)",
                                     paper_bgcolor="rgba(0,0,0,0)",
                                 )
