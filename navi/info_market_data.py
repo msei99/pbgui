@@ -5094,16 +5094,20 @@ def view_market_data():
                                     "api":            "#7e57c2",
                                     "other_exchange": "#ef6c00",
                                     "missing":        "#b23b3b",
+                                    "market holiday": "#6a1b9a",
+                                    "non-trading":    "#37474f",
                                 }
                                 _shown_in_legend: set[str] = set()
 
                                 for row_i, y in enumerate(years, start=1):
                                     max_days = 366 if calendar.isleap(int(y)) else 365
                                     doy_vals:  list[int] = list(range(1, max_days + 1))
-                                    l2b_row  = [0] * max_days
-                                    api_row  = [0] * max_days
-                                    oth_row  = [0] * max_days
-                                    miss_row = [0] * max_days
+                                    l2b_row      = [0] * max_days
+                                    api_row      = [0] * max_days
+                                    oth_row      = [0] * max_days
+                                    miss_row     = [0] * max_days
+                                    holiday_row  = [0] * max_days
+                                    notsess_row  = [0] * max_days
                                     hover_row = [""] * max_days
 
                                     cur_day = dt0
@@ -5140,6 +5144,15 @@ def view_market_data():
                                                     exp_ov = len(_tradfi_expected_indices_for_type(cur_d_ov, tradfi_type))
                                                 if is_holiday_ov:
                                                     exp_ov = 0
+                                                if exp_ov == 0 and api_v == 0 and l2b_v == 0 and oth_v == 0:
+                                                    if is_holiday_ov:
+                                                        holiday_row[doy_idx] = 1440
+                                                        hover_row[doy_idx] = f"{day_s_ov} | market holiday"
+                                                    else:
+                                                        notsess_row[doy_idx] = 1440
+                                                        hover_row[doy_idx] = f"{day_s_ov} | non-trading session"
+                                                    cur_day = cur_day + _timedelta(days=1)
+                                                    continue
                                                 miss_v = max(0, exp_ov - api_v - l2b_v - oth_v)
                                             elif not counts_ov:
                                                 miss_v = 1440
@@ -5154,12 +5167,17 @@ def view_market_data():
                                             )
                                         cur_day = cur_day + _timedelta(days=1)
 
-                                    for seg_name, seg_vals in (
+                                    base_segs = [
                                         ("l2Book_mid", l2b_row),
                                         ("api", api_row),
                                         ("other_exchange", oth_row),
                                         ("missing", miss_row),
-                                    ):
+                                    ]
+                                    tradfi_segs = [
+                                        ("market holiday", holiday_row),
+                                        ("non-trading", notsess_row),
+                                    ] if is_stock_perp_1m else []
+                                    for seg_name, seg_vals in base_segs + tradfi_segs:
                                         show_leg = seg_name not in _shown_in_legend
                                         if show_leg:
                                             _shown_in_legend.add(seg_name)
