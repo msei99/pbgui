@@ -181,7 +181,7 @@ def set_page_config(page : str = "Start"):
 <style>
     .stMainBlockContainer {
         padding-top: 2.25rem !important;
-        padding-bottom: 0 !important;
+        padding-bottom: 1rem !important;
     }
     .stMainBlockContainer h1,
     .stMainBlockContainer h2,
